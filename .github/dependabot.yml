@@ -15,22 +15,22 @@ updates:
     schedule:
       interval: "weekly"
 
-- package-ecosystem: "pip" # See documentation for possible values
+  - package-ecosystem: "pip" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
 
-- package-ecosystem: "docker" # See documentation for possible values
+  - package-ecosystem: "docker" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
 
-- package-ecosystem: "devcontainers" # See documentation for possible values
+  - package-ecosystem: "devcontainers" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
 
-- package-ecosystem: "docker-compose" # See documentation for possible values
+  - package-ecosystem: "docker-compose" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
