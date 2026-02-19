@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-name: Test with all supported Python versions
+name: Test with supported NetBox and Python versions
 
 on:
   push:
@@ -15,8 +15,13 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13"]
+        netbox-version: ["main", "v4.5-release", "v4.4-release"]
+        include:
+          - python-version: "3.14"
+            netbox-version: "main"
 
     services:
       redis:
@@ -43,6 +48,9 @@ jobs:
         with:
           path: netbox-InterfaceNameRules-plugin
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -53,15 +61,14 @@ jobs:
         with:
           repository: "netbox-community/netbox"
           path: netbox
-          ref: main
+          ref: ${{ matrix.netbox-version }}
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
-          pip install -e .
-          pip install pytest pytest-django
-          pip install -r ../netbox/requirements.txt -U
-          pip install tblib
+          uv pip install --system -e .
+          uv pip install --system pytest pytest-django tblib
+          uv pip install --system -r ../netbox/requirements.txt
 
       - name: Set up NetBox configuration
         working-directory: netbox
