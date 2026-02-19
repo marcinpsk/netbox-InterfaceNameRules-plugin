@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: netbox-InterfaceNameRules-plugin
 
@@ -57,7 +57,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Checkout NetBox
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: "netbox-community/netbox"
           path: netbox
