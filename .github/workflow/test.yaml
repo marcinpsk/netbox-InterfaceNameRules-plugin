@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+name: Test with all supported Python versions
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-netbox:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          path: netbox-InterfaceNameRules-plugin
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Checkout NetBox
+        uses: actions/checkout@v4
+        with:
+          repository: "netbox-community/netbox"
+          path: netbox
+          ref: main
+
+      - name: Install NetBox and plugin
+        working-directory: netbox-InterfaceNameRules-plugin
+        run: |
+          pip install -e .
+          pip install pytest pytest-django
+          pip install -r ../netbox/requirements.txt -U
+          pip install tblib
+
+      - name: Set up NetBox configuration
+        working-directory: netbox
+        run: |
+          cat > netbox/netbox/configuration.py << 'EOF'
+          ALLOWED_HOSTS = ['*']
+          DATABASE = {
+              'NAME': 'netbox',
+              'USER': 'netbox',
+              'PASSWORD': 'netbox',
+              'HOST': 'localhost',
+              'PORT': '',
+              'CONN_MAX_AGE': 300,
+              'ENGINE': 'django.db.backends.postgresql'
+          }
+          REDIS = {
+              'tasks': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 0},
+              'caching': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 1}
+          }
+          SECRET_KEY = 'test-secret-key-not-for-production-1234567890123456'
+          PLUGINS = ['netbox_interface_name_rules']
+          EOF
+
+      - name: Run tests
+        working-directory: netbox/netbox
+        env:
+          NETBOX_CONFIGURATION: netbox.configuration
+        run: |
+          python manage.py test netbox_interface_name_rules --verbosity=2
