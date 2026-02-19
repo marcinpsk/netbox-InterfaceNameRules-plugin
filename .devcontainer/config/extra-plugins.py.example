@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+"""
+Extra plugins to install in the dev container.
+
+Copy this file to .devcontainer/config/extra-plugins.py and customize.
+
+Each entry is a dict with:
+  - name: Python package name (required)
+  - source: "pip" to install from PyPI, or a local path for editable install
+  - plugin_name: Name to add to PLUGINS list (if different from package name)
+
+Examples:
+  # Install from PyPI
+  {"name": "netbox-secrets", "source": "pip"}
+
+  # Install from local (editable mode) — repo must be mounted in /workspaces/
+  {"name": "netbox-librenms-plugin", "source": "/workspaces/netbox-librenms-plugin"}
+"""
+
+EXTRA_PLUGINS = [
+    # {"name": "netbox-librenms-plugin", "source": "/workspaces/netbox-librenms-plugin"},
+    # {"name": "netbox-secrets", "source": "pip"},
+]

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+"""
+Plugin configuration for the NetBox Interface Name Rules Plugin in the dev container.
+
+- Copy this file to .devcontainer/config/plugin-config.py
+- Edit values as needed.
+- Add config for all other plugins here if any.
+"""
+
+PLUGINS = [
+    "netbox_interface_name_rules",
+]
+
+PLUGINS_CONFIG = {
+    "netbox_interface_name_rules": {},
+}
