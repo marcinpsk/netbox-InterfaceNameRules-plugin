@@ -1,0 +1,10 @@
+#!/bin/bash
+echo ""
+echo "🎯 NetBox Interface Name Rules Plugin Development Environment"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Quick Commands:"
+echo "  netbox-run        Start NetBox dev server on port 8000"
+echo "  netbox-test       Run plugin tests with pytest"
+echo "  ruff-check        Lint code with ruff"
+echo ""

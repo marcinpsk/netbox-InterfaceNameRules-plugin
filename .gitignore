@@ -1,0 +1,8 @@
+*.egg-info/
+__pycache__/
+*.pyc
+.ruff_cache/
+dist/
+build/
+.devcontainer/config/plugin-config.py
+.devcontainer/config/extra-configuration.py

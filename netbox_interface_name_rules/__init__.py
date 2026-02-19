@@ -1,0 +1,21 @@
+from netbox.plugins import PluginConfig
+
+__version__ = "0.1.0"
+
+
+class InterfaceNameRulesConfig(PluginConfig):
+    name = "netbox_interface_name_rules"
+    verbose_name = "Interface Name Rules"
+    description = "Automatic interface renaming when modules are installed into bays."
+    version = __version__
+    base_url = "interface-name-rules"
+    min_version = "4.2.0"
+    required_settings = []
+    default_settings = {}
+
+    def ready(self):
+        super().ready()
+        from . import signals  # noqa: F401 — registers post_save handler
+
+
+config = InterfaceNameRulesConfig

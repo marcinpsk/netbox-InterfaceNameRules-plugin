@@ -1,0 +1,89 @@
+{% extends 'generic/object_list.html' %}
+
+{% block content %}
+    <div class="card mb-3" id="interface-name-rules-help">
+        <div class="card-header" style="cursor: pointer;" onclick="toggleRulesHelp()">
+            <h5 class="card-title mb-0 d-flex align-items-center">
+                <i class="mdi mdi-information-outline me-2"></i>
+                Interface Name Rules Reference
+                <i class="mdi ms-auto" id="rules-help-chevron"></i>
+            </h5>
+        </div>
+        <div id="rules-help-body" class="card-body">
+            <p>Define post-install interface rename rules for module types where NetBox's
+               position-based naming can't produce the correct interface name.</p>
+            <p>Covers <strong>converter offset</strong> (e.g., CVR-X2-SFP + GLC-T),
+               <strong>breakout transceivers</strong> (e.g., QSFP+ 4x10G with channel numbering),
+               and <strong>platform-specific naming</strong> (e.g., Juniper et-/xe-/ge- prefixes).</p>
+
+            <p><strong>Signal-driven:</strong> Rules are applied automatically via Django's
+               <code>post_save</code> signal on the Module model — no manual invocation needed.
+               Any plugin or UI action that creates a Module will trigger matching rules.</p>
+
+            <h6 class="mt-3">Supported Template Variables</h6>
+            <table class="table table-sm table-bordered" style="max-width: 750px;">
+                <thead><tr><th style="width: 200px;">Variable</th><th>Description</th></tr></thead>
+                <tbody>
+                    <tr><td><code>{slot}</code></td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
+                    <tr><td><code>{bay_position}</code></td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
+                    <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
+                    <tr><td><code>{parent_bay_position}</code></td><td>Position of the parent module's bay</td></tr>
+                    <tr><td><code>{sfp_slot}</code></td><td>Numeric sub-bay index within the parent module</td></tr>
+                    <tr><td><code>{base}</code></td><td>Original interface name from the NetBox module template</td></tr>
+                    <tr><td><code>{channel}</code></td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
+                </tbody>
+            </table>
+
+            <h6 class="mt-3">Arithmetic Expressions</h6>
+            <p>Arithmetic is supported inside braces:
+               <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></p>
+
+            <h6 class="mt-3">Examples</h6>
+            <ul class="mb-0">
+                <li><strong>Converter offset:</strong> GLC-T in CVR-X2-SFP &rarr;
+                    <code>GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></li>
+                <li><strong>Breakout:</strong> QSFP-4X10G-LR &rarr; <code>{base}:{channel}</code>
+                    (Channels=4, Ch. Start=0)</li>
+                <li><strong>Platform naming:</strong> QSFP-100G-LR4 on ACX7024 &rarr;
+                    <code>et-0/0/{bay_position}</code> (scoped via Parent Device Type)</li>
+                <li><strong>UfiSpace breakout:</strong> QSFP-100G-LR4 on S9610-36D &rarr;
+                    <code>swp{bay_position_num}s{channel}</code> (Channels=2, Ch. Start=1)</li>
+            </ul>
+
+            {% if supports_module_path %}
+            <div class="alert alert-success mt-3 mb-0">
+                <i class="mdi mdi-check-circle me-1"></i>
+                <strong>NetBox &ge; {{ module_path_min_version }}:</strong>
+                <code>{module_path}</code> is supported. Platform naming rules (e.g., <code>et-0/0/{bay_position}</code>)
+                may be replaceable by using <code>{module_path}</code> in module type interface templates directly.
+                Converter offset and breakout rules are still needed.
+            </div>
+            {% else %}
+            <div class="alert alert-warning mt-3 mb-0">
+                <i class="mdi mdi-information-outline me-1"></i>
+                <strong>NetBox &lt; {{ module_path_min_version }}:</strong>
+                <code>{module_path}</code> template token not available. Platform naming rules
+                (e.g., Juniper <code>et-0/0/{bay_position}</code>) are required for correct interface naming.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    <script>
+        function toggleRulesHelp() {
+            const body = document.getElementById('rules-help-body');
+            const chevron = document.getElementById('rules-help-chevron');
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? '' : 'none';
+            chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-up' : 'mdi ms-auto mdi-chevron-down';
+            localStorage.setItem('rulesHelpCollapsed', collapsed ? '' : '1');
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            const collapsed = localStorage.getItem('rulesHelpCollapsed') === '1';
+            const body = document.getElementById('rules-help-body');
+            const chevron = document.getElementById('rules-help-chevron');
+            body.style.display = collapsed ? 'none' : '';
+            chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-down' : 'mdi ms-auto mdi-chevron-up';
+        });
+    </script>
+    {{ block.super }}
+{% endblock %}

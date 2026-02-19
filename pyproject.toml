@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-interface-name-rules"
+version = "0.1.0"
+description = "NetBox plugin for automatic interface renaming when modules are installed"
+readme = "README.md"
+requires-python = ">=3.12.0"
+license = {text = "Apache-2.0"}
+
+[tool.setuptools.packages.find]
+include = ["netbox_interface_name_rules*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["/opt/netbox/netbox"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501", "F403", "F405"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]

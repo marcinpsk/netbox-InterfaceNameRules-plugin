@@ -1,0 +1,48 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load plugins %}
+
+{% block content %}
+<div class="row mb-3">
+  <div class="col col-md-12">
+    <div class="card">
+      <table class="table table-hover attr-table">
+        <thead>
+          <tr>
+            <th>Module Type</th>
+            <th>Parent Module Type</th>
+            <th>Parent Device Type</th>
+            <th>Name Template</th>
+            <th>Channels</th>
+            <th>Channel Start</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="{{ object.module_type.get_absolute_url }}">{{ object.module_type }}</a></td>
+            <td>
+              {% if object.parent_module_type %}
+                <a href="{{ object.parent_module_type.get_absolute_url }}">{{ object.parent_module_type }}</a>
+              {% else %}
+                <span class="text-muted">Any parent</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if object.device_type %}
+                <a href="{{ object.device_type.get_absolute_url }}">{{ object.device_type }}</a>
+              {% else %}
+                <span class="text-muted">Any device</span>
+              {% endif %}
+            </td>
+            <td><code>{{ object.name_template }}</code></td>
+            <td>{{ object.channel_count|default:"—" }}</td>
+            <td>{{ object.channel_start }}</td>
+            <td>{{ object.description|default:"—" }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
