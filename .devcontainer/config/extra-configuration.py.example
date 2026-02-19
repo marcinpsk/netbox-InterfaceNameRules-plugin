@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+"""
+Extra NetBox configuration for the dev container.
+
+Copy this file to .devcontainer/config/extra-configuration.py and customize.
+All uppercase variables defined here will be injected into NetBox settings.
+"""
+
+# CSRF and allowed hosts — required for dev container to accept POST requests
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+ALLOWED_HOSTS = ["*"]
+
+# Dev banners
+BANNER_TOP = "Development Environment"
+BANNER_BOTTOM = "NetBox Interface Name Rules Plugin Dev Container"
+BANNER_LOGIN = "Development access only"
+
+# Example: Custom logging
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'loggers': {
+#         'netbox_interface_name_rules': {
+#             'level': 'DEBUG',
+#             'propagate': True,
+#         },
+#     },
+# }

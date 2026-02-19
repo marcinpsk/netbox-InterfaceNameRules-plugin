@@ -1,6 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Version-detection utilities for the interface name rules plugin."""
-
-import re
 
 MODULE_PATH_MIN_VERSION = "4.9.0"
 

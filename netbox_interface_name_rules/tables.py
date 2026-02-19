@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 import django_tables2 as tables
 from netbox.tables import NetBoxTable, columns
 

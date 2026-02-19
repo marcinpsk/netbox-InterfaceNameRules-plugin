@@ -1,8 +1,60 @@
-*.egg-info/
+# Python
 __pycache__/
-*.pyc
-.ruff_cache/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
 dist/
 build/
+.eggs/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+.env
+
+# Testing / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Ruff / linting
+.ruff_cache/
+.mypy_cache/
+
+# uv
+uv.lock
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+._*
+
+# Django
+*.log
+db.sqlite3
+
+# Dev Container
+.devcontainer/.env
 .devcontainer/config/plugin-config.py
 .devcontainer/config/extra-configuration.py
+.devcontainer/config/extra-plugins.py
+
+# Proxy CA certificates (keep local)
+ca-bundle.crt
+*.pem
+
+# GitHub workflows (until SSH auth is set up)
+.github/

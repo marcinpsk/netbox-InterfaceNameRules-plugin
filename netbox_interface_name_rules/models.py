@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 from dcim.models import DeviceType, ModuleType
 from django.db import models
 from django.urls import reverse

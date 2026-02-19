@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Core renaming engine — rule lookup and interface rename logic.
 
 This module is imported lazily by signals.py so that model imports happen
@@ -18,8 +20,6 @@ def apply_interface_name_rules(module, module_bay):
         Number of interfaces renamed/created, or 0 if no rule matched.
     """
     from dcim.models import Interface
-
-    from .models import InterfaceNameRule
 
     module_type = module.module_type
 
