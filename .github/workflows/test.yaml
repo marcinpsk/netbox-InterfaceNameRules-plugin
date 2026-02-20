@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
-        netbox-version: ["main", "v4.5-release", "v4.4-release"]
+        netbox-version: ["main", "v4.5.3", "v4.4.10"]
         include:
           - python-version: "3.14"
             netbox-version: "main"

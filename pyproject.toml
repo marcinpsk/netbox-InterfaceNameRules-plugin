@@ -17,6 +17,7 @@ include = ["netbox_interface_name_rules*"]
 
 [dependency-groups]
 dev = [
+    "build",
     "reuse",
     "ruff",
     "pre-commit",
