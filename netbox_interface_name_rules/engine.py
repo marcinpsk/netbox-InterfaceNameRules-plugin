@@ -16,6 +16,9 @@ def apply_interface_name_rules(module, module_bay):
     Looks up a matching rule for (module_type, parent_module_type, device_type)
     and renames interfaces created by NetBox's template instantiation.
 
+    Only processes interfaces whose name still matches the raw bay position
+    (i.e., haven't been renamed yet), ensuring idempotency.
+
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
     """
@@ -38,10 +41,20 @@ def apply_interface_name_rules(module, module_bay):
         return 0
 
     variables = _build_variables(module_bay)
-    interfaces = Interface.objects.filter(module=module)
-    renamed = 0
+    interfaces = list(Interface.objects.filter(module=module))
 
-    for iface in interfaces:
+    if not interfaces:
+        return 0
+
+    # Determine the raw interface name NetBox assigned from the template
+    # (the bay position). Only rename interfaces that still have this name.
+    raw_name = variables["bay_position"]
+    unrenamed = [i for i in interfaces if i.name == raw_name]
+    if not unrenamed:
+        return 0  # Already renamed (idempotent guard)
+
+    renamed = 0
+    for iface in unrenamed:
         variables["base"] = iface.name
         renamed += _apply_rule_to_interface(rule, iface, variables, module)
 

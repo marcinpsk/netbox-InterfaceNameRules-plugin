@@ -17,71 +17,333 @@
 #
 # Bulk import via: Interface Name Rules > Import
 
-# --- Converter Offset Examples ---
+# =============================================================================
+# Cisco 8201-SYS
+# Bay format: "Transceiver 0/0/0/X" with position=X (numeric)
+# =============================================================================
+
+# 400G QSFP-DD transceivers → FourHundredGigE0/0/0/X
+- module_type: QSFP-DD-400G-FR4
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR4
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR8
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-ZR
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD ZR naming"
+
+- module_type: QSFP-DD-400G-ZR+
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD ZR+ naming"
+
+- module_type: QSFP-DD-400G-ZR-M
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD ZR-M naming"
+
+- module_type: QSFP-DD-400G-ZR-M-HP
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD ZR-M-HP naming"
+
+# 100G QSFP28 transceivers → HundredGigE0/0/0/X
+- module_type: QSFP-100G-LR4
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-SWDM4
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-ZR
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 ZR naming"
+
+- module_type: QSFP28-100G-CU3M
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 DAC naming"
+
+# 100G QSFP28-DD dual breakout → HundredGigE0/0/0/X/channel
+- module_type: QSFP28-DD-2X100G-LR4
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}/{channel}"
+  channel_count: 2
+  channel_start: 0
+  description: "Cisco 8201-SYS QSFP28-DD 2x100G breakout"
+
+# 40G QSFP+ 4x10G breakout → TenGigE0/0/0/X/channel
+- module_type: QSFP-4X10G-LR
+  device_type: 8201-SYS
+  name_template: "TenGigE0/0/0/{bay_position}/{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Cisco 8201-SYS QSFP+ 4x10G breakout"
+
+- module_type: QSFP-4X10G-SR
+  device_type: 8201-SYS
+  name_template: "TenGigE0/0/0/{bay_position}/{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Cisco 8201-SYS QSFP+ 4x10G breakout"
+
+# 10G SFP+ → TenGigE0/0/0/X
+- module_type: SFP-10G-LR
+  device_type: 8201-SYS
+  name_template: "TenGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 10GE SFP+ naming"
+
+# 1G SFP → GigabitEthernet0/0/0/X
+- module_type: SFP-1G-LX
+  device_type: 8201-SYS
+  name_template: "GigabitEthernet0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 1GE SFP naming"
+
+# =============================================================================
+# Juniper ACX7024
+# Bay format: "Transceiver X" with position=X (numeric, 0-27)
+# =============================================================================
+
+# 100G QSFP28 → et-0/0/X
+- module_type: QSFP-100G-LR4
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-SWDM4
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-ZR
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 ZR naming"
+
+- module_type: QSFP28-100G-CU3M
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 DAC naming"
+
+# QSFP+ 4x10G breakout → xe-0/0/X:channel
+- module_type: QSFP-4X10G-LR
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G breakout"
+
+- module_type: QSFP-4X10G-SR
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G breakout"
+
+# QSFP28-DD 2x100G breakout → et-0/0/X:channel
+- module_type: QSFP28-DD-2X100G-LR4
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}:{channel}"
+  channel_count: 2
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP28-DD 2x100G breakout"
+
+# 10G SFP+ → xe-0/0/X
+- module_type: SFP-10G-LR
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}"
+  description: "Juniper ACX7024 10GE SFP+ naming"
+
+# 1G SFP → ge-0/0/X
+- module_type: SFP-1G-LX
+  device_type: ACX7024
+  name_template: "ge-0/0/{bay_position}"
+  description: "Juniper ACX7024 1GE SFP naming"
+
+# =============================================================================
+# Juniper ACX7100-32C
+# Bay format: "Transceiver X" with position=X (numeric, 0-35)
+# =============================================================================
+
+# 400G QSFP-DD → et-0/0/X
+- module_type: QSFP-DD-400G-FR4
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR4
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR8
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-ZR
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD ZR naming"
+
+- module_type: QSFP-DD-400G-ZR+
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD ZR+ naming"
+
+- module_type: QSFP-DD-400G-ZR-M
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD ZR-M naming"
+
+- module_type: QSFP-DD-400G-ZR-M-HP
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD ZR-M-HP naming"
+
+# 100G QSFP28 → et-0/0/X
+- module_type: QSFP-100G-LR4
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-SWDM4
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 100GE QSFP28 naming"
+
+- module_type: QSFP-100G-ZR
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 100GE QSFP28 ZR naming"
+
+# 10G SFP+ → xe-0/0/X
+- module_type: SFP-10G-LR
+  device_type: ACX7100-32C
+  name_template: "xe-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 10GE SFP+ naming"
+
+# 1G SFP → ge-0/0/X
+- module_type: SFP-1G-LX
+  device_type: ACX7100-32C
+  name_template: "ge-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 1GE SFP naming"
+
+# =============================================================================
+# UfiSpace S9610-36D
+# Bay format: "Transceiver X" with position=swpX
+# =============================================================================
+
+- module_type: QSFP-DD-400G-FR4
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR4
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-ZR
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 400GE QSFP-DD ZR naming"
+
+- module_type: QSFP-100G-LR4
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 100GE QSFP28 naming"
+
+- module_type: SFP-10G-LR
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 10GE SFP+ naming"
+
+- module_type: SFP-1G-LX
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D 1GE SFP naming"
+
+# =============================================================================
+# UfiSpace S9610-46DX
+# Bay format: "Transceiver X" with position=swpX
+# =============================================================================
+
+- module_type: QSFP-DD-400G-FR4
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR4
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX 400GE QSFP-DD naming"
+
+- module_type: QSFP-100G-LR4
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX 100GE QSFP28 naming"
+
+- module_type: SFP-10G-LR
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX 10GE SFP+ naming"
+
+- module_type: SFP-1G-LX
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX 1GE SFP naming"
+
+# =============================================================================
+# UfiSpace S9700-53DX
+# Bay format: "Transceiver X" with position=swpX
+# =============================================================================
+
+- module_type: QSFP-DD-400G-FR4
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX 400GE QSFP-DD naming"
+
+- module_type: QSFP-DD-400G-LR4
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX 400GE QSFP-DD naming"
+
+- module_type: QSFP-100G-LR4
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX 100GE QSFP28 naming"
+
+- module_type: SFP-10G-LR
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX 10GE SFP+ naming"
+
+- module_type: SFP-1G-LX
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX 1GE SFP naming"
+
+# =============================================================================
+# Converter Offset Rules (device-independent)
+# =============================================================================
 
 - module_type: SFP-1G-T
   parent_module_type: CVR-X2-SFP
   name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
-  channel_count: 0
-  channel_start: 0
   description: "SFP-1G-T in CVR-X2-SFP: offset port numbering for X2-to-SFP conversion"
-
-# --- Breakout Channel Examples ---
-
-- module_type: QSFP-4X10G-LR
-  name_template: "{base}:{channel}"
-  channel_count: 4
-  channel_start: 0
-  description: "QSFP+ 4x10G-LR breakout with Juniper-style channel numbering (0-3)"
-
-- module_type: QSFP-4X10G-SR
-  name_template: "{base}:{channel}"
-  channel_count: 4
-  channel_start: 0
-  description: "QSFP+ 4x10G-SR breakout with Juniper-style channel numbering (0-3)"
-
-# --- UfiSpace/Arcos Breakout Rules ---
-
-- module_type: QSFP-100G-LR4
-  device_type: S9610-36D
-  name_template: "swp{bay_position_num}s{channel}"
-  channel_count: 2
-  channel_start: 1
-  description: "UfiSpace QSFP28 2x100G breakout"
-
-- module_type: QSFP-100G-SR4
-  device_type: S9610-36D
-  name_template: "swp{bay_position_num}s{channel}"
-  channel_count: 2
-  channel_start: 1
-  description: "UfiSpace QSFP28 2x100G breakout"
-
-# --- Juniper ACX7024 Platform-Specific Rules ---
-
-- module_type: QSFP-100G-LR4
-  device_type: ACX7024
-  name_template: "et-0/0/{bay_position}"
-  channel_count: 0
-  channel_start: 0
-  description: "Juniper ACX7024 100GE QSFP28 naming"
-
-- module_type: QSFP-100G-SR4
-  device_type: ACX7024
-  name_template: "et-0/0/{bay_position}"
-  channel_count: 0
-  channel_start: 0
-  description: "Juniper ACX7024 100GE QSFP28 naming"
-
-- module_type: SFP-10G-SR
-  device_type: ACX7024
-  name_template: "xe-0/0/{bay_position}"
-  channel_count: 0
-  channel_start: 0
-  description: "Juniper ACX7024 10GE SFP+ naming"
-
-- module_type: SFP-1G-T
-  device_type: ACX7024
-  name_template: "ge-0/0/{bay_position}"
-  channel_count: 0
-  channel_start: 0
-  description: "Juniper ACX7024 1GE SFP naming"

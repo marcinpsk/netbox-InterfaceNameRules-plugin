@@ -55,3 +55,4 @@ db.sqlite3
 # Proxy CA certificates (keep local)
 ca-bundle.crt
 *.pem
+.github/hooks/
