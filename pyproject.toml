@@ -63,3 +63,4 @@ allowed_tags = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "bui
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
 ignore_merge_commits = false
+parse_squash_commits = false
