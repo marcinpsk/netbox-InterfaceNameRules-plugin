@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+site_name: NetBox Interface Name Rules
+site_url: https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/
+repo_url: https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin
+repo_name: marcinpsk/netbox-InterfaceNameRules-plugin
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+
+nav:
+  - Overview: index.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Template Variables: template-variables.md
+  - Examples: examples.md
+  - Contributing: contributing.md
+  - Changelog: changelog.md

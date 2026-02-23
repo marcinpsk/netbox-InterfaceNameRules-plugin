@@ -17,8 +17,12 @@ path = [
     ".github/copilot-instructions.md",
     ".github/dependabot.yml",
     ".github/workflows/codeql.yml",
+    ".github/ISSUE_TEMPLATE/**",
+    ".github/PULL_REQUEST_TEMPLATE/**",
     "CHANGELOG.md",
     "README.md",
+    "CONTRIBUTING.md",
+    "docs/**",
 ]
 SPDX-FileCopyrightText = "2025 Marcin Zieba <marcinpsk@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

@@ -56,3 +56,7 @@ db.sqlite3
 ca-bundle.crt
 *.pem
 .github/hooks/
+site/
+
+# direnv
+.envrc

@@ -1,37 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-name: Test with supported NetBox and Python versions
+name: Weekly test against NetBox main
 
 on:
-  push:
-    branches:
-      - main  # Only direct pushes to main; branch pushes with open PRs are covered by the pull_request trigger
-  pull_request:
-    branches:
-      - main
-      - develop
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  test-netbox:
+  test-netbox-main:
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
-      max-parallel: 6
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        netbox-version: ["v4.3.7", "v4.4.10", "v4.5.3"]
-        exclude:
-          - python-version: "3.14"
-            netbox-version: "v4.3.7"  # strawberry-graphql incompatible with Python 3.14 on this NetBox version
 
     services:
       redis:
         image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
         ports:
           - 6379:6379
 
@@ -58,16 +54,16 @@ jobs:
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b  # v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Checkout NetBox
+      - name: Checkout NetBox main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           repository: "netbox-community/netbox"
           path: netbox
-          ref: ${{ matrix.netbox-version }}
+          ref: main
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
@@ -86,7 +82,7 @@ jobs:
               'USER': 'netbox',
               'PASSWORD': 'netbox',
               'HOST': 'localhost',
-              'PORT': '',
+              'PORT': '5432',
               'CONN_MAX_AGE': 300,
               'ENGINE': 'django.db.backends.postgresql'
           }
@@ -94,8 +90,8 @@ jobs:
               'tasks': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 0},
               'caching': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 1}
           }
-          SECRET_KEY = 'test-secret-key-not-for-production-1234567890123456'
-          API_TOKEN_PEPPERS = {0: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+          SECRET_KEY = 'test-secret-key-not-for-production-1234567890123456'  # checkov:skip=CKV_SECRET_6: CI-only test fixture
+          API_TOKEN_PEPPERS = {0: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}  # checkov:skip=CKV_SECRET_6: CI-only test fixture
           PLUGINS = ['netbox_interface_name_rules']
           EOF
 

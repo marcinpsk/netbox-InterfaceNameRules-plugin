@@ -11,6 +11,12 @@ description = "NetBox plugin for automatic interface renaming when modules are i
 readme = "README.md"
 requires-python = ">=3.12.0"
 license = "Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: Django",
+]
 
 [tool.setuptools.packages.find]
 include = ["netbox_interface_name_rules*"]
@@ -24,6 +30,9 @@ dev = [
     "pytest",
     "pytest-django",
     "python-semantic-release",
+]
+docs = [
+    "mkdocs-material>=9,<10",
 ]
 
 [tool.pytest.ini_options]

@@ -1,5 +1,13 @@
 # NetBox Interface Name Rules Plugin
 
+[![PyPI](https://img.shields.io/pypi/v/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
+[![CI](https://img.shields.io/github/actions/workflow/status/marcinpsk/netbox-InterfaceNameRules-plugin/test.yaml?branch=main&label=tests)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/actions/workflows/test.yaml)
+[![License](https://img.shields.io/github/license/marcinpsk/netbox-InterfaceNameRules-plugin)](LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
+[![NetBox](https://img.shields.io/badge/NetBox-%E2%89%A54.2.0-blue)](https://github.com/netbox-community/netbox)
+[![Contributors](https://img.shields.io/github/contributors/marcinpsk/netbox-InterfaceNameRules-plugin)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/graphs/contributors)
+
 Automatic interface renaming when modules are installed into NetBox device bays.
 
 ## What it does
@@ -48,3 +56,9 @@ PLUGINS = ['netbox_interface_name_rules']
 ## License
 
 Apache 2.0
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to submit code or interface name rules.
+
+Community-contributed rules for various vendors are in the [`contrib/`](contrib/) directory.
