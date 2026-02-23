@@ -1,0 +1,176 @@
+{# SPDX-License-Identifier: Apache-2.0 #}
+{# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com> #}
+{% extends 'generic/_base.html' %}
+
+{% block title %}Apply Rules{% endblock %}
+
+{% block content %}
+<p class="text-muted mb-3">
+  Use this page to <strong>retroactively rename interfaces that were installed before the matching rule existed</strong>.
+  Interfaces installed <em>after</em> a rule is active are renamed automatically at install time — you don't need
+  to use Apply Rules for them.
+</p>
+<p class="text-muted mb-3">
+  Select a rule and click <strong>Preview &amp; Apply</strong> to see which currently installed interfaces
+  would be renamed, then optionally apply the changes (synchronously up to {{ batch_limit }} interfaces,
+  or as a background job for larger sets).
+</p>
+
+{% if rules %}
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+      <h5 class="card-title mb-0 me-2"><i class="mdi mdi-format-list-bulleted me-2"></i>Available Rules</h5>
+      <button id="scan-all-btn" class="btn btn-sm btn-outline-secondary" title="Check all rules to see if any currently installed interfaces would be renamed">
+        <i class="mdi mdi-magnify me-1"></i>Check all rules
+      </button>
+      <span id="scan-progress" class="text-muted small" aria-live="polite" role="status" style="display:none"></span>
+      <div class="ms-auto">
+        <input id="rule-search" type="search" class="form-control form-control-sm" placeholder="Filter rules…"
+               style="width:240px" aria-label="Filter rules">
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0" id="rules-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Type</th>
+            <th>Module Type</th>
+            <th>Parent Module Type</th>
+            <th>Device Type</th>
+            <th>Platform</th>
+            <th>Name Template</th>
+            <th>Ch.</th>
+            <th title="Click 'Check' to scan installed interfaces and see if any would be renamed by this rule. This scan runs on demand because it may be slow for rules matching many modules.">Can rename</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rule in rules %}
+            <tr>
+              <td><a href="{{ rule.get_absolute_url }}">{{ rule.pk }}</a></td>
+              <td>
+                {% if rule.module_type_is_regex %}
+                  <span class="badge text-bg-info">regex</span>
+                {% else %}
+                  <span class="badge text-bg-success">exact</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if rule.module_type_is_regex %}
+                  <code>{{ rule.module_type_pattern }}</code>
+                {% elif rule.module_type %}
+                  <a href="{{ rule.module_type.get_absolute_url }}">{{ rule.module_type.model }}</a>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if rule.parent_module_type %}
+                  <a href="{{ rule.parent_module_type.get_absolute_url }}">{{ rule.parent_module_type.model }}</a>
+                {% else %}
+                  <span class="text-muted">Any</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if rule.device_type %}
+                  <a href="{{ rule.device_type.get_absolute_url }}">{{ rule.device_type.model }}</a>
+                {% else %}
+                  <span class="text-muted">Any</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if rule.platform %}
+                  <a href="{{ rule.platform.get_absolute_url }}">{{ rule.platform.name }}</a>
+                {% else %}
+                  <span class="text-muted">Any</span>
+                {% endif %}
+              </td>
+              <td><code>{{ rule.name_template }}</code></td>
+              <td>{% if rule.channel_count %}{{ rule.channel_count }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+              <td class="applicable-cell" data-pk="{{ rule.pk }}"
+                  data-url="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_applicable' rule.pk %}">
+                <button class="btn btn-sm btn-outline-secondary scan-btn py-0 px-2"
+                        data-pk="{{ rule.pk }}"
+                        title="Scan installed interfaces to see if any would be renamed">
+                  <i class="mdi mdi-magnify"></i> Check
+                </button>
+              </td>
+              <td>
+                <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_apply_detail' rule.pk %}"
+                   class="btn btn-sm btn-outline-primary">
+                  <i class="mdi mdi-eye me-1"></i>Preview &amp; Apply
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    // --- filter ---
+    const input = document.getElementById('rule-search');
+    const rows  = document.querySelectorAll('#rules-table tbody tr');
+    input.addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      rows.forEach(r => { r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+    });
+
+    // --- per-rule scan ---
+    function renderResult(cell, applicable) {
+      const pk  = cell.dataset.pk;
+      const recheck = `<button class="btn btn-sm btn-link p-0 ms-1 rescan-btn" data-pk="${pk}" title="Re-check"><i class="mdi mdi-refresh"></i></button>`;
+      if (applicable === true) {
+        // light green tint — interfaces would be renamed
+        cell.innerHTML = `<span class="badge fw-normal" style="background:rgba(25,135,84,.15);color:#0f5132;border:1px solid rgba(25,135,84,.3)">Yes</span>${recheck}`;
+      } else if (applicable === false) {
+        // light muted tint — nothing to rename
+        cell.innerHTML = `<span class="badge fw-normal" style="background:rgba(108,117,125,.1);color:#6c757d;border:1px solid rgba(108,117,125,.25)">No</span>${recheck}`;
+      } else {
+        // light red tint — scan error
+        cell.innerHTML = `<span class="badge fw-normal" style="background:rgba(220,53,69,.12);color:#842029;border:1px solid rgba(220,53,69,.25)" title="Scan failed">Error</span>${recheck}`;
+      }
+      cell.querySelector('.rescan-btn').addEventListener('click', () => scanCell(cell));
+    }
+
+    // Returns a Promise that resolves when the fetch + render completes.
+    function scanCell(cell) {
+      const url = cell.dataset.url;
+      cell.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>';
+      return fetch(url)
+        .then(r => { if (!r.ok) { renderResult(cell, null); return; } return r.json(); })
+        .then(d => { if (d) renderResult(cell, d.applicable); })
+        .catch(() => renderResult(cell, null));
+    }
+
+    // bind initial scan buttons
+    document.querySelectorAll('.scan-btn').forEach(btn => {
+      btn.addEventListener('click', function () { scanCell(this.closest('td')); });
+    });
+
+    // --- scan all (serial, awaiting each fetch before moving to the next) ---
+    document.getElementById('scan-all-btn').addEventListener('click', async function () {
+      const cells = Array.from(document.querySelectorAll('.applicable-cell'))
+        .filter(cell => cell.closest('tr').style.display !== 'none');
+      const progress = document.getElementById('scan-progress');
+      this.disabled = true;
+      progress.style.display = '';
+      for (let i = 0; i < cells.length; i++) {
+        progress.textContent = `Checking ${i + 1} / ${cells.length}…`;
+        await scanCell(cells[i]);
+      }
+      progress.textContent = `Done — ${cells.length} rules checked.`;
+      this.disabled = false;
+    });
+  })();
+  </script>
+{% else %}
+  <div class="alert alert-info">
+    No rules defined yet.
+    <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_add' %}">Add a rule</a> to get started.
+  </div>
+{% endif %}
+{% endblock %}

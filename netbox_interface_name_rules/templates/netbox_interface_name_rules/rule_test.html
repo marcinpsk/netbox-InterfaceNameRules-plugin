@@ -1,0 +1,258 @@
+{# SPDX-License-Identifier: Apache-2.0 #}
+{# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com> #}
+{% extends 'generic/_base.html' %}
+
+{% block title %}Build Rule — Live Tester{% endblock %}
+
+{% block content %}
+
+{% if loaded_rule %}
+<div class="alert alert-info d-flex align-items-center mb-3">
+  <i class="mdi mdi-pencil-circle me-2"></i>
+  <span>
+    Testing existing rule <strong>#{{ loaded_rule.pk }}</strong>
+    (<a href="{{ loaded_rule.get_absolute_url }}">view</a> /
+    <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_edit' loaded_rule.pk %}">edit</a>).
+    Modify the fields below and click <strong>Check</strong> to preview, or
+    <strong>Save as Rule</strong> to update or create a rule.
+  </span>
+</div>
+{% endif %}
+<div class="row">
+  <div class="col-md-12 mb-2">
+    <p class="text-muted">
+      Fill in the rule fields and variable values below, then click <strong>Check</strong> to preview
+      the resulting interface name(s). If a module type is specified, the database is also queried for
+      any matching installed interfaces and their computed names are shown.<br>
+      <strong>Scope fields</strong> (Parent Module Type, Device Type, Platform) are optional filters —
+      leave them blank to test the rule without scoping.
+    </p>
+  </div>
+</div>
+
+<form method="post" action="" novalidate>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <div class="row g-3">
+
+    {# ── Left column: rule definition ─────────────────────────────────────────── #}
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-book-outline me-2"></i>Rule Definition</h5></div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">{{ form.name_template.label }}</label>
+            {{ form.name_template }}
+            <div class="form-text">{{ form.name_template.help_text }}</div>
+            {% if form.name_template.errors %}<div class="invalid-feedback d-block">{{ form.name_template.errors }}</div>{% endif %}
+          </div>
+          <div class="mb-3 form-check">
+            {{ form.module_type_is_regex }}
+            <label class="form-check-label">{{ form.module_type_is_regex.label }}</label>
+          </div>
+          <div class="mb-3" id="exact-mt-row">
+            <label class="form-label">{{ form.module_type.label }}</label>
+            {{ form.module_type }}
+            <div class="form-text">{{ form.module_type.help_text }}</div>
+          </div>
+          <div class="mb-3" id="regex-mt-row" style="display:none">
+            <label class="form-label">{{ form.module_type_pattern.label }}</label>
+            {{ form.module_type_pattern }}
+            <div class="form-text">{{ form.module_type_pattern.help_text }}</div>
+          </div>
+          <hr class="my-2">
+          <p class="text-muted small mb-2">Optional scoping — leave blank to match any:</p>
+          <div class="mb-3">
+            <label class="form-label">{{ form.parent_module_type.label }}</label>
+            {{ form.parent_module_type }}
+            <div class="form-text">{{ form.parent_module_type.help_text }}</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">{{ form.device_type.label }}</label>
+            {{ form.device_type }}
+            <div class="form-text">{{ form.device_type.help_text }}</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">{{ form.platform.label }}</label>
+            {{ form.platform }}
+            <div class="form-text">{{ form.platform.help_text }}</div>
+          </div>
+          <hr class="my-2">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label">{{ form.channel_count.label }}</label>
+              {{ form.channel_count }}
+              <div class="form-text">{{ form.channel_count.help_text }}</div>
+            </div>
+            <div class="col-6">
+              <label class="form-label">{{ form.channel_start.label }}</label>
+              {{ form.channel_start }}
+              <div class="form-text">{{ form.channel_start.help_text }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Right column: variable values ────────────────────────────────────────── #}
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-code-braces me-2"></i>Variable Values</h5></div>
+        <div class="card-body">
+          <p class="text-muted small">Set the template variable values used for the manual preview.
+             These simulate what NetBox extracts from the module bay context at install time.</p>
+          {% for field in form %}
+            {% if field.name|slice:":4" == "var_" %}
+              <div class="mb-2 row">
+                <label class="col-sm-5 col-form-label"><code>{{ field.label }}</code></label>
+                <div class="col-sm-7">{{ field }}</div>
+              </div>
+            {% endif %}
+          {% endfor %}
+
+          <details class="mt-3">
+            <summary class="text-muted small" style="cursor:pointer">Variable reference <i class="mdi mdi-information-outline"></i></summary>
+            <table class="table table-sm table-bordered mt-2 small">
+              <thead class="table-light"><tr><th>Variable</th><th>Description</th><th>Example</th></tr></thead>
+              <tbody>
+                <tr><td><code>{slot}</code></td><td>Top-level slot from parent bay position</td><td><code>0</code>, <code>2</code></td></tr>
+                <tr><td><code>{bay_position}</code></td><td>Bay position string from NetBox</td><td><code>0</code>, <code>swp1</code></td></tr>
+                <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position</td><td><code>1</code> (from <code>swp1</code>)</td></tr>
+                <tr><td><code>{parent_bay_position}</code></td><td>Parent module bay's position</td><td><code>0</code>, <code>2</code></td></tr>
+                <tr><td><code>{sfp_slot}</code></td><td>Sub-bay index within parent module</td><td><code>0</code>, <code>1</code></td></tr>
+                <tr><td><code>{base}</code></td><td>Current interface name from NetBox</td><td><code>Ethernet1</code>, <code>et-0/0/0</code></td></tr>
+                <tr><td><code>{channel}</code></td><td>Channel number (auto-set for breakout)</td><td><code>0</code>, <code>1</code>, <code>2</code></td></tr>
+              </tbody>
+            </table>
+            <p class="text-muted small mt-1 mb-0">
+              <strong>Arithmetic:</strong> expressions inside <code>{}</code> are evaluated safely,
+              e.g. <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code>.
+            </p>
+          </details>
+        </div>
+      </div>
+    </div>
+
+  </div>{# /row #}
+
+  <div class="mt-3 d-flex gap-2">
+    <button type="submit" name="action" value="check" class="btn btn-primary">
+      <i class="mdi mdi-play me-1"></i>Check
+    </button>
+    <button type="submit" name="action" value="save_rule" class="btn btn-success">
+      <i class="mdi mdi-content-save me-1"></i>Save as Rule
+    </button>
+  </div>
+</form>
+
+{# ── Results ─────────────────────────────────────────────────────────────────── #}
+
+{% if error %}
+  <div class="alert alert-danger mt-4">
+    <i class="mdi mdi-alert-circle me-1"></i><strong>Template error:</strong> {{ error }}
+  </div>
+{% endif %}
+
+{% if preview_results and not error %}
+  <div class="card mt-4">
+    <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-eye me-2"></i>Manual Variable Preview</h5></div>
+    <div class="card-body p-0">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>#</th>
+            {% if preview_results.0.channel is not None %}<th>Channel</th>{% endif %}
+            <th>Source (base name)</th>
+            <th></th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in preview_results %}
+            <tr>
+              <td class="text-muted">{{ forloop.counter }}</td>
+              {% if entry.channel is not None %}<td><code>{{ entry.channel }}</code></td>{% endif %}
+              <td><code class="text-muted">{{ entry.source }}</code></td>
+              <td><i class="mdi mdi-arrow-right text-muted"></i></td>
+              <td><code class="text-success">{{ entry.result }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+{% if db_preview is not None and not error %}
+  <div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h5 class="card-title mb-0"><i class="mdi mdi-database-search me-2"></i>Matching Installed Interfaces</h5>
+      <span class="badge text-bg-info">
+        {% if db_total > db_preview|length %}
+          Showing {{ db_preview|length }} of {{ db_total }} affected
+        {% else %}
+          {{ db_preview|length }} affected
+        {% endif %}
+      </span>
+    </div>
+    {% if db_preview %}
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Device</th>
+              <th>Module Type</th>
+              <th>Current Name</th>
+              <th></th>
+              <th>New Name(s)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in db_preview %}
+              <tr>
+                <td>
+                  {% if entry.module.device %}
+                    <a href="{{ entry.module.device.get_absolute_url }}">{{ entry.module.device }}</a>
+                  {% else %}<span class="text-muted">—</span>{% endif %}
+                </td>
+                <td>
+                  {% if entry.module.module_type %}
+                    <code>{{ entry.module.module_type.model }}</code>
+                  {% else %}
+                    <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+                <td><code class="text-muted">{{ entry.current_name }}</code></td>
+                <td><i class="mdi mdi-arrow-right text-muted"></i></td>
+                <td>
+                  {% for new_name in entry.new_names %}
+                    <code class="text-success">{{ new_name }}</code>{% if not forloop.last %}, {% endif %}
+                  {% endfor %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="card-body text-muted">No installed interfaces would be affected.</div>
+    {% endif %}
+  </div>
+{% endif %}
+
+<script>
+  (function () {
+    const regexCheck = document.getElementById('id_module_type_is_regex');
+    const exactRow = document.getElementById('exact-mt-row');
+    const regexRow = document.getElementById('regex-mt-row');
+
+    function toggle() {
+      const useRegex = regexCheck.checked;
+      exactRow.style.display = useRegex ? 'none' : '';
+      regexRow.style.display = useRegex ? '' : 'none';
+    }
+    regexCheck.addEventListener('change', toggle);
+    toggle();
+  })();
+</script>
+{% endblock %}

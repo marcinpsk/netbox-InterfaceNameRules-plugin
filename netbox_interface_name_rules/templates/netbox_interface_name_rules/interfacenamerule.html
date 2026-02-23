@@ -4,7 +4,55 @@
 {% load helpers %}
 {% load plugins %}
 
+{% block extra_controls %}
+  <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_test' %}?rule_id={{ object.pk }}"
+     class="btn btn-outline-secondary">
+    <i class="mdi mdi-flask-outline me-1"></i>Test in Build Rule
+  </a>
+  {% if perms.netbox_interface_name_rules.add_interfacenamerule %}
+    <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_duplicate' object.pk %}"
+       class="btn btn-success">
+      <i class="mdi mdi-content-copy me-1"></i>Duplicate
+    </a>
+  {% endif %}
+{% endblock extra_controls %}
+
 {% block content %}
+{# ── Priority callout ───────────────────────────────────────────────────────── #}
+<div class="alert alert-info d-flex align-items-start mb-3" role="alert">
+  <i class="mdi mdi-information-outline me-2 mt-1 fs-5"></i>
+  <div>
+    <strong>Priority score: {{ object.specificity_score }}</strong>
+    <span class="text-muted ms-1">({{ object.specificity_label }})</span>
+    <br>
+    <small>
+      This score is <em>auto-computed</em> — you cannot set it directly.
+      It controls which rule wins when multiple rules match the same module.
+      <strong>Higher score = higher priority.</strong>
+      Exact FK rules always outrank regex rules (score 1000+&nbsp;vs max ≤&nbsp;955).
+      Among regex rules, adding scope fields raises the score:
+      <code>parent_module_type</code>&nbsp;+4×100,
+      <code>device_type</code>&nbsp;+2×100,
+      <code>platform</code>&nbsp;+1×100,
+      plus pattern length.
+      <a data-bs-toggle="collapse" href="#priority-detail" class="ms-1">More…</a>
+    </small>
+    <div class="collapse mt-2" id="priority-detail">
+      <table class="table table-sm table-bordered mb-0 small">
+        <thead class="table-light"><tr><th>Rule type</th><th>Score formula</th><th>Range</th></tr></thead>
+        <tbody>
+          <tr><td>Exact FK (module_type)</td><td>1000 + scope</td><td>1000 – 1007</td></tr>
+          <tr><td>Regex (module_type_pattern)</td><td>scope × 100 + len(pattern)</td><td>0 – 955</td></tr>
+        </tbody>
+      </table>
+      <p class="small mb-0 mt-1">
+        Scope bits: <code>parent_module_type</code>=4, <code>device_type</code>=2, <code>platform</code>=1.
+        Two rules with the same score: lowest <code>pk</code> (oldest rule) wins.
+      </p>
+    </div>
+  </div>
+</div>
+
 <div class="row mb-3">
   <div class="col col-md-12">
     <div class="card">
@@ -13,7 +61,8 @@
           <tr>
             <th>Module Type</th>
             <th>Parent Module Type</th>
-            <th>Parent Device Type</th>
+            <th>Device Type</th>
+            <th>Platform</th>
             <th>Name Template</th>
             <th>Channels</th>
             <th>Channel Start</th>
@@ -22,7 +71,16 @@
         </thead>
         <tbody>
           <tr>
-            <td><a href="{{ object.module_type.get_absolute_url }}">{{ object.module_type }}</a></td>
+            <td>
+              {% if object.module_type_is_regex %}
+                <code>{{ object.module_type_pattern }}</code>
+                <span class="badge text-bg-info">regex</span>
+              {% elif object.module_type %}
+                <a href="{{ object.module_type.get_absolute_url }}">{{ object.module_type }}</a>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
             <td>
               {% if object.parent_module_type %}
                 <a href="{{ object.parent_module_type.get_absolute_url }}">{{ object.parent_module_type }}</a>
@@ -35,6 +93,13 @@
                 <a href="{{ object.device_type.get_absolute_url }}">{{ object.device_type }}</a>
               {% else %}
                 <span class="text-muted">Any device</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if object.platform %}
+                <a href="{{ object.platform.get_absolute_url }}">{{ object.platform }}</a>
+              {% else %}
+                <span class="text-muted">Any platform</span>
               {% endif %}
             </td>
             <td><code>{{ object.name_template }}</code></td>

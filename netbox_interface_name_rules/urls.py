@@ -12,7 +12,15 @@ urlpatterns = [
     path("rules/add/", views.InterfaceNameRuleCreateView.as_view(), name="interfacenamerule_add"),
     path("rules/import/", views.InterfaceNameRuleBulkImportView.as_view(), name="interfacenamerule_bulk_import"),
     path("rules/bulk_delete/", views.InterfaceNameRuleBulkDeleteView.as_view(), name="interfacenamerule_bulk_delete"),
+    # Rule tester (Build Rule)
+    path("rules/test/", views.RuleTestView.as_view(), name="interfacenamerule_test"),
+    # Apply rules to existing interfaces
+    path("rules/apply/", views.RuleApplyListView.as_view(), name="interfacenamerule_apply"),
+    # Per-rule parameterised routes
     path("rules/<int:pk>/", views.InterfaceNameRuleView.as_view(), name="interfacenamerule_detail"),
+    path(
+        "rules/<int:pk>/duplicate/", views.InterfaceNameRuleDuplicateView.as_view(), name="interfacenamerule_duplicate"
+    ),
     path("rules/<int:pk>/edit/", views.InterfaceNameRuleEditView.as_view(), name="interfacenamerule_edit"),
     path("rules/<int:pk>/delete/", views.InterfaceNameRuleDeleteView.as_view(), name="interfacenamerule_delete"),
     path(
@@ -20,4 +28,6 @@ urlpatterns = [
         views.InterfaceNameRuleChangeLogView.as_view(),
         name="interfacenamerule_changelog",
     ),
+    path("rules/<int:pk>/apply/", views.RuleApplyDetailView.as_view(), name="interfacenamerule_apply_detail"),
+    path("rules/<int:pk>/applicable/", views.RuleApplicableView.as_view(), name="interfacenamerule_applicable"),
 ]
