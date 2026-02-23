@@ -9,8 +9,8 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("dcim", "0225_gfk_indexes"),
-        ("extras", "0134_owner"),
+        ("dcim", "0210_macaddress_ordering"),
+        ("extras", "0129_fix_script_paths"),
     ]
 
     operations = [

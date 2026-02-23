@@ -1,0 +1,224 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+"""Tests for regex pattern matching on module type rules."""
+
+from dcim.models import (
+    Device,
+    DeviceRole,
+    DeviceType,
+    Interface,
+    Manufacturer,
+    Module,
+    ModuleBay,
+    ModuleBayTemplate,
+    ModuleType,
+    Site,
+)
+from django.core.exceptions import ValidationError
+from django.test import TestCase
+
+from netbox_interface_name_rules.engine import find_matching_rule, apply_interface_name_rules
+from netbox_interface_name_rules.models import InterfaceNameRule
+
+
+class RegexModelValidationTest(TestCase):
+    """Test model clean() validation for regex fields."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RxValMfg", slug="rxvalmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="RX-SFP", part_number="RX-SFP")
+
+    def test_regex_requires_pattern(self):
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="",
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_regex_rejects_fk_with_pattern(self):
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-.*",
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type", ctx.exception.message_dict)
+
+    def test_regex_validates_pattern_syntax(self):
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="[invalid(",
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_exact_requires_module_type_fk(self):
+        rule = InterfaceNameRule(
+            module_type_is_regex=False,
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type", ctx.exception.message_dict)
+
+    def test_valid_regex_rule_passes_clean(self):
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="port{bay_position}",
+        )
+        rule.clean()  # Should not raise
+
+    def test_valid_exact_rule_passes_clean(self):
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            module_type_is_regex=False,
+            name_template="port{bay_position}",
+        )
+        rule.clean()  # Should not raise
+
+
+class RegexFindMatchingRuleTest(TestCase):
+    """Test two-tier matching: exact FK first, then regex pattern."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RxMfg", slug="rxmfg")
+        cls.sfp_lr4 = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-LR4", part_number="LR4")
+        cls.sfp_lr8 = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-LR8", part_number="LR8")
+        cls.sfp_zr = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-ZR", part_number="ZR")
+        cls.sfp_10g = ModuleType.objects.create(manufacturer=manufacturer, model="SFP-10G-LR", part_number="10GLR")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="8201-SYS", slug="8201-sys")
+        cls.parent_mt = ModuleType.objects.create(manufacturer=manufacturer, model="RX-PARENT", part_number="RX-PARENT")
+
+    def test_regex_matches_multiple_module_types(self):
+        """A single regex rule matches several module types."""
+        rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="FourHundredGigE0/0/0/{bay_position}",
+        )
+        self.assertEqual(find_matching_rule(self.sfp_lr4, None, None), rule)
+        self.assertEqual(find_matching_rule(self.sfp_lr8, None, None), rule)
+        self.assertEqual(find_matching_rule(self.sfp_zr, None, None), rule)
+
+    def test_regex_does_not_match_unrelated(self):
+        """Regex only matches its pattern, not other module types."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="FourHundredGigE0/0/0/{bay_position}",
+        )
+        self.assertIsNone(find_matching_rule(self.sfp_10g, None, None))
+
+    def test_exact_takes_priority_over_regex(self):
+        """Exact FK match is preferred over regex pattern match."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="generic400G/{bay_position}",
+        )
+        exact_rule = InterfaceNameRule.objects.create(
+            module_type=self.sfp_lr4,
+            name_template="exact-lr4/{bay_position}",
+        )
+        result = find_matching_rule(self.sfp_lr4, None, None)
+        self.assertEqual(result, exact_rule)
+
+    def test_regex_with_device_type_specificity(self):
+        """Regex rule with device_type is preferred over generic regex."""
+        generic = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="generic/{bay_position}",
+        )
+        specific = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            device_type=self.device_type,
+            name_template="specific/{bay_position}",
+        )
+        # With device_type context → specific rule
+        result = find_matching_rule(self.sfp_lr4, None, self.device_type)
+        self.assertEqual(result, specific)
+        # Without device_type context → generic rule
+        result = find_matching_rule(self.sfp_lr4, None, None)
+        self.assertEqual(result, generic)
+
+    def test_regex_fullmatch_not_partial(self):
+        """re.fullmatch requires the entire model name to match."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="400G",  # Partial — should NOT match
+            name_template="partial/{bay_position}",
+        )
+        self.assertIsNone(find_matching_rule(self.sfp_lr4, None, None))
+
+    def test_regex_with_parent_module_type(self):
+        """Regex rule with parent_module_type specificity."""
+        rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            parent_module_type=self.parent_mt,
+            name_template="nested/{bay_position}",
+        )
+        result = find_matching_rule(self.sfp_lr8, self.parent_mt, None)
+        self.assertEqual(result, rule)
+        # Without parent context → no match
+        self.assertIsNone(find_matching_rule(self.sfp_lr8, None, None))
+
+
+class RegexApplyRulesTest(TestCase):
+    """Test regex rules through the full apply pipeline."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RxApplyMfg", slug="rxapplymfg")
+        cls.device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="RX-APPLY-DEV", slug="rx-apply-dev"
+        )
+        cls.mt_lr4 = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-LR4", part_number="APLR4")
+        cls.mt_zr = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-ZR", part_number="APZR")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 0", position="0")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 1", position="1")
+        role = DeviceRole.objects.create(name="RxApplyRole", slug="rxapplyrole")
+        site = Site.objects.create(name="RxApplySite", slug="rxapplysite")
+        cls.device = Device.objects.create(name="rx-apply-01", device_type=cls.device_type, role=role, site=site)
+
+    def test_regex_rule_renames_interface(self):
+        """Regex rule matches and renames interface for LR4."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="FourHundredGigE0/0/0/{bay_position}",
+        )
+        bay = ModuleBay.objects.get(device=self.device, name="Transceiver 0")
+        module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.mt_lr4)
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="400gbase-x-osfp")
+        renamed = apply_interface_name_rules(module, bay)
+        self.assertEqual(renamed, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "FourHundredGigE0/0/0/0")
+
+    def test_same_regex_rule_different_module_type(self):
+        """Same regex rule works for ZR module type too."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="FourHundredGigE0/0/0/{bay_position}",
+        )
+        bay = ModuleBay.objects.get(device=self.device, name="Transceiver 1")
+        module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.mt_zr)
+        iface = Interface.objects.create(device=self.device, module=module, name="1", type="400gbase-x-osfp")
+        renamed = apply_interface_name_rules(module, bay)
+        self.assertEqual(renamed, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "FourHundredGigE0/0/0/1")
