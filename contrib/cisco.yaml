@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Cisco Interface Name Rules
+#
+# Bulk import via: Interface Name Rules > Import
+#
+# Channel numbering on Cisco IOS-XR (including the 8000 series):
+#   Breakout subinterfaces are 0-based: .../X/0, .../X/1, .../X/2, .../X/3
+#   Use channel_start: 0 for all IOS-XR breakout rules.
+#   NOTE: Cisco Nexus (NX-OS) uses 1-based channel numbering (e.g. Ethernet1/1/1).
+#   If you are modelling Nexus devices with module bays, set channel_start: 1.
+
+# =============================================================================
+# Cisco 8201-SYS
+# Bay format: "Transceiver 0/0/0/X" with position=X (numeric)
+# =============================================================================
+
+# 400G QSFP-DD transceivers (regex) → FourHundredGigE0/0/0/X
+- module_type_pattern: "QSFP-DD-400G-.*"
+  module_type_is_regex: true
+  device_type: 8201-SYS
+  name_template: "FourHundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 400GE QSFP-DD naming (all variants)"
+
+# 100G QSFP28 transceivers (regex) → HundredGigE0/0/0/X
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 naming (all variants)"
+
+# 100G QSFP28 DAC (regex) → HundredGigE0/0/0/X
+- module_type_pattern: "QSFP28-100G-.*"
+  module_type_is_regex: true
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 100GE QSFP28 DAC naming (all variants)"
+
+# 100G QSFP28-DD dual breakout (exact) → HundredGigE0/0/0/X/channel
+- module_type: QSFP28-DD-2X100G-LR4
+  device_type: 8201-SYS
+  name_template: "HundredGigE0/0/0/{bay_position}/{channel}"
+  channel_count: 2
+  channel_start: 0
+  description: "Cisco 8201-SYS QSFP28-DD 2x100G breakout"
+
+# 40G QSFP+ 4x10G breakout (regex) → TenGigE0/0/0/X/channel
+- module_type_pattern: "QSFP-4X10G-.*"
+  module_type_is_regex: true
+  device_type: 8201-SYS
+  name_template: "TenGigE0/0/0/{bay_position}/{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Cisco 8201-SYS QSFP+ 4x10G breakout (all variants)"
+
+# 10G SFP+ (exact) → TenGigE0/0/0/X
+- module_type: SFP-10G-LR
+  device_type: 8201-SYS
+  name_template: "TenGigE0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 10GE SFP+ naming"
+
+# 1G SFP (exact) → GigabitEthernet0/0/0/X
+- module_type: SFP-1G-LX
+  device_type: 8201-SYS
+  name_template: "GigabitEthernet0/0/0/{bay_position}"
+  description: "Cisco 8201-SYS 1GE SFP naming"

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Converter Offset Rules (device-independent)
+#
+# These rules handle modules installed in media converters (e.g., X2-to-SFP)
+# where port numbering requires arithmetic offset calculations.
+#
+# Bulk import via: Interface Name Rules > Import
+
+# =============================================================================
+# CVR-X2-SFP converter
+# X2-to-SFP adapter — port number offset from parent module position
+# =============================================================================
+
+- module_type: SFP-1G-T
+  parent_module_type: CVR-X2-SFP
+  name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+  description: "SFP-1G-T in CVR-X2-SFP: offset port numbering for X2-to-SFP conversion"

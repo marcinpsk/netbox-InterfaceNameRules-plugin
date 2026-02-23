@@ -25,6 +25,16 @@ menu = PluginMenu(
                         ),
                     ),
                 ),
+                PluginMenuItem(
+                    link="plugins:netbox_interface_name_rules:interfacenamerule_test",
+                    link_text="Build Rule",
+                    buttons=(),
+                ),
+                PluginMenuItem(
+                    link="plugins:netbox_interface_name_rules:interfacenamerule_apply",
+                    link_text="Apply Rules",
+                    buttons=(),
+                ),
             ),
         ),
     ),

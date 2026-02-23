@@ -1,0 +1,30 @@
+name: Bug Report
+description: Report a bug
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the issue and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: netbox-version
+    attributes:
+      label: NetBox version
+      placeholder: "e.g. 4.5.3"
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      render: shell

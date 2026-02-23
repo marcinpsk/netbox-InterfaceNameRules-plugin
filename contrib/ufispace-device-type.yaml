@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# UfiSpace Interface Name Rules — Device-type-scoped (OPTION B)
+#
+# Bulk import via: Interface Name Rules > Import
+#
+# UfiSpace whitebox switches (S9610-36D, S9610-46DX, S9700-53DX, etc.) run SONiC
+# and use "swpX" interface naming where X is the transceiver bay number.
+#
+# Breakout ports on SONiC use the "swpXsY" convention where X is the bay number
+# and Y is the channel index (0-based): swp1s0, swp1s1, swp1s2, swp1s3.
+#
+# ─── HOW RULE PRIORITY WORKS ─────────────────────────────────────────────────
+#
+# When a module is installed, the engine picks the SINGLE most specific matching
+# rule using this cascade (highest score wins):
+#
+#   1. Exact module-type FK match always outranks regex at any scope.
+#   2. Scope specificity (more constraints = higher priority):
+#        parent_module_type set → +4 pts
+#        device_type set        → +2 pts
+#        platform set           → +1 pt
+#   3. For regex rules: longer pattern beats shorter at the same scope.
+#
+# Examples for a QSFP-DD-400G-DR4 module in a S9610-36D device:
+#   Rule A: /.*/ device_type=S9610-36D              → score 200+2=202  (dt, short)
+#   Rule B: /QSFP-DD-400G-.*/ device_type=S9610-36D → score 200+15=215 (dt, longer)
+#   → Rule B wins (highest score). Rule A catches everything else.
+#
+# ⚠ WARNING: Don't mix device-type and platform rules for the same device.
+#   A device-type rule at scope "dt" (score 2xx) always shadows a platform rule
+#   at scope "pl" (score 1xx), even if the platform rule has a more specific
+#   pattern. Choose ONE approach: device-type-scoped (this file) OR
+#   platform-scoped (see ufispace.yaml).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# OPTION B — Device-type-scoped rules (this file)
+#   Does NOT require a Platform object in NetBox.
+#   Each device model gets its own set of rules.
+#   Use this if you manage devices individually or do not use Platform tagging.
+#
+# For platform-scoped rules covering all SONiC devices at once, use ufispace.yaml.
+#
+# Load ONLY ONE of the two files to avoid ambiguity.
+
+# =============================================================================
+# UfiSpace S9610-36D
+# =============================================================================
+
+# Generic: all other module types → swpX (catch-all, shortest pattern → lowest priority)
+- module_type_pattern: ".*"
+  module_type_is_regex: true
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-36D — generic naming (all module types not matched by breakout rules)"
+
+# QSFP-DD 400G → 4×100G breakout (longer pattern beats .* above)
+- module_type_pattern: "QSFP-DD-400G-.*"
+  module_type_is_regex: true
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9610-36D — QSFP-DD 400G 4×100G breakout (swpXs0..swpXs3)"
+
+# QSFP28 100G → 4×25G breakout (longer pattern beats .* above)
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: S9610-36D
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9610-36D — QSFP28 100G 4×25G breakout (swpXs0..swpXs3)"
+
+# =============================================================================
+# UfiSpace S9610-46DX
+# =============================================================================
+
+- module_type_pattern: ".*"
+  module_type_is_regex: true
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9610-46DX — generic naming (all module types)"
+
+- module_type_pattern: "QSFP-DD-400G-.*"
+  module_type_is_regex: true
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9610-46DX — QSFP-DD 400G 4×100G breakout (swpXs0..swpXs3)"
+
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: S9610-46DX
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9610-46DX — QSFP28 100G 4×25G breakout (swpXs0..swpXs3)"
+
+# =============================================================================
+# UfiSpace S9700-53DX
+# =============================================================================
+
+- module_type_pattern: ".*"
+  module_type_is_regex: true
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}"
+  description: "UfiSpace S9700-53DX — generic naming (all module types)"
+
+- module_type_pattern: "QSFP-DD-400G-.*"
+  module_type_is_regex: true
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9700-53DX — QSFP-DD 400G 4×100G breakout (swpXs0..swpXs3)"
+
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: S9700-53DX
+  name_template: "swp{bay_position_num}s{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "UfiSpace S9700-53DX — QSFP28 100G 4×25G breakout (swpXs0..swpXs3)"

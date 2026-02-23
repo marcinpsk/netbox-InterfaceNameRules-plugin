@@ -1,0 +1,106 @@
+# Configuration
+
+## Creating Rules
+
+Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
+
+### Rule Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off) |
+| Module Type Pattern | Conditional | Regex pattern matched against module type model name via `re.fullmatch()` (required when Regex Mode is on) |
+| Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
+| Parent Module Type | No | Restrict to modules inside this parent (e.g., converter) |
+| Device Type | No | Restrict to devices of this type |
+| Name Template | Yes | Interface name pattern with template variables |
+| Channel Count | No | Number of breakout channels (0 = no breakout) |
+| Channel Start | No | Starting channel number (0 for most platforms) |
+
+### Rule Priority
+
+When multiple rules could match, the most specific one wins. Exact FK matches always beat regex matches:
+
+**Tier 1 — Exact module type match:**
+1. Module type + parent module type + device type (most specific)
+2. Module type + parent module type
+3. Module type + device type
+4. Module type only (universal)
+
+**Tier 2 — Regex pattern match (fallback, longest pattern first):**
+5–8. Same four specificity levels, but `module_type_pattern` is matched via `re.fullmatch()` against the installed module type's model name. When multiple patterns match at the same level, the longest pattern is preferred.
+
+## NetBox Module Interface Templates
+
+The plugin works alongside NetBox's own module interface template naming.
+Two NetBox token styles affect how and when the plugin renames interfaces:
+
+### `{module}` (legacy — all NetBox versions)
+
+When a module type's interface template uses `{module}`, NetBox substitutes the
+raw bay position string at install time — for example, `{module}` in bay `5`
+creates an interface named `5`.
+
+The plugin then **renames** this interface via the `post_save` signal on `Module`.
+This is the primary workflow the plugin was designed for.
+
+```
+NetBox installs:  interface name = "5"   (raw bay position)
+Plugin renames:   interface name = "et-0/0/5"
+```
+
+### `{module_path}` (NetBox ≥ 4.9)
+
+When a module type's interface template uses `{module_path}`, NetBox resolves
+the full module bay path at install time.  For a transceiver in "X2 Port 1"
+inside a line card in "Slot 1", `{module_path}` resolves to `1/1`.  The plugin
+signal still fires, but may compute the same name the interface already has —
+so it becomes a no-op.
+
+For directly-attached pluggables (single bay depth), `{module_path}` resolves to
+just the bay position, behaving identically to `{module}`.
+
+!!! tip
+    New module types should use `{module_path}` for best NetBox compatibility.
+    Legacy module types using `{module}` continue to work — the plugin handles the rename.
+
+### The `potentially-deprecated` Tag
+
+After installing a module, if the plugin's signal fires but finds the interface
+is already correctly named, it automatically tags the rule `potentially-deprecated`.
+This means:
+
+- For **new installs**: the rule may no longer be needed (NetBox generates the name)
+- For **retroactive applies**: the rule is still useful for modules installed before
+  `{module_path}` support was added, or before the rule existed
+
+The tag is informational only — the rule remains active.
+
+### Apply Rules and the Applicable Column
+
+**Apply Rules** is designed for **retroactive renames**.  Interfaces installed
+after a matching rule is active are renamed automatically at install time.
+
+The **Applicable** column shows ✓ only when at least one currently-installed
+interface **would actually change name** if the rule were applied.  Rules where
+all matching interfaces are already correctly named show `—`.
+
+## Bulk Import
+
+Export existing rules or import new ones via **Interface Name Rules → Import**.
+The YAML format matches the files in the `contrib/` directory.
+
+## REST API
+
+Full CRUD is available at `/api/plugins/interface-name-rules/rules/`.
+
+```bash
+# List rules
+curl -H "Authorization: Token $TOKEN" http://netbox/api/plugins/interface-name-rules/rules/
+
+# Create a rule
+curl -X POST -H "Authorization: Token $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"module_type": 1, "name_template": "et-0/0/{bay_position}"}' \
+  http://netbox/api/plugins/interface-name-rules/rules/
+```

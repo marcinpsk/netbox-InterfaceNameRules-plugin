@@ -10,9 +10,13 @@ Requires NetBox ≥ 4.2.0 and Python ≥ 3.12. Licensed under Apache-2.0 (REUSE-
 
 This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/netbox/en/stable/plugins/development/):
 
-- **`models.py`** — Single model `InterfaceNameRule` linking a module type to a name template, with optional scoping to parent module type and/or device type. Rules are matched most-specific-first.
-- **`signals.py`** — `post_save` receiver on `dcim.Module`. Only fires on `created=True`. Lazily imports the engine to avoid circular imports during Django startup.
-- **`engine.py`** — Core logic: rule lookup (`_find_matching_rule` with 4-level priority fallback), template variable building from module bay hierarchy, and interface renaming/breakout creation. The `evaluate_name_template` function supports `{variable}` substitution followed by safe AST-based arithmetic evaluation of remaining brace expressions.
+- **`models.py`** — Single model `InterfaceNameRule` linking a module type (nullable FK, required only in exact mode) to a name template, with optional scoping to parent module type, device type, and/or platform. Rules are matched most-specific-first.
+- **`signals.py`** — Two signal handlers:
+  - `post_save` on `dcim.Module` (primary path): fires on `created=True`, defers renaming to `on_commit` so interfaces exist in DB first. This is the **only** path that runs during normal module installation because NetBox creates interfaces via `bulk_create()`.
+  - `pre_save` on `dcim.Interface` (defence-in-depth): would rename before INSERT, but **does NOT fire** during normal module installation because `bulk_create()` skips `pre_save` signals. Only fires when interfaces are created individually via `Interface.save()` (scripts, custom code, etc.).
+
+  Lazily imports the engine to avoid circular imports during Django startup.
+- **`engine.py`** — Core logic: two-tier rule lookup (`_find_matching_rule` first tries an exact FK match across 4 specificity levels, then falls back to regex matching with `re.fullmatch()` across the same 4 levels), template variable building from module bay hierarchy, and interface renaming/breakout creation. The `evaluate_name_template` function supports `{variable}` substitution followed by safe AST-based arithmetic evaluation of remaining brace expressions.
 - **`api/`** — DRF REST API using NetBox's `NetBoxModelViewSet` and `NetBoxModelSerializer`.
 - **`views.py`, `urls.py`, `tables.py`, `forms.py`, `filters.py`, `navigation.py`** — Standard NetBox UI CRUD views.
 - **`utils.py`** — Version detection for feature gating (e.g., `{module_path}` token support in NetBox ≥ 4.9.0).
@@ -85,9 +89,9 @@ The `reuse-lint` pre-commit hook validates compliance on every commit.
 ## Key conventions
 
 - All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents.
-- Template variables use Python `str.format()` syntax: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`.
+- Template variables use Python `str.format()` syntax: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`, `{module_path}` (gated via `utils.supports_module_path()` for NetBox ≥ 4.9.0).
 - Arithmetic inside braces is evaluated via `ast.parse` with a strict allowlist of AST node types — never use `eval()` directly on user input.
 - The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.
-- Rule matching priority: (module_type + parent + device) → (module_type + parent) → (module_type + device) → (module_type only).
-- `contrib/interface_name_rules.yaml` contains example rules for bulk import — keep it updated when adding new rule patterns.
+- Rule matching uses **two tiers** within each priority level — exact FK match first, then regex (`re.fullmatch()`) fallback. Priority levels (applied in both tiers): (module_type + parent + device) → (module_type + parent) → (module_type + device) → (module_type only).
+- Add new rules to the appropriate vendor-specific file under `contrib/` (`cisco.yaml`, `juniper.yaml`, `linux.yaml`, `ufispace.yaml`, `ufispace-device-type.yaml`, `converters.yaml`) — keep them updated when adding new rule patterns.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format, enforced by pre-commit hook.

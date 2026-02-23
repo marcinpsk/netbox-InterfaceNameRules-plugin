@@ -4,32 +4,38 @@
 
 import functools
 import logging
-import threading
 
-from django.db import connection, transaction
+from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 logger = logging.getLogger("netbox_interface_name_rules")
 
-# Delay for auto-commit mode (seconds). Allows Module.save() to finish
-# creating component instances before the rename logic runs.
-_AUTOCOMMIT_DELAY = 0.5
+# NOTE: We intentionally do NOT hook into pre_save on dcim.Interface.
+#
+# NetBox's Module.save() creates interfaces via bulk_create() which bypasses
+# pre_save signals entirely.  NetBox then manually dispatches post_save for
+# the Module object.  The actual renaming path is therefore:
+#
+#   Module.save()
+#     → bulk_create() all interfaces (pre_save never fires)
+#     → NetBox fires post_save(Module)
+#     → on_module_saved → transaction.on_commit
+#     → _apply_rules_deferred → apply_interface_name_rules()
+#
+# Adding a pre_save on Interface would be a no-op for the normal install
+# path and would create a false sense of security.
 
 
 @receiver(post_save, sender="dcim.Module", dispatch_uid="interface_name_rules_post_save_module")
 def on_module_saved(sender, instance, created, **kwargs):
-    """Apply interface name rules when a module is installed (created).
+    """Apply interface name rules after module install — primary renaming path.
 
-    NetBox creates module component instances (interfaces) in Module.save()
-    *after* super().save() returns — the point at which post_save fires.
-
-    In an explicit transaction (UI/API with atomic block),
-    transaction.on_commit() correctly defers execution until after the
-    full save completes, including interface creation.
-
-    In auto-commit mode, on_commit() fires immediately — a short timer
-    is used as a fallback to allow Module.save() to finish.
+    NetBox's Module.save() creates interfaces via bulk_create() and then
+    manually dispatches post_save for the Module.  This handler defers the
+    actual renaming to on_commit so that all interfaces are visible in the DB
+    before apply_interface_name_rules() runs.  Handles both simple renames
+    and breakout channel creation.
     """
     if not created:
         return
@@ -40,11 +46,7 @@ def on_module_saved(sender, instance, created, **kwargs):
         return
 
     callback = functools.partial(_apply_rules_deferred, module.pk, module_bay.pk)
-
-    if connection.in_atomic_block:
-        transaction.on_commit(callback)
-    else:
-        threading.Timer(_AUTOCOMMIT_DELAY, callback).start()
+    transaction.on_commit(callback)
 
 
 def _apply_rules_deferred(module_pk, module_bay_pk):

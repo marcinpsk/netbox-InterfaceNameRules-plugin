@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Linux Server Interface Name Rules
+#
+# Bulk import via: Interface Name Rules > Import
+#
+# Linux names pluggable NIC ports based on slot/position, not transceiver type.
+# These rules map the NetBox module bay position to the expected Linux name so
+# that NetBox interfaces match what you see in `ip link` on the host.
+#
+# ─── NAMING CONVENTIONS COVERED ─────────────────────────────────────────────
+#
+#   eth{N}        — traditional (legacy) naming; common in containers / VMs
+#   ens{slot}f{N} — systemd predictable: slot-based + port index
+#   eno{N}        — systemd predictable: onboard/motherboard NIC
+#   swp{N}        — Cumulus Linux / Switchdev whitebox Linux (same as SONiC)
+#
+# ─── CHOOSING A RULE ─────────────────────────────────────────────────────────
+#
+# Only import the rules that match your environment. Conflicting rules for the
+# same module type and device can cause the wrong name to be applied.
+#
+# ⚠ IMPORT OVERWRITE BEHAVIOUR ────────────────────────────────────────────────
+# The import uses update_or_create keyed on
+#   (module_type_pattern, module_type_is_regex, parent_module_type, device_type, platform)
+# so importing the whole file will silently replace an earlier entry whenever a
+# later entry shares the same key.  All four OPTIONs in this file use global
+# scope (no device_type / platform / parent_module_type), so importing multiple
+# options for the same module_type_pattern overwrites the previous one.
+#
+# Remediation — pick ONE approach:
+#   a) Import only the OPTION blocks you need (copy them into a temporary file).
+#   b) Scope conflicting rules with device_type/platform to avoid key collisions.
+#   c) Split the OPTIONs into separate files and import only one.
+#
+# For SONiC-style swp naming, see ufispace.yaml instead (platform-scoped).
+#
+# ─── NetBox bay position mapping ─────────────────────────────────────────────
+#
+# NetBox creates a module bay per physical port on the NIC/device. The bay
+# position is typically the string from the module bay template, e.g. "0", "1".
+# {bay_position_num} extracts the numeric suffix so "Port 2" → 2.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# =============================================================================
+# OPTION 1 — Traditional naming:  eth0, eth1, eth2, ...
+#
+#   Used in: containers, VMs, older bare-metal hosts, hosts with net.ifnames=0
+#   Bay 0 → eth0, Bay 1 → eth1, ...
+# =============================================================================
+
+# 10G SFP+ → eth{N}
+- module_type_pattern: "SFP-10G-.*"
+  module_type_is_regex: true
+  name_template: "eth{bay_position_num}"
+  description: "Linux server — SFP+ 10G traditional naming (eth0, eth1, ...)"
+
+# 25G SFP28 → eth{N}
+- module_type_pattern: "SFP28-25G-.*"
+  module_type_is_regex: true
+  name_template: "eth{bay_position_num}"
+  description: "Linux server — SFP28 25G traditional naming (eth0, eth1, ...)"
+
+# 100G QSFP28 → eth{N}
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  name_template: "eth{bay_position_num}"
+  description: "Linux server — QSFP28 100G traditional naming (eth0, eth1, ...)"
+
+# =============================================================================
+# OPTION 2 — systemd predictable naming: ens{slot}f{port}
+#
+#   Used in: bare-metal servers where udev assigns slot-based names.
+#   The {slot} variable maps to the top-level module bay position (card slot).
+#   The {bay_position_num} maps to the port index within the NIC card.
+#
+#   Example: NIC in slot 3, port 0 → ens3f0 ; port 1 → ens3f1
+#
+#   ⚠ Requires the device type to have a module bay representing the NIC *slot*,
+#     and sub-bays (or positions) representing individual ports. If your NetBox
+#     model uses a single bay layer, replace {slot} with a fixed value.
+# =============================================================================
+
+# 10G SFP+ → ens{slot}f{N}
+- module_type_pattern: "SFP-10G-.*"
+  module_type_is_regex: true
+  name_template: "ens{slot}f{bay_position_num}"
+  description: "Linux server — SFP+ 10G systemd predictable naming (ens1f0, ens1f1, ...)"
+
+# 25G SFP28 → ens{slot}f{N}
+- module_type_pattern: "SFP28-25G-.*"
+  module_type_is_regex: true
+  name_template: "ens{slot}f{bay_position_num}"
+  description: "Linux server — SFP28 25G systemd predictable naming (ens1f0, ens1f1, ...)"
+
+# 100G QSFP28 → ens{slot}f{N}
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  name_template: "ens{slot}f{bay_position_num}"
+  description: "Linux server — QSFP28 100G systemd predictable naming (ens1f0, ens1f1, ...)"
+
+# =============================================================================
+# OPTION 3 — Cumulus Linux / DENT / switchdev whitebox: swp{N}
+#
+#   Used in: whitebox switches running Cumulus Linux, DENT, or any Linux NOS
+#   that follows the swpX convention. Identical to UfiSpace SONiC naming.
+#   For SONiC-specific platform-scoped rules, see ufispace.yaml instead.
+# =============================================================================
+
+# Any transceiver → swp{N}  (device-type-scoped — set device_type to your switch model)
+# Uncomment and set device_type to restrict to a specific switch model.
+#
+# - module_type_pattern: ".*"
+#   module_type_is_regex: true
+#   device_type: YOUR-SWITCH-MODEL
+#   name_template: "swp{bay_position_num}"
+#   description: "Cumulus Linux — generic swp naming"
+
+# =============================================================================
+# OPTION 4 — QSFP28 4×25G breakout (kernel sub-port notation)
+#
+#   Some drivers (mlx5, bnxt) expose breakout ports as sub-interfaces.
+#   Common notations: eth0d1..eth0d4 (Mellanox HW breakout in newer kernels)
+#   or eth0.1..eth0.4 / eth0:0..eth0:3 (varies by driver and distro).
+#
+#   Adjust the name_template separator to match your driver's convention.
+# =============================================================================
+
+# QSFP28 100G → 4×25G breakout using 'd' sub-port separator (Mellanox-style)
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  name_template: "eth{bay_position_num}d{channel}"
+  channel_count: 4
+  channel_start: 1
+  description: "Linux server — QSFP28 4×25G breakout, Mellanox-style (eth0d1..eth0d4)"

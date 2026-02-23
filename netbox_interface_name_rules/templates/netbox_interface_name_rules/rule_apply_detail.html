@@ -1,0 +1,210 @@
+{# SPDX-License-Identifier: Apache-2.0 #}
+{# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com> #}
+{% extends 'generic/_base.html' %}
+
+{% block title %}Apply Rule — Preview{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_apply' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="mdi mdi-arrow-left me-1"></i>Back to rule list
+  </a>
+</div>
+
+{# ── Rule summary ─────────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-book-outline me-2"></i>Rule</h5></div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-3">Module Type</dt>
+      <dd class="col-sm-9">
+        {% if rule.module_type_is_regex %}
+          <code>{{ rule.module_type_pattern }}</code>
+          <span class="badge text-bg-info ms-1">regex</span>
+        {% elif rule.module_type %}
+          <a href="{{ rule.module_type.get_absolute_url }}">{{ rule.module_type.model }}</a>
+        {% else %}
+          <span class="text-muted">—</span>
+        {% endif %}
+      </dd>
+      <dt class="col-sm-3">Parent Module Type</dt>
+      <dd class="col-sm-9">
+        {% if rule.parent_module_type %}
+          <a href="{{ rule.parent_module_type.get_absolute_url }}">{{ rule.parent_module_type.model }}</a>
+        {% else %}
+          <span class="text-muted">Any</span>
+        {% endif %}
+      </dd>
+      <dt class="col-sm-3">Device Type</dt>
+      <dd class="col-sm-9">
+        {% if rule.device_type %}
+          <a href="{{ rule.device_type.get_absolute_url }}">{{ rule.device_type.model }}</a>
+        {% else %}
+          <span class="text-muted">Any</span>
+        {% endif %}
+      </dd>
+      <dt class="col-sm-3">Platform</dt>
+      <dd class="col-sm-9">
+        {% if rule.platform %}
+          <a href="{{ rule.platform.get_absolute_url }}">{{ rule.platform.name }}</a>
+        {% else %}
+          <span class="text-muted">Any</span>
+        {% endif %}
+      </dd>
+      <dt class="col-sm-3">Name Template</dt>
+      <dd class="col-sm-9"><code>{{ rule.name_template }}</code></dd>
+      {% if rule.channel_count %}
+        <dt class="col-sm-3">Channels</dt>
+        <dd class="col-sm-9">{{ rule.channel_count }} starting at {{ rule.channel_start }}</dd>
+      {% endif %}
+    </dl>
+  </div>
+</div>
+
+{# ── Preview table ────────────────────────────────────────────────────────────── #}
+<form id="apply-form" method="post">
+{% csrf_token %}
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="card-title mb-0"><i class="mdi mdi-eye me-2"></i>Preview</h5>
+    <span class="badge text-bg-info fs-6 fw-normal">
+      {% if has_more %}
+        Showing {{ preview|length }} of {{ total_checked }}+ examined that would change
+        <span class="ms-1 badge text-bg-warning">(batch limit: {{ batch_limit }})</span>
+      {% else %}
+        {{ preview|length }} would change ({{ total_checked }} examined)
+      {% endif %}
+    </span>
+  </div>
+
+  {% if preview %}
+    <div class="card-body p-0">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th style="width:2rem">
+              <input type="checkbox" id="select-all" checked title="Select/deselect all"
+                     aria-label="Select all interfaces">
+            </th>
+            <th>Device</th>
+            <th>Module Type</th>
+            <th>Current Name</th>
+            <th>→</th>
+            <th>New Name(s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in preview %}
+            <tr>
+              <td>
+                <input type="checkbox" name="interface_ids" value="{{ entry.interface.pk }}"
+                       checked class="row-check" aria-label="Select {{ entry.current_name }}">
+              </td>
+              <td>
+                {% if entry.module.device %}
+                  <a href="{{ entry.module.device.get_absolute_url }}">{{ entry.module.device }}</a>
+                {% else %}<span class="text-muted">—</span>{% endif %}
+              </td>
+              <td>
+                {% if entry.module.module_type %}
+                  <code>{{ entry.module.module_type.model }}</code>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td><code class="text-danger">{{ entry.current_name }}</code></td>
+              <td class="text-muted">→</td>
+              <td>
+                {% for new_name in entry.new_names %}
+                  <code class="text-success">{{ new_name }}</code>{% if not forloop.last %}<br>{% endif %}
+                {% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card-body text-muted">No installed interfaces would be affected by this rule.</div>
+  {% endif %}
+</div>
+
+{# ── Apply controls ───────────────────────────────────────────────────────────── #}
+{% if preview %}
+  <div class="card">
+    <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-play me-2"></i>Apply</h5></div>
+    <div class="card-body">
+      {% if has_more %}
+        <div class="alert alert-warning mb-3">
+          <i class="mdi mdi-alert me-1"></i>
+          At least {{ batch_limit }} interfaces would be affected. Synchronous apply is limited to
+          {{ batch_limit }} interfaces per run. Use <strong>Run as Background Job</strong> to process all of them.
+        </div>
+      {% endif %}
+
+      {% if can_apply %}
+        <button type="submit" name="action" value="apply" id="apply-btn"
+                class="btn btn-primary me-2">
+          <i class="mdi mdi-check me-1"></i><span id="apply-btn-label">Apply Now ({{ preview|length }} selected)</span>
+        </button>
+
+        <button type="submit" name="action" value="background"
+                class="btn btn-outline-primary"
+                onclick="return confirm('Enqueue a background job to apply this rule to ALL matching interfaces?')">
+          <i class="mdi mdi-server me-1"></i>Run as Background Job (all)
+        </button>
+      {% else %}
+        <p class="text-muted mb-0">
+          <i class="mdi mdi-lock me-1"></i>You do not have permission to apply interface changes.
+          <span class="text-muted small">(requires <code>dcim.change_interface</code>)</span>
+        </p>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+</form>
+
+<script>
+(function () {
+  const selectAll = document.getElementById('select-all');
+  const applyBtn  = document.getElementById('apply-btn');
+  const applyLabel = document.getElementById('apply-btn-label');
+  const checks = Array.from(document.querySelectorAll('.row-check'));
+
+  function updateApplyLabel() {
+    const n = checks.filter(c => c.checked).length;
+    if (applyLabel) applyLabel.textContent = `Apply Now (${n} selected)`;
+    if (applyBtn)   applyBtn.disabled = (n === 0);
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function () {
+      checks.forEach(c => { c.checked = this.checked; });
+      updateApplyLabel();
+    });
+  }
+
+  checks.forEach(c => {
+    c.addEventListener('change', function () {
+      if (selectAll) selectAll.checked = checks.every(c => c.checked);
+      updateApplyLabel();
+    });
+  });
+
+  // Confirm before applying to avoid accidental renames
+  if (document.getElementById('apply-form')) {
+    document.getElementById('apply-form').addEventListener('submit', function (e) {
+      const btn = e.submitter;
+      if (btn && btn.value === 'apply') {
+        const n = checks.filter(c => c.checked).length;
+        if (!confirm(`Apply this rule to ${n} selected interface(s)?`)) {
+          e.preventDefault();
+        }
+      }
+    });
+  }
+
+  updateApplyLabel();
+})();
+</script>
+{% endblock %}

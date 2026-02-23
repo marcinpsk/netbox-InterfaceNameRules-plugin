@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Juniper Interface Name Rules
+#
+# Bulk import via: Interface Name Rules > Import
+
+# =============================================================================
+# Juniper ACX7024
+# Bay format: "Transceiver X" with position=X (numeric, 0-27)
+# =============================================================================
+
+# 100G QSFP28 (regex) → et-0/0/X
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 naming (all variants)"
+
+# 100G QSFP28 DAC (regex) → et-0/0/X
+- module_type_pattern: "QSFP28-100G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7024 100GE QSFP28 DAC naming (all variants)"
+
+# QSFP+ 4x10G breakout (regex) → xe-0/0/X:channel
+- module_type_pattern: "QSFP-4X10G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G breakout (all variants)"
+
+# QSFP28-DD 2x100G breakout (regex) → et-0/0/X:channel
+- module_type_pattern: "QSFP28-DD-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}:{channel}"
+  channel_count: 2
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP28-DD breakout (all variants)"
+
+# 10G SFP+ (exact) → xe-0/0/X
+- module_type: SFP-10G-LR
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}"
+  description: "Juniper ACX7024 10GE SFP+ naming"
+
+# 1G SFP (regex) → ge-0/0/X
+- module_type_pattern: "SFP-1G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "ge-0/0/{bay_position}"
+  description: "Juniper ACX7024 1GE SFP naming (all variants)"
+
+# =============================================================================
+# Juniper ACX7100-32C
+# Bay format: "Transceiver X" with position=X (numeric, 0-35)
+# =============================================================================
+
+# 400G QSFP-DD (regex) → et-0/0/X
+- module_type_pattern: "QSFP-DD-400G-.*"
+  module_type_is_regex: true
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 400GE QSFP-DD naming (all variants)"
+
+# 100G QSFP28 (regex) → et-0/0/X
+- module_type_pattern: "QSFP-100G-.*"
+  module_type_is_regex: true
+  device_type: ACX7100-32C
+  name_template: "et-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 100GE QSFP28 naming (all variants)"
+
+# 10G SFP+ (regex) → xe-0/0/X
+- module_type_pattern: "SFP-10G-.*"
+  module_type_is_regex: true
+  device_type: ACX7100-32C
+  name_template: "xe-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 10GE SFP+ naming (all variants)"
+
+# 1G SFP (exact) → ge-0/0/X
+- module_type: SFP-1G-LX
+  device_type: ACX7100-32C
+  name_template: "ge-0/0/{bay_position}"
+  description: "Juniper ACX7100-32C 1GE SFP naming"

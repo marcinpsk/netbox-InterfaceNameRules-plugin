@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+name: Weekly test against NetBox main
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  test-netbox-main:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    services:
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          path: netbox-InterfaceNameRules-plugin
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b  # v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Checkout NetBox main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          repository: "netbox-community/netbox"
+          path: netbox
+          ref: main
+
+      - name: Install NetBox and plugin
+        working-directory: netbox-InterfaceNameRules-plugin
+        run: |
+          uv pip install --system -r ../netbox/requirements.txt
+          uv pip install --system pytest pytest-django tblib
+          uv pip install --system -e .
+
+      - name: Set up NetBox configuration
+        working-directory: netbox
+        run: |
+          cat > netbox/netbox/configuration.py << 'EOF'
+          ALLOWED_HOSTS = ['*']
+          DATABASE = {
+              'NAME': 'netbox',
+              'USER': 'netbox',
+              'PASSWORD': 'netbox',
+              'HOST': 'localhost',
+              'PORT': '5432',
+              'CONN_MAX_AGE': 300,
+              'ENGINE': 'django.db.backends.postgresql'
+          }
+          REDIS = {
+              'tasks': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 0},
+              'caching': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 1}
+          }
+          SECRET_KEY = 'test-secret-key-not-for-production-1234567890123456'  # checkov:skip=CKV_SECRET_6: CI-only test fixture
+          API_TOKEN_PEPPERS = {0: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}  # checkov:skip=CKV_SECRET_6: CI-only test fixture
+          PLUGINS = ['netbox_interface_name_rules']
+          EOF
+
+      - name: Run tests
+        working-directory: netbox/netbox
+        env:
+          NETBOX_CONFIGURATION: netbox.configuration
+        run: |
+          python manage.py test netbox_interface_name_rules --verbosity=2
