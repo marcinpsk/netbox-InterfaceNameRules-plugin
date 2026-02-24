@@ -51,11 +51,10 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
 
     def get_extra_context(self, request):
-        from .utils import MODULE_PATH_MIN_VERSION, supports_module_path
+        from .utils import supports_module_path
 
         return {
             "supports_module_path": supports_module_path(),
-            "module_path_min_version": MODULE_PATH_MIN_VERSION,
         }
 
 

@@ -19,7 +19,7 @@ This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/ne
 - **`engine.py`** — Core logic: two-tier rule lookup (`_find_matching_rule` first tries an exact FK match across 4 specificity levels, then falls back to regex matching with `re.fullmatch()` across the same 4 levels), template variable building from module bay hierarchy, and interface renaming/breakout creation. The `evaluate_name_template` function supports `{variable}` substitution followed by safe AST-based arithmetic evaluation of remaining brace expressions.
 - **`api/`** — DRF REST API using NetBox's `NetBoxModelViewSet` and `NetBoxModelSerializer`.
 - **`views.py`, `urls.py`, `tables.py`, `forms.py`, `filters.py`, `navigation.py`** — Standard NetBox UI CRUD views.
-- **`utils.py`** — Version detection for feature gating (e.g., `{module_path}` token support in NetBox ≥ 4.9.0).
+- **`utils.py`** — Feature detection for gating (e.g., `{module_path}` token support detected via `dcim.constants.MODULE_PATH_TOKEN` import).
 
 The signal handler → engine import is intentionally lazy to ensure Django models are fully loaded before use.
 
@@ -89,7 +89,7 @@ The `reuse-lint` pre-commit hook validates compliance on every commit.
 ## Key conventions
 
 - All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents.
-- Template variables use Python `str.format()` syntax: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`, `{module_path}` (gated via `utils.supports_module_path()` for NetBox ≥ 4.9.0).
+- Template variables use Python `str.format()` syntax: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`, `{module_path}` (gated via `utils.supports_module_path()` using import-based feature detection).
 - Arithmetic inside braces is evaluated via `ast.parse` with a strict allowlist of AST node types — never use `eval()` directly on user input.
 - The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.
 - Rule matching uses **two tiers** within each priority level — exact FK match first, then regex (`re.fullmatch()`) fallback. Priority levels (applied in both tiers): (module_type + parent + device) → (module_type + parent) → (module_type + device) → (module_type only).
