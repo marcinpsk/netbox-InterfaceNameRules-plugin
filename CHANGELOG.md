@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-02-24)
+
+### Bug Fixes
+
+- **ci**: Use PAT for semantic-release, decouple publish workflow
+  ([`3197110`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/31971104e6c004f2d635ceb81195a8a7c15cf7ae))
+
+- **docs**: Pin mkdocs <2 to avoid Material incompatibility
+  ([`971900b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/971900b4f17f5673c948b6c2445e1a9f5c887a0a))
+
+
 ## v1.1.1 (2026-02-24)
 
 ### Bug Fixes
