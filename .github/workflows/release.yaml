@@ -52,7 +52,7 @@ jobs:
           git log --oneline v1.0.0..HEAD || echo "Failed to list commits since v1.0.0"
           echo "=== semantic-release --print (via uv run) ==="
           uv run semantic-release version --print || echo "uv run print failed"
-          echo "=== semantic-release --print (via .venv/bin) ==="
+          echo "=== semantic-release --print (via .venv/bin) ===="
           .venv/bin/semantic-release version --print || echo "direct print failed"
           echo "=== semantic-release --print-last-released ==="
           .venv/bin/semantic-release version --print-last-released || echo "print-last failed"
