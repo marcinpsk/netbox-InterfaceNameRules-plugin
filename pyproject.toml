@@ -32,6 +32,7 @@ dev = [
     "python-semantic-release",
 ]
 docs = [
+    "mkdocs>=1,<2",
     "mkdocs-material>=9,<10",
 ]
 
