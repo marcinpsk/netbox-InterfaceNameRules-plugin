@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/changelog/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/configuration/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/contributing/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/examples/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/installation/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/template-variables/</loc>
+         <lastmod>2026-02-24</lastmod>
+    </url>
+</urlset>
