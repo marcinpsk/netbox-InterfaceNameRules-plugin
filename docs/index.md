@@ -42,3 +42,7 @@ pip install netbox-interface-name-rules
 
 See [Installation](installation.md) for full setup instructions, then
 [Examples](examples.md) for real-world rules for Juniper, SONiC, Linux, and more.
+
+## Additional Resources
+
+- [DeepWiki](https://deepwiki.com/marcinpsk/netbox-InterfaceNameRules-plugin) — AI-generated codebase overview
