@@ -38,26 +38,31 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      - name: Debug git state
+      - name: Debug tag resolution
         run: |
-          echo "=== Tags ==="
-          git tag -l
-          echo "=== Tag type ==="
-          git cat-file -t v1.0.0 || echo "v1.0.0 not found"
-          echo "=== Branch ==="
-          git branch -v
-          echo "=== Last 12 commits ==="
-          git log --oneline -12
-          echo "=== Commits since v1.0.0 ==="
-          git log --oneline v1.0.0..HEAD || echo "Failed to list commits since v1.0.0"
-          echo "=== semantic-release --print (via uv run) ==="
-          uv run semantic-release version --print || echo "uv run print failed"
-          echo "=== semantic-release --print (via .venv/bin) ==="
-          .venv/bin/semantic-release version --print || echo "direct print failed"
-          echo "=== semantic-release --print-last-released ==="
-          .venv/bin/semantic-release version --print-last-released || echo "print-last failed"
-          echo "=== semantic-release verbose --print ==="
-          .venv/bin/semantic-release -vvv version --print 2>&1 | head -50 || true
+          echo "=== Tag ref and commit ==="
+          git rev-parse v1.0.0 || echo "tag parse failed"
+          git rev-parse v1.0.0^{commit} || echo "tag deref failed"
+          echo "=== Python tag check ==="
+          .venv/bin/python3 -c "
+          import git
+          repo = git.Repo('.')
+          print(f'active_branch: {repo.active_branch}')
+          for tag in repo.tags:
+              print(f'Tag: {tag.name}')
+              print(f'  tag.commit type: {type(tag.commit)}')
+              print(f'  tag.commit.hexsha: {tag.commit.hexsha}')
+              print(f'  tag.object type: {type(tag.object)}')
+              print(f'  tag.object sha: {tag.object.hexsha}')
+          from semantic_release.version.algorithm import _traverse_graph_for_commits
+          head = repo.active_branch.commit
+          all_c = _traverse_graph_for_commits(head_commit=head)
+          hashes = {c.hexsha for c in all_c}
+          print(f'Total commits in DFS: {len(all_c)}')
+          for tag in repo.tags:
+              in_set = tag.commit.hexsha in hashes
+              print(f'Tag {tag.name} commit {tag.commit.hexsha[:7]} in set: {in_set}')
+          "
 
       - name: Run semantic-release
         id: release
