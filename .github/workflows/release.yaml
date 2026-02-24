@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
@@ -37,13 +38,34 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      - name: Debug git state
+        run: |
+          echo "=== Tags ==="
+          git tag -l
+          echo "=== Tag type ==="
+          git cat-file -t v1.0.0 || echo "v1.0.0 not found"
+          echo "=== Branch ==="
+          git branch -v
+          echo "=== Last 12 commits ==="
+          git log --oneline -12
+          echo "=== Commits since v1.0.0 ==="
+          git log --oneline v1.0.0..HEAD || echo "Failed to list commits since v1.0.0"
+          echo "=== semantic-release --print (via uv run) ==="
+          uv run semantic-release version --print || echo "uv run print failed"
+          echo "=== semantic-release --print (via .venv/bin) ==="
+          .venv/bin/semantic-release version --print || echo "direct print failed"
+          echo "=== semantic-release --print-last-released ==="
+          .venv/bin/semantic-release version --print-last-released || echo "print-last failed"
+          echo "=== semantic-release verbose --print ==="
+          .venv/bin/semantic-release -vvv version --print 2>&1 | head -50 || true
+
       - name: Run semantic-release
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BEFORE=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-          uv run semantic-release version --changelog --push
+          uv run semantic-release -vv version --changelog --push
           AFTER=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
           if [ "$BEFORE" != "$AFTER" ]; then
             echo "released=true" >> $GITHUB_OUTPUT
