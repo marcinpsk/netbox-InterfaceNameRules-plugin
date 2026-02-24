@@ -57,6 +57,11 @@ PLUGINS = ['netbox_interface_name_rules']
 
 Apache 2.0
 
+## Documentation
+
+- [Full documentation](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/) — installation, configuration, examples
+- [DeepWiki](https://deepwiki.com/marcinpsk/netbox-InterfaceNameRules-plugin) — AI-generated codebase overview
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to submit code or interface name rules.
