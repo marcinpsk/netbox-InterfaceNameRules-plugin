@@ -27,6 +27,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # actions/checkout with --no-tags may not fetch annotated tag objects,
+      # only the refs. Re-fetch tags explicitly to ensure gitpython can
+      # dereference annotated tags to their target commits.
+      - name: Fetch tags (workaround for checkout --no-tags)
+        run: git fetch --tags --force
+
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
