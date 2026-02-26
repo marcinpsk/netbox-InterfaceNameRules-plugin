@@ -364,11 +364,32 @@ try:
         _demo_stack.master = _demo_vc1
         _demo_stack.save()
 
+    # Clean up any non-VC-SFP modules from sfp0 bays on demo devices (stale from manual testing)
+    from dcim.models import Module, ModuleBay
+
+    for _demo_dev in [_demo_vc1, _demo_vc2]:
+        for _sub_bay in ModuleBay.objects.filter(device=_demo_dev, name="sfp0"):
+            _stale_mods = Module.objects.filter(device=_demo_dev, module_bay=_sub_bay).exclude(
+                module_type__model="VC-SFP"
+            )
+            for _m in _stale_mods:
+                _m.delete()
+                print(f"  ✓ Removed stale {_m.module_type.model} from {_demo_dev.name} sfp0 (cleanup)")
+
 except Exception as _e:
     print(f"⚠ Could not create test devices: {_e}")
     import traceback
 
     traceback.print_exc()
+
+# Fix VirtualChassis member_count denormalized counter (can get out of sync from testing)
+try:
+    from django.core.management import call_command
+
+    call_command("calculate_cached_counts", verbosity=0)
+    print("  ✓ Refreshed cached counts (member_count)")
+except Exception as _e:
+    print(f"  ⚠ calculate_cached_counts failed: {_e}")
 
 print()
 
