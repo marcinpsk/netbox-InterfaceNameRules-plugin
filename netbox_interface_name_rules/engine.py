@@ -63,8 +63,10 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         # Fallback when module type has no InterfaceTemplates
         raw_names = {variables["bay_position"]}
 
-    if force_reapply:
-        # Re-apply to all interfaces regardless of current name (e.g. vc_position changed)
+    if force_reapply and rule.channel_count == 0:
+        # Re-apply to all interfaces regardless of current name (e.g. vc_position changed).
+        # Channel rules are excluded: with channel_count > 0, re-applying to all channel
+        # sub-interfaces (e.g. xe-0/0/4:0...:3) would trigger duplicate channel creation.
         unrenamed = interfaces
     else:
         unrenamed = [i for i in interfaces if i.name in raw_names]

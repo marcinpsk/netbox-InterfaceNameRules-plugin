@@ -386,6 +386,11 @@ class RuleToggleView(ConditionalLoginRequiredMixin, View):
             return JsonResponse({"enabled": rule.enabled, "pk": pk})
         state = "enabled" if rule.enabled else "disabled"
         messages.success(request, f"Rule '{rule}' {state}.")
-        return redirect(
-            request.META.get("HTTP_REFERER") or "plugins:netbox_interface_name_rules:interfacenamerule_list"
-        )
+        from django.utils.http import url_has_allowed_host_and_scheme
+
+        referer = request.META.get("HTTP_REFERER", "")
+        if referer and url_has_allowed_host_and_scheme(
+            referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            return redirect(referer)
+        return redirect("plugins:netbox_interface_name_rules:interfacenamerule_list")

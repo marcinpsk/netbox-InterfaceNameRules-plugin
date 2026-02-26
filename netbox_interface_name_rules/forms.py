@@ -236,6 +236,8 @@ class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):
         label="Module Type",
     )
     module_type_is_regex = forms.NullBooleanField(required=False, label="Regex Mode")
+    applies_to_device_interfaces = forms.NullBooleanField(required=False, label="Device Interface Rules")
+    enabled = forms.NullBooleanField(required=False, label="Enabled")
     module_type_pattern = forms.CharField(required=False, label="Pattern (contains)")
     parent_module_type_id = forms.ModelChoiceField(
         queryset=ModuleType.objects.all(),

@@ -200,8 +200,15 @@ try:
     _site, _ = Site.objects.get_or_create(name="Test Site", defaults={"slug": "test-site"})
     _mfr, _ = Manufacturer.objects.get_or_create(name="Test Manufacturer", defaults={"slug": "test-manufacturer"})
     _role, _ = DeviceRole.objects.get_or_create(name="Test Role", defaults={"slug": "test-role", "color": "9e9e9e"})
+except Exception as _e:
+    print(f"⚠ Could not set up shared test infrastructure: {_e}")
+    import traceback
 
-    # ── test-100ports (100 module-bay device for Apply Rules preview tests) ────
+    traceback.print_exc()
+    raise SystemExit(1)
+
+# ── TEST-100BAY device (100 module-bay device for Apply Rules preview tests) ──
+try:
     _dt100, _created = DeviceType.objects.get_or_create(
         manufacturer=_mfr,
         model="TEST-100BAY",
@@ -236,8 +243,14 @@ try:
         print("  ✓ Installed TEST-1PORT modules into all 100 bays")
     else:
         print("  · test-100ports already exists")
+except Exception as _e:
+    print(f"⚠ Could not create TEST-100BAY device: {_e}")
+    import traceback
 
-    # ── Virtual Chassis stack (2 × VC-SWITCH for {vc_position} rule tests) ────
+    traceback.print_exc()
+
+# ── VC-SWITCH device type + VC-LINECARD / VC-SFP module types ─────────────────
+try:
     _dt_vc, _created = DeviceType.objects.get_or_create(
         manufacturer=_mfr,
         model="VC-SWITCH",
@@ -264,18 +277,14 @@ try:
     )
     if _created_lc:
         # Single interface template named "0" — matches bay position, engine renames to Gi{vc_position}/0
-        from dcim.models import InterfaceTemplate as ModuleInterfaceTemplate
-
-        ModuleInterfaceTemplate.objects.get_or_create(
+        InterfaceTemplate.objects.get_or_create(
             module_type=_mt_vc_lc,
             name="0",
             defaults={"type": "1000base-t"},
         )
 
     # Add sfp0 sub-bay to VC-LINECARD (idempotent — even if module type already existed)
-    from dcim.models import ModuleBayTemplate as ModuleBayTemplateModel
-
-    ModuleBayTemplateModel.objects.get_or_create(
+    ModuleBayTemplate.objects.get_or_create(
         module_type=_mt_vc_lc,
         name="sfp0",
         defaults={"position": "0"},
@@ -288,9 +297,7 @@ try:
         defaults={},
     )
     if _created_sfp:
-        from dcim.models import InterfaceTemplate as ModuleInterfaceTemplate  # noqa: F811
-
-        ModuleInterfaceTemplate.objects.get_or_create(
+        InterfaceTemplate.objects.get_or_create(
             module_type=_mt_vc_sfp,
             name="0",
             defaults={"type": "1000base-x-sfp"},
@@ -298,7 +305,14 @@ try:
         print("  ✓ Created ModuleType VC-SFP (1 interface template)")
     else:
         print("  · ModuleType VC-SFP already exists")
+except Exception as _e:
+    print(f"⚠ Could not create VC-SWITCH/VC-LINECARD/VC-SFP types: {_e}")
+    import traceback
 
+    traceback.print_exc()
+
+# ── test-vc-stack (e2e test VC) ────────────────────────────────────────────────
+try:
     _vc1, _created = Device.objects.get_or_create(
         name="vc-stack-1",
         defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
@@ -338,9 +352,15 @@ try:
     if _stack.master != _vc1:
         _stack.master = _vc1
         _stack.save()
+except Exception as _e:
+    print(f"⚠ Could not create test-vc-stack: {_e}")
+    import traceback
 
-    # ── Demo Virtual Chassis stack (permanent, for manual verification) ────────
-    # These are NOT touched by e2e tests, giving the user a stable VC to experiment with.
+    traceback.print_exc()
+
+# ── Demo Virtual Chassis stack (permanent, for manual verification) ────────────
+# These are NOT touched by e2e tests, giving the user a stable VC to experiment with.
+try:
     _demo_vc1, _created = Device.objects.get_or_create(
         name="demo-vc-1",
         defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
@@ -390,7 +410,14 @@ try:
             for _m in _stale_mods:
                 _m.delete()
                 print(f"  ✓ Removed stale {_m.module_type.model} from {_demo_dev.name} sfp0 (cleanup)")
+except Exception as _e:
+    print(f"⚠ Could not create demo-vc-stack: {_e}")
+    import traceback
 
+    traceback.print_exc()
+
+# ── Vendor demo VCs (Juniper/Cisco/Arista) ────────────────────────────────────
+try:
     # ── Juniper EX-style VC (demo: 2 members, positions 0 and 1) ────────────────
     # Models Juniper EX4300 Virtual Chassis with ge-0/0/N and xe-0/1/N port naming.
     # In a Juniper VC, member IDs are 0-based. Interfaces are named ge-{member}/0/{port}.
@@ -527,7 +554,7 @@ try:
         _arista_stack.save()
 
 except Exception as _e:
-    print(f"⚠ Could not create test devices: {_e}")
+    print(f"⚠ Could not create vendor demo VCs (Juniper/Cisco/Arista): {_e}")
     import traceback
 
     traceback.print_exc()

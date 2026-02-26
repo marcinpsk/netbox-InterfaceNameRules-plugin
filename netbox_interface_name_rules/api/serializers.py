@@ -61,4 +61,8 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
                 raise serializers.ValidationError(
                     {"module_type": "module_type is required when regex mode is disabled."}
                 )
+            if pattern:
+                raise serializers.ValidationError(
+                    {"module_type_pattern": "Cannot set module_type_pattern when regex mode is disabled."}
+                )
         return attrs

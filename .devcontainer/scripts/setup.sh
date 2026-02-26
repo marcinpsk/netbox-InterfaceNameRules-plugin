@@ -213,12 +213,14 @@ echo "🔐 Creating superuser (if not exists)..."
 python manage.py shell -c "
 from django.contrib.auth import get_user_model
 User = get_user_model()
-username = '${SUPERUSER_NAME:-admin}'
-email = '${SUPERUSER_EMAIL:-admin@example.com}'
-password = '${SUPERUSER_PASSWORD:-admin}'
-if not User.objects.filter(username=username).exists():
+username = '${SUPERUSER_NAME}'
+password = '${SUPERUSER_PASSWORD}'
+email = '${SUPERUSER_EMAIL:-}'
+if not username or not password:
+    print('⚠ SUPERUSER_NAME or SUPERUSER_PASSWORD not set — skipping superuser creation')
+elif not User.objects.filter(username=username).exists():
     User.objects.create_superuser(username, email, password)
-    print(f'Created superuser: {username}/{password}')
+    print(f'Created superuser: {username}')
 else:
     print(f'Superuser {username} already exists')
 " 2>/dev/null || true

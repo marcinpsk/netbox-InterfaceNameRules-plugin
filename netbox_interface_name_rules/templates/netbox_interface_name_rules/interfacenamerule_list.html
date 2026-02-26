@@ -123,7 +123,10 @@
                     method: 'POST',
                     headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken},
                     credentials: 'same-origin',
-                }).then(r => r.json()).then(data => {
+                }).then(r => {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                }).then(data => {
                     btn.disabled = false;
                     const row = btn.closest('tr');
                     if (data.enabled) {
@@ -139,17 +142,7 @@
                     }
                 }).catch(() => {
                     btn.disabled = false;
-                    // Fallback: synthesise a form POST (navigates away)
-                    const f = document.createElement('form');
-                    f.method = 'POST';
-                    f.action = url;
-                    const csrf = document.createElement('input');
-                    csrf.type = 'hidden';
-                    csrf.name = 'csrfmiddlewaretoken';
-                    csrf.value = csrfToken;
-                    f.appendChild(csrf);
-                    document.body.appendChild(f);
-                    f.submit();
+                    window.location.reload();
                 });
             });
         });

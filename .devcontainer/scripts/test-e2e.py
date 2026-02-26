@@ -53,6 +53,11 @@ BAYS = [
 # Rule ID for toggle test — discovered dynamically at runtime (see toggle test block)
 
 # VC test constants (populated by load-sample-data.py)
+# WARNING: These IDs are hardcoded and depend on the order objects were created by load-sample-data.py.
+# If tests fail with 404, verify the correct IDs via the API, e.g.:
+#   GET /api/dcim/devices/?name=vc-stack-1
+#   GET /api/dcim/virtual-chassis/?name=test-vc-stack
+# Then update the constants below to match your devcontainer's current PKs.
 VC_DEVICE_ID = 32  # vc-stack-1 (vc_position=1, master)
 VC_BAY_ID = 1580  # linecard0 on vc-stack-1 (position=0)
 VC_DEVICE_ID_2 = 33  # vc-stack-2 (vc_position=2, non-master)
@@ -94,7 +99,9 @@ def _api_patch(url: str, payload: dict, headers: dict) -> None:
     data = _json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers=headers, method="PATCH")
     with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-        assert resp.status in (200, 201), f"PATCH {url} returned {resp.status}"
+        assert resp.status in (200, 201, 204), (
+            f"PATCH {url} returned {resp.status}: {resp.read().decode('utf-8', errors='replace')}"
+        )
 
 
 def _poll_for_text(page, base_url: str, path: str, text: str, timeout: float = 8.0) -> bool:
@@ -643,9 +650,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     {"virtual_chassis": None, "vc_position": None},
                     api_headers,
                 )
-                import time as _time
-
-                _time.sleep(0.5)
+                time.sleep(0.5)
                 page.goto(f"{base_url}/dcim/devices/{VC_DEVICE_ID_2}/interfaces/")
                 page.wait_for_load_state("networkidle", timeout=10000)
                 # Interface should still be there (module FK intact; our plugin skips rename on removal)
@@ -840,9 +845,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     )
 
                     # Verify Gi1/0 is gone (cascade delete by NetBox, not by our plugin)
-                    import time as _time
-
-                    _time.sleep(0.5)
+                    time.sleep(0.5)
                     page.goto(f"{base_url}/dcim/devices/{VC_DEVICE_ID}/interfaces/")
                     page.wait_for_load_state("networkidle", timeout=10000)
                     assert "Gi1/0" not in page.content(), "Gi1/0 still present after module cascade delete"
@@ -883,8 +886,6 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
         # ── Cleanup via API ───────────────────────────────────────────────────
         print("\n  [cleanup] removing test modules via API...")
         try:
-            import urllib.parse
-
             module_ids = []
             next_url = f"{base_url}/api/dcim/modules/?device_id={DEVICE_ID}"
             while next_url:
