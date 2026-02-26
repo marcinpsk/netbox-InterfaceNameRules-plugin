@@ -52,6 +52,7 @@ def load_interface_name_rules_file(filename):
     rows = load_yaml(filename)
     created = updated = skipped = 0
     for row in rows:
+        applies_to_device_interfaces = bool(row.get("applies_to_device_interfaces", False))
         module_type_is_regex = bool(row.get("module_type_is_regex", False))
         module_type_pattern = row.get("module_type_pattern", "")
         module_type_name = row.get("module_type", "")
@@ -62,16 +63,17 @@ def load_interface_name_rules_file(filename):
         channel_count = int(row.get("channel_count", 0))
         channel_start = int(row.get("channel_start", 0))
         description = row.get("description", "")
+        label = module_type_name or module_type_pattern or device_type_name or "(device-level)"
 
         if not name_template:
-            skip(f"{module_type_name or module_type_pattern}", "missing name_template")
+            skip(label, "missing name_template")
             skipped += 1
             continue
 
         module_type = None
-        if not module_type_is_regex:
+        if not applies_to_device_interfaces and not module_type_is_regex:
             if not module_type_name:
-                skip("(no module_type)", "module_type required when not regex")
+                skip(label, "module_type required when not regex and not device-level")
                 skipped += 1
                 continue
             try:
@@ -92,7 +94,7 @@ def load_interface_name_rules_file(filename):
             try:
                 parent_module_type = ModuleType.objects.get(model=parent_module_type_name)
             except (ModuleType.DoesNotExist, ModuleType.MultipleObjectsReturned) as exc:
-                skip(module_type_name or module_type_pattern, f"parent ModuleType {parent_module_type_name!r}: {exc}")
+                skip(label, f"parent ModuleType {parent_module_type_name!r}: {exc}")
                 skipped += 1
                 continue
 
@@ -101,7 +103,7 @@ def load_interface_name_rules_file(filename):
             try:
                 device_type = DeviceType.objects.get(model=device_type_name)
             except (DeviceType.DoesNotExist, DeviceType.MultipleObjectsReturned) as exc:
-                skip(module_type_name or module_type_pattern, f"DeviceType {device_type_name!r}: {exc}")
+                skip(label, f"DeviceType {device_type_name!r}: {exc}")
                 skipped += 1
                 continue
 
@@ -113,34 +115,47 @@ def load_interface_name_rules_file(filename):
                 try:
                     platform = Platform.objects.get(slug=platform_name)
                 except (Platform.DoesNotExist, Platform.MultipleObjectsReturned) as exc:
-                    skip(module_type_name or module_type_pattern, f"Platform {platform_name!r}: {exc}")
+                    skip(label, f"Platform {platform_name!r}: {exc}")
                     skipped += 1
                     continue
 
-        lookup = {
-            "module_type": module_type,
-            "module_type_pattern": module_type_pattern if module_type_is_regex else "",
-            "module_type_is_regex": module_type_is_regex,
-            "parent_module_type": parent_module_type,
-            "device_type": device_type,
-            "platform": platform,
-        }
+        if applies_to_device_interfaces:
+            # Device-level rules are keyed by (pattern, device_type, platform)
+            lookup = {
+                "applies_to_device_interfaces": True,
+                "module_type_pattern": module_type_pattern,
+                "device_type": device_type,
+                "platform": platform,
+            }
+            defaults_extra = {"module_type": None, "module_type_is_regex": False, "parent_module_type": None}
+        else:
+            lookup = {
+                "module_type": module_type,
+                "module_type_pattern": module_type_pattern if module_type_is_regex else "",
+                "module_type_is_regex": module_type_is_regex,
+                "parent_module_type": parent_module_type,
+                "device_type": device_type,
+                "platform": platform,
+                "applies_to_device_interfaces": False,
+            }
+            defaults_extra = {}
+
         defaults = {
             "name_template": name_template,
             "channel_count": channel_count,
             "channel_start": channel_start,
             "description": description,
+            **defaults_extra,
         }
         try:
             obj, was_created = InterfaceNameRule.objects.update_or_create(**lookup, defaults=defaults)
-            label = module_type_name or f"regex:{module_type_pattern}"
             if was_created:
                 ok(f"{label} → {name_template!r}")
                 created += 1
             else:
                 updated += 1
         except Exception as e:
-            skip(module_type_name or module_type_pattern, str(e))
+            skip(label, str(e))
             skipped += 1
     return created, updated, skipped
 
@@ -376,6 +391,141 @@ try:
                 _m.delete()
                 print(f"  ✓ Removed stale {_m.module_type.model} from {_demo_dev.name} sfp0 (cleanup)")
 
+    # ── Juniper EX-style VC (demo: 2 members, positions 0 and 1) ────────────────
+    # Models Juniper EX4300 Virtual Chassis with ge-0/0/N and xe-0/1/N port naming.
+    # In a Juniper VC, member IDs are 0-based. Interfaces are named ge-{member}/0/{port}.
+    _dt_jnp, _created = DeviceType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="JNP-EX-VC",
+        defaults={"slug": "jnp-ex-vc", "u_height": 1},
+    )
+    if _created:
+        for i in range(4):
+            InterfaceTemplate.objects.get_or_create(
+                device_type=_dt_jnp,
+                name=f"ge-0/0/{i}",
+                defaults={"type": "1000base-t"},
+            )
+        for i in range(2):
+            InterfaceTemplate.objects.get_or_create(
+                device_type=_dt_jnp,
+                name=f"xe-0/1/{i}",
+                defaults={"type": "10gbase-x-xfp"},
+            )
+        print("  ✓ Created DeviceType JNP-EX-VC (4×ge-0/0/N + 2×xe-0/1/N templates)")
+
+    for _name, _pos in [("jnp-vc-1", 0), ("jnp-vc-2", 1)]:
+        _dev, _c = Device.objects.get_or_create(
+            name=_name,
+            defaults={"site": _site, "device_type": _dt_jnp, "role": _role, "status": "active"},
+        )
+        if _c:
+            print(f"  ✓ Created device {_name}")
+
+    _jnp1 = Device.objects.get(name="jnp-vc-1")
+    _jnp2 = Device.objects.get(name="jnp-vc-2")
+    _jnp_stack, _created = VirtualChassis.objects.get_or_create(
+        name="juniper-vc-stack",
+        defaults={"master": _jnp1},
+    )
+    if _created:
+        print("  ✓ Created VirtualChassis juniper-vc-stack")
+    for _dev, _pos in [(_jnp1, 0), (_jnp2, 1)]:
+        if _dev.virtual_chassis != _jnp_stack or _dev.vc_position != _pos:
+            _dev.virtual_chassis = _jnp_stack
+            _dev.vc_position = _pos
+            _dev.save()
+            print(f"  ✓ Assigned {_dev.name} to juniper-vc-stack at position {_pos}")
+    if _jnp_stack.master != _jnp1:
+        _jnp_stack.master = _jnp1
+        _jnp_stack.save()
+
+    # ── Cisco Catalyst-style stack (demo: 2 members, positions 1 and 2) ─────────
+    # Models Cisco Catalyst 9300 IOS-XE stack. Member IDs are 1-based.
+    # Interfaces are named GigabitEthernet{member}/0/{port}.
+    _dt_cisco, _created = DeviceType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="CISCO-C9K",
+        defaults={"slug": "cisco-c9k", "u_height": 1},
+    )
+    if _created:
+        for i in range(1, 5):
+            InterfaceTemplate.objects.get_or_create(
+                device_type=_dt_cisco,
+                name=f"GigabitEthernet1/0/{i}",
+                defaults={"type": "1000base-t"},
+            )
+        print("  ✓ Created DeviceType CISCO-C9K (4×GigabitEthernet1/0/N templates)")
+
+    for _name, _pos in [("cisco-sw-1", 1), ("cisco-sw-2", 2)]:
+        _dev, _c = Device.objects.get_or_create(
+            name=_name,
+            defaults={"site": _site, "device_type": _dt_cisco, "role": _role, "status": "active"},
+        )
+        if _c:
+            print(f"  ✓ Created device {_name}")
+
+    _csw1 = Device.objects.get(name="cisco-sw-1")
+    _csw2 = Device.objects.get(name="cisco-sw-2")
+    _cisco_stack, _created = VirtualChassis.objects.get_or_create(
+        name="cisco-stack",
+        defaults={"master": _csw1},
+    )
+    if _created:
+        print("  ✓ Created VirtualChassis cisco-stack")
+    for _dev, _pos in [(_csw1, 1), (_csw2, 2)]:
+        if _dev.virtual_chassis != _cisco_stack or _dev.vc_position != _pos:
+            _dev.virtual_chassis = _cisco_stack
+            _dev.vc_position = _pos
+            _dev.save()
+            print(f"  ✓ Assigned {_dev.name} to cisco-stack at position {_pos}")
+    if _cisco_stack.master != _csw1:
+        _cisco_stack.master = _csw1
+        _cisco_stack.save()
+
+    # ── Arista EOS-style stack (demo: 2 members, positions 1 and 2) ─────────────
+    # Models Arista modular leaf switch naming: Ethernet{slot}/{port}.
+    # In a multi-chassis setup, slot maps to the VC member position.
+    _dt_arista, _created = DeviceType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="ARISTA-EOS",
+        defaults={"slug": "arista-eos", "u_height": 1},
+    )
+    if _created:
+        for i in range(1, 5):
+            InterfaceTemplate.objects.get_or_create(
+                device_type=_dt_arista,
+                name=f"Ethernet1/{i}",
+                defaults={"type": "10gbase-x-sfpp"},
+            )
+        print("  ✓ Created DeviceType ARISTA-EOS (4×Ethernet1/N templates)")
+
+    for _name, _pos in [("arista-sw-1", 1), ("arista-sw-2", 2)]:
+        _dev, _c = Device.objects.get_or_create(
+            name=_name,
+            defaults={"site": _site, "device_type": _dt_arista, "role": _role, "status": "active"},
+        )
+        if _c:
+            print(f"  ✓ Created device {_name}")
+
+    _asw1 = Device.objects.get(name="arista-sw-1")
+    _asw2 = Device.objects.get(name="arista-sw-2")
+    _arista_stack, _created = VirtualChassis.objects.get_or_create(
+        name="arista-stack",
+        defaults={"master": _asw1},
+    )
+    if _created:
+        print("  ✓ Created VirtualChassis arista-stack")
+    for _dev, _pos in [(_asw1, 1), (_asw2, 2)]:
+        if _dev.virtual_chassis != _arista_stack or _dev.vc_position != _pos:
+            _dev.virtual_chassis = _arista_stack
+            _dev.vc_position = _pos
+            _dev.save()
+            print(f"  ✓ Assigned {_dev.name} to arista-stack at position {_pos}")
+    if _arista_stack.master != _asw1:
+        _arista_stack.master = _asw1
+        _arista_stack.save()
+
 except Exception as _e:
     print(f"⚠ Could not create test devices: {_e}")
     import traceback
@@ -409,3 +559,31 @@ for fname in sorted(rule_files):
     total_skipped += s
 
 print(f"✅ Done: {total_created} created, {total_updated} updated, {total_skipped} skipped.")
+
+# Re-apply device-level interface rules for all current VC members.
+# Devices are added to VCs above, before rules are loaded — so the signal
+# fires before rules exist. Trigger a manual re-apply now that rules are in place.
+print()
+print("🔄 Re-applying device-level interface rules for all VC members…")
+try:
+    from dcim.models import Device
+    from netbox_interface_name_rules.engine import apply_device_interface_rules
+
+    _vc_devices = Device.objects.filter(virtual_chassis__isnull=False).select_related(
+        "virtual_chassis", "device_type", "platform"
+    )
+    _total_renamed = 0
+    for _d in _vc_devices:
+        _n = apply_device_interface_rules(_d)
+        if _n:
+            print(f"  ✓ Renamed {_n} interface(s) on {_d.name} (pos={_d.vc_position})")
+            _total_renamed += _n
+    if _total_renamed == 0:
+        print("  · No interfaces renamed (rules already match current names or no matching rules)")
+    else:
+        print(f"  ✓ Total: {_total_renamed} interface(s) renamed across all VC members")
+except Exception as _e:
+    print(f"  ⚠ Re-apply failed: {_e}")
+    import traceback
+
+    traceback.print_exc()

@@ -251,7 +251,7 @@ class InterfaceNameRule(NetBoxModel):
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
-                condition=models.Q(module_type_is_regex=False),
+                condition=models.Q(module_type_is_regex=False, applies_to_device_interfaces=False),
                 nulls_distinct=False,
                 name="interfacenamerule_unique_exact",
             ),
@@ -260,6 +260,12 @@ class InterfaceNameRule(NetBoxModel):
                 condition=models.Q(module_type_is_regex=True),
                 nulls_distinct=False,
                 name="interfacenamerule_unique_regex",
+            ),
+            models.UniqueConstraint(
+                fields=["module_type_pattern", "device_type", "platform"],
+                condition=models.Q(applies_to_device_interfaces=True),
+                nulls_distinct=False,
+                name="interfacenamerule_unique_device_iface",
             ),
         ]
 

@@ -3,23 +3,28 @@
 #
 # Demo Virtual Chassis Interface Name Rules
 #
-# These rules target the devcontainer demo devices (demo-vc-1 / demo-vc-2)
-# created by load-sample-data.py and demonstrate {vc_position} usage.
+# These rules target the devcontainer demo devices created by load-sample-data.py
+# and demonstrate {vc_position} usage for both MODULE interfaces and DEVICE interfaces.
 #
-# Template variable substitution:
-#   {vc_position}      — Virtual Chassis member position (device.vc_position)
-#   {bay_position_num} — numeric suffix of the module bay position
+# MODULE interface rules (applied via post_save on dcim.Module):
+#   {vc_position}         — Virtual Chassis member position (device.vc_position)
+#   {bay_position_num}    — numeric suffix of the module bay position
 #   {parent_bay_position} — position of the parent module bay (linecard position)
-#   {sfp_slot}         — sub-bay index within the parent module
+#   {sfp_slot}            — sub-bay index within the parent module
+#
+# DEVICE interface rules (applied via post_save on dcim.Device — VC position change):
+#   applies_to_device_interfaces: true
+#   module_type_pattern — optional regex filter applied to interface.name
+#   {vc_position} — Virtual Chassis member position
+#   {base}        — current full interface name
+#   {port}        — segment after the last "/" in the name (or the full name if no "/")
+#
+# ── Module interface rules ──────────────────────────────────────────────────────
 #
 # VC-LINECARD installs into "linecard0" (position "0") on VC-SWITCH devices.
 # demo-vc-1 has vc_position=1, demo-vc-2 has vc_position=2.
 # Result: installing VC-LINECARD into demo-vc-1 → interface named "Gi1/0"
 #                                  into demo-vc-2 → interface named "Gi2/0"
-#
-# VC-SFP installs into "sfp0" (position "0") on VC-LINECARD modules.
-# Result: installing VC-SFP into demo-vc-1 linecard0 → interface named "Gi1/0/0"
-#                                         demo-vc-2 linecard0 → interface named "Gi2/0/0"
 
 - module_type: "VC-LINECARD"
   module_type_is_regex: false
@@ -30,3 +35,51 @@
   module_type_is_regex: false
   name_template: "Gi{vc_position}/{parent_bay_position}/{sfp_slot}"
   description: "Demo VC SFP rule — names SFP port with vc_position/linecard/sfp (Gi1/0/0, Gi2/0/0)"
+
+# ── Device interface rules (applies_to_device_interfaces: true) ────────────────
+#
+# These rules rename native device-type interfaces (module=None) when a device
+# joins or changes position in a Virtual Chassis.
+#
+# Generic demo VC-SWITCH
+# Templates: Gi0/1 .. Gi0/4  →  Gi{vc_position}/1 .. Gi{vc_position}/4
+- applies_to_device_interfaces: true
+  device_type: "VC-SWITCH"
+  module_type_pattern: "Gi\\d+/\\d+"
+  name_template: "Gi{vc_position}/{port}"
+  description: "Demo VC-SWITCH: rename Gi0/N device interfaces to Gi{vc_position}/N"
+
+# Juniper EX Virtual Chassis
+# Templates: ge-0/0/0 .. ge-0/0/3  →  ge-{vc_position}/0/0 .. ge-{vc_position}/0/3
+# Juniper VCs are 0-based: member 0, member 1, ...
+- applies_to_device_interfaces: true
+  device_type: "JNP-EX-VC"
+  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  name_template: "ge-{vc_position}/0/{port}"
+  description: "Juniper EX VC: rename ge- access ports to ge-{vc_position}/0/{port}"
+
+# Juniper EX uplink ports (10GE xe-)
+# Templates: xe-0/1/0 .. xe-0/1/1  →  xe-{vc_position}/1/0 .. xe-{vc_position}/1/1
+- applies_to_device_interfaces: true
+  device_type: "JNP-EX-VC"
+  module_type_pattern: "xe-\\d+/\\d+/\\d+"
+  name_template: "xe-{vc_position}/1/{port}"
+  description: "Juniper EX VC: rename xe- uplink ports to xe-{vc_position}/1/{port}"
+
+# Cisco Catalyst 9000 Stack
+# Templates: GigabitEthernet1/0/1 .. GigabitEthernet1/0/4
+# Cisco stacks are 1-based: switch 1, switch 2, ...
+- applies_to_device_interfaces: true
+  device_type: "CISCO-C9K"
+  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  name_template: "GigabitEthernet{vc_position}/0/{port}"
+  description: "Cisco C9K stack: rename GigabitEthernet interfaces to GigabitEthernet{vc_position}/0/{port}"
+
+# Arista EOS (slot/port style)
+# Templates: Ethernet1/1 .. Ethernet1/4
+# In Arista modular/multi-chassis naming, slot maps to VC member position.
+- applies_to_device_interfaces: true
+  device_type: "ARISTA-EOS"
+  module_type_pattern: "Ethernet\\d+/\\d+"
+  name_template: "Ethernet{vc_position}/{port}"
+  description: "Arista EOS: rename Ethernet slot/port interfaces to Ethernet{vc_position}/{port}"

@@ -16,24 +16,35 @@
                position-based naming can't produce the correct interface name.</p>
             <p>Covers <strong>converter offset</strong> (e.g., CVR-X2-SFP + GLC-T),
                <strong>breakout transceivers</strong> (e.g., QSFP+ 4x10G with channel numbering),
-               and <strong>platform-specific naming</strong> (e.g., Juniper et-/xe-/ge- prefixes).</p>
+               <strong>platform-specific naming</strong> (e.g., Juniper et-/xe-/ge- prefixes),
+               and <strong>Virtual Chassis device port renaming</strong> (e.g., Gi0/1 → Gi2/1 on VC member 2).</p>
 
-            <p><strong>Signal-driven:</strong> Rules are applied automatically via Django's
-               <code>post_save</code> signal on the Module model — no manual invocation needed.
-               Any plugin or UI action that creates a Module will trigger matching rules.</p>
+            <p><strong>Signal-driven:</strong> Rules run automatically via two Django signals:</p>
+            <ul>
+                <li><code>post_save</code> on <strong>Module</strong> — fires after a module is installed into a device bay (primary path for transceiver/linecard naming).</li>
+                <li><code>post_save</code> on <strong>Device</strong> — fires after VC position changes (<code>vc_position</code> or <code>virtual_chassis</code> modified); triggers device-level interface renaming for VC members.</li>
+            </ul>
+            <p>Both paths use <code>on_commit</code> deferred execution so that all interfaces are in the database before renaming begins.</p>
+
+            <p><strong>Device interface rules</strong> (<code>Applies to Device Interfaces</code> checkbox) target native device-type interfaces
+               (<code>module=None</code>) rather than module-installed interfaces. Use these to rename VC member ports when the device
+               joins a stack or changes position. The <code>Module Type Pattern</code> field acts as an interface-name filter (regex) instead of a module type selector.</p>
 
             <h6 class="mt-3">Supported Template Variables</h6>
             <table class="table table-sm table-bordered" style="max-width: 750px;">
-                <thead><tr><th style="width: 200px;">Variable</th><th>Description</th></tr></thead>
+                <thead>
+                    <tr><th style="width: 200px;">Variable</th><th>Rule type</th><th>Description</th></tr>
+                </thead>
                 <tbody>
-                    <tr><td><code>{slot}</code></td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
-                    <tr><td><code>{bay_position}</code></td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
-                    <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
-                    <tr><td><code>{parent_bay_position}</code></td><td>Position of the parent module's bay</td></tr>
-                    <tr><td><code>{sfp_slot}</code></td><td>Numeric sub-bay index within the parent module</td></tr>
-                    <tr><td><code>{base}</code></td><td>Original interface name from the NetBox module template</td></tr>
-                    <tr><td><code>{channel}</code></td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
-                    <tr><td><code>{vc_position}</code></td><td>Virtual Chassis member position (<code>device.vc_position</code>); only available when device is a VC member — raises error and skips rename on non-VC devices</td></tr>
+                    <tr><td><code>{slot}</code></td><td>Module</td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
+                    <tr><td><code>{bay_position}</code></td><td>Module</td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
+                    <tr><td><code>{bay_position_num}</code></td><td>Module</td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
+                    <tr><td><code>{parent_bay_position}</code></td><td>Module</td><td>Position of the parent module's bay</td></tr>
+                    <tr><td><code>{sfp_slot}</code></td><td>Module</td><td>Numeric sub-bay index within the parent module</td></tr>
+                    <tr><td><code>{base}</code></td><td>Both</td><td>Original interface name from the template (or current name for device-level rules)</td></tr>
+                    <tr><td><code>{port}</code></td><td>Device</td><td>Segment after the last "/" in the current interface name (e.g., "Gi0/1" &rarr; "1"); full name if no "/"</td></tr>
+                    <tr><td><code>{channel}</code></td><td>Module</td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
+                    <tr><td><code>{vc_position}</code></td><td>Both</td><td>Virtual Chassis member position (<code>device.vc_position</code>); requires device to be in a VC</td></tr>
                 </tbody>
             </table>
 
@@ -53,6 +64,15 @@
                     <code>swp{bay_position_num}s{channel}</code> (Channels=2, Ch. Start=1)</li>
                 <li><strong>Virtual Chassis linecard:</strong> VC-LINECARD on stack member &rarr;
                     <code>Gi{vc_position}/{bay_position_num}</code> (requires device to be in a Virtual Chassis)</li>
+                <li><strong>VC device ports (Cisco):</strong> GigabitEthernet1/0/3 on stack member 2 &rarr;
+                    <code>GigabitEthernet{vc_position}/0/{port}</code> &rarr; GigabitEthernet2/0/3
+                    (device-level rule, pattern <code>GigabitEthernet\d+/\d+/\d+</code>)</li>
+                <li><strong>VC device ports (Juniper):</strong> ge-0/0/2 on VC member 1 &rarr;
+                    <code>ge-{vc_position}/0/{port}</code> &rarr; ge-1/0/2
+                    (device-level rule, pattern <code>ge-\d+/\d+/\d+</code>)</li>
+                <li><strong>VC device ports (Arista):</strong> Ethernet1/3 on VC member 2 &rarr;
+                    <code>Ethernet{vc_position}/{port}</code> &rarr; Ethernet2/3
+                    (device-level rule, pattern <code>Ethernet\d+/\d+</code>)</li>
             </ul>
 
             {% if supports_module_path %}
