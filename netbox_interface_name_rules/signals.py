@@ -27,29 +27,60 @@ logger = logging.getLogger("netbox_interface_name_rules")
 # path and would create a false sense of security.
 
 
+@receiver(pre_save, sender="dcim.Module", dispatch_uid="interface_name_rules_pre_save_module")
+def on_module_pre_save(sender, instance, **kwargs):
+    """Capture old module_type_id before a Module save (for type-change detection)."""
+    if instance.pk is None:
+        instance._prev_module_type_id = None
+        return
+    try:
+        old = sender.objects.filter(pk=instance.pk).values("module_type_id").first()
+        instance._prev_module_type_id = old["module_type_id"] if old else None
+    except Exception:
+        instance._prev_module_type_id = None
+
+
 @receiver(post_save, sender="dcim.Module", dispatch_uid="interface_name_rules_post_save_module")
 def on_module_saved(sender, instance, created, **kwargs):
-    """Apply interface name rules after module install — primary renaming path.
+    """Apply interface name rules after module install or module-type change.
 
-    NetBox's Module.save() creates interfaces via bulk_create() and then
-    manually dispatches post_save for the Module.  This handler defers the
-    actual renaming to on_commit so that all interfaces are visible in the DB
-    before apply_interface_name_rules() runs.  Handles both simple renames
-    and breakout channel creation.
+    Primary renaming path: NetBox's Module.save() creates interfaces via
+    bulk_create() and then manually dispatches post_save for the Module.
+    This handler defers the actual renaming to on_commit so that all
+    interfaces are visible in the DB before apply_interface_name_rules() runs.
+
+    Also handles module-type changes: when an existing module's type is changed
+    via the API (PATCH), force-reapply rules to rename existing interfaces
+    according to the new module type's rule.
     """
-    if not created:
-        return
-
     module = instance
     module_bay = getattr(module, "module_bay", None)
     if not module_bay:
         return
 
-    callback = functools.partial(_apply_rules_deferred, module.pk, module_bay.pk)
+    if created:
+        callback = functools.partial(_apply_rules_deferred, module.pk, module_bay.pk)
+        transaction.on_commit(callback)
+        return
+
+    # Module type change: re-apply rules with force_reapply=True
+    prev_module_type_id = getattr(instance, "_prev_module_type_id", None)
+    if prev_module_type_id is None:
+        return
+    if prev_module_type_id == instance.module_type_id:
+        return
+
+    logger.debug(
+        "Module %s type changed (%s → %s) — scheduling rule re-apply",
+        instance.pk,
+        prev_module_type_id,
+        instance.module_type_id,
+    )
+    callback = functools.partial(_apply_rules_deferred, module.pk, module_bay.pk, force_reapply=True)
     transaction.on_commit(callback)
 
 
-def _apply_rules_deferred(module_pk, module_bay_pk):
+def _apply_rules_deferred(module_pk, module_bay_pk, force_reapply=False):
     """Apply interface name rules after transaction commit."""
     from dcim.models import Module, ModuleBay
 
@@ -62,7 +93,7 @@ def _apply_rules_deferred(module_pk, module_bay_pk):
     try:
         from .engine import apply_interface_name_rules
 
-        renamed = apply_interface_name_rules(module, module_bay)
+        renamed = apply_interface_name_rules(module, module_bay, force_reapply=force_reapply)
         if renamed:
             logger.info(
                 "Renamed %d interface(s) for %s in %s",
@@ -170,4 +201,3 @@ def _apply_rules_for_device_deferred(device_pk):
             )
     except Exception:
         logger.exception("Failed to re-apply rules for device %s after VC change", device_pk)
-

@@ -168,6 +168,39 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
         except Exception as e:
             fail("module bays page", e)
 
+        # ── Pre-clean: remove stale modules from test bays (idempotent) ─────
+        try:
+            import urllib.request as _ureq_pre
+            import json as _json_pre
+
+            _pre_opener = _ureq_pre.build_opener(_ureq_pre.ProxyHandler({}))
+            _pre_cookies = ctx.cookies()
+            _pre_csrf = next((c["value"] for c in _pre_cookies if c["name"] == "csrftoken"), "")
+            _pre_session = next((c["value"] for c in _pre_cookies if c["name"] == "sessionid"), "")
+            _pre_headers = {
+                "X-CSRFToken": _pre_csrf,
+                "Cookie": f"csrftoken={_pre_csrf}; sessionid={_pre_session}",
+                "Content-Type": "application/json",
+            }
+            for _bay_id, _, _ in BAYS:
+                req = _ureq_pre.Request(
+                    f"{base_url}/api/dcim/modules/?device_id={DEVICE_ID}&module_bay_id={_bay_id}",
+                    headers=_pre_headers,
+                )
+                with _pre_opener.open(req, timeout=API_TIMEOUT) as resp:
+                    _existing = _json_pre.loads(resp.read())
+                for _m in _existing.get("results", []):
+                    _pre_opener.open(
+                        _ureq_pre.Request(
+                            f"{base_url}/api/dcim/modules/{_m['id']}/",
+                            headers=_pre_headers,
+                            method="DELETE",
+                        ),
+                        timeout=API_TIMEOUT,
+                    )
+        except Exception as _e:
+            print(f"  [pre-clean bays] warning: {_e}")
+
         # ── Tests 3+4 / 5+6: Install + verify interface naming ───────────────
         for bay_id, bay_name, expected_iface in BAYS:
             # Install via UI
@@ -376,6 +409,103 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                         {"vc_position": 1},
                         api_headers,
                     )
+                except Exception:
+                    pass
+
+            # ── Test: module type change → signal re-renames interface ───────
+            try:
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    mt_chg_mods = _json.loads(resp.read())
+                lc_mod_for_mt = next(
+                    (m for m in mt_chg_mods.get("results", []) if m["module_type"]["model"] == VC_MODULE_TYPE),
+                    None,
+                )
+                assert lc_mod_for_mt, f"VC-LINECARD module not found on device {VC_DEVICE_ID}"
+                lc_module_id_mt = lc_mod_for_mt["id"]
+
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/module-types/?model={VC_SFP_MODULE_TYPE}",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    sfp_mt_data = _json.loads(resp.read())
+                assert sfp_mt_data["count"] > 0, f"{VC_SFP_MODULE_TYPE} module type not found"
+                sfp_mt_id_for_swap = sfp_mt_data["results"][0]["id"]
+
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/module-types/?model={VC_MODULE_TYPE}",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    lc_mt_data = _json.loads(resp.read())
+                lc_mt_id_for_restore = lc_mt_data["results"][0]["id"]
+
+                # PATCH module type VC-LINECARD → VC-SFP
+                _api_patch(
+                    f"{base_url}/api/dcim/modules/{lc_module_id_mt}/",
+                    {"module_type": sfp_mt_id_for_swap},
+                    api_headers,
+                )
+                # VC-SFP rule: Gi{vc_position}/{parent_bay_position}/{sfp_slot} = Gi1/0/0
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi1/0/0")
+                assert found, "'Gi1/0/0' not found after module type change VC-LINECARD->VC-SFP"
+                ok("module type change: VC-LINECARD->VC-SFP renames Gi1/0 to Gi1/0/0")
+
+                # PATCH module type VC-SFP → VC-LINECARD (restore)
+                _api_patch(
+                    f"{base_url}/api/dcim/modules/{lc_module_id_mt}/",
+                    {"module_type": lc_mt_id_for_restore},
+                    api_headers,
+                )
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi1/0")
+                assert found, "'Gi1/0' not found after restoring VC-LINECARD type"
+                ok("module type change: restoring VC-LINECARD type renames Gi1/0/0 back to Gi1/0")
+            except Exception as e:
+                fail("module type change signal", e)
+                # Best-effort restore to VC-LINECARD on failure
+                try:
+                    with urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/dcim/module-types/?model={VC_MODULE_TYPE}",
+                            headers=api_headers,
+                        ),
+                        timeout=API_TIMEOUT,
+                    ) as resp:
+                        _lc_mt_restore = _json.loads(resp.read())
+                    if _lc_mt_restore.get("results"):
+                        with urllib.request.urlopen(
+                            urllib.request.Request(
+                                f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
+                                headers=api_headers,
+                            ),
+                            timeout=API_TIMEOUT,
+                        ) as resp:
+                            _all_mods = _json.loads(resp.read())
+                        _wrong_type_mod = next(
+                            (
+                                m
+                                for m in _all_mods.get("results", [])
+                                if m["module_type"]["model"] == VC_SFP_MODULE_TYPE
+                                and m.get("module_bay", {}).get("name") == "linecard0"
+                            ),
+                            None,
+                        )
+                        if _wrong_type_mod:
+                            _api_patch(
+                                f"{base_url}/api/dcim/modules/{_wrong_type_mod['id']}/",
+                                {"module_type": _lc_mt_restore["results"][0]["id"]},
+                                api_headers,
+                            )
                 except Exception:
                     pass
 
