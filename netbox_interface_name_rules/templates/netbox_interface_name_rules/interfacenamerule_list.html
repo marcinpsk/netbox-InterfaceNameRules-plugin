@@ -90,32 +90,47 @@
             body.style.display = collapsed ? 'none' : '';
             chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-down' : 'mdi ms-auto mdi-chevron-up';
 
-            // AJAX toggle: intercept enable/disable form submissions
-            document.addEventListener('submit', function(e) {
-                const form = e.target;
-                if (!form.classList.contains('toggle-form')) return;
-                e.preventDefault();
-                const url = form.action;
-                const csrfToken = form.querySelector('[name=csrfmiddlewaretoken]').value;
+            // AJAX toggle: click handler on toggle buttons (no form — avoids nested-form 405 bug)
+            document.addEventListener('click', function(e) {
+                const btn = e.target.closest('.toggle-btn[data-toggle-url]');
+                if (!btn) return;
+                const url = btn.dataset.toggleUrl;
+                const csrfToken =
+                    document.querySelector('input[name="csrfmiddlewaretoken"]')?.value ||
+                    (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || '';
+                btn.disabled = true;
                 fetch(url, {
                     method: 'POST',
                     headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken},
                     credentials: 'same-origin',
                 }).then(r => r.json()).then(data => {
-                    const btn = form.querySelector('.toggle-btn');
-                    const row = form.closest('tr');
+                    btn.disabled = false;
+                    const row = btn.closest('tr');
                     if (data.enabled) {
-                        btn.className = 'btn btn-xs btn-success toggle-btn';
+                        btn.className = 'btn btn-sm btn-success toggle-btn';
                         btn.title = 'Enabled — click to disable';
                         btn.querySelector('i').className = 'mdi mdi-check';
                         if (row) row.classList.remove('text-muted', 'opacity-50');
                     } else {
-                        btn.className = 'btn btn-xs btn-secondary toggle-btn';
+                        btn.className = 'btn btn-sm btn-secondary toggle-btn';
                         btn.title = 'Disabled — click to enable';
                         btn.querySelector('i').className = 'mdi mdi-minus';
                         if (row) { row.classList.add('text-muted'); row.classList.add('opacity-50'); }
                     }
-                }).catch(() => { form.submit(); }); // fallback to full reload on error
+                }).catch(() => {
+                    btn.disabled = false;
+                    // Fallback: synthesise a form POST (navigates away)
+                    const f = document.createElement('form');
+                    f.method = 'POST';
+                    f.action = url;
+                    const csrf = document.createElement('input');
+                    csrf.type = 'hidden';
+                    csrf.name = 'csrfmiddlewaretoken';
+                    csrf.value = csrfToken;
+                    f.appendChild(csrf);
+                    document.body.appendChild(f);
+                    f.submit();
+                });
             });
         });
     </script>

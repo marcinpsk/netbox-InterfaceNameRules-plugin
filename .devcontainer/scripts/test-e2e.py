@@ -50,8 +50,7 @@ BAYS = [
     (491, "Transceiver 5", "swp5"),  # bay_position_num=5
 ]
 
-# Rule IDs for toggle test (linux.yaml unscoped regex rules)
-TOGGLE_RULE_ID = 101  # regex:QSFP-100G-.* → eth{bay_position_num}d{channel}
+# Rule ID for toggle test — discovered dynamically at runtime (see toggle test block)
 
 # VC test constants (populated by load-sample-data.py)
 VC_DEVICE_ID = 32  # vc-stack-1 (vc_position=1, master)
@@ -252,27 +251,33 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             fail("librenms-sync after install", e)
 
         # ── Test: rule toggle — enable/disable via UI ─────────────────────────
+        # Discover a rule ID dynamically (any enabled toggle button on the page)
+        _toggle_rule_id = None
         try:
             page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
             page.wait_for_load_state("networkidle", timeout=10000)
-            toggle_form = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first
-            assert toggle_form.count() > 0, f"toggle form for rule {TOGGLE_RULE_ID} not found"
-            btn = toggle_form.locator("button")
+            _pk_val = page.evaluate(
+                'document.querySelector("button.toggle-btn.btn-success[data-pk]")?.getAttribute("data-pk")'
+            )
+            assert _pk_val, "no enabled toggle button found on rules list page"
+            _toggle_rule_id = int(_pk_val)
+            btn = page.locator(f'button.toggle-btn[data-pk="{_toggle_rule_id}"]').first
             assert "btn-success" in (btn.get_attribute("class") or ""), "rule should start enabled (btn-success)"
-            ok("rule toggle: rule list shows enabled state")
+            ok(f"rule toggle: rule list shows enabled state (rule id={_toggle_rule_id})")
         except Exception as e:
             fail("rule toggle: enabled state visible", e)
 
         try:
+            assert _toggle_rule_id, "no rule ID discovered"
             page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
             page.wait_for_load_state("networkidle", timeout=10000)
-            page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button").click()
-            page.wait_for_load_state("networkidle", timeout=10000)
-            btn_after = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button")
+            page.locator(f'button.toggle-btn[data-pk="{_toggle_rule_id}"]').first.click()
+            page.wait_for_timeout(800)  # AJAX settles
+            btn_after = page.locator(f'button.toggle-btn[data-pk="{_toggle_rule_id}"]').first
             assert "btn-secondary" in (btn_after.get_attribute("class") or ""), (
                 "rule should be disabled (btn-secondary)"
             )
-            row = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').locator("xpath=ancestor::tr")
+            row = btn_after.locator("xpath=ancestor::tr")
             row_class = row.get_attribute("class") or ""
             assert "opacity-50" in row_class or "text-muted" in row_class, f"disabled row not greyed: {row_class!r}"
             ok("rule toggle: rule disabled — button grey, row greyed out")
@@ -280,11 +285,12 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             fail("rule toggle: disable rule", e)
 
         try:
+            assert _toggle_rule_id, "no rule ID discovered"
             page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
             page.wait_for_load_state("networkidle", timeout=10000)
-            page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button").click()
-            page.wait_for_load_state("networkidle", timeout=10000)
-            btn_re = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button")
+            page.locator(f'button.toggle-btn[data-pk="{_toggle_rule_id}"]').first.click()
+            page.wait_for_timeout(800)
+            btn_re = page.locator(f'button.toggle-btn[data-pk="{_toggle_rule_id}"]').first
             assert "btn-success" in (btn_re.get_attribute("class") or ""), "rule should be re-enabled (btn-success)"
             ok("rule toggle: rule re-enabled — button green")
         except Exception as e:
