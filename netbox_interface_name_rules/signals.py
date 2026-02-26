@@ -172,32 +172,42 @@ def _apply_rules_for_device_deferred(device_pk):
     except Device.DoesNotExist:
         return
 
+    total = 0
+
+    # Re-apply module interface rules
     modules = Module.objects.filter(device=device).select_related("module_bay", "module_type")
-    if not modules.exists():
-        return
+    if modules.exists():
+        try:
+            from .engine import apply_interface_name_rules
 
+            for module in modules:
+                module_bay = module.module_bay
+                if not module_bay:
+                    continue
+                try:
+                    renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
+                    total += renamed or 0
+                except Exception:
+                    logger.exception(
+                        "Failed to re-apply rules for %s in %s after VC change",
+                        module.module_type,
+                        module_bay.name,
+                    )
+        except Exception:
+            logger.exception("Failed to re-apply module rules for device %s after VC change", device_pk)
+
+    # Re-apply device-level interface rules (interfaces with module=None)
     try:
-        from .engine import apply_interface_name_rules
+        from .engine import apply_device_interface_rules
 
-        total = 0
-        for module in modules:
-            module_bay = module.module_bay
-            if not module_bay:
-                continue
-            try:
-                renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
-                total += renamed or 0
-            except Exception:
-                logger.exception(
-                    "Failed to re-apply rules for %s in %s after VC change",
-                    module.module_type,
-                    module_bay.name,
-                )
-        if total:
-            logger.info(
-                "Re-renamed %d interface(s) for device %s after VC change",
-                total,
-                device,
-            )
+        renamed = apply_device_interface_rules(device)
+        total += renamed or 0
     except Exception:
-        logger.exception("Failed to re-apply rules for device %s after VC change", device_pk)
+        logger.exception("Failed to re-apply device interface rules for device %s after VC change", device_pk)
+
+    if total:
+        logger.info(
+            "Re-renamed %d interface(s) for device %s after VC change",
+            total,
+            device,
+        )

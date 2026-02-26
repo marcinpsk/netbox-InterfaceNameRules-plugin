@@ -87,6 +87,85 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed
 
 
+def apply_device_interface_rules(device):
+    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
+
+    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
+    type and platform, then renames any matching interfaces using the name_template.
+
+    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
+    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
+
+    Returns the number of interfaces renamed.
+    """
+    from dcim.models import Interface
+
+    from .models import InterfaceNameRule
+
+    if not getattr(device, "virtual_chassis_id", None):
+        return 0  # Only rename for VC members (vc_position must be set)
+
+    vc_position = str(device.vc_position)
+    device_type = getattr(device, "device_type", None)
+    platform = getattr(device, "platform", None)
+
+    from django.db.models import Q
+
+    rules = (
+        InterfaceNameRule.objects.filter(
+            applies_to_device_interfaces=True,
+            enabled=True,
+        )
+        .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
+        .filter(Q(platform=platform) | Q(platform__isnull=True))
+    )
+
+    if not rules.exists():
+        return 0
+
+    interfaces = list(Interface.objects.filter(device=device, module=None))
+    if not interfaces:
+        return 0
+
+    total = 0
+    for rule in rules:
+        for iface in interfaces:
+            # Filter by interface name pattern if specified
+            if rule.module_type_pattern:
+                try:
+                    if not re.fullmatch(rule.module_type_pattern, iface.name):
+                        continue
+                except re.error:
+                    continue
+
+            port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
+            variables = {"vc_position": vc_position, "base": iface.name, "port": port}
+
+            try:
+                new_name = evaluate_name_template(rule.name_template, variables)
+            except Exception:
+                logger.exception(
+                    "Failed to evaluate template %r for interface %s (rule %s)",
+                    rule.name_template,
+                    iface.name,
+                    rule.pk,
+                )
+                continue
+
+            if new_name == iface.name:
+                continue
+
+            old_name = iface.name
+            iface.name = new_name
+            iface.save()
+            logger.debug(
+                "Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk
+            )
+            total += 1
+
+    return total
+
+
 def _get_raw_interface_names(module):
     """Return the original interface names NetBox assigned from templates.
 

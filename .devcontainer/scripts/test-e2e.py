@@ -695,6 +695,120 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 except Exception as e:
                     print(f"  [cleanup] warning (vc-stack-2 modules): {e}")
 
+            # ── Test: device-level interface renaming on VC position change ───
+            _dev_iface_rule_id = None
+            _dev_iface_id = None
+            try:
+                # Look up VC-SWITCH device type ID
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/device-types/?model=VC-SWITCH",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    _dt_data = _json.loads(resp.read())
+                assert _dt_data["count"] > 0, "VC-SWITCH device type not found"
+                _vc_switch_dt_id = _dt_data["results"][0]["id"]
+
+                # Pre-cleanup: remove any stale Gi0/1 from a previous failed run
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/interfaces/?device_id={VC_DEVICE_ID}&name=Gi0%2F1",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    _stale = _json.loads(resp.read())
+                for _s in _stale.get("results", []):
+                    if _s.get("module") is None:
+                        try:
+                            urllib.request.urlopen(
+                                urllib.request.Request(
+                                    f"{base_url}/api/dcim/interfaces/{_s['id']}/",
+                                    headers=api_headers,
+                                    method="DELETE",
+                                ),
+                                timeout=API_TIMEOUT,
+                            )
+                        except Exception:
+                            pass
+
+                # Create a device-level interface on vc-stack-1 (module=None)
+                _iface_payload = _json.dumps({"device": VC_DEVICE_ID, "name": "Gi0/1", "type": "1000base-t"}).encode()
+                req = urllib.request.Request(
+                    f"{base_url}/api/dcim/interfaces/",
+                    data=_iface_payload,
+                    headers=api_headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                    _dev_iface = _json.loads(resp.read())
+                _dev_iface_id = _dev_iface["id"]
+
+                # Create a device-level interface rule (applies_to_device_interfaces=True)
+                _dev_iface_rule_payload = _json.dumps(
+                    {
+                        "applies_to_device_interfaces": True,
+                        "module_type_is_regex": False,
+                        "module_type_pattern": r"Gi\d+/\d+",
+                        "device_type": _vc_switch_dt_id,
+                        "name_template": "Gi{vc_position}/{port}",
+                        "enabled": True,
+                    }
+                ).encode()
+                req = urllib.request.Request(
+                    f"{base_url}/api/plugins/interface-name-rules/rules/",
+                    data=_dev_iface_rule_payload,
+                    headers=api_headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                    _dev_iface_rule = _json.loads(resp.read())
+                _dev_iface_rule_id = _dev_iface_rule["id"]
+
+                # Change vc_position 1→4 — should trigger rename Gi0/1 → Gi4/1
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
+                    {"vc_position": 4},
+                    api_headers,
+                )
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi4/1")
+                assert found, "'Gi4/1' not found — device-level interface rename failed on vc_position change"
+                ok("VC: device-level interface 'Gi0/1' → 'Gi4/1' on vc_position 1→4")
+
+                # Restore vc_position 4→1 — should rename Gi4/1 → Gi1/1
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
+                    {"vc_position": 1},
+                    api_headers,
+                )
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi1/1")
+                assert found, "'Gi1/1' not found — device-level interface re-rename failed on vc_position 4→1"
+                ok("VC: device-level interface 'Gi4/1' → 'Gi1/1' on vc_position 4→1 (force_reapply)")
+            except Exception as e:
+                fail("VC: device-level interface rename", e)
+                # Ensure vc_position is restored on failure
+                try:
+                    _api_patch(f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/", {"vc_position": 1}, api_headers)
+                except Exception:
+                    pass
+            finally:
+                # Clean up: delete the test interface and rule
+                for _url, _item_id in [
+                    (f"{base_url}/api/dcim/interfaces/", _dev_iface_id),
+                    (f"{base_url}/api/plugins/interface-name-rules/rules/", _dev_iface_rule_id),
+                ]:
+                    if _item_id is None:
+                        continue
+                    try:
+                        urllib.request.urlopen(
+                            urllib.request.Request(f"{_url}{_item_id}/", headers=api_headers, method="DELETE"),
+                            timeout=API_TIMEOUT,
+                        )
+                    except Exception:
+                        pass
+
             print("\n  [cleanup] removing VC test module and rule...")
 
             # ── Test: module cascade delete removes interface ─────────────────

@@ -111,6 +111,16 @@ class InterfaceNameRule(NetBoxModel):
         default=True,
         help_text="When disabled, this rule is ignored during module installation and Apply Rules operations.",
     )
+    applies_to_device_interfaces = models.BooleanField(
+        default=False,
+        verbose_name="Applies to Device Interfaces",
+        help_text=(
+            "When enabled, this rule renames device-level interfaces (module=None) when the device "
+            "joins or changes position in a Virtual Chassis. "
+            "The Module Type field must be empty; the Module Type Pattern (if set) is used as a regex "
+            "to filter which interface names to rename."
+        ),
+    )
 
     # Override inherited tags to avoid reverse accessor clash when co-installed
     # with another plugin that has a model of the same name.
@@ -118,7 +128,23 @@ class InterfaceNameRule(NetBoxModel):
 
     def clean(self):
         super().clean()
-        if self.module_type_is_regex:
+        if self.applies_to_device_interfaces:
+            # Device-level rules must not reference a module type
+            if self.module_type:
+                raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
+            # module_type_pattern is an optional interface-name filter regex
+            if self.module_type_pattern:
+                try:
+                    re.compile(self.module_type_pattern)
+                except re.error as e:
+                    raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
+                if _REDOS_PATTERN.search(self.module_type_pattern):
+                    raise ValidationError(
+                        {"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."}
+                    )
+            # Force regex mode off — module_type_is_regex has no meaning here
+            self.module_type_is_regex = False
+        elif self.module_type_is_regex:
             if not self.module_type_pattern:
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
@@ -153,6 +179,7 @@ class InterfaceNameRule(NetBoxModel):
         "channel_start",
         "description",
         "enabled",
+        "applies_to_device_interfaces",
     ]
 
     @property
@@ -207,8 +234,18 @@ class InterfaceNameRule(NetBoxModel):
         constraints = [
             models.CheckConstraint(
                 check=(
-                    models.Q(module_type_is_regex=True, module_type__isnull=True, module_type_pattern__gt="")
-                    | models.Q(module_type_is_regex=False, module_type__isnull=False)
+                    models.Q(applies_to_device_interfaces=True, module_type__isnull=True)
+                    | models.Q(
+                        applies_to_device_interfaces=False,
+                        module_type_is_regex=True,
+                        module_type__isnull=True,
+                        module_type_pattern__gt="",
+                    )
+                    | models.Q(
+                        applies_to_device_interfaces=False,
+                        module_type_is_regex=False,
+                        module_type__isnull=False,
+                    )
                 ),
                 name="interfacenamerule_module_type_mode_check",
             ),
