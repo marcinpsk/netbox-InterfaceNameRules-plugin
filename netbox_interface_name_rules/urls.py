@@ -30,4 +30,5 @@ urlpatterns = [
     ),
     path("rules/<int:pk>/apply/", views.RuleApplyDetailView.as_view(), name="interfacenamerule_apply_detail"),
     path("rules/<int:pk>/applicable/", views.RuleApplicableView.as_view(), name="interfacenamerule_applicable"),
+    path("rules/<int:pk>/toggle/", views.RuleToggleView.as_view(), name="interfacenamerule_toggle"),
 ]

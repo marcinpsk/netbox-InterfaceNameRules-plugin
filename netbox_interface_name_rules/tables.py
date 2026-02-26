@@ -37,8 +37,49 @@ class SpecificityColumn(tables.Column):
         return value
 
 
+_ENABLED_TOGGLE_TEMPLATE = """
+{%% if record.enabled %%}
+<form method="post" action="%(url_prefix)s{{ record.pk }}/toggle/" style="display:inline">
+  {%% csrf_token %%}
+  <button type="submit" class="btn btn-sm btn-success" title="Enabled — click to disable" aria-label="Toggle rule enabled">
+    <i class="mdi mdi-check"></i>
+  </button>
+</form>
+{%% else %%}
+<form method="post" action="%(url_prefix)s{{ record.pk }}/toggle/" style="display:inline">
+  {%% csrf_token %%}
+  <button type="submit" class="btn btn-sm btn-secondary" title="Disabled — click to enable" aria-label="Toggle rule enabled">
+    <i class="mdi mdi-minus"></i>
+  </button>
+</form>
+{%% endif %%}
+"""
+
+
 class InterfaceNameRuleTable(NetBoxTable):
     pk = columns.ToggleColumn()
+    enabled = tables.TemplateColumn(
+        template_code="""
+{% if record.enabled %}
+<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" style="display:inline">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-sm btn-success" title="Enabled — click to disable" aria-label="Toggle rule enabled">
+    <i class="mdi mdi-check"></i>
+  </button>
+</form>
+{% else %}
+<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" style="display:inline">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-sm btn-secondary" title="Disabled — click to enable" aria-label="Toggle rule enabled">
+    <i class="mdi mdi-minus"></i>
+  </button>
+</form>
+{% endif %}
+""",
+        verbose_name="Enabled",
+        orderable=True,
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
     specificity_score = SpecificityColumn()
     module_type = tables.Column(verbose_name="Module Type", linkify=True)
     module_type_pattern = tables.Column(verbose_name="Pattern")
@@ -67,6 +108,7 @@ class InterfaceNameRuleTable(NetBoxTable):
         fields = (
             "pk",
             "id",
+            "enabled",
             "specificity_score",
             "module_type",
             "module_type_pattern",
@@ -82,6 +124,7 @@ class InterfaceNameRuleTable(NetBoxTable):
         )
         default_columns = (
             "pk",
+            "enabled",
             "specificity_score",
             "module_type",
             "module_type_pattern",
@@ -94,4 +137,5 @@ class InterfaceNameRuleTable(NetBoxTable):
             "description",
             "actions",
         )
+        row_attrs = {"class": lambda record: "" if record.enabled else "text-muted opacity-50"}
         attrs = {"class": "table table-hover table-headings table-striped"}

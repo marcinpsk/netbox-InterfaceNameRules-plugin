@@ -9,7 +9,21 @@ import os
 
 import yaml
 
-CONTRIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "contrib")
+CONTRIB_DIR = os.path.join(
+    os.path.dirname(
+        os.path.abspath(
+            globals().get(
+                "__file__", "/workspaces/netbox-InterfaceNameRules-plugin/.devcontainer/scripts/load-sample-data.py"
+            )
+        )
+    ),
+    "..",
+    "..",
+    "contrib",
+)
+# Fallback for when piped via `manage.py shell` (where __file__ resolves incorrectly)
+if not os.path.isdir(CONTRIB_DIR):
+    CONTRIB_DIR = "/workspaces/netbox-InterfaceNameRules-plugin/contrib"
 
 
 def load_yaml(filename):
@@ -148,6 +162,147 @@ try:
         print("· Platform SONiC already exists")
 except Exception as e:
     print(f"⚠ Could not create SONiC platform: {e}")
+print()
+
+# ─── Test devices ─────────────────────────────────────────────────────────────
+print("🖥  Creating test devices…")
+print()
+
+try:
+    from dcim.models import (
+        Device,
+        DeviceRole,
+        DeviceType,
+        InterfaceTemplate,
+        Manufacturer,
+        ModuleBay,
+        ModuleBayTemplate,
+        ModuleType,
+        Site,
+        VirtualChassis,
+    )
+
+    _site, _ = Site.objects.get_or_create(name="Test Site", defaults={"slug": "test-site"})
+    _mfr, _ = Manufacturer.objects.get_or_create(name="Test Manufacturer", defaults={"slug": "test-manufacturer"})
+    _role, _ = DeviceRole.objects.get_or_create(name="Test Role", defaults={"slug": "test-role", "color": "9e9e9e"})
+
+    # ── test-100ports (100 module-bay device for Apply Rules preview tests) ────
+    _dt100, _created = DeviceType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="TEST-100BAY",
+        defaults={"slug": "test-100bay", "u_height": 2},
+    )
+    if _created:
+        for i in range(1, 101):
+            ModuleBayTemplate.objects.get_or_create(device_type=_dt100, name=f"bay{i}", defaults={"position": str(i)})
+        print("  ✓ Created DeviceType TEST-100BAY with 100 module bay templates")
+
+    _mt1port, _ = ModuleType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="TEST-1PORT",
+        defaults={},
+    )
+
+    _dev100, _created = Device.objects.get_or_create(
+        name="test-100ports",
+        defaults={"site": _site, "device_type": _dt100, "role": _role, "status": "active"},
+    )
+    if _created:
+        print("  ✓ Created device test-100ports")
+        # Install TEST-1PORT module into every bay so rule 95 can rename its interfaces
+        from dcim.models import Module
+
+        for bay in ModuleBay.objects.filter(device=_dev100).order_by("name"):
+            Module.objects.get_or_create(
+                device=_dev100,
+                module_bay=bay,
+                defaults={"module_type": _mt1port, "status": "active"},
+            )
+        print("  ✓ Installed TEST-1PORT modules into all 100 bays")
+    else:
+        print("  · test-100ports already exists")
+
+    # ── Virtual Chassis stack (2 × VC-SWITCH for {vc_position} rule tests) ────
+    _dt_vc, _created = DeviceType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="VC-SWITCH",
+        defaults={"slug": "vc-switch", "u_height": 1},
+    )
+    if _created:
+        for i in range(1, 3):
+            InterfaceTemplate.objects.get_or_create(
+                device_type=_dt_vc,
+                name=f"Gi0/{i}",
+                defaults={"type": "1000base-t"},
+            )
+        ModuleBayTemplate.objects.get_or_create(
+            device_type=_dt_vc,
+            name="linecard0",
+            defaults={"position": "0"},
+        )
+        print("  ✓ Created DeviceType VC-SWITCH (2 iface templates + 1 module bay)")
+
+    _mt_vc_lc, _created_lc = ModuleType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="VC-LINECARD",
+        defaults={},
+    )
+    if _created_lc:
+        # Single interface template named "0" — matches bay position, engine renames to Gi{vc_position}/0
+        from dcim.models import InterfaceTemplate as ModuleInterfaceTemplate
+
+        ModuleInterfaceTemplate.objects.get_or_create(
+            module_type=_mt_vc_lc,
+            name="0",
+            defaults={"type": "1000base-t"},
+        )
+
+    _vc1, _created = Device.objects.get_or_create(
+        name="vc-stack-1",
+        defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
+    )
+    if _created:
+        print("  ✓ Created device vc-stack-1")
+    else:
+        print("  · vc-stack-1 already exists")
+
+    _vc2, _created = Device.objects.get_or_create(
+        name="vc-stack-2",
+        defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
+    )
+    if _created:
+        print("  ✓ Created device vc-stack-2")
+    else:
+        print("  · vc-stack-2 already exists")
+
+    _stack, _created = VirtualChassis.objects.get_or_create(
+        name="test-vc-stack",
+        defaults={"master": _vc1},
+    )
+    if _created:
+        print("  ✓ Created VirtualChassis test-vc-stack")
+    else:
+        print("  · VirtualChassis test-vc-stack already exists")
+
+    # Assign VC membership (idempotent)
+    for _dev, _pos in [(_vc1, 1), (_vc2, 2)]:
+        if _dev.virtual_chassis != _stack or _dev.vc_position != _pos:
+            _dev.virtual_chassis = _stack
+            _dev.vc_position = _pos
+            _dev.save()
+            print(f"  ✓ Assigned {_dev.name} to stack at position {_pos}")
+
+    # Ensure master is set
+    if _stack.master != _vc1:
+        _stack.master = _vc1
+        _stack.save()
+
+except Exception as _e:
+    print(f"⚠ Could not create test devices: {_e}")
+    import traceback
+
+    traceback.print_exc()
+
 print()
 
 if not os.path.isdir(CONTRIB_DIR):

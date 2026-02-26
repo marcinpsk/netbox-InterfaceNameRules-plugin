@@ -369,3 +369,19 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
                 messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
 
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)
+
+
+class RuleToggleView(ConditionalLoginRequiredMixin, View):
+    """POST /rules/<pk>/toggle/ — flip the enabled flag on a rule."""
+
+    def post(self, request, pk):
+        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        if not request.user.has_perm("netbox_interface_name_rules.change_interfacenamerule"):
+            raise PermissionDenied
+        rule.enabled = not rule.enabled
+        rule.save(update_fields=["enabled"])
+        state = "enabled" if rule.enabled else "disabled"
+        messages.success(request, f"Rule '{rule}' {state}.")
+        return redirect(
+            request.META.get("HTTP_REFERER") or "plugins:netbox_interface_name_rules:interfacenamerule_list"
+        )

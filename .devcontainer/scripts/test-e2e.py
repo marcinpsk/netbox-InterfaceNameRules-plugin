@@ -45,6 +45,15 @@ BAYS = [
     (491, "Transceiver 5", "swp5"),  # bay_position_num=5
 ]
 
+# Rule IDs for toggle test (linux.yaml unscoped regex rules)
+TOGGLE_RULE_ID = 101  # regex:QSFP-100G-.* → eth{bay_position_num}d{channel}
+
+# VC test constants (populated by load-sample-data.py)
+VC_DEVICE_ID = 32  # vc-stack-1 (vc_position=1)
+VC_BAY_ID = 1580  # linecard0 (position=0)
+VC_MODULE_TYPE = "VC-LINECARD"
+VC_MANUFACTURER_ID = 12  # Test Manufacturer
+
 
 def tomselect_pick(page, field_id: str, search_text: str) -> None:
     """
@@ -166,28 +175,164 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
         except Exception as e:
             fail("librenms-sync after install", e)
 
+        # ── Test: rule toggle — enable/disable via UI ─────────────────────────
+        try:
+            page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
+            page.wait_for_load_state("networkidle", timeout=10000)
+            toggle_form = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first
+            assert toggle_form.count() > 0, f"toggle form for rule {TOGGLE_RULE_ID} not found"
+            btn = toggle_form.locator("button")
+            assert "btn-success" in (btn.get_attribute("class") or ""), "rule should start enabled (btn-success)"
+            ok("rule toggle: rule list shows enabled state")
+        except Exception as e:
+            fail("rule toggle: enabled state visible", e)
+
+        try:
+            page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
+            page.wait_for_load_state("networkidle", timeout=10000)
+            page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button").click()
+            page.wait_for_load_state("networkidle", timeout=10000)
+            btn_after = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button")
+            assert "btn-secondary" in (btn_after.get_attribute("class") or ""), (
+                "rule should be disabled (btn-secondary)"
+            )
+            row = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').locator("xpath=ancestor::tr")
+            row_class = row.get_attribute("class") or ""
+            assert "opacity-50" in row_class or "text-muted" in row_class, f"disabled row not greyed: {row_class!r}"
+            ok("rule toggle: rule disabled — button grey, row greyed out")
+        except Exception as e:
+            fail("rule toggle: disable rule", e)
+
+        try:
+            page.goto(f"{base_url}/plugins/interface-name-rules/rules/")
+            page.wait_for_load_state("networkidle", timeout=10000)
+            page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button").click()
+            page.wait_for_load_state("networkidle", timeout=10000)
+            btn_re = page.locator(f'form[action*="/{TOGGLE_RULE_ID}/toggle/"]').first.locator("button")
+            assert "btn-success" in (btn_re.get_attribute("class") or ""), "rule should be re-enabled (btn-success)"
+            ok("rule toggle: rule re-enabled — button green")
+        except Exception as e:
+            fail("rule toggle: re-enable rule", e)
+
+        # ── Test: VC position — module install on VC member ───────────────────
+        import urllib.request
+        import json as _json
+
+        cookies = ctx.cookies()
+        csrf = next((c["value"] for c in cookies if c["name"] == "csrftoken"), "")
+        session = next((c["value"] for c in cookies if c["name"] == "sessionid"), "")
+        api_headers = {
+            "X-CSRFToken": csrf,
+            "Cookie": f"csrftoken={csrf}; sessionid={session}",
+            "Content-Type": "application/json",
+        }
+
+        vc_rule_id = None
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/api/dcim/module-types/?model=VC-LINECARD",
+                headers=api_headers,
+            )
+            with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                mt_data = _json.loads(resp.read())
+            assert mt_data["count"] > 0, "VC-LINECARD module type not found"
+            vc_mt_id = mt_data["results"][0]["id"]
+
+            rule_payload = _json.dumps(
+                {
+                    "module_type": vc_mt_id,
+                    "module_type_is_regex": False,
+                    "name_template": "Gi{vc_position}/{bay_position_num}",
+                    "enabled": True,
+                }
+            ).encode()
+            req2 = urllib.request.Request(
+                f"{base_url}/api/plugins/interface-name-rules/rules/",
+                data=rule_payload,
+                headers=api_headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req2, timeout=API_TIMEOUT) as resp:
+                rule_data = _json.loads(resp.read())
+            vc_rule_id = rule_data["id"]
+            ok(f"VC: created rule VC-LINECARD → Gi{{vc_position}}/{{bay_position_num}} (id={vc_rule_id})")
+        except Exception as e:
+            fail("VC: create VC-LINECARD rule", e)
+
+        if vc_rule_id:
+            try:
+                page.goto(
+                    f"{base_url}/dcim/modules/add/"
+                    f"?device={VC_DEVICE_ID}&module_bay={VC_BAY_ID}"
+                    f"&manufacturer={VC_MANUFACTURER_ID}"
+                    f"&return_url=/dcim/devices/{VC_DEVICE_ID}/interfaces/"
+                )
+                page.wait_for_load_state("networkidle", timeout=10000)
+                tomselect_pick(page, "id_module_type", VC_MODULE_TYPE)
+                page.locator('button[name="_create"]').click()
+                page.wait_for_load_state("networkidle", timeout=15000)
+                ok(f"VC: installed {VC_MODULE_TYPE} into vc-stack-1 linecard0")
+            except Exception as e:
+                fail(f"VC: install {VC_MODULE_TYPE}", e)
+
+            try:
+                # vc-stack-1 has vc_position=1, bay position=0 → expect Gi1/0
+                expected_vc_iface = "Gi1/0"
+                deadline = time.monotonic() + 5
+                found = False
+                while time.monotonic() < deadline:
+                    page.goto(f"{base_url}/dcim/devices/{VC_DEVICE_ID}/interfaces/")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=3000)
+                    except Exception:
+                        pass
+                    if page.locator(f"text={expected_vc_iface}").count() > 0:
+                        found = True
+                        break
+                    time.sleep(0.5)
+                assert found, f"'{expected_vc_iface}' not found — {{vc_position}} not substituted"
+                ok(f"VC: interface '{expected_vc_iface}' created — {{vc_position}} works")
+            except Exception as e:
+                fail("VC: interface with vc_position", e)
+
+            print("\n  [cleanup] removing VC test module and rule...")
+            try:
+                req = urllib.request.Request(
+                    f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
+                    headers=api_headers,
+                )
+                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                    vc_mod_data = _json.loads(resp.read())
+                for m in vc_mod_data.get("results", []):
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/dcim/modules/{m['id']}/",
+                            headers=api_headers,
+                            method="DELETE",
+                        ),
+                        timeout=API_TIMEOUT,
+                    )
+                urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/plugins/interface-name-rules/rules/{vc_rule_id}/",
+                        headers=api_headers,
+                        method="DELETE",
+                    ),
+                    timeout=API_TIMEOUT,
+                )
+                print("  [cleanup] VC test module + rule removed ✓")
+            except Exception as e:
+                print(f"  [cleanup] warning: {e}")
+
         # ── Cleanup via API ───────────────────────────────────────────────────
         print("\n  [cleanup] removing test modules via API...")
         try:
-            import urllib.request
             import urllib.parse
-            import json as _json
 
-            # Reuse the browser session cookie for API calls
-            cookies = ctx.cookies()
-            csrf = next((c["value"] for c in cookies if c["name"] == "csrftoken"), "")
-            session = next((c["value"] for c in cookies if c["name"] == "sessionid"), "")
-            headers = {
-                "X-CSRFToken": csrf,
-                "Cookie": f"csrftoken={csrf}; sessionid={session}",
-                "Content-Type": "application/json",
-            }
-
-            # List modules on device (follow pagination)
             module_ids = []
             next_url = f"{base_url}/api/dcim/modules/?device_id={DEVICE_ID}"
             while next_url:
-                req = urllib.request.Request(next_url, headers=headers)
+                req = urllib.request.Request(next_url, headers=api_headers)
                 with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
                     data = _json.loads(resp.read())
                 module_ids.extend(m["id"] for m in data.get("results", []))
@@ -195,13 +340,15 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
 
             removed = 0
             for mid in module_ids:
-                del_req = urllib.request.Request(
-                    f"{base_url}/api/dcim/modules/{mid}/",
-                    headers=headers,
-                    method="DELETE",
-                )
                 try:
-                    urllib.request.urlopen(del_req, timeout=API_TIMEOUT)
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/dcim/modules/{mid}/",
+                            headers=api_headers,
+                            method="DELETE",
+                        ),
+                        timeout=API_TIMEOUT,
+                    )
                     removed += 1
                 except Exception as e:
                     print(f"  [cleanup] warning: failed to delete module {mid}: {e}")

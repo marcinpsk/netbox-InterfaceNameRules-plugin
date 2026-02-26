@@ -107,6 +107,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         help_text="Optional description or notes about this rule",
     )
+    enabled = models.BooleanField(
+        default=True,
+        help_text="When disabled, this rule is ignored during module installation and Apply Rules operations.",
+    )
 
     # Override inherited tags to avoid reverse accessor clash when co-installed
     # with another plugin that has a model of the same name.
@@ -148,6 +152,7 @@ class InterfaceNameRule(NetBoxModel):
         "channel_count",
         "channel_start",
         "description",
+        "enabled",
     ]
 
     @property

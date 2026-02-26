@@ -159,6 +159,7 @@ class InterfaceNameRuleForm(NetBoxModelForm):
             "channel_count",
             "channel_start",
             "description",
+            "enabled",
         ]
         help_texts = {
             "parent_module_type": (
@@ -221,6 +222,7 @@ class InterfaceNameRuleImportForm(NetBoxModelImportForm):
             "channel_count",
             "channel_start",
             "description",
+            "enabled",
         ]
 
 

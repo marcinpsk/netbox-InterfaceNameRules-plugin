@@ -69,6 +69,7 @@ See `contrib/ufispace.yaml` for a real-world example of the pattern mode and `co
 | `{parent_bay_position}` | Parent module's bay position |
 | `{sfp_slot}` | Sub-bay index within parent module |
 | `{base}` | Base interface name from NetBox position resolution |
+| `{vc_position}` | Virtual Chassis member position (`device.vc_position`); only injected when the device is a VC member — templates using this variable will produce no rename on non-VC devices |
 | `{channel}` | Breakout channel number (requires `channel_count`; range starts at `channel_start`, default `0`) |
 
 `channel_count` is a rule configuration field (not a template variable) that enables breakout mode.

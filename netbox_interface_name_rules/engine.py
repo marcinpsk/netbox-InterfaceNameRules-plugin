@@ -47,7 +47,7 @@ def apply_interface_name_rules(module, module_bay):
     if not rule:
         return 0
 
-    variables = build_variables(module_bay)
+    variables = build_variables(module_bay, device=module.device)
     interfaces = list(Interface.objects.filter(module=module))
 
     if not interfaces:
@@ -158,7 +158,7 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
 
     # Tier 1: exact FK match
     for pmt, dt, pl in candidates:
-        filters: dict = {"module_type": module_type, "module_type_is_regex": False}
+        filters: dict = {"module_type": module_type, "module_type_is_regex": False, "enabled": True}
         if pmt is None:
             filters["parent_module_type__isnull"] = True
         else:
@@ -178,7 +178,7 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     # Tier 2: regex pattern match — longer patterns are tried first (more specific)
     model_name = module_type.model
     for pmt, dt, pl in candidates:
-        filters = {"module_type_is_regex": True}
+        filters = {"module_type_is_regex": True, "enabled": True}
         if pmt is None:
             filters["parent_module_type__isnull"] = True
         else:
@@ -206,14 +206,20 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     return None
 
 
-def build_variables(module_bay):
+def build_variables(module_bay, device=None):
     """Build template variable dict from a module bay's position context.
 
     Extracts numeric and raw position values from the bay and its parent chain,
     producing the variables available for name_template substitution.
 
     Returns a dict with keys: slot, bay_position, bay_position_num,
-    parent_bay_position, sfp_slot.
+    parent_bay_position, sfp_slot, and optionally vc_position.
+
+    ``vc_position`` is only injected when *device* is a Virtual Chassis member
+    (device.virtual_chassis_id is set).  Templates using ``{vc_position}`` on a
+    non-VC device will raise ValueError during evaluation — this is intentional.
+    Note: Juniper VC positions start at 0, so 0 is a valid real-world value and
+    cannot be used as a "not in VC" sentinel.
     """
     bay_position = module_bay.position or "0"
     # If position is a template expression (e.g., {module}), extract from bay name
@@ -243,13 +249,16 @@ def build_variables(module_bay):
         if hasattr(owner_module, "module_bay") and owner_module.module_bay:
             slot = owner_module.module_bay.position or bay_position
 
-    return {
+    result = {
         "slot": slot,
         "bay_position": bay_position,
         "bay_position_num": bay_position_num,
         "parent_bay_position": parent_bay_position,
         "sfp_slot": sfp_slot,
     }
+    if device is not None and getattr(device, "virtual_chassis_id", None) is not None:
+        result["vc_position"] = str(device.vc_position)
+    return result
 
 
 def _apply_rule_to_interface(rule, iface, variables, module):
@@ -398,6 +407,7 @@ def find_interfaces_for_rule(rule, limit=None):
         "device",
         "device__device_type",
         "device__platform",
+        "device__virtual_chassis",
         "module_bay",
         "module_bay__parent",
     )
@@ -407,7 +417,7 @@ def find_interfaces_for_rule(rule, limit=None):
     total_checked = 0
     for module in module_qs:
         processed_pks.append(module.pk)
-        variables = build_variables(module.module_bay)
+        variables = build_variables(module.module_bay, device=module.device)
         ifaces_in_module = list(Interface.objects.filter(module=module).order_by("name"))
 
         if rule.channel_count > 0:
@@ -513,8 +523,8 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
         module_qs = module_qs.filter(device__platform=rule.platform)
 
     count = 0
-    for module in module_qs.select_related("module_bay", "module_type", "device"):
-        variables = build_variables(module.module_bay)
+    for module in module_qs.select_related("module_bay", "module_type", "device", "device__virtual_chassis"):
+        variables = build_variables(module.module_bay, device=module.device)
 
         if rule.channel_count > 0:
             # Channel rule: process module ONCE using the best base interface.
