@@ -218,7 +218,10 @@ class InterfaceNameRule(NetBoxModel):
     @property
     def specificity_label(self) -> str:
         """Short human-readable description of what this rule matches."""
-        mode = "exact" if not self.module_type_is_regex else f"regex({len(self.module_type_pattern)})"
+        if self.applies_to_device_interfaces:
+            mode = f"iface-filter({len(self.module_type_pattern)})" if self.module_type_pattern else "iface-filter(*)"
+        else:
+            mode = "exact" if not self.module_type_is_regex else f"regex({len(self.module_type_pattern)})"
         parts = []
         if self.parent_module_type_id:
             parts.append("parent")

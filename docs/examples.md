@@ -230,7 +230,91 @@ The **Apply Rules** page shows all rules with a live **Applicable** indicator
 
 ---
 
-## See also
+## Virtual Chassis port renaming
+
+When multiple devices form a **Virtual Chassis** (stack), each member's interfaces need to reflect its position in the chassis. The plugin fires `apply_device_interface_rules()` on `post_save` of `dcim.Device` whenever the VC position changes, renaming all native device-type interfaces automatically.
+
+Enable **Applies to Device Interfaces** on the rule. The **Module Type Pattern** field acts as a **regex filter on interface names** (not a module type selector) — the REGEX column shows a <img src="../screenshots/vc-filter-icon.png" alt="filter" width="16" style="vertical-align:middle"> filter icon instead of a boolean.
+
+### Device-level rules list (filtered to VC rules)
+
+![Rules list showing 5 device-level VC rules — filter icon in REGEX column, orange priority badge, green Device Ifaces checkmark](screenshots/vc-rules-list.png)
+
+---
+
+### Juniper EX Virtual Chassis
+
+Juniper VCs use **0-based** member IDs. Interfaces follow the `{prefix}-{member}/0/{port}` scheme.
+
+| Pattern | Name template | Member 0 result | Member 1 result |
+|---------|---------------|-----------------|-----------------|
+| `ge-\d+/\d+/\d+` | `ge-{vc_position}/0/{port}` | `ge-0/0/0` | `ge-1/0/0` |
+| `xe-\d+/\d+/\d+` | `xe-{vc_position}/1/{port}` | `xe-0/1/0` | `xe-1/1/0` |
+
+```yaml
+# Juniper EX — 1G access ports
+- applies_to_device_interfaces: true
+  device_type: "JNP-EX-VC"
+  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  name_template: "ge-{vc_position}/0/{port}"
+
+# Juniper EX — 10G uplinks
+- applies_to_device_interfaces: true
+  device_type: "JNP-EX-VC"
+  module_type_pattern: "xe-\\d+/\\d+/\\d+"
+  name_template: "xe-{vc_position}/1/{port}"
+```
+
+**jnp-vc-2** at VC position 1 — interfaces renamed `ge-0/0/N` → `ge-1/0/N`, `xe-0/1/N` → `xe-1/1/N`:
+
+![jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming](screenshots/vc-juniper-interfaces.png)
+
+---
+
+### Cisco Catalyst 9000 Stack
+
+Cisco stacks use **1-based** member IDs. Templates create `GigabitEthernet1/0/N`; on joining the stack at position 2, ports become `GigabitEthernet2/0/N`.
+
+```yaml
+- applies_to_device_interfaces: true
+  device_type: "CISCO-C9K"
+  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  name_template: "GigabitEthernet{vc_position}/0/{port}"
+```
+
+**cisco-sw-2** at VC position 2 — interfaces renamed `GigabitEthernet1/0/N` → `GigabitEthernet2/0/N`:
+
+![cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4](screenshots/vc-cisco-interfaces.png)
+
+---
+
+### Arista EOS
+
+Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device type creates templates `Ethernet1/1` … `Ethernet1/N`; at VC position 2 they become `Ethernet2/1` … `Ethernet2/N`.
+
+```yaml
+- applies_to_device_interfaces: true
+  device_type: "ARISTA-EOS"
+  module_type_pattern: "Ethernet\\d+/\\d+"
+  name_template: "Ethernet{vc_position}/{port}"
+```
+
+**arista-sw-2** at VC position 2 — interfaces renamed `Ethernet1/N` → `Ethernet2/N`:
+
+![arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4](screenshots/vc-arista-interfaces.png)
+
+!!! tip "Re-apply after initial load"
+    If devices were added to the VC *before* rules were loaded (e.g. during bulk provisioning), the signal fires before the rules exist. Force a re-apply with:
+    ```python
+    from dcim.models import Device
+    from netbox_interface_name_rules.engine import apply_device_interface_rules
+    for dev in Device.objects.filter(virtual_chassis__isnull=False):
+        apply_device_interface_rules(dev)
+    ```
+
+---
+
+
 
 - [`contrib/juniper.yaml`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/contrib/juniper.yaml) — full Juniper rule set
 - [`contrib/ufispace.yaml`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/contrib/ufispace.yaml) — SONiC platform-scoped rules

@@ -18,6 +18,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
     )
     module_type_is_regex = django_filters.BooleanFilter(label="Regex Mode")
     enabled = django_filters.BooleanFilter(label="Enabled")
+    applies_to_device_interfaces = django_filters.BooleanFilter(label="Device Interface Rules")
     module_type_pattern = django_filters.CharFilter(lookup_expr="icontains", label="Pattern")
     parent_module_type_id = django_filters.ModelChoiceFilter(
         queryset=ModuleType.objects.all(),
@@ -40,6 +41,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
         fields = [
             "module_type_id",
             "module_type_is_regex",
+            "applies_to_device_interfaces",
             "module_type_pattern",
             "parent_module_type_id",
             "device_type_id",
