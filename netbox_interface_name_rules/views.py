@@ -377,9 +377,13 @@ class RuleToggleView(ConditionalLoginRequiredMixin, View):
     def post(self, request, pk):
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
         if not request.user.has_perm("netbox_interface_name_rules.change_interfacenamerule"):
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse({"error": "Permission denied"}, status=403)
             raise PermissionDenied
         rule.enabled = not rule.enabled
         rule.save(update_fields=["enabled"])
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"enabled": rule.enabled, "pk": pk})
         state = "enabled" if rule.enabled else "disabled"
         messages.success(request, f"Rule '{rule}' {state}.")
         return redirect(

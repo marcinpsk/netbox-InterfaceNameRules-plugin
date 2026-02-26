@@ -11,6 +11,7 @@
 | `{sfp_slot}` | Sub-bay index within parent module | `1` |
 | `{base}` | Original interface name from NetBox | `Interface 0` |
 | `{channel}` | Breakout channel number (requires `channel_count`) | `0`, `1`, `2` |
+| `{vc_position}` | Virtual Chassis member position (`device.vc_position`); only available when the device is a VC member | `1`, `2` |
 
 ## Arithmetic Expressions
 
@@ -20,7 +21,21 @@ Any brace-enclosed expression containing arithmetic operators is evaluated safel
 {8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}
 ```
 
-Supported operators: `+`, `-`, `*`, `/`, `//` (floor division), parentheses.
+Supported operators: `+`, `-`, `*`, `//` (floor division), parentheses. Float division (`/`) is **not** supported — use `//` for integer division.
+
+## Virtual Chassis Support
+
+When a device belongs to a Virtual Chassis, the `{vc_position}` variable is injected automatically and reflects the device's chassis position (`device.vc_position`). Templates that use `{vc_position}` on non-VC devices will fail gracefully (the rename is skipped).
+
+### Virtual Chassis Linecard
+
+```yaml
+name_template: "Gi{vc_position}/{bay_position_num}"
+# Member at VC position 1, bay "linecard2" → Gi1/2
+# Member at VC position 2, bay "linecard3" → Gi2/3
+```
+
+Note: when a device is added to or removed from a Virtual Chassis (or its position changes), existing module-attached interfaces are **not** automatically renamed. Use the [Apply Rules](../configuration/interface-name-rules.md) UI to batch-rename.
 
 ## Examples
 

@@ -42,16 +42,16 @@ class InterfaceNameRuleTable(NetBoxTable):
     enabled = tables.TemplateColumn(
         template_code="""
 {% if record.enabled %}
-<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" style="display:inline">
+<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" class="toggle-form" style="display:inline">
   {% csrf_token %}
-  <button type="submit" class="btn btn-sm btn-success" title="Enabled — click to disable" aria-label="Toggle rule enabled">
+  <button type="submit" class="btn btn-xs btn-success toggle-btn" data-pk="{{ record.pk }}" title="Enabled — click to disable" aria-label="Toggle rule enabled" style="padding:1px 5px;font-size:0.75rem">
     <i class="mdi mdi-check"></i>
   </button>
 </form>
 {% else %}
-<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" style="display:inline">
+<form method="post" action="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}" class="toggle-form" style="display:inline">
   {% csrf_token %}
-  <button type="submit" class="btn btn-sm btn-secondary" title="Disabled — click to enable" aria-label="Toggle rule enabled">
+  <button type="submit" class="btn btn-xs btn-secondary toggle-btn" data-pk="{{ record.pk }}" title="Disabled — click to enable" aria-label="Toggle rule enabled" style="padding:1px 5px;font-size:0.75rem">
     <i class="mdi mdi-minus"></i>
   </button>
 </form>

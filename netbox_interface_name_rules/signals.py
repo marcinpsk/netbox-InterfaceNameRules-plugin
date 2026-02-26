@@ -6,7 +6,7 @@ import functools
 import logging
 
 from django.db import transaction
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 logger = logging.getLogger("netbox_interface_name_rules")
@@ -76,3 +76,98 @@ def _apply_rules_deferred(module_pk, module_bay_pk):
             module.module_type,
             module_bay.name,
         )
+
+
+# ---------------------------------------------------------------------------
+# Virtual Chassis membership change detection
+# ---------------------------------------------------------------------------
+# When a Device's vc_position or virtual_chassis changes, any module-attached
+# interfaces with rules using {vc_position} need to be renamed.  We capture
+# the old values in pre_save (stored on the instance) and compare in post_save.
+
+
+@receiver(pre_save, sender="dcim.Device", dispatch_uid="interface_name_rules_pre_save_device")
+def on_device_pre_save(sender, instance, **kwargs):
+    """Capture old virtual_chassis_id and vc_position before a Device save."""
+    if instance.pk is None:
+        # New device — nothing to compare
+        instance._prev_virtual_chassis_id = None
+        instance._prev_vc_position = None
+        return
+    try:
+        old = sender.objects.filter(pk=instance.pk).values("virtual_chassis_id", "vc_position").first()
+        instance._prev_virtual_chassis_id = old["virtual_chassis_id"] if old else None
+        instance._prev_vc_position = old["vc_position"] if old else None
+    except Exception:
+        instance._prev_virtual_chassis_id = None
+        instance._prev_vc_position = None
+
+
+@receiver(post_save, sender="dcim.Device", dispatch_uid="interface_name_rules_post_save_device")
+def on_device_saved(sender, instance, created, **kwargs):
+    """Re-apply interface name rules when a device's VC membership or position changes."""
+    if created:
+        return
+
+    prev_vc_id = getattr(instance, "_prev_virtual_chassis_id", None)
+    prev_vc_pos = getattr(instance, "_prev_vc_position", None)
+    new_vc_id = instance.virtual_chassis_id
+    new_vc_pos = instance.vc_position
+
+    vc_id_changed = prev_vc_id != new_vc_id
+    vc_pos_changed = prev_vc_pos != new_vc_pos
+
+    if not (vc_id_changed or vc_pos_changed):
+        return
+
+    # Only rename when the device is (now) in a VC — if it was removed, no {vc_position} available.
+    if new_vc_id is None:
+        logger.debug(
+            "Device %s removed from VC — skipping interface rename (no vc_position available)",
+            instance.pk,
+        )
+        return
+
+    callback = functools.partial(_apply_rules_for_device_deferred, instance.pk)
+    transaction.on_commit(callback)
+
+
+def _apply_rules_for_device_deferred(device_pk):
+    """Re-apply interface name rules for all modules in a device after VC position change."""
+    from dcim.models import Device, Module
+
+    try:
+        device = Device.objects.select_related("virtual_chassis").get(pk=device_pk)
+    except Device.DoesNotExist:
+        return
+
+    modules = Module.objects.filter(device=device).select_related("module_bay", "module_type")
+    if not modules.exists():
+        return
+
+    try:
+        from .engine import apply_interface_name_rules
+
+        total = 0
+        for module in modules:
+            module_bay = module.module_bay
+            if not module_bay:
+                continue
+            try:
+                renamed = apply_interface_name_rules(module, module_bay)
+                total += renamed or 0
+            except Exception:
+                logger.exception(
+                    "Failed to re-apply rules for %s in %s after VC change",
+                    module.module_type,
+                    module_bay.name,
+                )
+        if total:
+            logger.info(
+                "Re-renamed %d interface(s) for device %s after VC change",
+                total,
+                device,
+            )
+    except Exception:
+        logger.exception("Failed to re-apply rules for device %s after VC change", device_pk)
+

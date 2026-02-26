@@ -7,15 +7,26 @@
 # created by load-sample-data.py and demonstrate {vc_position} usage.
 #
 # Template variable substitution:
-#   {vc_position}    — Virtual Chassis member position (device.vc_position)
+#   {vc_position}      — Virtual Chassis member position (device.vc_position)
 #   {bay_position_num} — numeric suffix of the module bay position
+#   {parent_bay_position} — position of the parent module bay (linecard position)
+#   {sfp_slot}         — sub-bay index within the parent module
 #
 # VC-LINECARD installs into "linecard0" (position "0") on VC-SWITCH devices.
 # demo-vc-1 has vc_position=1, demo-vc-2 has vc_position=2.
 # Result: installing VC-LINECARD into demo-vc-1 → interface named "Gi1/0"
 #                                  into demo-vc-2 → interface named "Gi2/0"
+#
+# VC-SFP installs into "sfp0" (position "0") on VC-LINECARD modules.
+# Result: installing VC-SFP into demo-vc-1 linecard0 → interface named "Gi1/0/0"
+#                                         demo-vc-2 linecard0 → interface named "Gi2/0/0"
 
 - module_type: "VC-LINECARD"
   module_type_is_regex: false
   name_template: "Gi{vc_position}/{bay_position_num}"
   description: "Demo VC rule — names linecard port using VC member position (Gi1/0, Gi2/0)"
+
+- module_type: "VC-SFP"
+  module_type_is_regex: false
+  name_template: "Gi{vc_position}/{parent_bay_position}/{sfp_slot}"
+  description: "Demo VC SFP rule — names SFP port with vc_position/linecard/sfp (Gi1/0/0, Gi2/0/0)"

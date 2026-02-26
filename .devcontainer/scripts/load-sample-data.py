@@ -229,7 +229,7 @@ try:
         defaults={"slug": "vc-switch", "u_height": 1},
     )
     if _created:
-        for i in range(1, 3):
+        for i in range(1, 5):
             InterfaceTemplate.objects.get_or_create(
                 device_type=_dt_vc,
                 name=f"Gi0/{i}",
@@ -240,7 +240,7 @@ try:
             name="linecard0",
             defaults={"position": "0"},
         )
-        print("  ✓ Created DeviceType VC-SWITCH (2 iface templates + 1 module bay)")
+        print("  ✓ Created DeviceType VC-SWITCH (4 iface templates + 1 module bay)")
 
     _mt_vc_lc, _created_lc = ModuleType.objects.get_or_create(
         manufacturer=_mfr,
@@ -256,6 +256,33 @@ try:
             name="0",
             defaults={"type": "1000base-t"},
         )
+
+    # Add sfp0 sub-bay to VC-LINECARD (idempotent — even if module type already existed)
+    from dcim.models import ModuleBayTemplate as ModuleBayTemplateModel
+
+    ModuleBayTemplateModel.objects.get_or_create(
+        module_type=_mt_vc_lc,
+        name="sfp0",
+        defaults={"position": "0"},
+    )
+
+    # ── VC-SFP module type (for nested SFP testing) ─────────────────────────────
+    _mt_vc_sfp, _created_sfp = ModuleType.objects.get_or_create(
+        manufacturer=_mfr,
+        model="VC-SFP",
+        defaults={},
+    )
+    if _created_sfp:
+        from dcim.models import InterfaceTemplate as ModuleInterfaceTemplate  # noqa: F811
+
+        ModuleInterfaceTemplate.objects.get_or_create(
+            module_type=_mt_vc_sfp,
+            name="0",
+            defaults={"type": "1000base-x-sfp"},
+        )
+        print("  ✓ Created ModuleType VC-SFP (1 interface template)")
+    else:
+        print("  · ModuleType VC-SFP already exists")
 
     _vc1, _created = Device.objects.get_or_create(
         name="vc-stack-1",
