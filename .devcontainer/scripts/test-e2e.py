@@ -49,9 +49,13 @@ BAYS = [
 TOGGLE_RULE_ID = 101  # regex:QSFP-100G-.* → eth{bay_position_num}d{channel}
 
 # VC test constants (populated by load-sample-data.py)
-VC_DEVICE_ID = 32  # vc-stack-1 (vc_position=1)
-VC_BAY_ID = 1580  # linecard0 (position=0)
+VC_DEVICE_ID = 32  # vc-stack-1 (vc_position=1, master)
+VC_BAY_ID = 1580  # linecard0 on vc-stack-1 (position=0)
+VC_DEVICE_ID_2 = 33  # vc-stack-2 (vc_position=2, non-master)
+VC_BAY_ID_2 = 1581  # linecard0 on vc-stack-2 (position=0)
+VC_CHASSIS_ID = 1  # test-vc-stack VirtualChassis pk
 VC_MODULE_TYPE = "VC-LINECARD"
+VC_SFP_MODULE_TYPE = "VC-SFP"
 VC_MANUFACTURER_ID = 12  # Test Manufacturer
 
 
@@ -70,7 +74,38 @@ def tomselect_pick(page, field_id: str, search_text: str) -> None:
     inp.fill(search_text)
     page.wait_for_selector(f"#{field_id}-ts-dropdown .option:not(.no-results)", timeout=5000)
     page.locator(f"#{field_id}-ts-dropdown .option").filter(has_text=search_text).first.click()
-    page.wait_for_selector(f"#{field_id}-ts-dropdown", state="hidden", timeout=3000)
+    try:
+        page.wait_for_selector(f"#{field_id}-ts-dropdown", state="hidden", timeout=5000)
+    except Exception:
+        # Dropdown may not close automatically on slow pages; press Escape to force close
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+
+
+def _api_patch(url: str, payload: dict, headers: dict) -> None:
+    """PATCH a NetBox API endpoint with JSON payload."""
+    import json as _json
+    import urllib.request
+
+    data = _json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, headers=headers, method="PATCH")
+    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+        assert resp.status in (200, 201), f"PATCH {url} returned {resp.status}"
+
+
+def _poll_for_text(page, base_url: str, path: str, text: str, timeout: float = 8.0) -> bool:
+    """Navigate to path and poll until the given text appears on the page."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        page.goto(f"{base_url}{path}")
+        try:
+            page.wait_for_load_state("networkidle", timeout=3000)
+        except Exception:
+            pass
+        if page.locator(f"text={text}").count() > 0:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -292,22 +327,173 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             try:
                 # vc-stack-1 has vc_position=1, bay position=0 → expect Gi1/0
                 expected_vc_iface = "Gi1/0"
-                deadline = time.monotonic() + 5
-                found = False
-                while time.monotonic() < deadline:
-                    page.goto(f"{base_url}/dcim/devices/{VC_DEVICE_ID}/interfaces/")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=3000)
-                    except Exception:
-                        pass
-                    if page.locator(f"text={expected_vc_iface}").count() > 0:
-                        found = True
-                        break
-                    time.sleep(0.5)
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", expected_vc_iface)
                 assert found, f"'{expected_vc_iface}' not found — {{vc_position}} not substituted"
                 ok(f"VC: interface '{expected_vc_iface}' created — {{vc_position}} works")
             except Exception as e:
                 fail("VC: interface with vc_position", e)
+
+            # ── Test: VC position change → signal re-renames interface ────────
+            try:
+                # Change vc-stack-1 vc_position 1 → 3 via API
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
+                    {"vc_position": 3},
+                    api_headers,
+                )
+                # Poll for Gi3/0
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi3/0")
+                assert found, "'Gi3/0' not found after vc_position 1→3"
+                ok("VC: vc_position change 1→3 renamed interface to 'Gi3/0'")
+
+                # Restore vc_position 3 → 1
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
+                    {"vc_position": 1},
+                    api_headers,
+                )
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi1/0")
+                assert found, "'Gi1/0' not found after restoring vc_position 1"
+                ok("VC: vc_position restored 3→1, interface back to 'Gi1/0'")
+            except Exception as e:
+                fail("VC: position change signal", e)
+                # Ensure vc_position is restored even on failure
+                try:
+                    _api_patch(
+                        f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
+                        {"vc_position": 1},
+                        api_headers,
+                    )
+                except Exception:
+                    pass
+
+            # ── Test: VC-SFP nested install → Gi{vc_position}/{parent}/{sfp} ─
+            try:
+                # Find the installed VC-LINECARD module on vc-stack-1
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    mods_data = _json.loads(resp.read())
+                lc_mods = [m for m in mods_data.get("results", []) if m["module_type"]["model"] == VC_MODULE_TYPE]
+                assert lc_mods, f"VC-LINECARD not installed on device {VC_DEVICE_ID}"
+                linecard_id = lc_mods[0]["id"]
+
+                # Find sfp0 sub-bay on the linecard module
+                with urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{base_url}/api/dcim/module-bays/?module_id={linecard_id}&name=sfp0",
+                        headers=api_headers,
+                    ),
+                    timeout=API_TIMEOUT,
+                ) as resp:
+                    bays_data = _json.loads(resp.read())
+                assert bays_data["count"] > 0, f"sfp0 bay not found on VC-LINECARD module {linecard_id}"
+                sfp0_bay_id = bays_data["results"][0]["id"]
+
+                # Install VC-SFP via UI
+                page.goto(
+                    f"{base_url}/dcim/modules/add/"
+                    f"?device={VC_DEVICE_ID}&module_bay={sfp0_bay_id}"
+                    f"&manufacturer={VC_MANUFACTURER_ID}"
+                    f"&return_url=/dcim/devices/{VC_DEVICE_ID}/interfaces/"
+                )
+                page.wait_for_load_state("networkidle", timeout=10000)
+                tomselect_pick(page, "id_module_type", VC_SFP_MODULE_TYPE)
+                page.locator('button[name="_create"]').click()
+                page.wait_for_load_state("networkidle", timeout=15000)
+                ok(f"VC: installed {VC_SFP_MODULE_TYPE} into vc-stack-1 linecard0/sfp0")
+
+                # Poll for Gi1/0/0
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID}/interfaces/", "Gi1/0/0")
+                assert found, "'Gi1/0/0' not found — nested VC-SFP naming failed"
+                ok("VC: VC-SFP interface 'Gi1/0/0' created — nested {vc_position}/{parent_bay}/{sfp_slot} works")
+            except Exception as e:
+                fail("VC: VC-SFP nested install", e)
+
+            # ── Test: VC re-membership (vc-stack-2) → rename on re-add ────────
+            try:
+                # Install VC-LINECARD on vc-stack-2 first
+                page.goto(
+                    f"{base_url}/dcim/modules/add/"
+                    f"?device={VC_DEVICE_ID_2}&module_bay={VC_BAY_ID_2}"
+                    f"&manufacturer={VC_MANUFACTURER_ID}"
+                    f"&return_url=/dcim/devices/{VC_DEVICE_ID_2}/interfaces/"
+                )
+                page.wait_for_load_state("networkidle", timeout=10000)
+                tomselect_pick(page, "id_module_type", VC_MODULE_TYPE)
+                page.locator('button[name="_create"]').click()
+                page.wait_for_load_state("networkidle", timeout=15000)
+
+                # Verify Gi2/0
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID_2}/interfaces/", "Gi2/0")
+                assert found, "'Gi2/0' not found after VC-LINECARD install on vc-stack-2"
+                ok("VC: vc-stack-2 initial install → 'Gi2/0'")
+
+                # Remove vc-stack-2 from VC (vc_position → None)
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID_2}/",
+                    {"virtual_chassis": None, "vc_position": None},
+                    api_headers,
+                )
+
+                # Re-add at position 5
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID_2}/",
+                    {"virtual_chassis": VC_CHASSIS_ID, "vc_position": 5},
+                    api_headers,
+                )
+
+                # Poll for Gi5/0 — signal should have fired and renamed
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID_2}/interfaces/", "Gi5/0")
+                assert found, "'Gi5/0' not found after re-membership at vc_position=5"
+                ok("VC: re-membership (remove+add at pos 5) renamed interface to 'Gi5/0'")
+
+                # Restore vc-stack-2 to position 2
+                _api_patch(
+                    f"{base_url}/api/dcim/devices/{VC_DEVICE_ID_2}/",
+                    {"virtual_chassis": VC_CHASSIS_ID, "vc_position": 2},
+                    api_headers,
+                )
+                found = _poll_for_text(page, base_url, f"/dcim/devices/{VC_DEVICE_ID_2}/interfaces/", "Gi2/0")
+                assert found, "'Gi2/0' not found after restoring vc_position=2"
+                ok("VC: restored vc-stack-2 to pos 2, interface renamed back to 'Gi2/0'")
+            except Exception as e:
+                fail("VC: re-membership signal", e)
+                # Ensure vc-stack-2 is restored to VC at position 2 even on failure
+                try:
+                    _api_patch(
+                        f"{base_url}/api/dcim/devices/{VC_DEVICE_ID_2}/",
+                        {"virtual_chassis": VC_CHASSIS_ID, "vc_position": 2},
+                        api_headers,
+                    )
+                except Exception:
+                    pass
+            finally:
+                # Clean up vc-stack-2 modules
+                try:
+                    with urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID_2}",
+                            headers=api_headers,
+                        ),
+                        timeout=API_TIMEOUT,
+                    ) as resp:
+                        vc2_mods = _json.loads(resp.read())
+                    for m in vc2_mods.get("results", []):
+                        urllib.request.urlopen(
+                            urllib.request.Request(
+                                f"{base_url}/api/dcim/modules/{m['id']}/",
+                                headers=api_headers,
+                                method="DELETE",
+                            ),
+                            timeout=API_TIMEOUT,
+                        )
+                except Exception as e:
+                    print(f"  [cleanup] warning (vc-stack-2 modules): {e}")
 
             print("\n  [cleanup] removing VC test module and rule...")
             try:

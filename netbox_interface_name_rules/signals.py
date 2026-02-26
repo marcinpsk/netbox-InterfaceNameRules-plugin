@@ -154,7 +154,7 @@ def _apply_rules_for_device_deferred(device_pk):
             if not module_bay:
                 continue
             try:
-                renamed = apply_interface_name_rules(module, module_bay)
+                renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
                 total += renamed or 0
             except Exception:
                 logger.exception(

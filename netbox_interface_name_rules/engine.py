@@ -16,14 +16,16 @@ from django.db.models.functions import Length
 logger = logging.getLogger(__name__)
 
 
-def apply_interface_name_rules(module, module_bay):
+def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
     Looks up a matching rule for (module_type, parent_module_type, device_type, platform)
     and renames interfaces created by NetBox's template instantiation.
 
     Only processes interfaces whose name still matches the raw bay position
-    (i.e., haven't been renamed yet), ensuring idempotency.
+    (i.e., haven't been renamed yet), ensuring idempotency.  Pass
+    ``force_reapply=True`` to skip this check and re-apply rules to ALL
+    module interfaces (used when vc_position or other variables change).
 
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
@@ -60,7 +62,12 @@ def apply_interface_name_rules(module, module_bay):
     if not raw_names:
         # Fallback when module type has no InterfaceTemplates
         raw_names = {variables["bay_position"]}
-    unrenamed = [i for i in interfaces if i.name in raw_names]
+
+    if force_reapply:
+        # Re-apply to all interfaces regardless of current name (e.g. vc_position changed)
+        unrenamed = interfaces
+    else:
+        unrenamed = [i for i in interfaces if i.name in raw_names]
     if not unrenamed:
         return 0  # Already renamed (idempotent guard)
 
