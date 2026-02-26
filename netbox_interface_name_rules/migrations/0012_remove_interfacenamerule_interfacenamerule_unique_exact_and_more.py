@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("dcim", "0225_gfk_indexes"),
+        ("dcim", "0210_macaddress_ordering"),
         ("extras", "0134_owner"),
         (
             "netbox_interface_name_rules",
