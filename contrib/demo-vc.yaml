@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Demo Virtual Chassis Interface Name Rules
+#
+# These rules target the devcontainer demo devices (demo-vc-1 / demo-vc-2)
+# created by load-sample-data.py and demonstrate {vc_position} usage.
+#
+# Template variable substitution:
+#   {vc_position}    — Virtual Chassis member position (device.vc_position)
+#   {bay_position_num} — numeric suffix of the module bay position
+#
+# VC-LINECARD installs into "linecard0" (position "0") on VC-SWITCH devices.
+# demo-vc-1 has vc_position=1, demo-vc-2 has vc_position=2.
+# Result: installing VC-LINECARD into demo-vc-1 → interface named "Gi1/0"
+#                                  into demo-vc-2 → interface named "Gi2/0"
+
+- module_type: "VC-LINECARD"
+  module_type_is_regex: false
+  name_template: "Gi{vc_position}/{bay_position_num}"
+  description: "Demo VC rule — names linecard port using VC member position (Gi1/0, Gi2/0)"

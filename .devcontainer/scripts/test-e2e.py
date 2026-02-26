@@ -228,6 +228,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
         }
 
         vc_rule_id = None
+        vc_rule_created = False
         try:
             req = urllib.request.Request(
                 f"{base_url}/api/dcim/module-types/?model=VC-LINECARD",
@@ -238,24 +239,37 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             assert mt_data["count"] > 0, "VC-LINECARD module type not found"
             vc_mt_id = mt_data["results"][0]["id"]
 
-            rule_payload = _json.dumps(
-                {
-                    "module_type": vc_mt_id,
-                    "module_type_is_regex": False,
-                    "name_template": "Gi{vc_position}/{bay_position_num}",
-                    "enabled": True,
-                }
-            ).encode()
-            req2 = urllib.request.Request(
-                f"{base_url}/api/plugins/interface-name-rules/rules/",
-                data=rule_payload,
+            # Check if a rule for VC-LINECARD already exists (e.g. from demo-vc.yaml)
+            req_check = urllib.request.Request(
+                f"{base_url}/api/plugins/interface-name-rules/rules/?module_type_id={vc_mt_id}&module_type_is_regex=false",
                 headers=api_headers,
-                method="POST",
             )
-            with urllib.request.urlopen(req2, timeout=API_TIMEOUT) as resp:
-                rule_data = _json.loads(resp.read())
-            vc_rule_id = rule_data["id"]
-            ok(f"VC: created rule VC-LINECARD → Gi{{vc_position}}/{{bay_position_num}} (id={vc_rule_id})")
+            with urllib.request.urlopen(req_check, timeout=API_TIMEOUT) as resp:
+                existing_rules = _json.loads(resp.read())
+
+            if existing_rules["count"] > 0:
+                vc_rule_id = existing_rules["results"][0]["id"]
+                ok(f"VC: using existing rule VC-LINECARD (id={vc_rule_id})")
+            else:
+                rule_payload = _json.dumps(
+                    {
+                        "module_type": vc_mt_id,
+                        "module_type_is_regex": False,
+                        "name_template": "Gi{vc_position}/{bay_position_num}",
+                        "enabled": True,
+                    }
+                ).encode()
+                req2 = urllib.request.Request(
+                    f"{base_url}/api/plugins/interface-name-rules/rules/",
+                    data=rule_payload,
+                    headers=api_headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req2, timeout=API_TIMEOUT) as resp:
+                    rule_data = _json.loads(resp.read())
+                vc_rule_id = rule_data["id"]
+                vc_rule_created = True
+                ok(f"VC: created rule VC-LINECARD → Gi{{vc_position}}/{{bay_position_num}} (id={vc_rule_id})")
         except Exception as e:
             fail("VC: create VC-LINECARD rule", e)
 
@@ -312,15 +326,16 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                         ),
                         timeout=API_TIMEOUT,
                     )
-                urllib.request.urlopen(
-                    urllib.request.Request(
-                        f"{base_url}/api/plugins/interface-name-rules/rules/{vc_rule_id}/",
-                        headers=api_headers,
-                        method="DELETE",
-                    ),
-                    timeout=API_TIMEOUT,
-                )
-                print("  [cleanup] VC test module + rule removed ✓")
+                if vc_rule_created:
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/plugins/interface-name-rules/rules/{vc_rule_id}/",
+                            headers=api_headers,
+                            method="DELETE",
+                        ),
+                        timeout=API_TIMEOUT,
+                    )
+                print("  [cleanup] VC test module removed ✓")
             except Exception as e:
                 print(f"  [cleanup] warning: {e}")
 

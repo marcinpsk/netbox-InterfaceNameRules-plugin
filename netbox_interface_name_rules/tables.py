@@ -37,25 +37,6 @@ class SpecificityColumn(tables.Column):
         return value
 
 
-_ENABLED_TOGGLE_TEMPLATE = """
-{%% if record.enabled %%}
-<form method="post" action="%(url_prefix)s{{ record.pk }}/toggle/" style="display:inline">
-  {%% csrf_token %%}
-  <button type="submit" class="btn btn-sm btn-success" title="Enabled — click to disable" aria-label="Toggle rule enabled">
-    <i class="mdi mdi-check"></i>
-  </button>
-</form>
-{%% else %%}
-<form method="post" action="%(url_prefix)s{{ record.pk }}/toggle/" style="display:inline">
-  {%% csrf_token %%}
-  <button type="submit" class="btn btn-sm btn-secondary" title="Disabled — click to enable" aria-label="Toggle rule enabled">
-    <i class="mdi mdi-minus"></i>
-  </button>
-</form>
-{%% endif %%}
-"""
-
-
 class InterfaceNameRuleTable(NetBoxTable):
     pk = columns.ToggleColumn()
     enabled = tables.TemplateColumn(

@@ -297,6 +297,46 @@ try:
         _stack.master = _vc1
         _stack.save()
 
+    # ── Demo Virtual Chassis stack (permanent, for manual verification) ────────
+    # These are NOT touched by e2e tests, giving the user a stable VC to experiment with.
+    _demo_vc1, _created = Device.objects.get_or_create(
+        name="demo-vc-1",
+        defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
+    )
+    if _created:
+        print("  ✓ Created device demo-vc-1")
+    else:
+        print("  · demo-vc-1 already exists")
+
+    _demo_vc2, _created = Device.objects.get_or_create(
+        name="demo-vc-2",
+        defaults={"site": _site, "device_type": _dt_vc, "role": _role, "status": "active"},
+    )
+    if _created:
+        print("  ✓ Created device demo-vc-2")
+    else:
+        print("  · demo-vc-2 already exists")
+
+    _demo_stack, _created = VirtualChassis.objects.get_or_create(
+        name="demo-vc-stack",
+        defaults={"master": _demo_vc1},
+    )
+    if _created:
+        print("  ✓ Created VirtualChassis demo-vc-stack")
+    else:
+        print("  · VirtualChassis demo-vc-stack already exists")
+
+    for _dev, _pos in [(_demo_vc1, 1), (_demo_vc2, 2)]:
+        if _dev.virtual_chassis != _demo_stack or _dev.vc_position != _pos:
+            _dev.virtual_chassis = _demo_stack
+            _dev.vc_position = _pos
+            _dev.save()
+            print(f"  ✓ Assigned {_dev.name} to demo-vc-stack at position {_pos}")
+
+    if _demo_stack.master != _demo_vc1:
+        _demo_stack.master = _demo_vc1
+        _demo_stack.save()
+
 except Exception as _e:
     print(f"⚠ Could not create test devices: {_e}")
     import traceback
