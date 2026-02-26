@@ -24,9 +24,11 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
             "channel_count",
             "channel_start",
             "description",
+            "enabled",
         ]
 
     def validate(self, attrs):
+        """Ensure module_type XOR module_type_pattern depending on regex mode."""
         attrs = super().validate(attrs)
         instance = self.instance
 
