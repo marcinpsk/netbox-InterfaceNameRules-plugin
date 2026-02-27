@@ -395,12 +395,15 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)
 
 
-class RuleToggleView(ConditionalLoginRequiredMixin, View):
+@register_model_view(InterfaceNameRule, name="toggle", path="toggle")
+class RuleToggleView(generic.ObjectView):
     """POST /rules/<pk>/toggle/ — flip the enabled flag on a rule."""
+
+    queryset = InterfaceNameRule.objects.all()
 
     def post(self, request, pk):
         """Toggle the enabled flag on the rule and return JSON or redirect."""
-        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        rule = self.get_object(pk=pk)
         if not request.user.has_perm("netbox_interface_name_rules.change_interfacenamerule"):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"error": "Permission denied"}, status=403)

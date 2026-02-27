@@ -127,6 +127,7 @@ def apply_device_interface_rules(device):
         )
         .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
         .filter(Q(platform=platform) | Q(platform__isnull=True))
+        .order_by("-priority", "pk")
     )
 
     if not rules.exists():
@@ -181,7 +182,18 @@ def apply_device_interface_rules(device):
                 )
                 iface.name = old_name  # revert
                 continue
-            iface.save()
+            try:
+                iface.save()
+            except Exception:
+                logger.exception(
+                    "DB save failed for device interface %s → %s (rule %s, device %s)",
+                    old_name,
+                    new_name,
+                    rule.pk,
+                    device.pk,
+                )
+                iface.name = old_name  # revert
+                continue
             renamed_pks.add(iface.pk)
             logger.debug(
                 "Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk

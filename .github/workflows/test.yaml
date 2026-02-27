@@ -104,5 +104,5 @@ jobs:
         env:
           NETBOX_CONFIGURATION: netbox.configuration
         run: |
-          coverage run manage.py test netbox_interface_name_rules --verbosity=2
-          coverage report
+          coverage run --rcfile ../../netbox-InterfaceNameRules-plugin/pyproject.toml manage.py test netbox_interface_name_rules --verbosity=2
+          coverage report --rcfile ../../netbox-InterfaceNameRules-plugin/pyproject.toml

@@ -205,25 +205,24 @@ def _apply_rules_for_device_deferred(device_pk):
         "device__platform",
         "device__virtual_chassis",
     )
-    if modules.exists():
-        try:
-            from .engine import apply_interface_name_rules
+    try:
+        from .engine import apply_interface_name_rules
 
-            for module in modules:
-                module_bay = module.module_bay
-                if not module_bay:
-                    continue
-                try:
-                    renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
-                    total += renamed or 0
-                except Exception:
-                    logger.exception(
-                        "Failed to re-apply rules for %s in %s after VC change",
-                        module.module_type,
-                        module_bay.name,
-                    )
-        except Exception:
-            logger.exception("Failed to re-apply module rules for device %s after VC change", device_pk)
+        for module in modules:
+            module_bay = module.module_bay
+            if not module_bay:
+                continue
+            try:
+                renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
+                total += renamed or 0
+            except Exception:
+                logger.exception(
+                    "Failed to re-apply rules for %s in %s after VC change",
+                    module.module_type,
+                    module_bay.name,
+                )
+    except Exception:
+        logger.exception("Failed to re-apply module rules for device %s after VC change", device_pk)
 
     # Re-apply device-level interface rules (interfaces with module=None)
     try:
