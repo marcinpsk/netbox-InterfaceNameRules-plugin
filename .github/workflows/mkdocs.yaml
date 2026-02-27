@@ -71,6 +71,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git diff --cached --quiet || git commit -m "Restore coverage report after docs deploy [skip ci]"
+            git pull --rebase origin gh-pages
             git push origin gh-pages
             echo "Coverage report restored"
           fi

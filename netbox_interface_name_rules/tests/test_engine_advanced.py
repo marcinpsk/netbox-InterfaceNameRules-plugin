@@ -440,7 +440,7 @@ class ForceReapplyTest(EngineAdvancedFixtures):
             name_template="et-0/0/{bay_position}",
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Interface already has the correct final name — normally would be skipped
+        # Interface currently has an old name — would normally be skipped (not in raw_names)
         iface = Interface.objects.create(device=self.device, module=module, name="old-name", type="10gbase-x-sfpp")
 
         # Without force_reapply: skipped because "old-name" not in raw_names
@@ -453,8 +453,8 @@ class ForceReapplyTest(EngineAdvancedFixtures):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "et-0/0/0")
 
-    def test_force_reapply_channel_matches_subinterfaces_by_base_name(self):
-        """force_reapply with channel rule matches sub-interfaces by base name (before ':')."""
+    def test_force_reapply_channel_skips_when_base_not_in_raw_names(self):
+        """force_reapply with channel rule produces no renames when base name doesn't match raw names."""
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",

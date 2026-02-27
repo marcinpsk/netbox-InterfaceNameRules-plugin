@@ -39,16 +39,31 @@ jobs:
           echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${TOTAL}%\",\"color\":\"${COLOR}\"}" > coverage-report/badge.json
           echo "Coverage: ${TOTAL}% (${COLOR})"
 
-      - name: Clone gh-pages branch
-        # Avoid actions/checkout in workflow_run context (SonarQube GHAS-1/pwn-request
-        # mitigation): clone only the gh-pages ref directly without running a third-party
-        # action that could be flagged as executing untrusted code from a fork.
+      - name: Bootstrap gh-pages if absent
+        # Create an orphan gh-pages branch on first run so the subsequent
+        # checkout step never fails on a brand-new repository.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git clone --depth 1 --branch gh-pages \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
-            gh-pages
+          if ! git ls-remote --exit-code \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+              refs/heads/gh-pages >/dev/null 2>&1; then
+            echo "gh-pages branch absent — bootstrapping..."
+            git init _gh_bootstrap
+            cd _gh_bootstrap
+            git checkout --orphan gh-pages
+            git commit --allow-empty -m "Initialize gh-pages [skip ci]"
+            git remote add origin \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+            git push origin gh-pages
+            echo "gh-pages branch created"
+          fi
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          ref: gh-pages
+          path: gh-pages
 
       - name: Update coverage on gh-pages
         working-directory: gh-pages
