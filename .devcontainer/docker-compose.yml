@@ -45,13 +45,13 @@ services:
       - "8000:8000"
 
   postgres:
-    image: postgres:15
+    image: postgres:18
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-netbox}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-netbox}"]
       interval: 30s
