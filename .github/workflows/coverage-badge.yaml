@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+name: Update coverage report
+
+on:
+  workflow_run:
+    workflows: ["Test with supported NetBox and Python versions"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  publish-coverage:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download coverage report
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4
+        with:
+          name: coverage-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: coverage-report
+
+      - name: Generate badge JSON
+        run: |
+          TOTAL=$(python3 -c "import json; print(json.load(open('coverage-report/coverage.json'))['totals']['percent_covered_display'])")
+          INT=${TOTAL%.*}
+          if [ "$INT" -ge 90 ]; then COLOR="brightgreen"
+          elif [ "$INT" -ge 80 ]; then COLOR="green"
+          elif [ "$INT" -ge 70 ]; then COLOR="yellow"
+          else COLOR="red"; fi
+          echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${TOTAL}%\",\"color\":\"${COLOR}\"}" > coverage-report/badge.json
+          echo "Coverage: ${TOTAL}% (${COLOR})"
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Update coverage on gh-pages
+        working-directory: gh-pages
+        run: |
+          rm -rf coverage
+          cp -r ../coverage-report/htmlcov coverage
+          cp ../coverage-report/badge.json coverage/badge.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add coverage/
+          git diff --cached --quiet || git commit -m "Update coverage report [skip ci]"
+          git push
