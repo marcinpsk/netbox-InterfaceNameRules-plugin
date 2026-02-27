@@ -11,9 +11,12 @@ on:
 jobs:
   publish-coverage:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.owner.login == github.repository_owner
     permissions:
       contents: write
+      actions: read
 
     steps:
       - name: Download coverage report

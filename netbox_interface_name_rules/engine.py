@@ -120,17 +120,19 @@ def apply_device_interface_rules(device):
 
     from django.db.models import Q
 
-    rules = (
+    rules = list(
         InterfaceNameRule.objects.filter(
             applies_to_device_interfaces=True,
             enabled=True,
         )
         .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
         .filter(Q(platform=platform) | Q(platform__isnull=True))
-        .order_by("-priority", "pk")
     )
+    # Sort Python-side: specificity_score descending, then pk ascending for stability.
+    # (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)
+    rules.sort(key=lambda r: (-r.specificity_score, r.pk))
 
-    if not rules.exists():
+    if not rules:
         return 0
 
     interfaces = list(Interface.objects.filter(device=device, module=None))
@@ -635,6 +637,9 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
 
     id_set = frozenset(interface_ids) if interface_ids is not None else None
     if id_set is not None and not id_set:
+        return 0
+
+    if not rule.enabled:
         return 0
 
     if rule.module_type_is_regex:

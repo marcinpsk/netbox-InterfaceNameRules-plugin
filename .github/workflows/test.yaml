@@ -114,6 +114,7 @@ jobs:
         env:
           COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
         run: |
+          mkdir -p ../../coverage-report
           coverage json -o ../../coverage-report/coverage.json
           coverage html -d ../../coverage-report/htmlcov
 

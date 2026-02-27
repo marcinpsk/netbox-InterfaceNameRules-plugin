@@ -59,6 +59,8 @@ jobs:
         run: |
           if [ -d /tmp/coverage-backup ]; then
             git checkout gh-pages
+            git fetch origin gh-pages
+            git reset --hard origin/gh-pages
             cp -r /tmp/coverage-backup coverage
             git add coverage/
             git config user.name "github-actions[bot]"
