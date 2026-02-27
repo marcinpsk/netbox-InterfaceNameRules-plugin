@@ -470,9 +470,10 @@ class ForceReapplyTest(EngineAdvancedFixtures):
 
         # force_reapply=True: base "xe-0/0/0" does NOT match raw "0", so unrenamed=[]
         # (correctly avoiding re-creating channels when names are already correct)
-        apply_interface_name_rules(module, self.bay0, force_reapply=True)
-        # Names are already correct, so no renames needed (returns 0)
-        self.assertIsNotNone(iface0)  # Interface exists
+        result = apply_interface_name_rules(module, self.bay0, force_reapply=True)
+        # Names are already correct, so no renames needed
+        self.assertEqual(result, 0)
+        self.assertIsNotNone(iface0)  # Interface still exists
 
 
 class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):

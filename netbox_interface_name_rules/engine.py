@@ -71,7 +71,16 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         # For breakout rules, re-apply only to channel sub-interfaces whose base name
         # (before ":") matches a raw template name so vc_position changes propagate
         # without re-creating already-correct channel entries.
-        unrenamed = [i for i in interfaces if i.name.rsplit(":", 1)[0] in raw_names]
+        # Deduplicate by base: only one interface per base should be processed.
+        # Prefer the ":0" channel so _apply_rule_to_interface sees an already-correct
+        # name for ch=0 (no-op rename). Fall back to first seen if ":0" is absent.
+        seen_bases: dict = {}
+        for i in interfaces:
+            base = i.name.rsplit(":", 1)[0]
+            if base in raw_names:
+                if base not in seen_bases or i.name.endswith(":0"):
+                    seen_bases[base] = i
+        unrenamed = list(seen_bases.values())
     else:
         unrenamed = [i for i in interfaces if i.name in raw_names]
     if not unrenamed:

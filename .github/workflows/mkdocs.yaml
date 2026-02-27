@@ -43,6 +43,7 @@ jobs:
 
       - name: Save coverage report from gh-pages
         run: |
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
           if git show gh-pages:coverage/badge.json >/dev/null 2>&1; then
             git checkout gh-pages -- coverage/
             mv coverage /tmp/coverage-backup
