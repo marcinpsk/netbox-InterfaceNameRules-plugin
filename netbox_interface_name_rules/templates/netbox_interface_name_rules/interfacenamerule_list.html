@@ -5,6 +5,7 @@
 {% block content %}
     <div class="card mb-3" id="interface-name-rules-help">
         <div class="card-header" role="button" tabindex="0" style="cursor: pointer;"
+             id="rules-help-header" aria-expanded="true" aria-controls="rules-help-body"
              onclick="toggleRulesHelp()"
              onkeydown="if(event.key==='Enter'||event.key===' '){toggleRulesHelp();event.preventDefault();}">
             <h5 class="card-title mb-0 d-flex align-items-center">
@@ -99,18 +100,22 @@
     <script>
         function toggleRulesHelp() {
             const body = document.getElementById('rules-help-body');
+            const header = document.getElementById('rules-help-header');
             const chevron = document.getElementById('rules-help-chevron');
             const collapsed = body.style.display === 'none';
             body.style.display = collapsed ? '' : 'none';
             chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-up' : 'mdi ms-auto mdi-chevron-down';
+            header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
             localStorage.setItem('rulesHelpCollapsed', collapsed ? '' : '1');
         }
         document.addEventListener('DOMContentLoaded', function() {
             const collapsed = localStorage.getItem('rulesHelpCollapsed') === '1';
             const body = document.getElementById('rules-help-body');
+            const header = document.getElementById('rules-help-header');
             const chevron = document.getElementById('rules-help-chevron');
             body.style.display = collapsed ? 'none' : '';
             chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-down' : 'mdi ms-auto mdi-chevron-up';
+            header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
 
             // AJAX toggle: click handler on toggle buttons (no form — avoids nested-form 405 bug)
             document.addEventListener('click', function(e) {
@@ -134,11 +139,13 @@
                     if (data.enabled) {
                         btn.className = 'btn btn-sm btn-success toggle-btn';
                         btn.title = 'Enabled — click to disable';
+                        btn.setAttribute('aria-pressed', 'true');
                         btn.querySelector('i').className = 'mdi mdi-check';
                         if (row) row.classList.remove('text-muted', 'opacity-50');
                     } else {
                         btn.className = 'btn btn-sm btn-secondary toggle-btn';
                         btn.title = 'Disabled — click to enable';
+                        btn.setAttribute('aria-pressed', 'false');
                         btn.querySelector('i').className = 'mdi mdi-minus';
                         if (row) { row.classList.add('text-muted'); row.classList.add('opacity-50'); }
                     }

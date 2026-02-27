@@ -462,7 +462,7 @@ class ForceReapplyTest(EngineAdvancedFixtures):
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Already-renamed channel interfaces — base "0" matches raw_name "0"
+        # Already-renamed channel interfaces — base "xe-0/0/0" does NOT match raw_name "0"
         iface0 = Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:1", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:2", type="10gbase-x-sfpp")

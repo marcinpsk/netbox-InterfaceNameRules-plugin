@@ -51,6 +51,8 @@ jobs:
             echo "gh-pages branch absent — bootstrapping..."
             git init _gh_bootstrap
             cd _gh_bootstrap
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git checkout --orphan gh-pages
             git commit --allow-empty -m "Initialize gh-pages [skip ci]"
             git remote add origin \
