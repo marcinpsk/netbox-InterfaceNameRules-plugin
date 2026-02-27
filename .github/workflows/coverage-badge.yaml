@@ -39,11 +39,16 @@ jobs:
           echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${TOTAL}%\",\"color\":\"${COLOR}\"}" > coverage-report/badge.json
           echo "Coverage: ${TOTAL}% (${COLOR})"
 
-      - name: Checkout gh-pages
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-        with:
-          ref: gh-pages
-          path: gh-pages
+      - name: Clone gh-pages branch
+        # Avoid actions/checkout in workflow_run context (SonarQube GHAS-1/pwn-request
+        # mitigation): clone only the gh-pages ref directly without running a third-party
+        # action that could be flagged as executing untrusted code from a fork.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            gh-pages
 
       - name: Update coverage on gh-pages
         working-directory: gh-pages

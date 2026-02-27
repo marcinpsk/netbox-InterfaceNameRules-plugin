@@ -237,7 +237,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
         result = apply_rule_to_existing(rule, limit=1)
-        self.assertLessEqual(result, 1)
+        self.assertEqual(result, 1)
 
     def test_regex_rule_applies_to_matching_module_types(self):
         """Regex rule's module_qs includes all matching module types."""
@@ -425,7 +425,7 @@ class EvaluateNameTemplateEdgesTest(TestCase):
             evaluate_name_template("{1 + }", {})
 
     def test_unsafe_ast_node_rejected(self):
-        """AST node not in allowlist (e.g., function call) raises ValueError."""
+        """AST node not in allowlist (e.g., Name lookup — not a call) raises ValueError."""
         with self.assertRaises(ValueError):
             evaluate_name_template("{__import__}", {})
 
