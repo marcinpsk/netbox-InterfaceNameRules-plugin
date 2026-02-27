@@ -127,6 +127,7 @@ class InterfaceNameRule(NetBoxModel):
     tags = TaggableManager(through="extras.TaggedItem", related_name="+")
 
     def clean(self):
+        """Validate regex/FK mode exclusivity and required fields."""
         super().clean()
         if self.applies_to_device_interfaces:
             # Device-level rules must not reference a module type
@@ -165,6 +166,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
 
     def get_absolute_url(self):
+        """Return the detail URL for this rule."""
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", args=[self.pk])
 
     clone_fields = [

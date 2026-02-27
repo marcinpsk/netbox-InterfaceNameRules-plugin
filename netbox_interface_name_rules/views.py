@@ -44,6 +44,8 @@ class RulePreview:
 
 
 class InterfaceNameRuleListView(generic.ObjectListView):
+    """List view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     table = InterfaceNameRuleTable
     filterset = InterfaceNameRuleFilterSet
@@ -51,6 +53,7 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
 
     def get_extra_context(self, request):
+        """Inject feature-detection flags into the list template context."""
         from .utils import supports_module_path
 
         return {
@@ -59,35 +62,49 @@ class InterfaceNameRuleListView(generic.ObjectListView):
 
 
 class InterfaceNameRuleCreateView(generic.ObjectEditView):
+    """Create view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     form = InterfaceNameRuleForm
 
 
 @register_model_view(InterfaceNameRule, "bulk_import", path="import", detail=False)
 class InterfaceNameRuleBulkImportView(generic.BulkImportView):
+    """Bulk import view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     model_form = InterfaceNameRuleImportForm
 
 
 class InterfaceNameRuleView(generic.ObjectView):
+    """Detail view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
 class InterfaceNameRuleEditView(generic.ObjectEditView):
+    """Edit view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     form = InterfaceNameRuleForm
 
 
 class InterfaceNameRuleDeleteView(generic.ObjectDeleteView):
+    """Delete view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
 class InterfaceNameRuleBulkDeleteView(generic.BulkDeleteView):
+    """Bulk delete view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     table = InterfaceNameRuleTable
 
 
 class InterfaceNameRuleChangeLogView(generic.ObjectChangeLogView):
+    """Change-log view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
@@ -95,6 +112,7 @@ class InterfaceNameRuleDuplicateView(ConditionalLoginRequiredMixin, View):
     """Redirect to the add view pre-populated with a clone of the given rule."""
 
     def get(self, request, pk):
+        """Redirect to the add view pre-populated with fields cloned from rule pk."""
         from utilities.querydict import prepare_cloned_fields
 
         rule = get_object_or_404(InterfaceNameRule.objects.all(), pk=pk)
@@ -109,6 +127,7 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_test.html"
 
     def get(self, request):
+        """Render the test form, pre-populated from rule_id query param if given."""
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
@@ -133,6 +152,7 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
         return render(request, self.template_name, {"form": RuleTestForm(initial=initial), "loaded_rule": loaded_rule})
 
     def post(self, request):
+        """Evaluate the submitted template and return a preview or redirect to save."""
         from urllib.parse import urlencode
 
         from .engine import evaluate_name_template, find_interfaces_for_rule
@@ -268,6 +288,7 @@ class RuleApplyListView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_apply.html"
 
     def get(self, request):
+        """Render the list of all rules with apply/preview buttons."""
         rules = InterfaceNameRule.objects.select_related(
             "module_type", "parent_module_type", "device_type", "platform"
         ).order_by("pk")
@@ -282,6 +303,7 @@ class RuleApplicableView(ConditionalLoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
+        """Return JSON {"applicable": bool} for the rule identified by pk."""
         from .engine import has_applicable_interfaces
 
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
@@ -304,6 +326,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_apply_detail.html"
 
     def get(self, request, pk):
+        """Render a preview of all interfaces that would be renamed by this rule."""
         from .engine import find_interfaces_for_rule
 
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
@@ -331,6 +354,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
         )
 
     def post(self, request, pk):
+        """Apply the rule (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
         if not request.user.has_perm("dcim.change_interface"):
@@ -375,6 +399,7 @@ class RuleToggleView(ConditionalLoginRequiredMixin, View):
     """POST /rules/<pk>/toggle/ — flip the enabled flag on a rule."""
 
     def post(self, request, pk):
+        """Toggle the enabled flag on the rule and return JSON or redirect."""
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
         if not request.user.has_perm("netbox_interface_name_rules.change_interfacenamerule"):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":

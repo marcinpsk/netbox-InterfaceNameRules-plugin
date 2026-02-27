@@ -29,6 +29,7 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
+
     """
     from dcim.models import Interface
 
@@ -168,6 +169,18 @@ def apply_device_interface_rules(device):
 
             old_name = iface.name
             iface.name = new_name
+            try:
+                iface.full_clean()
+            except Exception:
+                logger.exception(
+                    "Validation failed for device interface %s → %s (rule %s, device %s)",
+                    old_name,
+                    new_name,
+                    rule.pk,
+                    device.pk,
+                )
+                iface.name = old_name  # revert
+                continue
             iface.save()
             renamed_pks.add(iface.pk)
             logger.debug(

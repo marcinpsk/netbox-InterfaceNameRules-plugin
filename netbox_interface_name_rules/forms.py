@@ -104,6 +104,7 @@ class RuleTestForm(forms.Form):
     )
 
     def clean(self):
+        """Validate mutual exclusivity of regex/exact module-type fields."""
         cleaned_data = super().clean()
         module_type_is_regex = cleaned_data.get("module_type_is_regex", False)
         module_type = cleaned_data.get("module_type")
@@ -131,9 +132,11 @@ class RuleTestForm(forms.Form):
         return cleaned_data
 
     def clean_channel_count(self):
+        """Return 0 when the field is blank or None."""
         return self.cleaned_data.get("channel_count") or 0
 
     def clean_channel_start(self):
+        """Return 0 when the field is blank or None."""
         return self.cleaned_data.get("channel_start") or 0
 
 
@@ -183,6 +186,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
 
 
 class InterfaceNameRuleImportForm(NetBoxModelImportForm):
+    """CSV/YAML bulk-import form for InterfaceNameRule."""
+
     # FK fields must declare to_field_name explicitly so YAML/CSV can reference
     # objects by their natural key instead of numeric PK.
     module_type = CSVModelChoiceField(
@@ -229,6 +234,8 @@ class InterfaceNameRuleImportForm(NetBoxModelImportForm):
 
 
 class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):
+    """Filter form for the InterfaceNameRule list view."""
+
     q = forms.CharField(required=False, label="Search")
     module_type_id = forms.ModelChoiceField(
         queryset=ModuleType.objects.all(),

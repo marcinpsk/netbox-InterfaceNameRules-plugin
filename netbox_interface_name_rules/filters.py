@@ -9,6 +9,8 @@ from .models import InterfaceNameRule
 
 
 class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
+    """FilterSet for InterfaceNameRule list/API filtering."""
+
     q = django_filters.CharFilter(method="search", label="Search")
 
     module_type_id = django_filters.ModelChoiceFilter(
@@ -50,6 +52,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
         ]
 
     def search(self, queryset, name, value):
+        """Filter by pattern, template, description, or module type model name."""
         return queryset.filter(
             Q(module_type_pattern__icontains=value)
             | Q(name_template__icontains=value)

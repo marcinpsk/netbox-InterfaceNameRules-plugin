@@ -27,7 +27,8 @@ SCREENSHOTS_DIR = "/workspaces/netbox-InterfaceNameRules-plugin/docs/screenshots
 USERNAME = "admin"
 PASSWORD = "admin"
 
-# Device IDs (from devcontainer load-sample-data.py)
+# Device IDs come from load-sample-data.py — update these if that script changes.
+# To find current IDs: GET /api/dcim/devices/?name=jnp-vc-2 (etc.) in the devcontainer.
 DEVICE_JNP_VC2 = 37
 DEVICE_CISCO_SW2 = 39
 DEVICE_ARISTA_SW2 = 41

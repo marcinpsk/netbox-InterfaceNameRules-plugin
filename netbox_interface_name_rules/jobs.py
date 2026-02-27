@@ -12,6 +12,7 @@ class ApplyRuleJob(JobRunner):
         name = "Apply Interface Name Rule"
 
     def run(self, *args, **kwargs):
+        """Retrieve the rule by pk from kwargs and apply it to all matching interfaces."""
         from .engine import apply_rule_to_existing
         from .models import InterfaceNameRule
 

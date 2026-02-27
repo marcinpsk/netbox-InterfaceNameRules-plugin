@@ -17,6 +17,7 @@ class SpecificityColumn(tables.Column):
         super().__init__(*args, **kwargs)
 
     def render(self, value, record):
+        """Render the specificity score as a coloured badge."""
         label = record.specificity_label
         if record.applies_to_device_interfaces:
             css = "text-bg-warning"  # device-interface rule
@@ -36,10 +37,13 @@ class SpecificityColumn(tables.Column):
         )
 
     def value(self, value, record=None, **kwargs):
+        """Return the raw numeric specificity score for CSV export."""
         return value
 
 
 class InterfaceNameRuleTable(NetBoxTable):
+    """Table for displaying InterfaceNameRule objects."""
+
     pk = columns.ToggleColumn()
     enabled = tables.TemplateColumn(
         template_code="""

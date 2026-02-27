@@ -6,6 +6,8 @@ __version__ = "1.1.2"
 
 
 class InterfaceNameRulesConfig(PluginConfig):
+    """NetBox plugin configuration for Interface Name Rules."""
+
     name = "netbox_interface_name_rules"
     verbose_name = "Interface Name Rules"
     description = "Automatic interface renaming when modules are installed into bays."
@@ -16,6 +18,7 @@ class InterfaceNameRulesConfig(PluginConfig):
     default_settings = {}
 
     def ready(self):
+        """Connect signal handlers after all apps are loaded."""
         super().ready()
         from . import signals  # noqa: F401 — registers post_save handler
 

@@ -91,6 +91,7 @@ def _apply_rules_deferred(module_pk, module_bay_pk, force_reapply=False):
         module_bay_pk: Primary key of the ModuleBay containing the module.
         force_reapply: When True, re-apply even if interfaces already have
             the expected names (used for module-type changes).
+
     """
     from dcim.models import Module, ModuleBay
 
@@ -184,6 +185,7 @@ def _apply_rules_for_device_deferred(device_pk):
 
     Args:
         device_pk: Primary key of the Device to re-apply rules for.
+
     """
     from dcim.models import Device, Module
 
@@ -195,7 +197,14 @@ def _apply_rules_for_device_deferred(device_pk):
     total = 0
 
     # Re-apply module interface rules
-    modules = Module.objects.filter(device=device).select_related("module_bay", "module_type", "device")
+    modules = Module.objects.filter(device=device).select_related(
+        "module_bay",
+        "module_type",
+        "device",
+        "device__device_type",
+        "device__platform",
+        "device__virtual_chassis",
+    )
     if modules.exists():
         try:
             from .engine import apply_interface_name_rules

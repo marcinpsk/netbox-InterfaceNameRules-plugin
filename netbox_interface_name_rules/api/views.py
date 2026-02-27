@@ -8,5 +8,7 @@ from .serializers import InterfaceNameRuleSerializer
 
 
 class InterfaceNameRuleViewSet(NetBoxModelViewSet):
+    """REST API viewset for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     serializer_class = InterfaceNameRuleSerializer
