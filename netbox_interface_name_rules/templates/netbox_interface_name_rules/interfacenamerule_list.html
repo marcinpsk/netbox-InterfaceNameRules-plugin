@@ -140,12 +140,14 @@
                         btn.className = 'btn btn-sm btn-success toggle-btn';
                         btn.title = 'Enabled — click to disable';
                         btn.setAttribute('aria-pressed', 'true');
+                        btn.setAttribute('aria-label', 'Enabled — click to disable');
                         btn.querySelector('i').className = 'mdi mdi-check';
                         if (row) row.classList.remove('text-muted', 'opacity-50');
                     } else {
                         btn.className = 'btn btn-sm btn-secondary toggle-btn';
                         btn.title = 'Disabled — click to enable';
                         btn.setAttribute('aria-pressed', 'false');
+                        btn.setAttribute('aria-label', 'Disabled — click to enable');
                         btn.querySelector('i').className = 'mdi mdi-minus';
                         if (row) { row.classList.add('text-muted'); row.classList.add('opacity-50'); }
                     }

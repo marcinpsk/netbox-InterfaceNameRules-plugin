@@ -45,7 +45,7 @@ services:
       - "8000:8000"
 
   postgres:
-    image: postgres:18
+    image: postgres:17
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
