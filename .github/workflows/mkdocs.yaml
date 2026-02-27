@@ -43,13 +43,17 @@ jobs:
 
       - name: Save coverage report from gh-pages
         run: |
-          git fetch origin gh-pages:gh-pages 2>/dev/null || true
-          if git show gh-pages:coverage/badge.json >/dev/null 2>&1; then
-            git checkout gh-pages -- coverage/
-            mv coverage /tmp/coverage-backup
-            echo "Coverage report saved"
+          if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages:gh-pages
+            if git show gh-pages:coverage/badge.json >/dev/null 2>&1; then
+              git checkout gh-pages -- coverage/
+              mv coverage /tmp/coverage-backup
+              echo "Coverage report saved"
+            else
+              echo "No coverage report found on gh-pages"
+            fi
           else
-            echo "No coverage report found on gh-pages"
+            echo "gh-pages branch does not exist yet, skipping backup"
           fi
 
       - name: Deploy documentation

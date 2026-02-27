@@ -474,6 +474,8 @@ class ForceReapplyTest(EngineAdvancedFixtures):
         # Names are already correct, so no renames needed
         self.assertEqual(result, 0)
         self.assertIsNotNone(iface0)  # Interface still exists
+        iface0.refresh_from_db()
+        self.assertEqual(iface0.name, "xe-0/0/0:0")  # Name unchanged
 
 
 class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
