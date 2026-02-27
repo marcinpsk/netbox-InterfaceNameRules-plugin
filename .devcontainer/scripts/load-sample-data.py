@@ -21,9 +21,19 @@ CONTRIB_DIR = os.path.join(
     "..",
     "contrib",
 )
-# Fallback for when piped via `manage.py shell` (where __file__ resolves incorrectly)
+# Fallback for when piped via `manage.py shell` (where __file__ resolves incorrectly).
+# Walk up from cwd to find a directory that contains contrib/.
 if not os.path.isdir(CONTRIB_DIR):
-    CONTRIB_DIR = "/workspaces/netbox-InterfaceNameRules-plugin/contrib"
+    _search = os.getcwd()
+    for _ in range(6):
+        _candidate = os.path.join(_search, "contrib")
+        if os.path.isdir(_candidate):
+            CONTRIB_DIR = _candidate
+            break
+        _parent = os.path.dirname(_search)
+        if _parent == _search:
+            break
+        _search = _parent
 
 
 def load_yaml(filename):

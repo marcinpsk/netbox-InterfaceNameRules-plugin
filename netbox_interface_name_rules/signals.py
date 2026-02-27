@@ -81,7 +81,17 @@ def on_module_saved(sender, instance, created, **kwargs):
 
 
 def _apply_rules_deferred(module_pk, module_bay_pk, force_reapply=False):
-    """Apply interface name rules after transaction commit."""
+    """Apply interface name rules after transaction commit.
+
+    Called via transaction.on_commit so all interfaces created by bulk_create()
+    are visible in the DB before renaming begins.
+
+    Args:
+        module_pk: Primary key of the Module whose interfaces should be renamed.
+        module_bay_pk: Primary key of the ModuleBay containing the module.
+        force_reapply: When True, re-apply even if interfaces already have
+            the expected names (used for module-type changes).
+    """
     from dcim.models import Module, ModuleBay
 
     try:
@@ -164,7 +174,17 @@ def on_device_saved(sender, instance, created, **kwargs):
 
 
 def _apply_rules_for_device_deferred(device_pk):
-    """Re-apply interface name rules for all modules in a device after VC position change."""
+    """Re-apply all interface name rules for a device after a VC membership or position change.
+
+    Handles two categories of interfaces:
+    - Module-attached interfaces: re-applies module-level rules with force_reapply=True
+      so {vc_position} is updated even when the interface name already matches the template.
+    - Device-level interfaces (module=None): re-applies device-level rules which use
+      applies_to_device_interfaces=True rules matched by interface-name regex.
+
+    Args:
+        device_pk: Primary key of the Device to re-apply rules for.
+    """
     from dcim.models import Device, Module
 
     try:
@@ -175,7 +195,7 @@ def _apply_rules_for_device_deferred(device_pk):
     total = 0
 
     # Re-apply module interface rules
-    modules = Module.objects.filter(device=device).select_related("module_bay", "module_type")
+    modules = Module.objects.filter(device=device).select_related("module_bay", "module_type", "device")
     if modules.exists():
         try:
             from .engine import apply_interface_name_rules

@@ -22,15 +22,23 @@ Tests:
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 
 import argparse
+import json
 import os
 import sys
 import time
+import urllib.request
+
+_no_proxy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
     # Try adding system dist-packages (devcontainer has playwright outside venv)
-    sys.path.insert(0, "/usr/local/lib/python3.12/dist-packages")
+    import sysconfig
+
+    _purelib = sysconfig.get_path("purelib")
+    if _purelib:
+        sys.path.insert(0, _purelib)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -93,15 +101,12 @@ def tomselect_pick(page, field_id: str, search_text: str) -> None:
 
 def _api_patch(url: str, payload: dict, headers: dict) -> None:
     """PATCH a NetBox API endpoint with JSON payload."""
-    import json as _json
-    import urllib.request
-
-    data = _json.dumps(payload).encode()
+    data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers=headers, method="PATCH")
-    with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-        assert resp.status in (200, 201, 204), (
-            f"PATCH {url} returned {resp.status}: {resp.read().decode('utf-8', errors='replace')}"
-        )
+    with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+        if resp.status not in (200, 201, 204):
+            body = resp.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"PATCH {url} returned {resp.status}: {body}")
 
 
 def _poll_for_text(page, base_url: str, path: str, text: str, timeout: float = 8.0) -> bool:
@@ -304,12 +309,6 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             fail("rule toggle: re-enable rule", e)
 
         # ── Test: VC position — module install on VC member ───────────────────
-        import urllib.request
-        import json as _json
-
-        # Bypass HTTP proxy for localhost API calls (proxy env vars exclude ::1 but not localhost)
-        _no_proxy_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        urllib.request.install_opener(_no_proxy_opener)
 
         cookies = ctx.cookies()
         csrf = next((c["value"] for c in cookies if c["name"] == "csrftoken"), "")
@@ -327,8 +326,8 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 f"{base_url}/api/dcim/module-types/?model=VC-LINECARD",
                 headers=api_headers,
             )
-            with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                mt_data = _json.loads(resp.read())
+            with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+                mt_data = json.loads(resp.read())
             assert mt_data["count"] > 0, "VC-LINECARD module type not found"
             vc_mt_id = mt_data["results"][0]["id"]
 
@@ -337,14 +336,14 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 f"{base_url}/api/plugins/interface-name-rules/rules/?module_type_id={vc_mt_id}&module_type_is_regex=false",
                 headers=api_headers,
             )
-            with urllib.request.urlopen(req_check, timeout=API_TIMEOUT) as resp:
-                existing_rules = _json.loads(resp.read())
+            with _no_proxy_opener.open(req_check, timeout=API_TIMEOUT) as resp:
+                existing_rules = json.loads(resp.read())
 
             if existing_rules["count"] > 0:
                 vc_rule_id = existing_rules["results"][0]["id"]
                 ok(f"VC: using existing rule VC-LINECARD (id={vc_rule_id})")
             else:
-                rule_payload = _json.dumps(
+                rule_payload = json.dumps(
                     {
                         "module_type": vc_mt_id,
                         "module_type_is_regex": False,
@@ -358,8 +357,8 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     headers=api_headers,
                     method="POST",
                 )
-                with urllib.request.urlopen(req2, timeout=API_TIMEOUT) as resp:
-                    rule_data = _json.loads(resp.read())
+                with _no_proxy_opener.open(req2, timeout=API_TIMEOUT) as resp:
+                    rule_data = json.loads(resp.read())
                 vc_rule_id = rule_data["id"]
                 vc_rule_created = True
                 ok(f"VC: created rule VC-LINECARD → Gi{{vc_position}}/{{bay_position_num}} (id={vc_rule_id})")
@@ -427,14 +426,14 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
 
             # ── Test: module type change → signal re-renames interface ───────
             try:
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    mt_chg_mods = _json.loads(resp.read())
+                    mt_chg_mods = json.loads(resp.read())
                 lc_mod_for_mt = next(
                     (m for m in mt_chg_mods.get("results", []) if m["module_type"]["model"] == VC_MODULE_TYPE),
                     None,
@@ -442,25 +441,25 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 assert lc_mod_for_mt, f"VC-LINECARD module not found on device {VC_DEVICE_ID}"
                 lc_module_id_mt = lc_mod_for_mt["id"]
 
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/module-types/?model={VC_SFP_MODULE_TYPE}",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    sfp_mt_data = _json.loads(resp.read())
+                    sfp_mt_data = json.loads(resp.read())
                 assert sfp_mt_data["count"] > 0, f"{VC_SFP_MODULE_TYPE} module type not found"
                 sfp_mt_id_for_swap = sfp_mt_data["results"][0]["id"]
 
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/module-types/?model={VC_MODULE_TYPE}",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    lc_mt_data = _json.loads(resp.read())
+                    lc_mt_data = json.loads(resp.read())
                 lc_mt_id_for_restore = lc_mt_data["results"][0]["id"]
 
                 # PATCH module type VC-LINECARD → VC-SFP
@@ -487,23 +486,23 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 fail("module type change signal", e)
                 # Best-effort restore to VC-LINECARD on failure
                 try:
-                    with urllib.request.urlopen(
+                    with _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/dcim/module-types/?model={VC_MODULE_TYPE}",
                             headers=api_headers,
                         ),
                         timeout=API_TIMEOUT,
                     ) as resp:
-                        _lc_mt_restore = _json.loads(resp.read())
+                        _lc_mt_restore = json.loads(resp.read())
                     if _lc_mt_restore.get("results"):
-                        with urllib.request.urlopen(
+                        with _no_proxy_opener.open(
                             urllib.request.Request(
                                 f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
                                 headers=api_headers,
                             ),
                             timeout=API_TIMEOUT,
                         ) as resp:
-                            _all_mods = _json.loads(resp.read())
+                            _all_mods = json.loads(resp.read())
                         _wrong_type_mod = next(
                             (
                                 m
@@ -525,27 +524,27 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             # ── Test: VC-SFP nested install → Gi{vc_position}/{parent}/{sfp} ─
             try:
                 # Find the installed VC-LINECARD module on vc-stack-1
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    mods_data = _json.loads(resp.read())
+                    mods_data = json.loads(resp.read())
                 lc_mods = [m for m in mods_data.get("results", []) if m["module_type"]["model"] == VC_MODULE_TYPE]
                 assert lc_mods, f"VC-LINECARD not installed on device {VC_DEVICE_ID}"
                 linecard_id = lc_mods[0]["id"]
 
                 # Find sfp0 sub-bay on the linecard module
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/module-bays/?module_id={linecard_id}&name=sfp0",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    bays_data = _json.loads(resp.read())
+                    bays_data = json.loads(resp.read())
                 assert bays_data["count"] > 0, f"sfp0 bay not found on VC-LINECARD module {linecard_id}"
                 sfp0_bay_id = bays_data["results"][0]["id"]
 
@@ -577,21 +576,17 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 # Both VCs should show "2" members in the list (not "3")
                 assert "demo-vc-stack" in content, "demo-vc-stack not found in VC list"
                 assert "test-vc-stack" in content, "test-vc-stack not found in VC list"
-                # The member count column — verify no "3" appears for our VCs
-                # Find the table row for each VC and check the Members column
                 demo_row = page.locator("tr", has=page.locator('text="demo-vc-stack"'))
                 test_row = page.locator("tr", has=page.locator('text="test-vc-stack"'))
                 assert demo_row.count() > 0, "demo-vc-stack row not found"
                 assert test_row.count() > 0, "test-vc-stack row not found"
-                # Member count "3" should not appear in either row
-                demo_row_text = demo_row.first.inner_text(timeout=3000)
-                test_row_text = test_row.first.inner_text(timeout=3000)
-                assert "\t3\t" not in demo_row_text and " 3 " not in demo_row_text.replace("\n", " "), (
-                    f"demo-vc-stack shows unexpected member count: {demo_row_text!r}"
-                )
-                assert "\t3\t" not in test_row_text and " 3 " not in test_row_text.replace("\n", " "), (
-                    f"test-vc-stack shows unexpected member count: {test_row_text!r}"
-                )
+                # Determine Members column index from header row
+                headers = [th.inner_text().strip() for th in page.locator("thead th").all()]
+                members_col = headers.index("Members") if "Members" in headers else 4
+                demo_members = demo_row.first.locator("td").nth(members_col).inner_text(timeout=3000).strip()
+                test_members = test_row.first.locator("td").nth(members_col).inner_text(timeout=3000).strip()
+                assert demo_members == "2", f"demo-vc-stack shows {demo_members!r} members, expected 2"
+                assert test_members == "2", f"test-vc-stack shows {test_members!r} members, expected 2"
                 ok("VC: member count shows 2 (not 3) for both VCs")
             except Exception as e:
                 fail("VC: member count verification", e)
@@ -680,16 +675,16 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             finally:
                 # Clean up vc-stack-2 modules
                 try:
-                    with urllib.request.urlopen(
+                    with _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID_2}",
                             headers=api_headers,
                         ),
                         timeout=API_TIMEOUT,
                     ) as resp:
-                        vc2_mods = _json.loads(resp.read())
+                        vc2_mods = json.loads(resp.read())
                     for m in vc2_mods.get("results", []):
-                        urllib.request.urlopen(
+                        _no_proxy_opener.open(
                             urllib.request.Request(
                                 f"{base_url}/api/dcim/modules/{m['id']}/",
                                 headers=api_headers,
@@ -705,30 +700,30 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             _dev_iface_id = None
             try:
                 # Look up VC-SWITCH device type ID
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/device-types/?model=VC-SWITCH",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    _dt_data = _json.loads(resp.read())
+                    _dt_data = json.loads(resp.read())
                 assert _dt_data["count"] > 0, "VC-SWITCH device type not found"
                 _vc_switch_dt_id = _dt_data["results"][0]["id"]
 
                 # Pre-cleanup: remove any stale Gi0/1 from a previous failed run
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/interfaces/?device_id={VC_DEVICE_ID}&name=Gi0%2F1",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    _stale = _json.loads(resp.read())
+                    _stale = json.loads(resp.read())
                 for _s in _stale.get("results", []):
                     if _s.get("module") is None:
                         try:
-                            urllib.request.urlopen(
+                            _no_proxy_opener.open(
                                 urllib.request.Request(
                                     f"{base_url}/api/dcim/interfaces/{_s['id']}/",
                                     headers=api_headers,
@@ -740,19 +735,19 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                             pass
 
                 # Create a device-level interface on vc-stack-1 (module=None)
-                _iface_payload = _json.dumps({"device": VC_DEVICE_ID, "name": "Gi0/1", "type": "1000base-t"}).encode()
+                _iface_payload = json.dumps({"device": VC_DEVICE_ID, "name": "Gi0/1", "type": "1000base-t"}).encode()
                 req = urllib.request.Request(
                     f"{base_url}/api/dcim/interfaces/",
                     data=_iface_payload,
                     headers=api_headers,
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                    _dev_iface = _json.loads(resp.read())
+                with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+                    _dev_iface = json.loads(resp.read())
                 _dev_iface_id = _dev_iface["id"]
 
                 # Create a device-level interface rule (applies_to_device_interfaces=True)
-                _dev_iface_rule_payload = _json.dumps(
+                _dev_iface_rule_payload = json.dumps(
                     {
                         "applies_to_device_interfaces": True,
                         "module_type_is_regex": False,
@@ -768,8 +763,8 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     headers=api_headers,
                     method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                    _dev_iface_rule = _json.loads(resp.read())
+                with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+                    _dev_iface_rule = json.loads(resp.read())
                 _dev_iface_rule_id = _dev_iface_rule["id"]
 
                 # Change vc_position 1→4 — should trigger rename Gi0/1 → Gi4/1
@@ -807,7 +802,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     if _item_id is None:
                         continue
                     try:
-                        urllib.request.urlopen(
+                        _no_proxy_opener.open(
                             urllib.request.Request(f"{_url}{_item_id}/", headers=api_headers, method="DELETE"),
                             timeout=API_TIMEOUT,
                         )
@@ -819,14 +814,14 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             # ── Test: module cascade delete removes interface ─────────────────
             try:
                 # vc-stack-1 should still have VC-LINECARD installed from earlier tests
-                with urllib.request.urlopen(
+                with _no_proxy_opener.open(
                     urllib.request.Request(
                         f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
                         headers=api_headers,
                     ),
                     timeout=API_TIMEOUT,
                 ) as resp:
-                    mods_data2 = _json.loads(resp.read())
+                    mods_data2 = json.loads(resp.read())
                 lc_mods2 = [m for m in mods_data2.get("results", []) if m["module_type"]["model"] == VC_MODULE_TYPE]
                 if lc_mods2:
                     # Verify Gi1/0 exists
@@ -835,7 +830,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     assert "Gi1/0" in page.content(), "Gi1/0 not present before cascade delete test"
 
                     # Delete VC-LINECARD module via API — NetBox should cascade-delete Gi1/0
-                    urllib.request.urlopen(
+                    _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/dcim/modules/{lc_mods2[0]['id']}/",
                             headers=api_headers,
@@ -859,10 +854,10 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     f"{base_url}/api/dcim/modules/?device_id={VC_DEVICE_ID}",
                     headers=api_headers,
                 )
-                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                    vc_mod_data = _json.loads(resp.read())
+                with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+                    vc_mod_data = json.loads(resp.read())
                 for m in vc_mod_data.get("results", []):
-                    urllib.request.urlopen(
+                    _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/dcim/modules/{m['id']}/",
                             headers=api_headers,
@@ -871,7 +866,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                         timeout=API_TIMEOUT,
                     )
                 if vc_rule_created:
-                    urllib.request.urlopen(
+                    _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/plugins/interface-name-rules/rules/{vc_rule_id}/",
                             headers=api_headers,
@@ -890,15 +885,15 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             next_url = f"{base_url}/api/dcim/modules/?device_id={DEVICE_ID}"
             while next_url:
                 req = urllib.request.Request(next_url, headers=api_headers)
-                with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-                    data = _json.loads(resp.read())
+                with _no_proxy_opener.open(req, timeout=API_TIMEOUT) as resp:
+                    data = json.loads(resp.read())
                 module_ids.extend(m["id"] for m in data.get("results", []))
                 next_url = data.get("next")
 
             removed = 0
             for mid in module_ids:
                 try:
-                    urllib.request.urlopen(
+                    _no_proxy_opener.open(
                         urllib.request.Request(
                             f"{base_url}/api/dcim/modules/{mid}/",
                             headers=api_headers,

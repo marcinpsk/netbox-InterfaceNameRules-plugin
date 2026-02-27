@@ -14,10 +14,13 @@ All demo devices — no ITC-Lab or production data in screenshots.
 
 import os
 import sys
+import sysconfig
 
-sys.path.insert(0, "/usr/local/lib/python3.12/dist-packages")
+_purelib = sysconfig.get_path("purelib")
+if _purelib and _purelib not in sys.path:
+    sys.path.insert(0, _purelib)
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright  # noqa: E402
 
 BASE_URL = "http://127.0.0.1:8000"
 SCREENSHOTS_DIR = "/workspaces/netbox-InterfaceNameRules-plugin/docs/screenshots"

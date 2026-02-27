@@ -65,9 +65,12 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
     if force_reapply and rule.channel_count == 0:
         # Re-apply to all interfaces regardless of current name (e.g. vc_position changed).
-        # Channel rules are excluded: with channel_count > 0, re-applying to all channel
-        # sub-interfaces (e.g. xe-0/0/4:0...:3) would trigger duplicate channel creation.
         unrenamed = interfaces
+    elif force_reapply and rule.channel_count > 0:
+        # For breakout rules, re-apply only to channel sub-interfaces whose base name
+        # (before ":") matches a raw template name so vc_position changes propagate
+        # without re-creating already-correct channel entries.
+        unrenamed = [i for i in interfaces if i.name.rsplit(":", 1)[0] in raw_names]
     else:
         unrenamed = [i for i in interfaces if i.name in raw_names]
     if not unrenamed:
@@ -107,6 +110,9 @@ def apply_device_interface_rules(device):
     if not getattr(device, "virtual_chassis_id", None):
         return 0  # Only rename for VC members (vc_position must be set)
 
+    if device.vc_position is None:
+        return 0  # vc_position unset (e.g. VC master before position assigned)
+
     vc_position = str(device.vc_position)
     device_type = getattr(device, "device_type", None)
     platform = getattr(device, "platform", None)
@@ -130,8 +136,11 @@ def apply_device_interface_rules(device):
         return 0
 
     total = 0
+    renamed_pks: set[int] = set()
     for rule in rules:
         for iface in interfaces:
+            if iface.pk in renamed_pks:
+                continue  # Already renamed by a higher-priority rule
             # Filter by interface name pattern if specified
             if rule.module_type_pattern:
                 try:
@@ -160,6 +169,7 @@ def apply_device_interface_rules(device):
             old_name = iface.name
             iface.name = new_name
             iface.save()
+            renamed_pks.add(iface.pk)
             logger.debug(
                 "Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk
             )
@@ -344,7 +354,11 @@ def build_variables(module_bay, device=None):
         "parent_bay_position": parent_bay_position,
         "sfp_slot": sfp_slot,
     }
-    if device is not None and getattr(device, "virtual_chassis_id", None) is not None:
+    if (
+        device is not None
+        and getattr(device, "virtual_chassis_id", None) is not None
+        and device.vc_position is not None
+    ):
         result["vc_position"] = str(device.vc_position)
     return result
 

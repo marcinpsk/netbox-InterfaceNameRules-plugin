@@ -234,7 +234,7 @@ The **Apply Rules** page shows all rules with a live **Applicable** indicator
 
 When multiple devices form a **Virtual Chassis** (stack), each member's interfaces need to reflect its position in the chassis. The plugin fires `apply_device_interface_rules()` on `post_save` of `dcim.Device` whenever the VC position changes, renaming all native device-type interfaces automatically.
 
-Enable **Applies to Device Interfaces** on the rule. The **Module Type Pattern** field acts as a **regex filter on interface names** (not a module type selector) — the REGEX column shows a <img src="../screenshots/vc-filter-icon.png" alt="filter" width="16" style="vertical-align:middle"> filter icon instead of a boolean.
+Enable **Applies to Device Interfaces** on the rule. The **Module Type Pattern** field acts as a **regex filter on interface names** (not a module type selector) — the REGEX column shows a <img src="screenshots/vc-filter-icon.png" alt="filter" width="16" style="vertical-align:middle"> filter icon instead of a boolean.
 
 ### Device-level rules list (filtered to VC rules)
 
