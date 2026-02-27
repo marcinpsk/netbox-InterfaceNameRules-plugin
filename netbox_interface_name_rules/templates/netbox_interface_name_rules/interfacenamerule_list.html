@@ -4,7 +4,9 @@
 
 {% block content %}
     <div class="card mb-3" id="interface-name-rules-help">
-        <div class="card-header" style="cursor: pointer;" onclick="toggleRulesHelp()">
+        <div class="card-header" role="button" tabindex="0" style="cursor: pointer;"
+             onclick="toggleRulesHelp()"
+             onkeydown="if(event.key==='Enter'||event.key===' '){toggleRulesHelp();event.preventDefault();}">
             <h5 class="card-title mb-0 d-flex align-items-center">
                 <i class="mdi mdi-information-outline me-2"></i>
                 Interface Name Rules Reference

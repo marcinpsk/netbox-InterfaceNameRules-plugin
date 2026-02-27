@@ -41,51 +41,51 @@
         <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-book-outline me-2"></i>Rule Definition</h5></div>
         <div class="card-body">
           <div class="mb-3">
-            <label class="form-label fw-semibold">{{ form.name_template.label }}</label>
+            <label class="form-label fw-semibold" for="{{ form.name_template.id_for_label }}">{{ form.name_template.label }}</label>
             {{ form.name_template }}
             <div class="form-text">{{ form.name_template.help_text }}</div>
             {% if form.name_template.errors %}<div class="invalid-feedback d-block">{{ form.name_template.errors }}</div>{% endif %}
           </div>
           <div class="mb-3 form-check">
             {{ form.module_type_is_regex }}
-            <label class="form-check-label">{{ form.module_type_is_regex.label }}</label>
+            <label class="form-check-label" for="{{ form.module_type_is_regex.id_for_label }}">{{ form.module_type_is_regex.label }}</label>
           </div>
           <div class="mb-3" id="exact-mt-row">
-            <label class="form-label">{{ form.module_type.label }}</label>
+            <label class="form-label" for="{{ form.module_type.id_for_label }}">{{ form.module_type.label }}</label>
             {{ form.module_type }}
             <div class="form-text">{{ form.module_type.help_text }}</div>
           </div>
           <div class="mb-3" id="regex-mt-row" style="display:none">
-            <label class="form-label">{{ form.module_type_pattern.label }}</label>
+            <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{{ form.module_type_pattern.label }}</label>
             {{ form.module_type_pattern }}
             <div class="form-text">{{ form.module_type_pattern.help_text }}</div>
           </div>
           <hr class="my-2">
           <p class="text-muted small mb-2">Optional scoping — leave blank to match any:</p>
           <div class="mb-3">
-            <label class="form-label">{{ form.parent_module_type.label }}</label>
+            <label class="form-label" for="{{ form.parent_module_type.id_for_label }}">{{ form.parent_module_type.label }}</label>
             {{ form.parent_module_type }}
             <div class="form-text">{{ form.parent_module_type.help_text }}</div>
           </div>
           <div class="mb-3">
-            <label class="form-label">{{ form.device_type.label }}</label>
+            <label class="form-label" for="{{ form.device_type.id_for_label }}">{{ form.device_type.label }}</label>
             {{ form.device_type }}
             <div class="form-text">{{ form.device_type.help_text }}</div>
           </div>
           <div class="mb-3">
-            <label class="form-label">{{ form.platform.label }}</label>
+            <label class="form-label" for="{{ form.platform.id_for_label }}">{{ form.platform.label }}</label>
             {{ form.platform }}
             <div class="form-text">{{ form.platform.help_text }}</div>
           </div>
           <hr class="my-2">
           <div class="row g-2">
             <div class="col-6">
-              <label class="form-label">{{ form.channel_count.label }}</label>
+              <label class="form-label" for="{{ form.channel_count.id_for_label }}">{{ form.channel_count.label }}</label>
               {{ form.channel_count }}
               <div class="form-text">{{ form.channel_count.help_text }}</div>
             </div>
             <div class="col-6">
-              <label class="form-label">{{ form.channel_start.label }}</label>
+              <label class="form-label" for="{{ form.channel_start.id_for_label }}">{{ form.channel_start.label }}</label>
               {{ form.channel_start }}
               <div class="form-text">{{ form.channel_start.help_text }}</div>
             </div>
@@ -104,7 +104,7 @@
           {% for field in form %}
             {% if field.name|slice:":4" == "var_" %}
               <div class="mb-2 row">
-                <label class="col-sm-5 col-form-label"><code>{{ field.label }}</code></label>
+                <label class="col-sm-5 col-form-label" for="{{ field.id_for_label }}"><code>{{ field.label }}</code></label>
                 <div class="col-sm-7">{{ field }}</div>
               </div>
             {% endif %}
