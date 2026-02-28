@@ -132,6 +132,7 @@ class InterfaceNameRuleTable(NetBoxTable):
         )
         default_columns = (
             "pk",
+            "id",
             "enabled",
             "specificity_score",
             "module_type",
