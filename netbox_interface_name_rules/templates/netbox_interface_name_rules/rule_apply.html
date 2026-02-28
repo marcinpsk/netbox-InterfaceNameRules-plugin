@@ -20,10 +20,6 @@
   <div class="card">
     <div class="card-header d-flex align-items-center gap-2 flex-wrap">
       <h5 class="card-title mb-0 me-2"><i class="mdi mdi-format-list-bulleted me-2"></i>Available Rules</h5>
-      <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_test' %}"
-         class="btn btn-sm btn-outline-primary" title="Open Rule Builder">
-        <i class="mdi mdi-flask-outline me-1"></i>Rule Builder
-      </a>
       <button id="scan-all-btn" class="btn btn-sm btn-outline-secondary" title="Check all rules to see if any currently installed interfaces would be renamed">
         <i class="mdi mdi-magnify me-1"></i>Check all rules
       </button>
@@ -104,6 +100,10 @@
                 <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_apply_detail' rule.pk %}"
                    class="btn btn-sm btn-outline-primary">
                   <i class="mdi mdi-eye me-1"></i>Preview &amp; Apply
+                </a>
+                <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_test' %}?rule_id={{ rule.pk }}"
+                   class="btn btn-sm btn-outline-secondary" title="Test in Rule Builder">
+                  <i class="mdi mdi-flask-outline"></i>
                 </a>
               </td>
             </tr>
