@@ -637,13 +637,63 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#virtual-chassis-port-renaming" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See also
+        Virtual Chassis port renaming
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Virtual Chassis port renaming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#device-level-rules-list-filtered-to-vc-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device-level rules list (filtered to VC rules)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#juniper-ex-virtual-chassis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Juniper EX Virtual Chassis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cisco-catalyst-9000-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cisco Catalyst 9000 Stack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#arista-eos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Arista EOS
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -947,13 +997,63 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#see-also" class="md-nav__link">
+  <a href="#virtual-chassis-port-renaming" class="md-nav__link">
     <span class="md-ellipsis">
       
-        See also
+        Virtual Chassis port renaming
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Virtual Chassis port renaming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#device-level-rules-list-filtered-to-vc-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device-level rules list (filtered to VC rules)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#juniper-ex-virtual-chassis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Juniper EX Virtual Chassis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cisco-catalyst-9000-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cisco Catalyst 9000 Stack
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#arista-eos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Arista EOS
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1230,7 +1330,82 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 <strong>Preview &amp; Apply</strong> to inspect affected interfaces before committing.</p>
 <p><img alt="Apply Rules list showing regex and exact rules with Applicable column" src="../screenshots/12-apply-rules-updated.png" /></p>
 <hr />
-<h2 id="see-also">See also</h2>
+<h2 id="virtual-chassis-port-renaming">Virtual Chassis port renaming</h2>
+<p>When multiple devices form a <strong>Virtual Chassis</strong> (stack), each member's interfaces need to reflect its position in the chassis. The plugin fires <code>apply_device_interface_rules()</code> on <code>post_save</code> of <code>dcim.Device</code> whenever the VC position changes, renaming all native device-type interfaces automatically.</p>
+<p>Enable <strong>Applies to Device Interfaces</strong> on the rule. The <strong>Module Type Pattern</strong> field acts as a <strong>regex filter on interface names</strong> (not a module type selector) — the REGEX column shows a <img src="screenshots/vc-filter-icon.png" alt="filter" width="16" style="vertical-align:middle"> filter icon instead of a boolean.</p>
+<h3 id="device-level-rules-list-filtered-to-vc-rules">Device-level rules list (filtered to VC rules)</h3>
+<p><img alt="Rules list showing 5 device-level VC rules — filter icon in REGEX column, orange priority badge, green Device Ifaces checkmark" src="../screenshots/vc-rules-list.png" /></p>
+<hr />
+<h3 id="juniper-ex-virtual-chassis">Juniper EX Virtual Chassis</h3>
+<p>Juniper VCs use <strong>0-based</strong> member IDs. Interfaces follow the <code>{prefix}-{member}/0/{port}</code> scheme.</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Name template</th>
+<th>Member 0 result</th>
+<th>Member 1 result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ge-\d+/\d+/\d+</code></td>
+<td><code>ge-{vc_position}/0/{port}</code></td>
+<td><code>ge-0/0/0</code></td>
+<td><code>ge-1/0/0</code></td>
+</tr>
+<tr>
+<td><code>xe-\d+/\d+/\d+</code></td>
+<td><code>xe-{vc_position}/1/{port}</code></td>
+<td><code>xe-0/1/0</code></td>
+<td><code>xe-1/1/0</code></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Juniper EX — 1G access ports</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-{vc_position}/0/{port}&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Juniper EX — 10G uplinks</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-{vc_position}/1/{port}&quot;</span>
+</code></pre></div>
+<p><strong>jnp-vc-2</strong> at VC position 1 — interfaces renamed <code>ge-0/0/N</code> → <code>ge-1/0/N</code>, <code>xe-0/1/N</code> → <code>xe-1/1/N</code>:</p>
+<p><img alt="jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming" src="../screenshots/vc-juniper-interfaces.png" /></p>
+<hr />
+<h3 id="cisco-catalyst-9000-stack">Cisco Catalyst 9000 Stack</h3>
+<p>Cisco stacks use <strong>1-based</strong> member IDs. Templates create <code>GigabitEthernet1/0/N</code>; on joining the stack at position 2, ports become <code>GigabitEthernet2/0/N</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CISCO-C9K&quot;</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{vc_position}/0/{port}&quot;</span>
+</code></pre></div>
+<p><strong>cisco-sw-2</strong> at VC position 2 — interfaces renamed <code>GigabitEthernet1/0/N</code> → <code>GigabitEthernet2/0/N</code>:</p>
+<p><img alt="cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4" src="../screenshots/vc-cisco-interfaces.png" /></p>
+<hr />
+<h3 id="arista-eos">Arista EOS</h3>
+<p>Arista modular/multi-chassis naming uses <code>Ethernet{slot}/{port}</code>. The device type creates templates <code>Ethernet1/1</code> … <code>Ethernet1/N</code>; at VC position 2 they become <code>Ethernet2/1</code> … <code>Ethernet2/N</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ARISTA-EOS&quot;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet\\d+/\\d+&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet{vc_position}/{port}&quot;</span>
+</code></pre></div>
+<p><strong>arista-sw-2</strong> at VC position 2 — interfaces renamed <code>Ethernet1/N</code> → <code>Ethernet2/N</code>:</p>
+<p><img alt="arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4" src="../screenshots/vc-arista-interfaces.png" /></p>
+<div class="admonition tip">
+<p class="admonition-title">Re-apply after initial load</p>
+<p>If devices were added to the VC <em>before</em> rules were loaded (e.g. during bulk provisioning), the signal fires before the rules exist. Force a re-apply with:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dcim.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Device</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">netbox_interface_name_rules.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">apply_device_interface_rules</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="n">Device</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">virtual_chassis__isnull</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">apply_device_interface_rules</span><span class="p">(</span><span class="n">dev</span><span class="p">)</span>
+</code></pre></div></p>
+</div>
+<hr />
 <ul>
 <li><a href="https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/contrib/juniper.yaml"><code>contrib/juniper.yaml</code></a> — full Juniper rule set</li>
 <li><a href="https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/contrib/ufispace.yaml"><code>contrib/ufispace.yaml</code></a> — SONiC platform-scoped rules</li>
