@@ -77,7 +77,10 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         seen_bases: dict = {}
         for i in interfaces:
             base = i.name.rsplit(":", 1)[0]
-            if base in raw_names:
+            # Match when the full base is a raw name OR when the last segment of the
+            # base (after the final "/") matches a raw name — the latter handles
+            # already-renamed bases like "xe-1/0/0" where raw_names contains "0".
+            if base in raw_names or base.rsplit("/", 1)[-1] in raw_names:
                 if base not in seen_bases or i.name.endswith(":0"):
                     seen_bases[base] = i
         unrenamed = list(seen_bases.values())
@@ -202,9 +205,16 @@ def apply_device_interface_rules(device):
         .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
         .filter(Q(platform=platform) | Q(platform__isnull=True))
     )
-    # Sort Python-side: specificity_score descending, then pk ascending for stability.
+    # Sort Python-side: specificity_score descending, then module_type_pattern length
+    # descending (for device-interface rules with ties), then pk ascending for stability.
     # (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)
-    rules.sort(key=lambda r: (-r.specificity_score, r.pk))
+    rules.sort(
+        key=lambda r: (
+            -r.specificity_score,
+            -(len(r.module_type_pattern or "") if r.applies_to_device_interfaces else 0),
+            r.pk,
+        )
+    )
 
     if not rules:
         return 0

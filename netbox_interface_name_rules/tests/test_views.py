@@ -188,23 +188,130 @@ class RuleApplicableViewTest(ViewTestBase):
 class RuleTestViewTest(ViewTestBase):
     """Test the RuleTestView (build-rule / preview)."""
 
+    def _url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
     def test_test_view_get_200(self):
         """GET to rule test view returns 200."""
-        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
-        response = self.client.get(url)
+        response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)
 
     def test_test_view_post_simple_template(self):
         """POST to rule test view with a simple template returns a result."""
-        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
         data = {
             "name_template": "et-0/0/{bay_position}",
             "bay_position": "3",
             "channel_count": "0",
             "channel_start": "0",
         }
-        response = self.client.post(url, data)
+        response = self.client.post(self._url(), data)
         self.assertEqual(response.status_code, 200)
+
+    def test_check_channel_preview_returns_multiple_results(self):
+        """POST check with channel_count=3 produces one preview entry per channel."""
+        data = {
+            "name_template": "{base}:{channel}",
+            "channel_count": "3",
+            "channel_start": "0",
+            "var_base": "et-0/0/0",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 200)
+        preview = response.context["preview_results"]
+        self.assertIsNotNone(preview)
+        self.assertEqual(len(preview), 3)
+        self.assertEqual(preview[0]["result"], "et-0/0/0:0")
+        self.assertEqual(preview[1]["result"], "et-0/0/0:1")
+        self.assertEqual(preview[2]["result"], "et-0/0/0:2")
+
+    def test_check_with_module_type_populates_db_preview(self):
+        """POST check with module_type FK set triggers find_interfaces_for_rule."""
+        data = {
+            "name_template": "et-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type": str(self.module_type.pk),
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 200)
+        # db_preview should be a list (possibly empty if no modules exist)
+        self.assertIsNotNone(response.context["db_preview"])
+        self.assertIsInstance(response.context["db_preview"], list)
+
+    def test_check_with_regex_pattern_populates_db_preview(self):
+        """POST check with regex module_type_pattern triggers find_interfaces_for_rule."""
+        data = {
+            "name_template": "port{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type_is_regex": "on",
+            "module_type_pattern": "VIEW-SFP",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.context["db_preview"])
+
+    def test_check_invalid_template_sets_error(self):
+        """POST with a malformed template expression sets error context."""
+        data = {
+            "name_template": "{1 + }",
+            "channel_count": "0",
+            "channel_start": "0",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.context["error"])
+
+    def test_save_rule_existing_redirects_to_edit(self):
+        """POST save_rule with matching module_type redirects to rule edit page."""
+        # rule_disabled matches: module_type=self.module_type, device_type=None, platform=None
+        edit_url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_edit",
+            args=[self.rule_disabled.pk],
+        )
+        data = {
+            "name_template": "ge-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type": str(self.module_type.pk),
+            "action": "save_rule",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(edit_url, response["Location"])
+
+    def test_save_rule_no_match_redirects_to_add(self):
+        """POST save_rule with no existing matching rule redirects to add page."""
+        mfr = Manufacturer.objects.create(name="SaveTestMfg", slug="savetestmfg")
+        new_mt = ModuleType.objects.create(manufacturer=mfr, model="SAVE-ONLY-MT", part_number="SAVE-ONLY-MT")
+        add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+        data = {
+            "name_template": "xe-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type": str(new_mt.pk),
+            "action": "save_rule",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(add_url, response["Location"])
+        self.assertIn("module_type=", response["Location"])
+
+    def test_save_rule_regex_no_match_redirects_to_add_with_pattern(self):
+        """POST save_rule with regex type redirects to add with pattern in query string."""
+        add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+        data = {
+            "name_template": "port{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type_is_regex": "on",
+            "module_type_pattern": "UNIQUEPATTERN-99",
+            "action": "save_rule",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(add_url, response["Location"])
+        self.assertIn("module_type_pattern=UNIQUEPATTERN-99", response["Location"])
 
 
 class RuleDuplicateViewTest(ViewTestBase):

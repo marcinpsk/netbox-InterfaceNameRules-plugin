@@ -453,8 +453,8 @@ class ForceReapplyTest(EngineAdvancedFixtures):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "et-0/0/0")
 
-    def test_force_reapply_channel_skips_when_base_not_in_raw_names(self):
-        """force_reapply with channel rule produces no renames when base name doesn't match raw names."""
+    def test_force_reapply_channel_no_renames_when_already_correct(self):
+        """force_reapply with channel rule produces no renames when all interfaces already have correct names."""
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -462,20 +462,39 @@ class ForceReapplyTest(EngineAdvancedFixtures):
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Already-renamed channel interfaces — base "xe-0/0/0" does NOT match raw_name "0"
+        # Already-renamed channel interfaces — last segment of base "xe-0/0/0" (i.e. "0") matches raw_name "0"
         iface0 = Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:1", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:2", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:3", type="10gbase-x-sfpp")
 
-        # force_reapply=True: base "xe-0/0/0" does NOT match raw "0", so unrenamed=[]
-        # (correctly avoiding re-creating channels when names are already correct)
+        # force_reapply=True: base "xe-0/0/0" is matched (via last segment "0" in raw_names),
+        # but template evaluates to the same names, so 0 renames occur.
         result = apply_interface_name_rules(module, self.bay0, force_reapply=True)
         # Names are already correct, so no renames needed
         self.assertEqual(result, 0)
         self.assertIsNotNone(iface0)  # Interface still exists
         iface0.refresh_from_db()
         self.assertEqual(iface0.name, "xe-0/0/0:0")  # Name unchanged
+
+    def test_force_reapply_channel_renames_on_vc_position_change(self):
+        """force_reapply with a channel+vc_position rule renames already-named channel interfaces."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-{vc_position}/0/{bay_position}:{channel}",
+            channel_count=1,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.vc_device, module_bay=self.vc_bay, module_type=self.module_type)
+        # Interface was previously named with old vc_position=2; last segment "0" matches raw_name "0"
+        iface = Interface.objects.create(device=self.vc_device, module=module, name="xe-2/0/0:0", type="10gbase-x-sfpp")
+
+        # force_reapply=True: base "xe-2/0/0" is matched (last segment "0" in raw_names),
+        # and vc_device.vc_position=1 → new name "xe-1/0/0:0" differs → rename occurs.
+        result = apply_interface_name_rules(module, self.vc_bay, force_reapply=True)
+        self.assertEqual(result, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "xe-1/0/0:0")
 
 
 class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
