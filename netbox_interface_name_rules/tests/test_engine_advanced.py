@@ -415,6 +415,31 @@ class BuildVariablesEdgesTest(TestCase):
         variables = build_variables(bay, device=device_no_pos)
         self.assertNotIn("vc_position", variables)
 
+    def test_template_expression_position_extracts_from_name(self):
+        """Bay with position='{module}' (template expression) extracts number from bay name."""
+        # Force the position to a template expression via low-level update to bypass form validation
+        ModuleBay.objects.filter(pk=self.bay.pk).update(position="{module}")
+        self.bay.refresh_from_db()
+        # bay.name = "Slot 2", so trailing digit = "2"
+        variables = build_variables(self.bay)
+        self.assertEqual(variables["bay_position"], "2")
+        self.assertEqual(variables["bay_position_num"], "2")
+
+    def test_template_expression_position_no_digits_falls_back(self):
+        """Bay with template position and name without digits → bay_position='0'."""
+        manufacturer = Manufacturer.objects.create(name="VEMfg3", slug="vemfg3")
+        dt = DeviceType.objects.create(manufacturer=manufacturer, model="VE3-Dev", slug="ve3-dev")
+        ModuleBayTemplate.objects.create(device_type=dt, name="SlotABC", position="0")
+        role = DeviceRole.objects.create(name="VE3Role", slug="ve3role")
+        site = Site.objects.create(name="VE3Site", slug="ve3site")
+        device = Device.objects.create(name="ve3-dev-01", device_type=dt, role=role, site=site)
+        bay = ModuleBay.objects.get(device=device, name="SlotABC")
+        # Force template-expression position with no digit in name
+        ModuleBay.objects.filter(pk=bay.pk).update(position="{module}")
+        bay.refresh_from_db()
+        variables = build_variables(bay)
+        self.assertEqual(variables["bay_position"], "0")
+
 
 class EvaluateNameTemplateEdgesTest(TestCase):
     """Test evaluate_name_template error branches."""
@@ -495,6 +520,14 @@ class ForceReapplyTest(EngineAdvancedFixtures):
         self.assertEqual(result, 1)
         iface.refresh_from_db()
         self.assertEqual(iface.name, "xe-1/0/0:0")
+
+    def test_no_rule_for_module_returns_zero(self):
+        """apply_interface_name_rules returns 0 immediately when no rule matches."""
+        # No InterfaceNameRule created → find_matching_rule returns None
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+        result = apply_interface_name_rules(module, self.bay0)
+        self.assertEqual(result, 0)
 
 
 class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):

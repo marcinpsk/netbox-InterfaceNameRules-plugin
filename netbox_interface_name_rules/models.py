@@ -13,6 +13,22 @@ from taggit.managers import TaggableManager
 _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
 
 
+def _validate_module_type_pattern(pattern):
+    """Compile *pattern* and check for ReDoS-prone constructs.
+
+    Raises ``ValidationError`` targeting ``module_type_pattern`` if the
+    pattern is syntactically invalid or contains nested quantifiers.
+    Called from ``InterfaceNameRule.clean()`` to avoid duplicating the same
+    try/except + ReDoS guard in each branch.
+    """
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
+    if _REDOS_PATTERN.search(pattern):
+        raise ValidationError({"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."})
+
+
 class InterfaceNameRule(NetBoxModel):
     """Post-install interface rename rule for module types.
 
@@ -135,14 +151,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
-                try:
-                    re.compile(self.module_type_pattern)
-                except re.error as e:
-                    raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
-                if _REDOS_PATTERN.search(self.module_type_pattern):
-                    raise ValidationError(
-                        {"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."}
-                    )
+                _validate_module_type_pattern(self.module_type_pattern)
             # Force regex mode off — module_type_is_regex has no meaning here
             self.module_type_is_regex = False
         elif self.module_type_is_regex:
@@ -150,15 +159,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
                 raise ValidationError({"module_type": "Cannot set both module type FK and regex pattern. Choose one."})
-            try:
-                re.compile(self.module_type_pattern)
-            except re.error as e:
-                raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
-            # Basic ReDoS guard: reject common nested-quantifier constructs
-            if _REDOS_PATTERN.search(self.module_type_pattern):
-                raise ValidationError(
-                    {"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."}
-                )
+            _validate_module_type_pattern(self.module_type_pattern)
         else:
             # Clear any stale pattern so it does not persist when switching modes
             self.module_type_pattern = ""

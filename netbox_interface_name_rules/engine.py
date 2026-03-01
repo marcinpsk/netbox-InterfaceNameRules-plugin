@@ -16,6 +16,46 @@ from django.db.models.functions import Length
 logger = logging.getLogger(__name__)
 
 
+def _get_parent_module_type(module_bay):
+    """Return the module type of the module installed in the parent bay, or None.
+
+    Used by ``apply_interface_name_rules`` to scope rules to a specific parent
+    module type (e.g., SFP inside a CVR-X2-SFP converter).
+    """
+    if module_bay.parent:
+        parent_bay = module_bay.parent
+        if hasattr(parent_bay, "installed_module") and parent_bay.installed_module:
+            return parent_bay.installed_module.module_type
+    return None
+
+
+def _collect_unrenamed(interfaces, rule, raw_names, force_reapply):
+    """Return the subset of *interfaces* that should be processed by the rule.
+
+    Normal (non-force) mode: only interfaces whose current name is still in the
+    raw template names (idempotency guard).
+
+    force_reapply, non-channel: all interfaces (e.g. vc_position changed).
+
+    force_reapply, channel rule: one interface per base name, matching when the
+    full base OR its last path segment is in *raw_names*; prefers the ":0"
+    channel to avoid duplicate-name errors on re-apply.
+    """
+    if not force_reapply:
+        return [i for i in interfaces if i.name in raw_names]
+    if rule.channel_count == 0:
+        return interfaces
+    # Breakout + force_reapply: deduplicate by base, prefer ":0"
+    seen_bases: dict = {}
+    for i in interfaces:
+        base = i.name.rsplit(":", 1)[0]
+        # Also match when the last path segment equals a raw name (already-renamed bases).
+        if base in raw_names or base.rsplit("/", 1)[-1] in raw_names:
+            if base not in seen_bases or i.name.endswith(":0"):
+                seen_bases[base] = i
+    return list(seen_bases.values())
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -33,19 +73,9 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """
     from dcim.models import Interface
 
-    module_type = module.module_type
-
-    # Determine parent module type (if installed inside another module)
-    parent_module_type = None
-    if module_bay.parent:
-        parent_bay = module_bay.parent
-        if hasattr(parent_bay, "installed_module") and parent_bay.installed_module:
-            parent_module_type = parent_bay.installed_module.module_type
-
-    # Look up rule: most specific first, then broader matches
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module_type, parent_module_type, device_type, platform)
+    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
         return 0
@@ -56,36 +86,10 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     if not interfaces:
         return 0
 
-    # Determine the raw interface names NetBox assigned from templates.
-    # Use NetBox's own resolve_name() to handle nested modules correctly
-    # (e.g., {module} walks the module tree for converters).
-    raw_names = _get_raw_interface_names(module)
-    if not raw_names:
-        # Fallback when module type has no InterfaceTemplates
-        raw_names = {variables["bay_position"]}
+    # Determine raw names NetBox assigned from templates; fall back to bay_position.
+    raw_names = _get_raw_interface_names(module) or {variables["bay_position"]}
+    unrenamed = _collect_unrenamed(interfaces, rule, raw_names, force_reapply)
 
-    if force_reapply and rule.channel_count == 0:
-        # Re-apply to all interfaces regardless of current name (e.g. vc_position changed).
-        unrenamed = interfaces
-    elif force_reapply and rule.channel_count > 0:
-        # For breakout rules, re-apply only to channel sub-interfaces whose base name
-        # (before ":") matches a raw template name so vc_position changes propagate
-        # without re-creating already-correct channel entries.
-        # Deduplicate by base: only one interface per base should be processed.
-        # Prefer the ":0" channel so _apply_rule_to_interface sees an already-correct
-        # name for ch=0 (no-op rename). Fall back to first seen if ":0" is absent.
-        seen_bases: dict = {}
-        for i in interfaces:
-            base = i.name.rsplit(":", 1)[0]
-            # Match when the full base is a raw name OR when the last segment of the
-            # base (after the final "/") matches a raw name — the latter handles
-            # already-renamed bases like "xe-1/0/0" where raw_names contains "0".
-            if base in raw_names or base.rsplit("/", 1)[-1] in raw_names:
-                if base not in seen_bases or i.name.endswith(":0"):
-                    seen_bases[base] = i
-        unrenamed = list(seen_bases.values())
-    else:
-        unrenamed = [i for i in interfaces if i.name in raw_names]
     if not unrenamed:
         return 0  # Already renamed (idempotent guard)
 
@@ -96,10 +100,8 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         renamed += _apply_rule_to_interface(rule, iface, vars_copy, module)
 
     if unrenamed and renamed == 0:
-        # All interfaces already have the names the rule would produce.
-        # This can happen when a newer NetBox version generates correct names
-        # natively (e.g. via improved template resolution), making this rule
-        # potentially obsolete — at least for this module type/context.
+        # All interfaces already have the names the rule would produce — flag as
+        # potentially obsolete (e.g., newer NetBox generates correct names natively).
         _flag_rule_potentially_deprecated(rule)
 
     return renamed
@@ -359,6 +361,41 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     return None
 
 
+def _resolve_bay_position(module_bay):
+    """Return (bay_position, bay_position_num) from a module bay's position field.
+
+    Handles template expressions like ``{module}`` by extracting the trailing
+    digit from the bay name.  Falls back to ``"0"`` if no digit is found.
+    """
+    bay_position = module_bay.position or "0"
+    if bay_position.startswith("{"):
+        match = re.search(r"(\d+)$", module_bay.name)
+        bay_position = match.group(1) if match else "0"
+    num_match = re.search(r"(\d+)$", bay_position)
+    bay_position_num = num_match.group(1) if num_match else bay_position
+    return bay_position, bay_position_num
+
+
+def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+    """Return the ``slot`` variable from the module bay hierarchy.
+
+    When the bay has a parent bay, slot comes from the parent (or grandparent
+    when two levels of nesting exist).  When the bay belongs to an installed
+    module with its own bay, slot comes from that module's bay position.
+    Falls back to ``bay_position_num``.
+    """
+    if module_bay.parent:
+        parent_bay = module_bay.parent
+        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
+            return parent_bay.parent.position or parent_bay_position
+        return parent_bay_position
+    if hasattr(module_bay, "module") and module_bay.module:
+        owner_module = module_bay.module
+        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
+            return owner_module.module_bay.position or bay_position_num
+    return bay_position_num
+
+
 def build_variables(module_bay, device=None):
     """Build template variable dict from a module bay's position context.
 
@@ -374,40 +411,20 @@ def build_variables(module_bay, device=None):
     Note: Juniper VC positions start at 0, so 0 is a valid real-world value and
     cannot be used as a "not in VC" sentinel.
     """
-    bay_position = module_bay.position or "0"
-    # If position is a template expression (e.g., {module}), extract from bay name
-    if bay_position.startswith("{"):
-        match = re.search(r"(\d+)$", module_bay.name)
-        bay_position = match.group(1) if match else "0"
-    # Extract numeric-only version for arithmetic (e.g., "swp1" → "1")
-    bay_position_num_match = re.search(r"(\d+)$", bay_position)
-    bay_position_num = bay_position_num_match.group(1) if bay_position_num_match else bay_position
+    bay_position, bay_position_num = _resolve_bay_position(module_bay)
 
     parent_bay_position = "0"
-    sfp_slot = bay_position_num
-    slot = bay_position_num
-
     if module_bay.parent:
-        parent_bay = module_bay.parent
-        parent_bay_position = parent_bay.position or "0"
-        # slot is typically the top-level module position
-        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
-            grandparent = parent_bay.parent
-            slot = grandparent.position or parent_bay_position
-        else:
-            slot = parent_bay_position
-    elif hasattr(module_bay, "module") and module_bay.module:
-        # Bay belongs to an installed module (not nested, but module-scoped)
-        owner_module = module_bay.module
-        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
-            slot = owner_module.module_bay.position or bay_position
+        parent_bay_position = module_bay.parent.position or "0"
+
+    slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
 
     result = {
         "slot": slot,
         "bay_position": bay_position,
         "bay_position_num": bay_position_num,
         "parent_bay_position": parent_bay_position,
-        "sfp_slot": sfp_slot,
+        "sfp_slot": bay_position_num,
     }
     if (
         device is not None

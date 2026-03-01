@@ -289,6 +289,102 @@ class ModelCleanDeviceIfaceTest(TestCase):
         self.assertIn("module_type_pattern", ctx.exception.message_dict)
 
 
+class ModelCleanRegexModeTest(TestCase):
+    """Test clean() validation for regex mode (module_type_is_regex=True)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RegexCleanMfg", slug="regexcleanmfg")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="RXCLN-SFP", part_number="RXCLN-SFP"
+        )
+
+    def test_regex_mode_without_pattern_fails(self):
+        """module_type_is_regex=True but no pattern → ValidationError on module_type_pattern."""
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="",
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_regex_mode_with_module_type_fk_fails(self):
+        """module_type_is_regex=True but module_type FK also set → ValidationError on module_type."""
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-.*",
+            module_type=self.module_type,
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type", ctx.exception.message_dict)
+
+    def test_regex_mode_invalid_pattern_fails(self):
+        """module_type_is_regex=True with syntactically invalid regex → ValidationError."""
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="[unclosed",
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_regex_mode_valid_pattern_passes(self):
+        """module_type_is_regex=True with valid pattern and no FK → passes clean()."""
+        rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-.*",
+            name_template="port{bay_position}",
+        )
+        rule.clean()  # Should not raise
+
+
+class ModelCleanExactModeTest(TestCase):
+    """Test clean() validation for exact mode (module_type_is_regex=False)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ExactCleanMfg", slug="exactcleanmfg")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="EXCLN-SFP", part_number="EXCLN-SFP"
+        )
+
+    def test_exact_mode_without_module_type_fails(self):
+        """Exact mode with no module_type FK → ValidationError on module_type."""
+        rule = InterfaceNameRule(
+            module_type_is_regex=False,
+            module_type=None,
+            name_template="port{bay_position}",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+        self.assertIn("module_type", ctx.exception.message_dict)
+
+    def test_exact_mode_clears_stale_pattern(self):
+        """Exact mode with a leftover module_type_pattern → pattern is cleared by clean()."""
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            module_type_is_regex=False,
+            module_type_pattern="stale-regex",
+            name_template="port{bay_position}",
+        )
+        rule.clean()
+        self.assertEqual(rule.module_type_pattern, "")
+
+    def test_exact_mode_valid_passes(self):
+        """Exact mode with module_type FK set → passes clean()."""
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            module_type_is_regex=False,
+            name_template="port{bay_position}",
+        )
+        rule.clean()  # Should not raise
+
+
 # ---------------------------------------------------------------------------
 # api/serializers.py — validate() edge cases
 # ---------------------------------------------------------------------------
