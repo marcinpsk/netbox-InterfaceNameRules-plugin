@@ -109,7 +109,7 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type_regex)
         Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
-        results, total = find_interfaces_for_rule(rule)
+        results, _ = find_interfaces_for_rule(rule)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["new_names"], ["Hu0/0/0/0"])
 
@@ -124,7 +124,7 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
-        results, total = find_interfaces_for_rule(rule)
+        results, _ = find_interfaces_for_rule(rule)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["new_names"], ["xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"])
 
@@ -139,7 +139,7 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
         Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
-        results, total = find_interfaces_for_rule(rule, limit=1)
+        results, _ = find_interfaces_for_rule(rule, limit=1)
         self.assertEqual(len(results), 1)
 
     def test_no_modules_returns_empty(self):

@@ -151,7 +151,7 @@
                         btn.setAttribute('aria-label', 'Disabled — click to enable');
                         const iconOff = btn.querySelector('i');
                         if (iconOff) iconOff.className = 'mdi mdi-minus';
-                        if (row) { row.classList.add('text-muted'); row.classList.add('opacity-50'); }
+                        if (row) row.classList.add('text-muted', 'opacity-50');
                     }
                 }).catch(() => {
                     btn.disabled = false;

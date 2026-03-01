@@ -102,6 +102,71 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed
 
 
+def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
+    """Attempt to rename a single device-level interface using *rule*.
+
+    Returns ``True`` if the interface was successfully renamed, ``False`` otherwise.
+    Mutates ``renamed_pks`` on success.
+    """
+    if iface.pk in renamed_pks:
+        return False  # Already renamed by a higher-priority rule
+
+    if rule.module_type_pattern:
+        try:
+            if not re.fullmatch(rule.module_type_pattern, iface.name):
+                return False
+        except re.error:
+            return False
+
+    port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
+    variables = {"vc_position": vc_position, "base": iface.name, "port": port}
+
+    try:
+        new_name = evaluate_name_template(rule.name_template, variables)
+    except Exception:
+        logger.exception(
+            "Failed to evaluate template %r for interface %s (rule %s)",
+            rule.name_template,
+            iface.name,
+            rule.pk,
+        )
+        return False
+
+    if new_name == iface.name:
+        return False
+
+    old_name = iface.name
+    iface.name = new_name
+    try:
+        iface.full_clean()
+    except Exception:
+        logger.exception(
+            "Validation failed for device interface %s → %s (rule %s, device %s)",
+            old_name,
+            new_name,
+            rule.pk,
+            device.pk,
+        )
+        iface.name = old_name
+        return False
+    try:
+        iface.save()
+    except Exception:
+        logger.exception(
+            "DB save failed for device interface %s → %s (rule %s, device %s)",
+            old_name,
+            new_name,
+            rule.pk,
+            device.pk,
+        )
+        iface.name = old_name
+        return False
+
+    renamed_pks.add(iface.pk)
+    logger.debug("Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk)
+    return True
+
+
 def apply_device_interface_rules(device):
     """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
 
@@ -152,64 +217,8 @@ def apply_device_interface_rules(device):
     renamed_pks: set[int] = set()
     for rule in rules:
         for iface in interfaces:
-            if iface.pk in renamed_pks:
-                continue  # Already renamed by a higher-priority rule
-            # Filter by interface name pattern if specified
-            if rule.module_type_pattern:
-                try:
-                    if not re.fullmatch(rule.module_type_pattern, iface.name):
-                        continue
-                except re.error:
-                    continue
-
-            port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
-            variables = {"vc_position": vc_position, "base": iface.name, "port": port}
-
-            try:
-                new_name = evaluate_name_template(rule.name_template, variables)
-            except Exception:
-                logger.exception(
-                    "Failed to evaluate template %r for interface %s (rule %s)",
-                    rule.name_template,
-                    iface.name,
-                    rule.pk,
-                )
-                continue
-
-            if new_name == iface.name:
-                continue
-
-            old_name = iface.name
-            iface.name = new_name
-            try:
-                iface.full_clean()
-            except Exception:
-                logger.exception(
-                    "Validation failed for device interface %s → %s (rule %s, device %s)",
-                    old_name,
-                    new_name,
-                    rule.pk,
-                    device.pk,
-                )
-                iface.name = old_name  # revert
-                continue
-            try:
-                iface.save()
-            except Exception:
-                logger.exception(
-                    "DB save failed for device interface %s → %s (rule %s, device %s)",
-                    old_name,
-                    new_name,
-                    rule.pk,
-                    device.pk,
-                )
-                iface.name = old_name  # revert
-                continue
-            renamed_pks.add(iface.pk)
-            logger.debug(
-                "Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk
-            )
-            total += 1
+            if _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
+                total += 1
 
     return total
 
