@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-03-01)
+
+### Documentation
+
+- Add DeepWiki link ([#16](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/16),
+  [`7a8df9e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7a8df9e702b703aa510d1c6caee37018066ead50))
+
+### Features
+
+- Add VC support ([#18](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/18),
+  [`922391d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/922391def56f93f9be81d76f9a28b9a8d624b96b))
+
+
 ## v1.1.2 (2026-02-24)
 
 ### Bug Fixes
