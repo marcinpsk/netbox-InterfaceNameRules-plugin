@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-03-01)
+
+### Bug Fixes
+
+- Exempt standalone E2E/data-loading scripts and forced bump
+  ([#20](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/20),
+  [`b0ecd29`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b0ecd291c5b3125fa719b440d67d7199687fcdf3))
+
+### Continuous Integration
+
+- Add Codecov PR comments and conventional commit PR title check
+  ([#19](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/19),
+  [`ccb6e38`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ccb6e3822fd19df6aebceca1d69f5a4497273594))
+
+
 ## v1.2.0 (2026-03-01)
 
 ### Documentation
