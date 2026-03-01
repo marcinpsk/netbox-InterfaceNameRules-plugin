@@ -13,12 +13,14 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
+    Platform,
     Site,
     VirtualChassis,
 )
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
+    _extract_trailing_digits,
     _find_channel_base,
     _matching_moduletype_pks,
     apply_interface_name_rules,
@@ -66,6 +68,7 @@ class EngineAdvancedFixtures(TestCase):
             vc_position=1,
         )
         cls.vc_bay = ModuleBay.objects.get(device=cls.vc_device, name="Bay 0")
+        cls.platform = Platform.objects.create(name="AdvOS", slug="advos")
 
 
 class FindInterfacesForRuleTest(EngineAdvancedFixtures):
@@ -151,6 +154,92 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
         results, total = find_interfaces_for_rule(rule)
         self.assertEqual(len(results), 0)
         self.assertEqual(total, 0)
+
+    def test_device_type_filter_scopes_modules(self):
+        """Rule with device_type only finds modules installed on matching device."""
+        # A second device type with its own device
+        mfg = Manufacturer.objects.create(name="DtFilterMfg", slug="dtfiltermfg")
+        other_dt = DeviceType.objects.create(manufacturer=mfg, model="OTHER-DEV", slug="other-dev")
+        ModuleBayTemplate.objects.create(device_type=other_dt, name="Bay 0", position="0")
+        site = Site.objects.get(name="AdvSite")
+        role = DeviceRole.objects.get(name="AdvRole")
+        other_device = Device.objects.create(name="other-dev-01", device_type=other_dt, role=role, site=site)
+        other_bay = ModuleBay.objects.get(device=other_device, name="Bay 0")
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            device_type=self.device_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        # Module on matching device — should appear
+        m_match = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=m_match, name="0", type="10gbase-x-sfpp")
+        # Module on non-matching device — should NOT appear
+        m_other = Module.objects.create(device=other_device, module_bay=other_bay, module_type=self.module_type)
+        Interface.objects.create(device=other_device, module=m_other, name="0", type="10gbase-x-sfpp")
+
+        results, total = find_interfaces_for_rule(rule)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["module"], m_match)
+        self.assertEqual(total, 1)
+
+    def test_platform_filter_scopes_modules(self):
+        """Rule with platform only finds modules installed on matching-platform devices."""
+        site = Site.objects.get(name="AdvSite")
+        role = DeviceRole.objects.get(name="AdvRole")
+        platform_device = Device.objects.create(
+            name="platform-dev-01", device_type=self.device_type, role=role, site=site, platform=self.platform
+        )
+        platform_bay = ModuleBay.objects.get(device=platform_device, name="Bay 0")
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            platform=self.platform,
+            name_template="et-0/0/{bay_position}",
+        )
+        # Module on platform-matching device
+        m_match = Module.objects.create(device=platform_device, module_bay=platform_bay, module_type=self.module_type)
+        Interface.objects.create(device=platform_device, module=m_match, name="0", type="10gbase-x-sfpp")
+        # Module on non-platform device (no platform set)
+        m_other = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=m_other, name="1", type="10gbase-x-sfpp")
+
+        results, total = find_interfaces_for_rule(rule)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["module"], m_match)
+        self.assertEqual(total, 1)
+
+    def test_template_error_shown_in_new_names(self):
+        """A template that raises ValueError produces '<error: ...>' in new_names."""
+        # {vc_position} is undefined for a non-VC device → ValueError at eval time
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-{vc_position}/0/{bay_position}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+
+        results, total = find_interfaces_for_rule(rule)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["new_names"][0].startswith("<error:"))
+        self.assertEqual(total, 1)
+
+    def test_channel_rule_all_correct_not_in_results(self):
+        """Channel rule excludes module when all expected channels already exist."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        # Create all expected channel interfaces with already-correct names
+        Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:1", type="10gbase-x-sfpp")
+
+        results, total = find_interfaces_for_rule(rule)
+        self.assertEqual(len(results), 0)
+        self.assertEqual(total, 2)
 
 
 class ApplyRuleToExistingTest(EngineAdvancedFixtures):
@@ -453,6 +542,43 @@ class EvaluateNameTemplateEdgesTest(TestCase):
         """AST node not in allowlist (e.g., Name lookup — not a call) raises ValueError."""
         with self.assertRaises(ValueError):
             evaluate_name_template("{__import__}", {})
+
+
+class ExtractTrailingDigitsTest(TestCase):
+    """Test _extract_trailing_digits: the ReDoS-safe trailing-digit extractor."""
+
+    def test_pure_digits(self):
+        """All-digit string returns itself."""
+        self.assertEqual(_extract_trailing_digits("123"), "123")
+
+    def test_alpha_suffix_none(self):
+        """String ending in non-digit returns empty string."""
+        self.assertEqual(_extract_trailing_digits("abc"), "")
+
+    def test_mixed_trailing_digits(self):
+        """Typical interface position like 'swp1' → '1'."""
+        self.assertEqual(_extract_trailing_digits("swp1"), "1")
+
+    def test_path_style(self):
+        """Juniper-style position 'xe-0/0/0' → trailing '0'."""
+        self.assertEqual(_extract_trailing_digits("xe-0/0/0"), "0")
+
+    def test_empty_string(self):
+        """Empty string returns empty string."""
+        self.assertEqual(_extract_trailing_digits(""), "")
+
+    def test_single_digit(self):
+        """Single digit string returns that digit."""
+        self.assertEqual(_extract_trailing_digits("5"), "5")
+
+    def test_multi_digit_trailing(self):
+        """Multiple trailing digits captured: 'port42' → '42'."""
+        self.assertEqual(_extract_trailing_digits("port42"), "42")
+
+    def test_no_backtracking_on_long_non_digit_suffix(self):
+        """Long string ending with a non-digit runs in O(n) — should return empty quickly."""
+        long_str = "1" * 1000 + "x"
+        self.assertEqual(_extract_trailing_digits(long_str), "")
 
 
 class ForceReapplyTest(EngineAdvancedFixtures):

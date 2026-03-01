@@ -15,6 +15,7 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
+    Platform,
     Site,
 )
 from django.test import TestCase
@@ -38,6 +39,7 @@ class FindMatchingRuleTest(TestCase):
             manufacturer=manufacturer, model="TEST-CONVERTER", part_number="TEST-CONVERTER"
         )
         cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="TEST-DEVICE", slug="test-device")
+        cls.platform = Platform.objects.create(name="TEST-OS", slug="test-os")
 
     def test_no_rules_returns_none(self):
         result = find_matching_rule(self.module_type, None, None)
@@ -95,6 +97,30 @@ class FindMatchingRuleTest(TestCase):
         )
         result = find_matching_rule(self.module_type, self.parent_module_type, self.device_type)
         self.assertEqual(result, full)
+
+    def test_platform_specific_rule_preferred(self):
+        """Platform-scoped rule is preferred over unscoped rule."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="generic{bay_position}",
+        )
+        platform_specific = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            platform=self.platform,
+            name_template="platform{bay_position}",
+        )
+        result = find_matching_rule(self.module_type, None, None, platform=self.platform)
+        self.assertEqual(result, platform_specific)
+
+    def test_disabled_rule_not_returned(self):
+        """Disabled exact rule is never returned even if it matches."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="disabled{bay_position}",
+            enabled=False,
+        )
+        result = find_matching_rule(self.module_type, None, None)
+        self.assertIsNone(result)
 
 
 class BuildVariablesTest(TestCase):
