@@ -14,7 +14,7 @@ echo ""
 echo "🐳 Container Environment:"
 echo "  - NETBOX_VERSION: ${NETBOX_VERSION:-not set}"
 echo "  - DEBUG: ${DEBUG:-not set}"
-echo "  - SECRET_KEY: ${SECRET_KEY:0:20}... (truncated)"
+echo "  - SECRET_KEY: $([ -n "$SECRET_KEY" ] && echo 'set' || echo 'unset')"
 echo "  - DB_HOST: ${DB_HOST:-not set}"
 echo "  - DB_NAME: ${DB_NAME:-not set}"
 echo "  - DB_USER: ${DB_USER:-not set}"
@@ -60,7 +60,7 @@ if command -v netstat >/dev/null 2>&1; then
 elif command -v ss >/dev/null 2>&1; then
   echo "  - Port 8000: $(ss -tuln 2>/dev/null | grep :8000 >/dev/null && echo 'Listening' || echo 'Not listening')"
 else
-  echo "  - Port 8000: $(cat /proc/net/tcp 2>/dev/null | awk '$2 ~ /:1F40$/ {print "Listening"; exit}' | grep -q "Listening" && echo 'Listening' || echo 'Not listening')"
+  echo "  - Port 8000: $(cat /proc/net/tcp 2>/dev/null | awk '$2 ~ /:1F40$/ && $4 == "0A" {print "Listening"; exit}' | grep -q "Listening" && echo 'Listening' || echo 'Not listening')"
 fi
 
 echo ""

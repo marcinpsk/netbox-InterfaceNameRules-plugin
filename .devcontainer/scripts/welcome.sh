@@ -37,7 +37,7 @@ if [ -n "$CODESPACES" ]; then
   echo "   NetBox will be available via automatic port forwarding"
   echo "   Check the 'Ports' panel for the forwarded port labeled 'NetBox Web Interface'"
   if [ -n "$CODESPACE_NAME" ]; then
-    CODESPACE_URL="https://${CODESPACE_NAME}-8000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-preview.app.github.dev}"
+    CODESPACE_URL="https://${CODESPACE_NAME}-8000.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
     echo "   Expected URL: $CODESPACE_URL"
   fi
   echo "   💡 Click the link in the Ports panel or look for the 'Open in Browser' button"

@@ -56,16 +56,18 @@ if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
 
   if [ -n "$CA_BUNDLE_SRC" ]; then
     echo "🔐 Installing custom CA certificate from $CA_BUNDLE_SRC..."
-    cert_count=$(grep -c '-----BEGIN CERTIFICATE-----' "$CA_BUNDLE_SRC" 2>/dev/null || true)
+    cert_count=$(grep -c -- '-----BEGIN CERTIFICATE-----' "$CA_BUNDLE_SRC" 2>/dev/null || true)
     if [ "${cert_count:-0}" -eq 0 ]; then
       echo "  ⚠️  ca-bundle.crt does not contain any PEM certificate blocks; skipping CA install."
     else
       mkdir -p /usr/local/share/ca-certificates/proxy
       find /usr/local/share/ca-certificates/proxy -maxdepth 1 -name 'cert-*' -delete 2>/dev/null || true
+      set +e
       csplit -z -f /usr/local/share/ca-certificates/proxy/cert- \
         "$CA_BUNDLE_SRC" '/-----BEGIN CERTIFICATE-----/' '{*}' \
         >/dev/null 2>&1
       CSPLIT_STATUS=$?
+      set -e
       if [ "$CSPLIT_STATUS" -ne 0 ]; then
         echo "  ⚠️  Failed to split ca-bundle.crt (csplit exit code: $CSPLIT_STATUS). Skipping CA install."
       elif compgen -G "/usr/local/share/ca-certificates/proxy/cert-*" > /dev/null; then

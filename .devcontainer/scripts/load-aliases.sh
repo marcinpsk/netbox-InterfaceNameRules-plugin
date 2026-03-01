@@ -39,12 +39,8 @@ netbox-stop() {
     local PID
     PID=$(cat /tmp/netbox.pid 2>/dev/null)
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-      if is_expected_pid "$PID" "python.*runserver.*8000"; then
-        graceful_kill_pid "$PID"
-        echo "   Stopped NetBox (PID: $PID)"
-      else
-        echo "   Skipping stale /tmp/netbox.pid (PID $PID is not NetBox runserver)"
-      fi
+      graceful_kill_pid "$PID"
+      echo "   Stopped NetBox (PID: $PID)"
     fi
     rm -f /tmp/netbox.pid
   fi
@@ -52,12 +48,8 @@ netbox-stop() {
     local PID
     PID=$(cat /tmp/rqworker.pid 2>/dev/null)
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-      if is_expected_pid "$PID" "python.*rqworker"; then
-        graceful_kill_pid "$PID"
-        echo "   Stopped RQ worker (PID: $PID)"
-      else
-        echo "   Skipping stale /tmp/rqworker.pid (PID $PID is not rqworker)"
-      fi
+      graceful_kill_pid "$PID"
+      echo "   Stopped RQ worker (PID: $PID)"
     fi
     rm -f /tmp/rqworker.pid
   fi
@@ -95,7 +87,7 @@ netbox-status() {
   local PID
   if [ -f /tmp/netbox.pid ]; then
     PID=$(cat /tmp/netbox.pid 2>/dev/null)
-    if [ -n "$PID" ] && is_expected_pid "$PID" "python.*runserver.*8000"; then
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
       echo "NetBox is running (PID: $PID)"
     else
       echo "NetBox is not running"
@@ -105,7 +97,7 @@ netbox-status() {
   fi
   if [ -f /tmp/rqworker.pid ]; then
     PID=$(cat /tmp/rqworker.pid 2>/dev/null)
-    if [ -n "$PID" ] && is_expected_pid "$PID" "python.*rqworker"; then
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
       echo "RQ worker is running (PID: $PID)"
     else
       echo "RQ worker is not running"
@@ -119,7 +111,7 @@ rq-status() {
   local PID
   if [ -f /tmp/rqworker.pid ]; then
     PID=$(cat /tmp/rqworker.pid 2>/dev/null)
-    if [ -n "$PID" ] && is_expected_pid "$PID" "python.*rqworker"; then
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
       echo "RQ worker is running (PID: $PID)"
     else
       echo "RQ worker is not running"
@@ -220,7 +212,7 @@ dev-help() {
   echo "  diagnose            : Run startup diagnostics"
   echo "  dev-help            : Show this help message"
   echo ""
-  echo "📖 NetBox available at: http://localhost:8000 (admin/admin)"
+  echo "📖 NetBox available at: http://localhost:8000 (${SUPERUSER_NAME:-admin}/${SUPERUSER_PASSWORD:-admin})"
 }
 
 echo "✅ Dev helpers loaded! Try: rq-status, rq-stats, rq-recent, dev-help"

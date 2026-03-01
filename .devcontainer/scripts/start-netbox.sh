@@ -44,11 +44,7 @@ fi
 if [ -f /tmp/netbox.pid ]; then
   OLD_PID=$(cat /tmp/netbox.pid 2>/dev/null)
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    if is_expected_pid "$OLD_PID" "python.*runserver.*8000"; then
-      graceful_kill_pid "$OLD_PID"
-    else
-      echo "⚠️  Skipping stale /tmp/netbox.pid (PID $OLD_PID is not NetBox runserver)"
-    fi
+    graceful_kill_pid "$OLD_PID"
   fi
   rm -f /tmp/netbox.pid
 fi
@@ -56,11 +52,7 @@ fi
 if [ -f /tmp/rqworker.pid ]; then
   OLD_PID=$(cat /tmp/rqworker.pid 2>/dev/null)
   if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    if is_expected_pid "$OLD_PID" "python.*rqworker"; then
-      graceful_kill_pid "$OLD_PID"
-    else
-      echo "⚠️  Skipping stale /tmp/rqworker.pid (PID $OLD_PID is not rqworker)"
-    fi
+    graceful_kill_pid "$OLD_PID"
   fi
   rm -f /tmp/rqworker.pid
 fi
@@ -69,13 +61,20 @@ fi
 source /opt/netbox/venv/bin/activate
 
 # Navigate to NetBox directory
-cd /opt/netbox/netbox
+if ! cd /opt/netbox/netbox; then
+  echo "ERROR: Failed to cd into /opt/netbox/netbox" >&2
+  exit 1
+fi
 
 # Start RQ worker in background
+# Dev environment: keep startup simple — no service manager needed.
 echo "⚙️  Starting RQ worker..."
 (
   source /opt/netbox/venv/bin/activate
-  cd /opt/netbox/netbox
+  if ! cd /opt/netbox/netbox; then
+    echo "ERROR: RQ worker subshell: failed to cd into /opt/netbox/netbox" >&2
+    exit 1
+  fi
   python manage.py rqworker --verbosity=1
 ) > /tmp/rqworker.log 2>&1 &
 
@@ -88,7 +87,10 @@ if [ "$BACKGROUND" = true ]; then
   (
     export DEBUG="${DEBUG:-True}"
     source /opt/netbox/venv/bin/activate
-    cd /opt/netbox/netbox
+    if ! cd /opt/netbox/netbox; then
+      echo "ERROR: NetBox subshell: failed to cd into /opt/netbox/netbox" >&2
+      exit 1
+    fi
     python manage.py runserver 0.0.0.0:8000 --verbosity=0
   ) > /tmp/netbox.log 2>&1 &
 
