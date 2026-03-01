@@ -11,6 +11,13 @@ echo "📍 Current working directory: $(pwd)"
 NETBOX_VERSION=${NETBOX_VERSION:-"latest"}
 echo "📦 Using NetBox Docker image: netboxcommunity/netbox:${NETBOX_VERSION}"
 
+# Clean up empty CA bundle vars (Compose injects "" when host var is unset)
+for _ca_var in REQUESTS_CA_BUNDLE SSL_CERT_FILE CURL_CA_BUNDLE; do
+  _val="${!_ca_var}"
+  [ -z "$_val" ] && unset "$_ca_var"
+done
+unset _ca_var _val
+
 # Detect plugin workspace directory
 detect_plugin_workspace() {
   if [ -f "$PWD/pyproject.toml" ]; then
@@ -49,17 +56,35 @@ if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
 
   if [ -n "$CA_BUNDLE_SRC" ]; then
     echo "🔐 Installing custom CA certificate from $CA_BUNDLE_SRC..."
-    mkdir -p /usr/local/share/ca-certificates/proxy
-    find /usr/local/share/ca-certificates/proxy -maxdepth 1 -name 'cert-*' -delete 2>/dev/null || true
-    csplit -z -f /usr/local/share/ca-certificates/proxy/cert- "$CA_BUNDLE_SRC" '/-----BEGIN CERTIFICATE-----/' '{*}' >/dev/null 2>&1
-    for f in /usr/local/share/ca-certificates/proxy/cert-*; do mv "$f" "${f}.crt" 2>/dev/null || true; done
-    update-ca-certificates 2>/dev/null
+    cert_count=$(grep -c -- '-----BEGIN CERTIFICATE-----' "$CA_BUNDLE_SRC" 2>/dev/null || true)
+    if [ "${cert_count:-0}" -eq 0 ]; then
+      echo "  ⚠️  ca-bundle.crt does not contain any PEM certificate blocks; skipping CA install."
+    else
+      mkdir -p /usr/local/share/ca-certificates/proxy
+      find /usr/local/share/ca-certificates/proxy -maxdepth 1 -name 'cert-*' -delete 2>/dev/null || true
+      set +e
+      csplit -z -f /usr/local/share/ca-certificates/proxy/cert- \
+        "$CA_BUNDLE_SRC" '/-----BEGIN CERTIFICATE-----/' '{*}' \
+        >/dev/null 2>&1
+      CSPLIT_STATUS=$?
+      set -e
+      if [ "$CSPLIT_STATUS" -ne 0 ]; then
+        echo "  ⚠️  Failed to split ca-bundle.crt (csplit exit code: $CSPLIT_STATUS). Skipping CA install."
+      elif compgen -G "/usr/local/share/ca-certificates/proxy/cert-*" > /dev/null; then
+        for f in /usr/local/share/ca-certificates/proxy/cert-*; do
+          mv "$f" "${f}.crt" 2>/dev/null || true
+        done
+        update-ca-certificates 2>/dev/null
+        echo "  ✓ CA certificate installed into system trust store ($cert_count cert(s))"
+      else
+        echo "  ⚠️  No certificate fragments were generated from ca-bundle.crt; skipping CA install."
+      fi
+    fi
     export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     export GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
     pip config set global.cert /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true
-    echo "  ✓ CA certificate installed"
   fi
 fi
 
@@ -70,16 +95,17 @@ if [ ! -f "/opt/netbox/venv/bin/activate" ]; then
 fi
 source /opt/netbox/venv/bin/activate
 
-# Install uv if not available
-if ! command -v uv >/dev/null 2>&1; then
-  echo "🔧 Installing uv..."
-  pip install uv
+# Choose installer (uv if available, else pip)
+if command -v uv >/dev/null 2>&1; then
+  PIP_CMD="uv pip"
+else
+  PIP_CMD="pip"
 fi
 
 echo "🔧 Installing development dependencies..."
 apt-get update -qq
 apt-get install -y -qq net-tools git
-uv pip install pytest pytest-django ruff pre-commit
+$PIP_CMD install pytest pytest-django ruff pre-commit
 
 # Install GitHub CLI
 if ! command -v gh >/dev/null 2>&1; then
@@ -106,7 +132,7 @@ if [ -z "$PLUGIN_WS_DIR" ]; then
 fi
 echo "📂 Plugin workspace: $PLUGIN_WS_DIR"
 cd "$PLUGIN_WS_DIR"
-uv pip install -e .
+$PIP_CMD install -e .
 echo "✅ Installed $PLUGIN_NAME in editable mode"
 
 # Install extra plugins from config file
@@ -133,12 +159,12 @@ for p in getattr(m, 'EXTRA_PLUGINS', []):
     if [[ "$line" == pip:* ]]; then
       pkg="${line#pip:}"
       echo "  📦 Installing $pkg from PyPI..."
-      uv pip install "$pkg" || echo "  ⚠️  Failed to install $pkg"
+      $PIP_CMD install "$pkg" || echo "  ⚠️  Failed to install $pkg"
     elif [[ "$line" == editable:* ]]; then
       path="${line#editable:}"
       echo "  📦 Installing from $path (editable)..."
       if [ -d "$path" ]; then
-        uv pip install -e "$path" || echo "  ⚠️  Failed to install from $path"
+        $PIP_CMD install -e "$path" || echo "  ⚠️  Failed to install from $path"
       else
         echo "  ⚠️  Path $path not found (is the repo mounted?)"
       fi
@@ -210,15 +236,15 @@ echo "🗃️  Applying database migrations..."
 python manage.py migrate 2>&1 | grep -E "(Operations to perform|Running migrations|Apply all migrations|No migrations to apply|\s+Applying|\s+OK)" || true
 
 echo "🔐 Creating superuser (if not exists)..."
+echo "   Credentials are read from environment variables (see .devcontainer/.env)"
 python manage.py shell -c "
+import os
 from django.contrib.auth import get_user_model
 User = get_user_model()
-username = '${SUPERUSER_NAME}'
-password = '${SUPERUSER_PASSWORD}'
-email = '${SUPERUSER_EMAIL:-}'
-if not username or not password:
-    print('⚠ SUPERUSER_NAME or SUPERUSER_PASSWORD not set — skipping superuser creation')
-elif not User.objects.filter(username=username).exists():
+username = (os.environ.get('SUPERUSER_NAME') or '').strip() or 'admin'
+email = (os.environ.get('SUPERUSER_EMAIL') or '').strip() or 'admin@example.com'
+password = (os.environ.get('SUPERUSER_PASSWORD') or '').strip() or 'admin'
+if not User.objects.filter(username=username).exists():
     User.objects.create_superuser(username, email, password)
     print(f'Created superuser: {username}')
 else:
