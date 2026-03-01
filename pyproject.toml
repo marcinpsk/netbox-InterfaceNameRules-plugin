@@ -29,7 +29,11 @@ dev = [
     "pre-commit",
     "pytest",
     "pytest-django",
+    "pytest-cov>=6.0",
     "python-semantic-release",
+    "django>=6.0.2",
+    "netaddr>=1.3.0",
+    "psycopg>=3.3.3",
 ]
 docs = [
     "mkdocs>=1,<2",
@@ -43,7 +47,7 @@ pythonpath = ["/opt/netbox/netbox"]
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "D"]
+select = ["E", "F", "W", "D", "C901"]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "F403",   # star imports
@@ -57,11 +61,17 @@ ignore = [
     "D213",   # multi-line summary second line (conflicts with D212)
 ]
 
+[tool.ruff.lint.mccabe]
+# Flag errors (`C901`) whenever the complexity level exceeds 15.
+max-complexity = 15
+
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "*/migrations/*.py" = ["D"]
 "*/tests/*.py" = ["D"]
 ".devcontainer/**" = ["D"]
+".devcontainer/scripts/test-e2e.py" = ["C901"]
+".devcontainer/scripts/load-sample-data.py" = ["C901"]
 
 [tool.coverage.run]
 source = ["netbox_interface_name_rules"]
