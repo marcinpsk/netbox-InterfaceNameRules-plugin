@@ -60,7 +60,7 @@ if command -v netstat >/dev/null 2>&1; then
 elif command -v ss >/dev/null 2>&1; then
   echo "  - Port 8000: $(ss -tuln 2>/dev/null | grep :8000 >/dev/null && echo 'Listening' || echo 'Not listening')"
 else
-  echo "  - Port 8000: $(cat /proc/net/tcp 2>/dev/null | awk '$2 ~ /:1F40$/ && $4 == "0A" {print "Listening"; exit}' | grep -q "Listening" && echo 'Listening' || echo 'Not listening')"
+  echo "  - Port 8000: $(awk 'BEGIN{r="Not listening"} $2 ~ /:1F40$/ && $4 == "0A" {r="Listening"; exit} END{print r}' /proc/net/tcp 2>/dev/null)"
 fi
 
 echo ""

@@ -8,20 +8,14 @@ export PATH="/opt/netbox/venv/bin:$PATH"
 export DEBUG="${DEBUG:-True}"
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# Clean up empty CA bundle vars (Compose/devcontainer inject "" when host var is
-# unset, which breaks requests/curl).  When setup.sh has installed custom CAs
-# into the system trust store, point to it instead.
+# Unset CA bundle vars when empty (Compose/devcontainer inject "" when the
+# host var is unset, which breaks requests/curl).
 for _ca_var in REQUESTS_CA_BUNDLE SSL_CERT_FILE CURL_CA_BUNDLE; do
-  _val="${!_ca_var}"
-  if [ -z "$_val" ]; then
-    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
-      declare -x "$_ca_var=/etc/ssl/certs/ca-certificates.crt"
-    else
-      unset "$_ca_var"
-    fi
+  if [ -z "${!_ca_var}" ]; then
+    unset "$_ca_var"
   fi
 done
-unset _ca_var _val
+unset _ca_var
 
 # Load shared process management helpers
 if ! source "$PLUGIN_DIR/.devcontainer/scripts/process-helpers.sh"; then
@@ -144,7 +138,12 @@ plugin-install() {
 
 plugins-install() {
   if [ -f "$PLUGIN_DIR/.devcontainer/extra-requirements.txt" ]; then
-    source /opt/netbox/venv/bin/activate && pip install -r "$PLUGIN_DIR/.devcontainer/extra-requirements.txt"
+    source /opt/netbox/venv/bin/activate
+    if command -v uv >/dev/null 2>&1; then
+      uv pip install -r "$PLUGIN_DIR/.devcontainer/extra-requirements.txt"
+    else
+      pip install -r "$PLUGIN_DIR/.devcontainer/extra-requirements.txt"
+    fi
   else
     echo "No .devcontainer/extra-requirements.txt found"
   fi
