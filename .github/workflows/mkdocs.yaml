@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b  # v7.3.0
@@ -39,5 +41,37 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system "mkdocs-material>=9,<10"
 
-      - name: Deploy to GitHub Pages
+      - name: Save coverage report from gh-pages
+        run: |
+          if git ls-remote --exit-code origin refs/heads/gh-pages >/dev/null 2>&1; then
+            git fetch origin refs/heads/gh-pages:gh-pages
+            if git show gh-pages:coverage/badge.json >/dev/null 2>&1; then
+              git checkout gh-pages -- coverage/
+              mv coverage /tmp/coverage-backup
+              echo "Coverage report saved"
+            else
+              echo "No coverage report found on gh-pages"
+            fi
+          else
+            echo "gh-pages branch does not exist yet, skipping backup"
+          fi
+
+      - name: Deploy documentation
         run: mkdocs gh-deploy --force --strict
+
+      - name: Restore coverage report
+        if: always()
+        run: |
+          if [ -d /tmp/coverage-backup ]; then
+            git checkout gh-pages
+            git fetch origin gh-pages
+            git reset --hard origin/gh-pages
+            cp -r /tmp/coverage-backup coverage
+            git add coverage/
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git diff --cached --quiet || git commit -m "Restore coverage report after docs deploy [skip ci]"
+            git pull --rebase origin gh-pages
+            git push origin gh-pages
+            echo "Coverage report restored"
+          fi

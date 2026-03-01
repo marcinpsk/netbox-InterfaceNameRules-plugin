@@ -51,7 +51,7 @@ services:
       POSTGRES_USER: ${DB_USER:-netbox}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-netbox}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-netbox}"]
       interval: 30s

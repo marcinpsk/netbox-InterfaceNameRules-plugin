@@ -17,8 +17,11 @@ class SpecificityColumn(tables.Column):
         super().__init__(*args, **kwargs)
 
     def render(self, value, record):
+        """Render the specificity score as a coloured badge."""
         label = record.specificity_label
-        if not record.module_type_is_regex:
+        if record.applies_to_device_interfaces:
+            css = "text-bg-warning"  # device-interface rule
+        elif not record.module_type_is_regex:
             css = "text-bg-success"  # exact FK — always highest priority
         elif record.device_type_id or record.parent_module_type_id:
             css = "text-bg-primary"  # device- or parent-scoped regex
@@ -34,18 +37,63 @@ class SpecificityColumn(tables.Column):
         )
 
     def value(self, value, record=None, **kwargs):
+        """Return the raw numeric specificity score for CSV export."""
         return value
 
 
 class InterfaceNameRuleTable(NetBoxTable):
+    """Table for displaying InterfaceNameRule objects."""
+
     pk = columns.ToggleColumn()
+    enabled = tables.TemplateColumn(
+        template_code="""
+{% if record.enabled %}
+<button type="button" class="btn btn-sm btn-success toggle-btn"
+        data-toggle-url="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}"
+        data-pk="{{ record.pk }}"
+        title="Enabled — click to disable"
+        aria-label="Toggle rule enabled">
+  <i class="mdi mdi-check"></i>
+</button>
+{% else %}
+<button type="button" class="btn btn-sm btn-secondary toggle-btn"
+        data-toggle-url="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_toggle' record.pk %}"
+        data-pk="{{ record.pk }}"
+        title="Disabled — click to enable"
+        aria-label="Toggle rule enabled">
+  <i class="mdi mdi-minus"></i>
+</button>
+{% endif %}
+""",
+        verbose_name="Enabled",
+        orderable=True,
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
     specificity_score = SpecificityColumn()
     module_type = tables.Column(verbose_name="Module Type", linkify=True)
     module_type_pattern = tables.Column(verbose_name="Pattern")
-    module_type_is_regex = columns.BooleanColumn(verbose_name="Regex")
+    module_type_is_regex = tables.TemplateColumn(
+        template_code="""
+{% if record.applies_to_device_interfaces %}
+<span class="badge text-bg-info" title="Pattern filters interface names (device-level rule — not a module type selector)">
+  <i class="mdi mdi-filter-outline"></i>
+</span>
+{% elif record.module_type_is_regex %}
+<span class="badge text-bg-success" title="Module type is matched by regex pattern">
+  <i class="mdi mdi-check"></i>
+</span>
+{% else %}
+<span class="text-muted" title="Exact module type match (FK)">—</span>
+{% endif %}
+""",
+        verbose_name="Regex",
+        orderable=True,
+        attrs={"td": {"class": "text-center"}, "th": {"class": "text-center"}},
+    )
     parent_module_type = tables.Column(verbose_name="Parent Module Type", linkify=True)
     device_type = tables.Column(verbose_name="Device Type", linkify=True)
     platform = tables.Column(verbose_name="Platform", linkify=True)
+    applies_to_device_interfaces = columns.BooleanColumn(verbose_name="Device Ifaces")
     name_template = tables.Column(verbose_name="Name Template")
     channel_count = tables.Column(verbose_name="Channels")
     channel_start = tables.Column(verbose_name="Ch. Start")
@@ -67,6 +115,7 @@ class InterfaceNameRuleTable(NetBoxTable):
         fields = (
             "pk",
             "id",
+            "enabled",
             "specificity_score",
             "module_type",
             "module_type_pattern",
@@ -74,6 +123,7 @@ class InterfaceNameRuleTable(NetBoxTable):
             "parent_module_type",
             "device_type",
             "platform",
+            "applies_to_device_interfaces",
             "name_template",
             "channel_count",
             "channel_start",
@@ -82,6 +132,8 @@ class InterfaceNameRuleTable(NetBoxTable):
         )
         default_columns = (
             "pk",
+            "id",
+            "enabled",
             "specificity_score",
             "module_type",
             "module_type_pattern",
@@ -89,9 +141,11 @@ class InterfaceNameRuleTable(NetBoxTable):
             "parent_module_type",
             "device_type",
             "platform",
+            "applies_to_device_interfaces",
             "name_template",
             "channel_count",
             "description",
             "actions",
         )
+        row_attrs = {"class": lambda record: "" if record.enabled else "text-muted opacity-50"}
         attrs = {"class": "table table-hover table-headings table-striped"}

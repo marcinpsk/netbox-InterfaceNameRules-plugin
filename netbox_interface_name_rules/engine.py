@@ -16,51 +16,80 @@ from django.db.models.functions import Length
 logger = logging.getLogger(__name__)
 
 
-def apply_interface_name_rules(module, module_bay):
+def _get_parent_module_type(module_bay):
+    """Return the module type of the module installed in the parent bay, or None.
+
+    Used by ``apply_interface_name_rules`` to scope rules to a specific parent
+    module type (e.g., SFP inside a CVR-X2-SFP converter).
+    """
+    if module_bay.parent:
+        parent_bay = module_bay.parent
+        if hasattr(parent_bay, "installed_module") and parent_bay.installed_module:
+            return parent_bay.installed_module.module_type
+    return None
+
+
+def _collect_unrenamed(interfaces, rule, raw_names, force_reapply):
+    """Return the subset of *interfaces* that should be processed by the rule.
+
+    Normal (non-force) mode: only interfaces whose current name is still in the
+    raw template names (idempotency guard).
+
+    force_reapply, non-channel: all interfaces (e.g. vc_position changed).
+
+    force_reapply, channel rule: one interface per base name, matching when the
+    full base OR its last path segment is in *raw_names*; prefers the ":0"
+    channel to avoid duplicate-name errors on re-apply.
+    """
+    if not force_reapply:
+        return [i for i in interfaces if i.name in raw_names]
+    if rule.channel_count == 0:
+        return interfaces
+    # Breakout + force_reapply: deduplicate by base, prefer ":0"
+    seen_bases: dict = {}
+    for i in interfaces:
+        base = i.name.rsplit(":", 1)[0]
+        # Also match when the last path segment equals a raw name (already-renamed bases).
+        if base in raw_names or base.rsplit("/", 1)[-1] in raw_names:
+            if base not in seen_bases or i.name.endswith(":0"):
+                seen_bases[base] = i
+    return list(seen_bases.values())
+
+
+def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
     Looks up a matching rule for (module_type, parent_module_type, device_type, platform)
     and renames interfaces created by NetBox's template instantiation.
 
     Only processes interfaces whose name still matches the raw bay position
-    (i.e., haven't been renamed yet), ensuring idempotency.
+    (i.e., haven't been renamed yet), ensuring idempotency.  Pass
+    ``force_reapply=True`` to skip this check and re-apply rules to ALL
+    module interfaces (used when vc_position or other variables change).
 
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
+
     """
     from dcim.models import Interface
 
-    module_type = module.module_type
-
-    # Determine parent module type (if installed inside another module)
-    parent_module_type = None
-    if module_bay.parent:
-        parent_bay = module_bay.parent
-        if hasattr(parent_bay, "installed_module") and parent_bay.installed_module:
-            parent_module_type = parent_bay.installed_module.module_type
-
-    # Look up rule: most specific first, then broader matches
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module_type, parent_module_type, device_type, platform)
+    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
         return 0
 
-    variables = build_variables(module_bay)
+    variables = build_variables(module_bay, device=module.device)
     interfaces = list(Interface.objects.filter(module=module))
 
     if not interfaces:
         return 0
 
-    # Determine the raw interface names NetBox assigned from templates.
-    # Use NetBox's own resolve_name() to handle nested modules correctly
-    # (e.g., {module} walks the module tree for converters).
-    raw_names = _get_raw_interface_names(module)
-    if not raw_names:
-        # Fallback when module type has no InterfaceTemplates
-        raw_names = {variables["bay_position"]}
-    unrenamed = [i for i in interfaces if i.name in raw_names]
+    # Determine raw names NetBox assigned from templates; fall back to bay_position.
+    raw_names = _get_raw_interface_names(module) or {variables["bay_position"]}
+    unrenamed = _collect_unrenamed(interfaces, rule, raw_names, force_reapply)
+
     if not unrenamed:
         return 0  # Already renamed (idempotent guard)
 
@@ -71,13 +100,139 @@ def apply_interface_name_rules(module, module_bay):
         renamed += _apply_rule_to_interface(rule, iface, vars_copy, module)
 
     if unrenamed and renamed == 0:
-        # All interfaces already have the names the rule would produce.
-        # This can happen when a newer NetBox version generates correct names
-        # natively (e.g. via improved template resolution), making this rule
-        # potentially obsolete — at least for this module type/context.
+        # All interfaces already have the names the rule would produce — flag as
+        # potentially obsolete (e.g., newer NetBox generates correct names natively).
         _flag_rule_potentially_deprecated(rule)
 
     return renamed
+
+
+def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
+    """Attempt to rename a single device-level interface using *rule*.
+
+    Returns ``True`` if the interface was successfully renamed, ``False`` otherwise.
+    Mutates ``renamed_pks`` on success.
+    """
+    if iface.pk in renamed_pks:
+        return False  # Already renamed by a higher-priority rule
+
+    if rule.module_type_pattern:
+        try:
+            if not re.fullmatch(rule.module_type_pattern, iface.name):
+                return False
+        except re.error:
+            return False
+
+    port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
+    variables = {"vc_position": vc_position, "base": iface.name, "port": port}
+
+    try:
+        new_name = evaluate_name_template(rule.name_template, variables)
+    except Exception:
+        logger.exception(
+            "Failed to evaluate template %r for interface %s (rule %s)",
+            rule.name_template,
+            iface.name,
+            rule.pk,
+        )
+        return False
+
+    if new_name == iface.name:
+        return False
+
+    old_name = iface.name
+    iface.name = new_name
+    try:
+        iface.full_clean()
+    except Exception:
+        logger.exception(
+            "Validation failed for device interface %s → %s (rule %s, device %s)",
+            old_name,
+            new_name,
+            rule.pk,
+            device.pk,
+        )
+        iface.name = old_name
+        return False
+    try:
+        iface.save()
+    except Exception:
+        logger.exception(
+            "DB save failed for device interface %s → %s (rule %s, device %s)",
+            old_name,
+            new_name,
+            rule.pk,
+            device.pk,
+        )
+        iface.name = old_name
+        return False
+
+    renamed_pks.add(iface.pk)
+    logger.debug("Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk)
+    return True
+
+
+def apply_device_interface_rules(device):
+    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
+
+    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
+    type and platform, then renames any matching interfaces using the name_template.
+
+    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
+    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
+
+    Returns the number of interfaces renamed.
+    """
+    from dcim.models import Interface
+
+    from .models import InterfaceNameRule
+
+    if not getattr(device, "virtual_chassis_id", None):
+        return 0  # Only rename for VC members (vc_position must be set)
+
+    if device.vc_position is None:
+        return 0  # vc_position unset (e.g. VC master before position assigned)
+
+    vc_position = str(device.vc_position)
+    device_type = getattr(device, "device_type", None)
+    platform = getattr(device, "platform", None)
+
+    from django.db.models import Q
+
+    rules = list(
+        InterfaceNameRule.objects.filter(
+            applies_to_device_interfaces=True,
+            enabled=True,
+        )
+        .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
+        .filter(Q(platform=platform) | Q(platform__isnull=True))
+    )
+    # Sort Python-side: specificity_score descending, then module_type_pattern length
+    # descending (for device-interface rules with ties), then pk ascending for stability.
+    # (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)
+    rules.sort(
+        key=lambda r: (
+            -r.specificity_score,
+            -(len(r.module_type_pattern or "") if r.applies_to_device_interfaces else 0),
+            r.pk,
+        )
+    )
+
+    if not rules:
+        return 0
+
+    interfaces = list(Interface.objects.filter(device=device, module=None))
+    if not interfaces:
+        return 0
+
+    total = 0
+    renamed_pks: set[int] = set()
+    for rule in rules:
+        for iface in interfaces:
+            if _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
+                total += 1
+
+    return total
 
 
 def _get_raw_interface_names(module):
@@ -128,6 +283,80 @@ def _flag_rule_potentially_deprecated(rule):
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
 
 
+def _scope_filter(field: str, value) -> dict:
+    """Return ``{field: value}`` or ``{field__isnull: True}`` for a nullable FK.
+
+    Avoids repeating the ``if value is None`` pattern throughout rule lookup.
+    """
+    if value is None:
+        return {f"{field}__isnull": True}
+    return {field: value}
+
+
+def _build_candidates(parent_module_type, device_type, platform) -> list:
+    """Build ordered list of (pmt, dt, pl) tuples from most to least specific.
+
+    Each argument expands to ``[value, None]`` when provided, or ``[None]``
+    when already absent.  Deduplication ensures no key appears twice (which
+    would happen when multiple inputs are None).
+    """
+    seen: set = set()
+    candidates = []
+    pmt_opts = [parent_module_type, None] if parent_module_type else [None]
+    dt_opts = [device_type, None] if device_type else [None]
+    pl_opts = [platform, None] if platform else [None]
+    for pmt in pmt_opts:
+        for dt in dt_opts:
+            for pl in pl_opts:
+                key = (pmt, dt, pl)
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(key)
+    return candidates
+
+
+def _find_exact_match(module_type, candidates):
+    """Tier 1: return the first enabled exact-FK rule in specificity order, or None."""
+    from .models import InterfaceNameRule
+
+    for pmt, dt, pl in candidates:
+        filters = {"module_type": module_type, "module_type_is_regex": False, "enabled": True}
+        filters.update(_scope_filter("parent_module_type", pmt))
+        filters.update(_scope_filter("device_type", dt))
+        filters.update(_scope_filter("platform", pl))
+        rule = InterfaceNameRule.objects.filter(**filters).first()
+        if rule:
+            return rule
+    return None
+
+
+def _find_regex_match(model_name: str, candidates):
+    """Tier 2: return the first enabled regex rule whose pattern fullmatches *model_name*, or None.
+
+    Tries candidates in specificity order; within each level longer patterns
+    are tried first (more specific).  Invalid regex patterns are silently skipped.
+    """
+    from .models import InterfaceNameRule
+
+    for pmt, dt, pl in candidates:
+        filters = {"module_type_is_regex": True, "enabled": True}
+        filters.update(_scope_filter("parent_module_type", pmt))
+        filters.update(_scope_filter("device_type", dt))
+        filters.update(_scope_filter("platform", pl))
+        qs = (
+            InterfaceNameRule.objects.filter(**filters)
+            .annotate(pattern_length=Length("module_type_pattern"))
+            .order_by("-pattern_length", "pk")
+        )
+        for rule in qs:
+            try:
+                if re.fullmatch(rule.module_type_pattern, model_name):
+                    return rule
+            except re.error:
+                continue
+    return None
+
+
 def find_matching_rule(module_type, parent_module_type, device_type, platform=None):
     """Find the most specific InterfaceNameRule matching the context.
 
@@ -142,114 +371,97 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
 
     Returns the first matching rule, or None if no rule matches.
     """
-    from .models import InterfaceNameRule
-
-    # Build candidate (parent_module_type, device_type, platform) tuples ordered
-    # most-specific to least-specific, deduplicating when inputs are None.
-    seen: set = set()
-    candidates = []
-    for pmt in [parent_module_type, None] if parent_module_type else [None]:
-        for dt in [device_type, None] if device_type else [None]:
-            for pl in [platform, None] if platform else [None]:
-                key = (pmt, dt, pl)
-                if key not in seen:
-                    seen.add(key)
-                    candidates.append(key)
-
-    # Tier 1: exact FK match
-    for pmt, dt, pl in candidates:
-        filters: dict = {"module_type": module_type, "module_type_is_regex": False}
-        if pmt is None:
-            filters["parent_module_type__isnull"] = True
-        else:
-            filters["parent_module_type"] = pmt
-        if dt is None:
-            filters["device_type__isnull"] = True
-        else:
-            filters["device_type"] = dt
-        if pl is None:
-            filters["platform__isnull"] = True
-        else:
-            filters["platform"] = pl
-        rule = InterfaceNameRule.objects.filter(**filters).first()
-        if rule:
-            return rule
-
-    # Tier 2: regex pattern match — longer patterns are tried first (more specific)
-    model_name = module_type.model
-    for pmt, dt, pl in candidates:
-        filters = {"module_type_is_regex": True}
-        if pmt is None:
-            filters["parent_module_type__isnull"] = True
-        else:
-            filters["parent_module_type"] = pmt
-        if dt is None:
-            filters["device_type__isnull"] = True
-        else:
-            filters["device_type"] = dt
-        if pl is None:
-            filters["platform__isnull"] = True
-        else:
-            filters["platform"] = pl
-        qs = (
-            InterfaceNameRule.objects.filter(**filters)
-            .annotate(pattern_length=Length("module_type_pattern"))
-            .order_by("-pattern_length", "pk")
-        )
-        for rule in qs:
-            try:
-                if re.fullmatch(rule.module_type_pattern, model_name):
-                    return rule
-            except re.error:
-                continue
-
-    return None
+    candidates = _build_candidates(parent_module_type, device_type, platform)
+    return _find_exact_match(module_type, candidates) or _find_regex_match(module_type.model, candidates)
 
 
-def build_variables(module_bay):
+def _extract_trailing_digits(s: str) -> str:
+    r"""Return the trailing digit run of *s* without regex backtracking.
+
+    Pure O(n) string scan — eliminates the polynomial backtracking risk that
+    arises from using ``re.search(r"(\d+)$", ...)`` on strings ending in a
+    non-digit character (e.g. ``"1" * n + "x"`` would cause O(n²) steps).
+
+    Returns an empty string when *s* has no trailing digits.
+    """
+    i = len(s)
+    while i > 0 and s[i - 1].isdigit():
+        i -= 1
+    return s[i:]
+
+
+def _resolve_bay_position(module_bay):
+    """Return (bay_position, bay_position_num) from a module bay's position field.
+
+    Handles template expressions like ``{module}`` by extracting the trailing
+    digit from the bay name.  Falls back to ``"0"`` if no digit is found.
+    """
+    bay_position = module_bay.position or "0"
+    if bay_position.startswith("{"):
+        digits = _extract_trailing_digits(module_bay.name)
+        bay_position = digits if digits else "0"
+    digits = _extract_trailing_digits(bay_position)
+    bay_position_num = digits if digits else bay_position
+    return bay_position, bay_position_num
+
+
+def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+    """Return the ``slot`` variable from the module bay hierarchy.
+
+    When the bay has a parent bay, slot comes from the parent (or grandparent
+    when two levels of nesting exist).  When the bay belongs to an installed
+    module with its own bay, slot comes from that module's bay position.
+    Falls back to ``bay_position_num``.
+    """
+    if module_bay.parent:
+        parent_bay = module_bay.parent
+        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
+            return parent_bay.parent.position or parent_bay_position
+        return parent_bay_position
+    if hasattr(module_bay, "module") and module_bay.module:
+        owner_module = module_bay.module
+        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
+            return owner_module.module_bay.position or bay_position_num
+    return bay_position_num
+
+
+def build_variables(module_bay, device=None):
     """Build template variable dict from a module bay's position context.
 
     Extracts numeric and raw position values from the bay and its parent chain,
     producing the variables available for name_template substitution.
 
     Returns a dict with keys: slot, bay_position, bay_position_num,
-    parent_bay_position, sfp_slot.
+    parent_bay_position, sfp_slot, and optionally vc_position.
+
+    ``vc_position`` is only injected when *device* is a Virtual Chassis member
+    (device.virtual_chassis_id is set).  Templates using ``{vc_position}`` on a
+    non-VC device will raise ValueError during evaluation — this is intentional.
+    Note: Juniper VC positions start at 0, so 0 is a valid real-world value and
+    cannot be used as a "not in VC" sentinel.
     """
-    bay_position = module_bay.position or "0"
-    # If position is a template expression (e.g., {module}), extract from bay name
-    if bay_position.startswith("{"):
-        match = re.search(r"(\d+)$", module_bay.name)
-        bay_position = match.group(1) if match else "0"
-    # Extract numeric-only version for arithmetic (e.g., "swp1" → "1")
-    bay_position_num_match = re.search(r"(\d+)$", bay_position)
-    bay_position_num = bay_position_num_match.group(1) if bay_position_num_match else bay_position
+    bay_position, bay_position_num = _resolve_bay_position(module_bay)
 
     parent_bay_position = "0"
-    sfp_slot = bay_position_num
-    slot = bay_position_num
-
     if module_bay.parent:
-        parent_bay = module_bay.parent
-        parent_bay_position = parent_bay.position or "0"
-        # slot is typically the top-level module position
-        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
-            grandparent = parent_bay.parent
-            slot = grandparent.position or parent_bay_position
-        else:
-            slot = parent_bay_position
-    elif hasattr(module_bay, "module") and module_bay.module:
-        # Bay belongs to an installed module (not nested, but module-scoped)
-        owner_module = module_bay.module
-        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
-            slot = owner_module.module_bay.position or bay_position
+        parent_bay_position = module_bay.parent.position or "0"
 
-    return {
+    slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
+
+    result = {
         "slot": slot,
         "bay_position": bay_position,
         "bay_position_num": bay_position_num,
         "parent_bay_position": parent_bay_position,
-        "sfp_slot": sfp_slot,
+        "sfp_slot": bay_position_num,
     }
+    if (
+        device is not None
+        and getattr(device, "virtual_chassis_id", None) is not None
+        and device.vc_position is not None
+    ):
+        result["vc_position"] = str(device.vc_position)
+    return result
 
 
 def _apply_rule_to_interface(rule, iface, variables, module):
@@ -360,6 +572,95 @@ def has_applicable_interfaces(rule) -> bool:
         return False
 
 
+def _build_module_qs(rule):
+    """Return a Module queryset filtered to the rule's scope (module type, parent, device, platform).
+
+    Shared by ``find_interfaces_for_rule`` and ``apply_rule_to_existing`` to avoid
+    duplicating the filtering logic.
+    """
+    from dcim.models import Module
+
+    if rule.module_type_is_regex:
+        qs = Module.objects.filter(module_type__in=_matching_moduletype_pks(rule.module_type_pattern))
+    else:
+        qs = Module.objects.filter(module_type=rule.module_type)
+    if rule.parent_module_type:
+        qs = qs.filter(module_bay__parent__installed_module__module_type=rule.parent_module_type)
+    if rule.device_type:
+        qs = qs.filter(device__device_type=rule.device_type)
+    if rule.platform:
+        qs = qs.filter(device__platform=rule.platform)
+    return qs
+
+
+def _evaluate_plain_interface(rule, module, iface, variables) -> dict | None:
+    """Return a result dict if *iface* would be renamed by *rule*, else None."""
+    vars_copy = {**variables, "base": iface.name}
+    try:
+        new_name = evaluate_name_template(rule.name_template, vars_copy)
+    except ValueError as exc:
+        new_name = f"<error: {exc}>"
+    if new_name == iface.name:
+        return None
+    return {"module": module, "interface": iface, "current_name": iface.name, "new_names": [new_name]}
+
+
+def _channel_rule_entry(rule, module, ifaces, variables) -> dict | None:
+    """Return a result dict if the channel rule would change any name for this module, else None."""
+    base_iface = _find_channel_base(rule, ifaces, variables)
+    vars_copy = {**variables, "base": base_iface.name}
+    expected_names = []
+    try:
+        for ch in range(rule.channel_count):
+            expected_names.append(
+                evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
+            )
+    except ValueError as exc:
+        expected_names = [f"<error: {exc}>"]
+    existing_names = {i.name for i in ifaces}
+    # Report if any channel name is missing or the base itself needs renaming
+    if any(n not in existing_names for n in expected_names) or (
+        expected_names and expected_names[0] != base_iface.name
+    ):
+        return {"module": module, "interface": base_iface, "current_name": base_iface.name, "new_names": expected_names}
+    return None
+
+
+def _count_remaining_interfaces(module_qs, processed_pks) -> int:
+    """Count interfaces in modules not yet visited during a find_interfaces_for_rule scan."""
+    from dcim.models import Interface
+
+    return Interface.objects.filter(module__in=module_qs.exclude(pk__in=processed_pks)).count()
+
+
+def _process_channel_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
+    """Process one module for a channel rule.  Returns (checked_count, should_stop)."""
+    checked = len(ifaces)
+    if not ifaces:
+        return checked, False
+    entry = _channel_rule_entry(rule, module, ifaces, variables)
+    if entry:
+        results.append(entry)
+        if limit is not None and len(results) >= limit:
+            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
+    return checked, False
+
+
+def _process_plain_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
+    """Process one module for a plain (non-channel) rule.  Returns (checked_count, should_stop)."""
+    checked = 0
+    for iface_idx, iface in enumerate(ifaces):
+        checked += 1
+        entry = _evaluate_plain_interface(rule, module, iface, variables)
+        if entry:
+            results.append(entry)
+            if limit is not None and len(results) >= limit:
+                checked += len(ifaces) - (iface_idx + 1)
+                checked += _count_remaining_interfaces(module_qs, processed_pks)
+                return checked, True
+    return checked, False
+
+
 def find_interfaces_for_rule(rule, limit=None):
     """Find interfaces that would be renamed by applying the given rule retroactively.
 
@@ -379,99 +680,30 @@ def find_interfaces_for_rule(rule, limit=None):
     If *limit* is set the list is truncated after that many changed entries, but
     *total_checked* always reflects the full count of interfaces examined.
     """
-    from dcim.models import Interface, Module
+    from dcim.models import Interface
 
-    if rule.module_type_is_regex:
-        module_qs = Module.objects.filter(module_type__in=_matching_moduletype_pks(rule.module_type_pattern))
-    else:
-        module_qs = Module.objects.filter(module_type=rule.module_type)
-
-    if rule.parent_module_type:
-        module_qs = module_qs.filter(module_bay__parent__installed_module__module_type=rule.parent_module_type)
-    if rule.device_type:
-        module_qs = module_qs.filter(device__device_type=rule.device_type)
-    if rule.platform:
-        module_qs = module_qs.filter(device__platform=rule.platform)
-
-    module_qs = module_qs.select_related(
+    module_qs = _build_module_qs(rule).select_related(
         "module_type",
         "device",
         "device__device_type",
         "device__platform",
+        "device__virtual_chassis",
         "module_bay",
         "module_bay__parent",
     )
+    process_fn = _process_channel_module if rule.channel_count > 0 else _process_plain_module
 
     processed_pks = []
     results = []
     total_checked = 0
     for module in module_qs:
         processed_pks.append(module.pk)
-        variables = build_variables(module.module_bay)
-        ifaces_in_module = list(Interface.objects.filter(module=module).order_by("name"))
-
-        if rule.channel_count > 0:
-            # Channel rules: count interfaces as a unit (processed all-at-once below).
-            total_checked += len(ifaces_in_module)
-            if not ifaces_in_module:
-                continue
-            base_iface = _find_channel_base(rule, ifaces_in_module, variables)
-            vars_copy = dict(variables)
-            vars_copy["base"] = base_iface.name
-            expected_names = []
-            try:
-                for ch in range(rule.channel_count):
-                    vars_ch = dict(vars_copy)
-                    vars_ch["channel"] = str(rule.channel_start + ch)
-                    expected_names.append(evaluate_name_template(rule.name_template, vars_ch))
-            except ValueError as exc:
-                expected_names = [f"<error: {exc}>"]
-
-            existing_names = {i.name for i in ifaces_in_module}
-            # Report if any expected channel is missing, or the base needs renaming
-            if any(n not in existing_names for n in expected_names) or (
-                expected_names and expected_names[0] != base_iface.name
-            ):
-                results.append(
-                    {
-                        "module": module,
-                        "interface": base_iface,
-                        "current_name": base_iface.name,
-                        "new_names": expected_names,
-                    }
-                )
-                if limit is not None and len(results) >= limit:
-                    total_checked += Interface.objects.filter(
-                        module__in=module_qs.exclude(pk__in=processed_pks)
-                    ).count()
-                    return results, total_checked
-        else:
-            for iface_idx, iface in enumerate(ifaces_in_module):
-                total_checked += 1  # count each interface as we iterate it
-                vars_copy = dict(variables)
-                vars_copy["base"] = iface.name
-                try:
-                    new_names = [evaluate_name_template(rule.name_template, vars_copy)]
-                except ValueError as exc:
-                    new_names = [f"<error: {exc}>"]
-
-                if new_names[0] != iface.name:
-                    results.append(
-                        {
-                            "module": module,
-                            "interface": iface,
-                            "current_name": iface.name,
-                            "new_names": new_names,
-                        }
-                    )
-                    if limit is not None and len(results) >= limit:
-                        # Count remaining interfaces in the current module (not yet iterated)
-                        total_checked += len(ifaces_in_module) - (iface_idx + 1)
-                        # Count interfaces in modules not yet started
-                        total_checked += Interface.objects.filter(
-                            module__in=module_qs.exclude(pk__in=processed_pks)
-                        ).count()
-                        return results, total_checked
+        variables = build_variables(module.module_bay, device=module.device)
+        ifaces = list(Interface.objects.filter(module=module).order_by("name"))
+        checked, stop = process_fn(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+        total_checked += checked
+        if stop:
+            return results, total_checked
 
     return results, total_checked
 
@@ -494,27 +726,20 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
 
     Returns the number of interfaces renamed/created.
     """
-    from dcim.models import Interface, Module
+    from dcim.models import Interface
 
     id_set = frozenset(interface_ids) if interface_ids is not None else None
     if id_set is not None and not id_set:
         return 0
 
-    if rule.module_type_is_regex:
-        module_qs = Module.objects.filter(module_type__in=_matching_moduletype_pks(rule.module_type_pattern))
-    else:
-        module_qs = Module.objects.filter(module_type=rule.module_type)
+    if not rule.enabled:
+        return 0
 
-    if rule.parent_module_type:
-        module_qs = module_qs.filter(module_bay__parent__installed_module__module_type=rule.parent_module_type)
-    if rule.device_type:
-        module_qs = module_qs.filter(device__device_type=rule.device_type)
-    if rule.platform:
-        module_qs = module_qs.filter(device__platform=rule.platform)
+    module_qs = _build_module_qs(rule)
 
     count = 0
-    for module in module_qs.select_related("module_bay", "module_type", "device"):
-        variables = build_variables(module.module_bay)
+    for module in module_qs.select_related("module_bay", "module_type", "device", "device__virtual_chassis"):
+        variables = build_variables(module.module_bay, device=module.device)
 
         if rule.channel_count > 0:
             # Channel rule: process module ONCE using the best base interface.

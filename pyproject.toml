@@ -43,10 +43,33 @@ pythonpath = ["/opt/netbox/netbox"]
 line-length = 120
 
 [tool.ruff.lint]
-ignore = ["E501", "F403", "F405"]
+select = ["E", "F", "D"]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "F403",   # star imports
+    "F405",   # may be undefined from star import
+    "D100",   # missing docstring in public module
+    "D104",   # missing docstring in public package
+    "D105",   # missing docstring in magic method
+    "D106",   # missing docstring in public nested class (Django Meta, etc.)
+    "D107",   # missing docstring in __init__
+    "D203",   # 1 blank line before class docstring (conflicts with D211)
+    "D213",   # multi-line summary second line (conflicts with D212)
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"*/migrations/*.py" = ["D"]
+"*/tests/*.py" = ["D"]
+".devcontainer/**" = ["D"]
+
+[tool.coverage.run]
+source = ["netbox_interface_name_rules"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

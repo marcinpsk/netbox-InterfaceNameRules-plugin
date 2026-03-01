@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+name: Update coverage report
+
+on:
+  workflow_run:
+    workflows: ["Test with supported NetBox and Python versions"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  publish-coverage:
+    runs-on: ubuntu-latest
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event == 'push'
+    permissions:
+      contents: write
+      actions: read
+
+    concurrency:
+      group: publish-gh-pages
+      cancel-in-progress: false
+
+    steps:
+      - name: Download coverage report
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4
+        with:
+          name: coverage-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: coverage-report
+
+      - name: Generate badge JSON
+        run: |
+          TOTAL=$(python3 -c "import json; print(json.load(open('coverage-report/coverage.json'))['totals']['percent_covered_display'])")
+          INT=${TOTAL%.*}
+          if [ "$INT" -ge 90 ]; then COLOR="brightgreen"
+          elif [ "$INT" -ge 80 ]; then COLOR="green"
+          elif [ "$INT" -ge 70 ]; then COLOR="yellow"
+          else COLOR="red"; fi
+          echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${TOTAL}%\",\"color\":\"${COLOR}\"}" > coverage-report/badge.json
+          echo "Coverage: ${TOTAL}% (${COLOR})"
+
+      - name: Bootstrap gh-pages if absent
+        # Create an orphan gh-pages branch on first run so the subsequent
+        # checkout step never fails on a brand-new repository.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git ls-remote --exit-code \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+              refs/heads/gh-pages >/dev/null 2>&1; then
+            echo "gh-pages branch absent — bootstrapping..."
+            git init _gh_bootstrap
+            cd _gh_bootstrap
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout --orphan gh-pages
+            git commit --allow-empty -m "Initialize gh-pages [skip ci]"
+            git remote add origin \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+            git push origin gh-pages
+            echo "gh-pages branch created"
+          fi
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Update coverage on gh-pages
+        working-directory: gh-pages
+        run: |
+          rm -rf coverage
+          cp -r ../coverage-report/htmlcov coverage
+          cp ../coverage-report/badge.json coverage/badge.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add coverage/
+          git diff --cached --quiet || git commit -m "Update coverage report [skip ci]"
+          # Rebase onto remote before push to handle concurrent gh-pages updates
+          git pull --rebase origin gh-pages
+          git push origin gh-pages

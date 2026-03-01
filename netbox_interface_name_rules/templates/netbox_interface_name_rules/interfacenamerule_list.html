@@ -4,7 +4,10 @@
 
 {% block content %}
     <div class="card mb-3" id="interface-name-rules-help">
-        <div class="card-header" style="cursor: pointer;" onclick="toggleRulesHelp()">
+        <div class="card-header" role="button" tabindex="0" style="cursor: pointer;"
+             id="rules-help-header" aria-expanded="true" aria-controls="rules-help-body"
+             onclick="toggleRulesHelp()"
+             onkeydown="if(event.key==='Enter'||event.key===' '){toggleRulesHelp();event.preventDefault();}">
             <h5 class="card-title mb-0 d-flex align-items-center">
                 <i class="mdi mdi-information-outline me-2"></i>
                 Interface Name Rules Reference
@@ -16,23 +19,35 @@
                position-based naming can't produce the correct interface name.</p>
             <p>Covers <strong>converter offset</strong> (e.g., CVR-X2-SFP + GLC-T),
                <strong>breakout transceivers</strong> (e.g., QSFP+ 4x10G with channel numbering),
-               and <strong>platform-specific naming</strong> (e.g., Juniper et-/xe-/ge- prefixes).</p>
+               <strong>platform-specific naming</strong> (e.g., Juniper et-/xe-/ge- prefixes),
+               and <strong>Virtual Chassis device port renaming</strong> (e.g., Gi0/1 → Gi2/1 on VC member 2).</p>
 
-            <p><strong>Signal-driven:</strong> Rules are applied automatically via Django's
-               <code>post_save</code> signal on the Module model — no manual invocation needed.
-               Any plugin or UI action that creates a Module will trigger matching rules.</p>
+            <p><strong>Signal-driven:</strong> Rules run automatically via two Django signals:</p>
+            <ul>
+                <li><code>post_save</code> on <strong>Module</strong> — fires after a module is installed into a device bay (primary path for transceiver/linecard naming).</li>
+                <li><code>post_save</code> on <strong>Device</strong> — fires after VC position changes (<code>vc_position</code> or <code>virtual_chassis</code> modified); triggers device-level interface renaming for VC members.</li>
+            </ul>
+            <p>Both paths use <code>on_commit</code> deferred execution so that all interfaces are in the database before renaming begins.</p>
+
+            <p><strong>Device interface rules</strong> (<code>Applies to Device Interfaces</code> checkbox) target native device-type interfaces
+               (<code>module=None</code>) rather than module-installed interfaces. Use these to rename VC member ports when the device
+               joins a stack or changes position. The <code>Module Type Pattern</code> field acts as an interface-name filter (regex) instead of a module type selector.</p>
 
             <h6 class="mt-3">Supported Template Variables</h6>
             <table class="table table-sm table-bordered" style="max-width: 750px;">
-                <thead><tr><th style="width: 200px;">Variable</th><th>Description</th></tr></thead>
+                <thead>
+                    <tr><th style="width: 200px;">Variable</th><th>Rule type</th><th>Description</th></tr>
+                </thead>
                 <tbody>
-                    <tr><td><code>{slot}</code></td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
-                    <tr><td><code>{bay_position}</code></td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
-                    <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
-                    <tr><td><code>{parent_bay_position}</code></td><td>Position of the parent module's bay</td></tr>
-                    <tr><td><code>{sfp_slot}</code></td><td>Numeric sub-bay index within the parent module</td></tr>
-                    <tr><td><code>{base}</code></td><td>Original interface name from the NetBox module template</td></tr>
-                    <tr><td><code>{channel}</code></td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
+                    <tr><td><code>{slot}</code></td><td>Module</td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
+                    <tr><td><code>{bay_position}</code></td><td>Module</td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
+                    <tr><td><code>{bay_position_num}</code></td><td>Module</td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
+                    <tr><td><code>{parent_bay_position}</code></td><td>Module</td><td>Position of the parent module's bay</td></tr>
+                    <tr><td><code>{sfp_slot}</code></td><td>Module</td><td>Numeric sub-bay index within the parent module</td></tr>
+                    <tr><td><code>{base}</code></td><td>Both</td><td>Original interface name from the template (or current name for device-level rules)</td></tr>
+                    <tr><td><code>{port}</code></td><td>Device</td><td>Segment after the last "/" in the current interface name (e.g., "Gi0/1" &rarr; "1"); full name if no "/"</td></tr>
+                    <tr><td><code>{channel}</code></td><td>Module</td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
+                    <tr><td><code>{vc_position}</code></td><td>Both</td><td>Virtual Chassis member position (<code>device.vc_position</code>); requires device to be in a VC</td></tr>
                 </tbody>
             </table>
 
@@ -50,22 +65,34 @@
                     <code>et-0/0/{bay_position}</code> (scoped via Parent Device Type)</li>
                 <li><strong>UfiSpace breakout:</strong> QSFP-100G-LR4 on S9610-36D &rarr;
                     <code>swp{bay_position_num}s{channel}</code> (Channels=2, Ch. Start=1)</li>
+                <li><strong>Virtual Chassis linecard:</strong> VC-LINECARD on stack member &rarr;
+                    <code>Gi{vc_position}/{bay_position_num}</code> (requires device to be in a Virtual Chassis)</li>
+                <li><strong>VC device ports (Cisco):</strong> GigabitEthernet1/0/3 on stack member 2 &rarr;
+                    <code>GigabitEthernet{vc_position}/0/{port}</code> &rarr; GigabitEthernet2/0/3
+                    (device-level rule, pattern <code>GigabitEthernet\d+/\d+/\d+</code>)</li>
+                <li><strong>VC device ports (Juniper):</strong> ge-0/0/2 on VC member 1 &rarr;
+                    <code>ge-{vc_position}/0/{port}</code> &rarr; ge-1/0/2
+                    (device-level rule, pattern <code>ge-\d+/\d+/\d+</code>)</li>
+                <li><strong>VC device ports (Arista):</strong> Ethernet1/3 on VC member 2 &rarr;
+                    <code>Ethernet{vc_position}/{port}</code> &rarr; Ethernet2/3
+                    (device-level rule, pattern <code>Ethernet\d+/\d+</code>)</li>
             </ul>
 
             {% if supports_module_path %}
             <div class="alert alert-success mt-3 mb-0">
                 <i class="mdi mdi-check-circle me-1"></i>
-                <strong>NetBox &ge; {{ module_path_min_version }}:</strong>
-                <code>{module_path}</code> is supported. Platform naming rules (e.g., <code>et-0/0/{bay_position}</code>)
+                <strong><code>{module_path}</code> supported:</strong>
+                Platform naming rules (e.g., <code>et-0/0/{bay_position}</code>)
                 may be replaceable by using <code>{module_path}</code> in module type interface templates directly.
                 Converter offset and breakout rules are still needed.
             </div>
             {% else %}
             <div class="alert alert-warning mt-3 mb-0">
                 <i class="mdi mdi-information-outline me-1"></i>
-                <strong>NetBox &lt; {{ module_path_min_version }}:</strong>
-                <code>{module_path}</code> template token not available. Platform naming rules
+                <strong><code>{module_path}</code> not available:</strong>
+                Platform naming rules
                 (e.g., Juniper <code>et-0/0/{bay_position}</code>) are required for correct interface naming.
+                Upgrade NetBox to get native <code>{module_path}</code> support.
             </div>
             {% endif %}
         </div>
@@ -73,18 +100,64 @@
     <script>
         function toggleRulesHelp() {
             const body = document.getElementById('rules-help-body');
+            const header = document.getElementById('rules-help-header');
             const chevron = document.getElementById('rules-help-chevron');
             const collapsed = body.style.display === 'none';
             body.style.display = collapsed ? '' : 'none';
             chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-up' : 'mdi ms-auto mdi-chevron-down';
+            header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
             localStorage.setItem('rulesHelpCollapsed', collapsed ? '' : '1');
         }
         document.addEventListener('DOMContentLoaded', function() {
             const collapsed = localStorage.getItem('rulesHelpCollapsed') === '1';
             const body = document.getElementById('rules-help-body');
+            const header = document.getElementById('rules-help-header');
             const chevron = document.getElementById('rules-help-chevron');
             body.style.display = collapsed ? 'none' : '';
             chevron.className = collapsed ? 'mdi ms-auto mdi-chevron-down' : 'mdi ms-auto mdi-chevron-up';
+            header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+
+            // AJAX toggle: click handler on toggle buttons (no form — avoids nested-form 405 bug)
+            document.addEventListener('click', function(e) {
+                const btn = e.target.closest('.toggle-btn[data-toggle-url]');
+                if (!btn) return;
+                const url = btn.dataset.toggleUrl;
+                const csrfToken =
+                    document.querySelector('input[name="csrfmiddlewaretoken"]')?.value ||
+                    (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || '';
+                btn.disabled = true;
+                fetch(url, {
+                    method: 'POST',
+                    headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrfToken},
+                    credentials: 'same-origin',
+                }).then(r => {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                }).then(data => {
+                    btn.disabled = false;
+                    const row = btn.closest('tr');
+                    if (data.enabled) {
+                        btn.className = 'btn btn-sm btn-success toggle-btn';
+                        btn.title = 'Enabled — click to disable';
+                        btn.setAttribute('aria-pressed', 'true');
+                        btn.setAttribute('aria-label', 'Enabled — click to disable');
+                        const iconOn = btn.querySelector('i');
+                        if (iconOn) iconOn.className = 'mdi mdi-check';
+                        if (row) row.classList.remove('text-muted', 'opacity-50');
+                    } else {
+                        btn.className = 'btn btn-sm btn-secondary toggle-btn';
+                        btn.title = 'Disabled — click to enable';
+                        btn.setAttribute('aria-pressed', 'false');
+                        btn.setAttribute('aria-label', 'Disabled — click to enable');
+                        const iconOff = btn.querySelector('i');
+                        if (iconOff) iconOff.className = 'mdi mdi-minus';
+                        if (row) row.classList.add('text-muted', 'opacity-50');
+                    }
+                }).catch(() => {
+                    btn.disabled = false;
+                    window.location.reload();
+                });
+            });
         });
     </script>
     {{ block.super }}

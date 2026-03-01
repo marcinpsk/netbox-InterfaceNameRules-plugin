@@ -101,6 +101,10 @@
                    class="btn btn-sm btn-outline-primary">
                   <i class="mdi mdi-eye me-1"></i>Preview &amp; Apply
                 </a>
+                <a href="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_test' %}?rule_id={{ rule.pk }}"
+                   class="btn btn-sm btn-outline-secondary" title="Test in Rule Builder" aria-label="Test in Rule Builder">
+                  <i class="mdi mdi-flask-outline"></i>
+                </a>
               </td>
             </tr>
           {% endfor %}

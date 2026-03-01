@@ -175,6 +175,16 @@ class RegexFindMatchingRuleTest(TestCase):
         # Without parent context → no match
         self.assertIsNone(find_matching_rule(self.sfp_lr8, None, None))
 
+    def test_disabled_regex_rule_not_returned(self):
+        """Disabled regex rule is not returned even if its pattern matches."""
+        InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-DD-400G-.*",
+            name_template="disabled/{bay_position}",
+            enabled=False,
+        )
+        self.assertIsNone(find_matching_rule(self.sfp_lr4, None, None))
+
 
 class RegexApplyRulesTest(TestCase):
     """Test regex rules through the full apply pipeline."""

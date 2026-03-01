@@ -44,6 +44,8 @@ class RulePreview:
 
 
 class InterfaceNameRuleListView(generic.ObjectListView):
+    """List view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     table = InterfaceNameRuleTable
     filterset = InterfaceNameRuleFilterSet
@@ -51,44 +53,58 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
 
     def get_extra_context(self, request):
-        from .utils import MODULE_PATH_MIN_VERSION, supports_module_path
+        """Inject feature-detection flags into the list template context."""
+        from .utils import supports_module_path
 
         return {
             "supports_module_path": supports_module_path(),
-            "module_path_min_version": MODULE_PATH_MIN_VERSION,
         }
 
 
 class InterfaceNameRuleCreateView(generic.ObjectEditView):
+    """Create view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     form = InterfaceNameRuleForm
 
 
 @register_model_view(InterfaceNameRule, "bulk_import", path="import", detail=False)
 class InterfaceNameRuleBulkImportView(generic.BulkImportView):
+    """Bulk import view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     model_form = InterfaceNameRuleImportForm
 
 
 class InterfaceNameRuleView(generic.ObjectView):
+    """Detail view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
 class InterfaceNameRuleEditView(generic.ObjectEditView):
+    """Edit view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     form = InterfaceNameRuleForm
 
 
 class InterfaceNameRuleDeleteView(generic.ObjectDeleteView):
+    """Delete view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
 class InterfaceNameRuleBulkDeleteView(generic.BulkDeleteView):
+    """Bulk delete view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
     table = InterfaceNameRuleTable
 
 
 class InterfaceNameRuleChangeLogView(generic.ObjectChangeLogView):
+    """Change-log view for InterfaceNameRule."""
+
     queryset = InterfaceNameRule.objects.all()
 
 
@@ -96,6 +112,7 @@ class InterfaceNameRuleDuplicateView(ConditionalLoginRequiredMixin, View):
     """Redirect to the add view pre-populated with a clone of the given rule."""
 
     def get(self, request, pk):
+        """Redirect to the add view pre-populated with fields cloned from rule pk."""
         from utilities.querydict import prepare_cloned_fields
 
         rule = get_object_or_404(InterfaceNameRule.objects.all(), pk=pk)
@@ -110,6 +127,7 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_test.html"
 
     def get(self, request):
+        """Render the test form, pre-populated from rule_id query param if given."""
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
@@ -134,10 +152,7 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
         return render(request, self.template_name, {"form": RuleTestForm(initial=initial), "loaded_rule": loaded_rule})
 
     def post(self, request):
-        from urllib.parse import urlencode
-
-        from .engine import evaluate_name_template, find_interfaces_for_rule
-
+        """Evaluate the submitted template and return a preview or redirect to save."""
         form = RuleTestForm(request.POST)
         preview_results = None
         db_preview = None
@@ -147,108 +162,12 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
 
         if form.is_valid():
             cd = form.cleaned_data
-            name_template = cd["name_template"]
-            channel_count = cd.get("channel_count") or 0
-            channel_start = cd.get("channel_start") or 0
-            module_type_is_regex = cd.get("module_type_is_regex", False)
-            module_type = cd.get("module_type")
-            module_type_pattern = cd.get("module_type_pattern", "")
-
-            # ── Save as Rule action ─────────────────────────────────────────────
             if action == "save_rule":
-                qs = InterfaceNameRule.objects.all()
-                if module_type_is_regex:
-                    qs = qs.filter(module_type_is_regex=True, module_type_pattern=module_type_pattern)
-                else:
-                    qs = qs.filter(module_type_is_regex=False, module_type=module_type)
-                for field in ("parent_module_type", "device_type", "platform"):
-                    val = cd.get(field)
-                    if val:
-                        qs = qs.filter(**{field: val})
-                    else:
-                        qs = qs.filter(**{f"{field}__isnull": True})
-                existing = qs.first()
-                if existing:
-                    messages.info(
-                        request,
-                        f"A matching rule already exists (#{existing.pk}). Redirecting to edit it.",
-                    )
-                    return redirect(
-                        reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[existing.pk])
-                    )
-                params = {
-                    "name_template": name_template,
-                    "module_type_is_regex": "on" if module_type_is_regex else "",
-                    "channel_count": channel_count,
-                    "channel_start": channel_start,
-                }
-                if module_type_is_regex:
-                    params["module_type_pattern"] = module_type_pattern
-                elif module_type:
-                    params["module_type"] = module_type.pk
-                for field in ("parent_module_type", "device_type", "platform"):
-                    val = cd.get(field)
-                    if val:
-                        params[field] = val.pk
-                add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
-                return redirect(f"{add_url}?{urlencode(params)}")
-
-            # ── Check action (default) ──────────────────────────────────────────
-            variables = {
-                "slot": cd.get("var_slot") or "1",
-                "bay_position": cd.get("var_bay_position") or "1",
-                "bay_position_num": cd.get("var_bay_position_num") or "1",
-                "parent_bay_position": cd.get("var_parent_bay_position") or "1",
-                "sfp_slot": cd.get("var_sfp_slot") or "1",
-                "base": cd.get("var_base") or "Ethernet1",
-            }
-
-            try:
-                if channel_count > 0:
-                    preview_results = []
-                    for ch in range(channel_count):
-                        vars_copy = dict(variables)
-                        vars_copy["channel"] = str(channel_start + ch)
-                        preview_results.append(
-                            {
-                                "source": variables["base"],
-                                "channel": str(channel_start + ch),
-                                "result": evaluate_name_template(name_template, vars_copy),
-                            }
-                        )
-                else:
-                    preview_results = [
-                        {
-                            "source": variables["base"],
-                            "channel": None,
-                            "result": evaluate_name_template(name_template, variables),
-                        }
-                    ]
-            except Exception as exc:
-                logger.exception("Template evaluation error: %s", exc)
-                error = type(exc).__name__
-
-            if (module_type_is_regex and module_type_pattern) or (not module_type_is_regex and module_type):
-                fake = RulePreview(
-                    module_type_is_regex=module_type_is_regex,
-                    module_type_pattern=module_type_pattern,
-                    module_type=module_type,
-                    parent_module_type=cd.get("parent_module_type"),
-                    device_type=cd.get("device_type"),
-                    platform=cd.get("platform"),
-                    name_template=name_template,
-                    channel_count=channel_count,
-                    channel_start=channel_start,
-                )
-                try:
-                    db_preview, db_total = find_interfaces_for_rule(fake, limit=100)
-                except (re.error, ValueError) as exc:
-                    error = f"Invalid module type regex: {exc}"
-                    db_preview, db_total = [], 0
-                except Exception as exc:
-                    logger.exception("Unexpected error in find_interfaces_for_rule: %s", exc)
-                    error = f"Unexpected error: {type(exc).__name__}"
-                    db_preview, db_total = [], 0
+                return self._handle_save_rule(request, cd)
+            preview_results, error = self._evaluate_template_preview(cd)
+            db_preview, db_total, db_error = self._fetch_db_preview(cd)
+            if db_error and not error:
+                error = db_error
 
         return render(
             request,
@@ -262,6 +181,128 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
             },
         )
 
+    def _handle_save_rule(self, request, cd):
+        """Find an existing matching rule or redirect to the add-rule form with pre-filled params."""
+        from urllib.parse import urlencode
+
+        name_template = cd["name_template"]
+        channel_count = cd.get("channel_count") or 0
+        channel_start = cd.get("channel_start") or 0
+        module_type_is_regex = cd.get("module_type_is_regex", False)
+        module_type = cd.get("module_type")
+        module_type_pattern = cd.get("module_type_pattern", "")
+
+        qs = InterfaceNameRule.objects.all()
+        if module_type_is_regex:
+            qs = qs.filter(module_type_is_regex=True, module_type_pattern=module_type_pattern)
+        else:
+            qs = qs.filter(module_type_is_regex=False, module_type=module_type)
+        for field in ("parent_module_type", "device_type", "platform"):
+            val = cd.get(field)
+            if val:
+                qs = qs.filter(**{field: val})
+            else:
+                qs = qs.filter(**{f"{field}__isnull": True})
+        existing = qs.first()
+        if existing:
+            messages.info(
+                request,
+                f"A matching rule already exists (#{existing.pk}). Redirecting to edit it.",
+            )
+            return redirect(reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[existing.pk]))
+
+        params = {
+            "name_template": name_template,
+            "module_type_is_regex": "on" if module_type_is_regex else "",
+            "channel_count": channel_count,
+            "channel_start": channel_start,
+        }
+        if module_type_is_regex:
+            params["module_type_pattern"] = module_type_pattern
+        elif module_type:
+            params["module_type"] = module_type.pk
+        for field in ("parent_module_type", "device_type", "platform"):
+            val = cd.get(field)
+            if val:
+                params[field] = val.pk
+        add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+        return redirect(f"{add_url}?{urlencode(params)}")
+
+    def _evaluate_template_preview(self, cd):
+        """Evaluate name_template against form variables; return (preview_results, error)."""
+        from .engine import evaluate_name_template
+
+        name_template = cd["name_template"]
+        channel_count = cd.get("channel_count") or 0
+        channel_start = cd.get("channel_start") or 0
+        variables = {
+            "slot": cd.get("var_slot") or "1",
+            "bay_position": cd.get("var_bay_position") or "1",
+            "bay_position_num": cd.get("var_bay_position_num") or "1",
+            "parent_bay_position": cd.get("var_parent_bay_position") or "1",
+            "sfp_slot": cd.get("var_sfp_slot") or "1",
+            "base": cd.get("var_base") or "Ethernet1",
+        }
+        try:
+            if channel_count > 0:
+                preview_results = []
+                for ch in range(channel_count):
+                    vars_copy = dict(variables)
+                    vars_copy["channel"] = str(channel_start + ch)
+                    preview_results.append(
+                        {
+                            "source": variables["base"],
+                            "channel": str(channel_start + ch),
+                            "result": evaluate_name_template(name_template, vars_copy),
+                        }
+                    )
+            else:
+                preview_results = [
+                    {
+                        "source": variables["base"],
+                        "channel": None,
+                        "result": evaluate_name_template(name_template, variables),
+                    }
+                ]
+            return preview_results, None
+        except Exception as exc:
+            logger.exception("Template evaluation error: %s", exc)
+            return None, type(exc).__name__
+
+    def _fetch_db_preview(self, cd):
+        """Run find_interfaces_for_rule against the DB; return (db_preview, db_total, error)."""
+        from .engine import find_interfaces_for_rule
+
+        name_template = cd["name_template"]
+        channel_count = cd.get("channel_count") or 0
+        channel_start = cd.get("channel_start") or 0
+        module_type_is_regex = cd.get("module_type_is_regex", False)
+        module_type = cd.get("module_type")
+        module_type_pattern = cd.get("module_type_pattern", "")
+
+        if not ((module_type_is_regex and module_type_pattern) or (not module_type_is_regex and module_type)):
+            return None, 0, None
+
+        fake = RulePreview(
+            module_type_is_regex=module_type_is_regex,
+            module_type_pattern=module_type_pattern,
+            module_type=module_type,
+            parent_module_type=cd.get("parent_module_type"),
+            device_type=cd.get("device_type"),
+            platform=cd.get("platform"),
+            name_template=name_template,
+            channel_count=channel_count,
+            channel_start=channel_start,
+        )
+        try:
+            db_preview, db_total = find_interfaces_for_rule(fake, limit=100)
+            return db_preview, db_total, None
+        except (re.error, ValueError) as exc:
+            return [], 0, f"Invalid module type regex: {exc}"
+        except Exception as exc:
+            logger.exception("Unexpected error in find_interfaces_for_rule: %s", exc)
+            return [], 0, f"Unexpected error: {type(exc).__name__}"
+
 
 class RuleApplyListView(ConditionalLoginRequiredMixin, View):
     """Display all rules with buttons to preview/apply each one."""
@@ -269,6 +310,7 @@ class RuleApplyListView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_apply.html"
 
     def get(self, request):
+        """Render the list of all rules with apply/preview buttons."""
         rules = InterfaceNameRule.objects.select_related(
             "module_type", "parent_module_type", "device_type", "platform"
         ).order_by("pk")
@@ -283,6 +325,7 @@ class RuleApplicableView(ConditionalLoginRequiredMixin, View):
     """
 
     def get(self, request, pk):
+        """Return JSON {"applicable": bool} for the rule identified by pk."""
         from .engine import has_applicable_interfaces
 
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
@@ -305,6 +348,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
     template_name = "netbox_interface_name_rules/rule_apply_detail.html"
 
     def get(self, request, pk):
+        """Render a preview of all interfaces that would be renamed by this rule."""
         from .engine import find_interfaces_for_rule
 
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
@@ -332,6 +376,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
         )
 
     def post(self, request, pk):
+        """Apply the rule (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
         if not request.user.has_perm("dcim.change_interface"):
@@ -370,3 +415,32 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
                 messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
 
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)
+
+
+@register_model_view(InterfaceNameRule, name="toggle", path="toggle")
+class RuleToggleView(generic.ObjectView):
+    """POST /rules/<pk>/toggle/ — flip the enabled flag on a rule."""
+
+    queryset = InterfaceNameRule.objects.all()
+
+    def post(self, request, pk):
+        """Toggle the enabled flag on the rule and return JSON or redirect."""
+        rule = self.get_object(pk=pk)
+        if not request.user.has_perm("netbox_interface_name_rules.change_interfacenamerule"):
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse({"error": "Permission denied"}, status=403)
+            raise PermissionDenied
+        rule.enabled = not rule.enabled
+        rule.save(update_fields=["enabled"])
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"enabled": rule.enabled, "pk": pk})
+        state = "enabled" if rule.enabled else "disabled"
+        messages.success(request, f"Rule '{rule}' {state}.")
+        from django.utils.http import url_has_allowed_host_and_scheme
+
+        referer = request.META.get("HTTP_REFERER", "")
+        if referer and url_has_allowed_host_and_scheme(
+            referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+        ):
+            return redirect(referer)
+        return redirect("plugins:netbox_interface_name_rules:interfacenamerule_list")

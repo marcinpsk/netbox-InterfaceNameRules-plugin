@@ -24,18 +24,30 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
             "channel_count",
             "channel_start",
             "description",
+            "enabled",
+            "applies_to_device_interfaces",
         ]
 
     def validate(self, attrs):
+        """Ensure module_type XOR module_type_pattern depending on regex mode."""
         attrs = super().validate(attrs)
         instance = self.instance
 
         # For PATCH requests, fall back to existing instance values for fields not in attrs
+        is_device_level = attrs.get(
+            "applies_to_device_interfaces", getattr(instance, "applies_to_device_interfaces", False)
+        )
         is_regex = attrs.get("module_type_is_regex", getattr(instance, "module_type_is_regex", False))
         module_type = attrs.get("module_type", getattr(instance, "module_type", None))
         pattern = attrs.get("module_type_pattern", getattr(instance, "module_type_pattern", ""))
 
-        if is_regex:
+        if is_device_level:
+            # Device-level rules must not have a module_type FK
+            if module_type:
+                raise serializers.ValidationError(
+                    {"module_type": "Module type must be empty for device-level interface rules."}
+                )
+        elif is_regex:
             if not pattern:
                 raise serializers.ValidationError(
                     {"module_type_pattern": "Regex pattern is required when regex mode is enabled."}
@@ -48,5 +60,9 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
             if not module_type:
                 raise serializers.ValidationError(
                     {"module_type": "module_type is required when regex mode is disabled."}
+                )
+            if pattern:
+                raise serializers.ValidationError(
+                    {"module_type_pattern": "Cannot set module_type_pattern when regex mode is disabled."}
                 )
         return attrs

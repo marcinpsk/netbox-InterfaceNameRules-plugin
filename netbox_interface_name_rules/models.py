@@ -13,6 +13,22 @@ from taggit.managers import TaggableManager
 _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
 
 
+def _validate_module_type_pattern(pattern):
+    """Compile *pattern* and check for ReDoS-prone constructs.
+
+    Raises ``ValidationError`` targeting ``module_type_pattern`` if the
+    pattern is syntactically invalid or contains nested quantifiers.
+    Called from ``InterfaceNameRule.clean()`` to avoid duplicating the same
+    try/except + ReDoS guard in each branch.
+    """
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
+    if _REDOS_PATTERN.search(pattern):
+        raise ValidationError({"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."})
+
+
 class InterfaceNameRule(NetBoxModel):
     """Post-install interface rename rule for module types.
 
@@ -107,27 +123,43 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         help_text="Optional description or notes about this rule",
     )
+    enabled = models.BooleanField(
+        default=True,
+        help_text="When disabled, this rule is ignored during module installation and Apply Rules operations.",
+    )
+    applies_to_device_interfaces = models.BooleanField(
+        default=False,
+        verbose_name="Applies to Device Interfaces",
+        help_text=(
+            "When enabled, this rule renames device-level interfaces (module=None) when the device "
+            "joins or changes position in a Virtual Chassis. "
+            "The Module Type field must be empty; the Module Type Pattern (if set) is used as a regex "
+            "to filter which interface names to rename."
+        ),
+    )
 
     # Override inherited tags to avoid reverse accessor clash when co-installed
     # with another plugin that has a model of the same name.
     tags = TaggableManager(through="extras.TaggedItem", related_name="+")
 
     def clean(self):
+        """Validate regex/FK mode exclusivity and required fields."""
         super().clean()
-        if self.module_type_is_regex:
+        if self.applies_to_device_interfaces:
+            # Device-level rules must not reference a module type
+            if self.module_type:
+                raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
+            # module_type_pattern is an optional interface-name filter regex
+            if self.module_type_pattern:
+                _validate_module_type_pattern(self.module_type_pattern)
+            # Force regex mode off — module_type_is_regex has no meaning here
+            self.module_type_is_regex = False
+        elif self.module_type_is_regex:
             if not self.module_type_pattern:
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
                 raise ValidationError({"module_type": "Cannot set both module type FK and regex pattern. Choose one."})
-            try:
-                re.compile(self.module_type_pattern)
-            except re.error as e:
-                raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
-            # Basic ReDoS guard: reject common nested-quantifier constructs
-            if _REDOS_PATTERN.search(self.module_type_pattern):
-                raise ValidationError(
-                    {"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."}
-                )
+            _validate_module_type_pattern(self.module_type_pattern)
         else:
             # Clear any stale pattern so it does not persist when switching modes
             self.module_type_pattern = ""
@@ -135,6 +167,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
 
     def get_absolute_url(self):
+        """Return the detail URL for this rule."""
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", args=[self.pk])
 
     clone_fields = [
@@ -148,6 +181,8 @@ class InterfaceNameRule(NetBoxModel):
         "channel_count",
         "channel_start",
         "description",
+        "enabled",
+        "applies_to_device_interfaces",
     ]
 
     @property
@@ -186,7 +221,10 @@ class InterfaceNameRule(NetBoxModel):
     @property
     def specificity_label(self) -> str:
         """Short human-readable description of what this rule matches."""
-        mode = "exact" if not self.module_type_is_regex else f"regex({len(self.module_type_pattern)})"
+        if self.applies_to_device_interfaces:
+            mode = f"iface-filter({len(self.module_type_pattern)})" if self.module_type_pattern else "iface-filter(*)"
+        else:
+            mode = "exact" if not self.module_type_is_regex else f"regex({len(self.module_type_pattern)})"
         parts = []
         if self.parent_module_type_id:
             parts.append("parent")
@@ -202,14 +240,24 @@ class InterfaceNameRule(NetBoxModel):
         constraints = [
             models.CheckConstraint(
                 check=(
-                    models.Q(module_type_is_regex=True, module_type__isnull=True, module_type_pattern__gt="")
-                    | models.Q(module_type_is_regex=False, module_type__isnull=False)
+                    models.Q(applies_to_device_interfaces=True, module_type__isnull=True)
+                    | models.Q(
+                        applies_to_device_interfaces=False,
+                        module_type_is_regex=True,
+                        module_type__isnull=True,
+                        module_type_pattern__gt="",
+                    )
+                    | models.Q(
+                        applies_to_device_interfaces=False,
+                        module_type_is_regex=False,
+                        module_type__isnull=False,
+                    )
                 ),
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
-                condition=models.Q(module_type_is_regex=False),
+                condition=models.Q(module_type_is_regex=False, applies_to_device_interfaces=False),
                 nulls_distinct=False,
                 name="interfacenamerule_unique_exact",
             ),
@@ -218,6 +266,12 @@ class InterfaceNameRule(NetBoxModel):
                 condition=models.Q(module_type_is_regex=True),
                 nulls_distinct=False,
                 name="interfacenamerule_unique_regex",
+            ),
+            models.UniqueConstraint(
+                fields=["module_type_pattern", "device_type", "platform"],
+                condition=models.Q(applies_to_device_interfaces=True),
+                nulls_distinct=False,
+                name="interfacenamerule_unique_device_iface",
             ),
         ]
 

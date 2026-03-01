@@ -73,7 +73,7 @@ jobs:
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system pytest pytest-django tblib
+          uv pip install --system pytest pytest-django tblib coverage
           uv pip install --system -e .
 
       - name: Set up NetBox configuration
@@ -99,9 +99,29 @@ jobs:
           PLUGINS = ['netbox_interface_name_rules']
           EOF
 
-      - name: Run tests
+      - name: Run tests with coverage
         working-directory: netbox/netbox
         env:
           NETBOX_CONFIGURATION: netbox.configuration
+          COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
         run: |
-          python manage.py test netbox_interface_name_rules --verbosity=2
+          coverage run manage.py test netbox_interface_name_rules --verbosity=2
+          coverage report
+
+      - name: Generate coverage report
+        if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
+        working-directory: netbox/netbox
+        env:
+          COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
+        run: |
+          mkdir -p ../../coverage-report
+          coverage json -o ../../coverage-report/coverage.json
+          coverage html -d ../../coverage-report/htmlcov
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: coverage-report
+          path: coverage-report/
+          retention-days: 7
