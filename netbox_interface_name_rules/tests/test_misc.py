@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for utils, jobs, model properties, and API serializer edge-cases."""
 
+from unittest.mock import MagicMock, patch
+
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -464,3 +466,308 @@ class SerializerValidationTest(TestCase):
         )
         s.is_valid()
         self.assertIn("module_type", s.errors)
+
+
+# ---------------------------------------------------------------------------
+# forms.py — RuleTestForm.clean() validation branches (lines 115-130)
+# ---------------------------------------------------------------------------
+
+
+class RuleTestFormValidationTest(TestCase):
+    """Tests for RuleTestForm.clean() error branches."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="FTMfg", slug="ftmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="FT-SFP", part_number="FT-SFP")
+
+    def _make_form(self, extra):
+        from netbox_interface_name_rules.forms import RuleTestForm
+
+        data = {"name_template": "et-0/0/{bay_position}", "channel_count": "0", "channel_start": "0"}
+        data.update(extra)
+        return RuleTestForm(data)
+
+    def test_regex_mode_no_pattern_adds_error(self):
+        """RuleTestForm.clean() adds error on module_type_pattern when regex mode but no pattern (line 115)."""
+        form = self._make_form({"module_type_is_regex": True})
+        form.is_valid()
+        self.assertIn("module_type_pattern", form.errors)
+
+    def test_regex_mode_invalid_pattern_adds_error(self):
+        """RuleTestForm.clean() adds error when regex pattern is invalid (lines 119-120)."""
+        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "[invalid("})
+        form.is_valid()
+        self.assertIn("module_type_pattern", form.errors)
+
+    def test_regex_mode_redos_pattern_adds_error(self):
+        """RuleTestForm.clean() adds error when pattern contains nested quantifiers (line 125).
+
+        (a)+? compiles OK (valid lazy quantifier syntax) but triggers the ReDoS guard
+        because )+? matches \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
+        """
+        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "(a)+?"})
+        form.is_valid()
+        self.assertIn("module_type_pattern", form.errors)
+
+    def test_regex_mode_with_module_type_adds_error(self):
+        """RuleTestForm.clean() adds error on module_type when both regex and FK set (line 127)."""
+        form = self._make_form(
+            {
+                "module_type_is_regex": True,
+                "module_type_pattern": "VALID-.*",
+                "module_type": str(self.module_type.pk),
+            }
+        )
+        form.is_valid()
+        self.assertIn("module_type", form.errors)
+
+    def test_non_regex_with_pattern_adds_error(self):
+        """RuleTestForm.clean() adds error when module_type_pattern set in non-regex mode (line 130)."""
+        form = self._make_form({"module_type_pattern": "some-pattern"})
+        form.is_valid()
+        self.assertIn("module_type_pattern", form.errors)
+
+
+# ---------------------------------------------------------------------------
+# filters.py — search() method (line 56)
+# ---------------------------------------------------------------------------
+
+
+class FilterSearchMethodTest(TestCase):
+    """Test the InterfaceNameRuleFilterSet.search() method."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="FiltXMfg", slug="filtxmfg")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="FILTX-SFP", part_number="FILTX-SFP"
+        )
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="filtx-template-{bay_position}",
+            description="filtx-search-test",
+        )
+
+    def test_search_by_template(self):
+        """search() on name_template returns matching rules (line 56)."""
+        from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
+
+        qs = InterfaceNameRuleFilterSet({"q": "filtx-template"}, queryset=InterfaceNameRule.objects.all()).qs
+        self.assertIn(self.rule, qs)
+
+    def test_search_by_description(self):
+        """search() on description returns matching rules."""
+        from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
+
+        qs = InterfaceNameRuleFilterSet({"q": "filtx-search-test"}, queryset=InterfaceNameRule.objects.all()).qs
+        self.assertIn(self.rule, qs)
+
+    def test_search_by_module_type_model(self):
+        """search() on module type model name returns matching rules."""
+        from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
+
+        qs = InterfaceNameRuleFilterSet({"q": "FILTX-SFP"}, queryset=InterfaceNameRule.objects.all()).qs
+        self.assertIn(self.rule, qs)
+
+
+# ---------------------------------------------------------------------------
+# tables.py — SpecificityColumn.render() CSS branches (lines 23, 27, 29, 41)
+# ---------------------------------------------------------------------------
+
+
+class TableSpecificityColumnRenderTest(TestCase):
+    """Test SpecificityColumn render() returns the correct CSS class badge."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="TblXMfg", slug="tblxmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="TBLX-SFP", part_number="TBLX-SFP")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="TBLX-Dev", slug="tblx-dev")
+        cls.platform = Platform.objects.create(name="TBLX-IOS", slug="tblx-ios")
+
+    def _render(self, rule):
+        from netbox_interface_name_rules.tables import SpecificityColumn
+
+        col = SpecificityColumn()
+        return col.render(value=rule.specificity_score, record=rule)
+
+    def test_device_iface_rule_uses_warning_badge(self):
+        """applies_to_device_interfaces rule renders with text-bg-warning (line 23)."""
+        rule = InterfaceNameRule(applies_to_device_interfaces=True, name_template="x")
+        html = self._render(rule)
+        self.assertIn("text-bg-warning", html)
+
+    def test_exact_rule_uses_success_badge(self):
+        """Exact FK rule renders with text-bg-success (line 25)."""
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="x")
+        html = self._render(rule)
+        self.assertIn("text-bg-success", html)
+
+    def test_regex_device_scoped_uses_primary_badge(self):
+        """Regex + device_type scoped rule renders with text-bg-primary (line 27)."""
+        rule = InterfaceNameRule(module_type_is_regex=True, module_type_pattern="SFP-.*", name_template="x")
+        rule.device_type_id = self.device_type.pk
+        html = self._render(rule)
+        self.assertIn("text-bg-primary", html)
+
+    def test_regex_parent_scoped_uses_primary_badge(self):
+        """Regex + parent_module_type scoped rule renders with text-bg-primary (line 27)."""
+        rule = InterfaceNameRule(module_type_is_regex=True, module_type_pattern="SFP-.*", name_template="x")
+        rule.parent_module_type_id = self.module_type.pk
+        html = self._render(rule)
+        self.assertIn("text-bg-primary", html)
+
+    def test_regex_platform_scoped_uses_info_badge(self):
+        """Regex + platform-only scoped rule renders with text-bg-info (line 29)."""
+        rule = InterfaceNameRule(module_type_is_regex=True, module_type_pattern="SFP-.*", name_template="x")
+        rule.platform_id = self.platform.pk
+        html = self._render(rule)
+        self.assertIn("text-bg-info", html)
+
+    def test_value_method_returns_score(self):
+        """SpecificityColumn.value() returns the raw score (line 41)."""
+        from netbox_interface_name_rules.tables import SpecificityColumn
+
+        col = SpecificityColumn()
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="x")
+        self.assertEqual(col.value(rule.specificity_score, rule), rule.specificity_score)
+
+
+# ---------------------------------------------------------------------------
+# models.py — specificity_label with parent/platform (lines 230, 234)
+# ---------------------------------------------------------------------------
+
+
+class ModelSpecificityLabelScopeTest(TestCase):
+    """Test specificity_label with parent_module_type and platform scopes."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ScopXMfg", slug="scopxmfg")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="SCOPX-SFP", part_number="SCOPX-SFP"
+        )
+        cls.platform = Platform.objects.create(name="SCOPX-IOS", slug="scopx-ios")
+
+    def test_specificity_label_with_parent_includes_parent(self):
+        """specificity_label includes 'parent' when parent_module_type_id is set (line 230)."""
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="x")
+        rule.parent_module_type_id = self.module_type.pk
+        label = rule.specificity_label
+        self.assertIn("parent", label)
+
+    def test_specificity_label_with_platform_includes_platform(self):
+        """specificity_label includes 'platform' when platform_id is set (line 234)."""
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="x")
+        rule.platform_id = self.platform.pk
+        label = rule.specificity_label
+        self.assertIn("platform", label)
+
+    def test_specificity_label_all_scopes(self):
+        """specificity_label includes parent+device+platform when all scopes are set."""
+        dt = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.get(name="ScopXMfg"), model="SCOPX-Dev", slug="scopx-dev"
+        )
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="x")
+        rule.parent_module_type_id = self.module_type.pk
+        rule.device_type_id = dt.pk
+        rule.platform_id = self.platform.pk
+        label = rule.specificity_label
+        self.assertIn("parent", label)
+        self.assertIn("device", label)
+        self.assertIn("platform", label)
+
+
+# ---------------------------------------------------------------------------
+# models.py — _validate_module_type_pattern ReDoS guard (line 29)
+# ---------------------------------------------------------------------------
+
+
+class ModelValidatePatternReDoSTest(TestCase):
+    """Test _validate_module_type_pattern raises for valid-but-ReDoS-prone patterns."""
+
+    def test_valid_regex_with_nested_quantifiers_raises(self):
+        """A valid regex with nested quantifiers e.g. (a)+? raises ValidationError (line 29).
+
+        (a)+? compiles without error but contains )+? which matches
+        \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
+        """
+        from django.core.exceptions import ValidationError
+
+        from netbox_interface_name_rules.models import _validate_module_type_pattern
+
+        with self.assertRaises(ValidationError) as ctx:
+            _validate_module_type_pattern("(a)+?")
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+        self.assertIn("nested quantifiers", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# jobs.py — ApplyRuleJob.run() success + exception paths (lines 30-36)
+# ---------------------------------------------------------------------------
+
+
+class JobRunSuccessAndExceptionTest(TestCase):
+    """Test ApplyRuleJob.run() with a real rule: success path and exception path."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="JobXMfg", slug="jobxmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="JOBX-SFP", part_number="JOBX-SFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+
+    def _make_job(self):
+        from netbox_interface_name_rules.jobs import ApplyRuleJob
+
+        job = ApplyRuleJob.__new__(ApplyRuleJob)
+        job.logger = MagicMock()
+        return job
+
+    def test_job_run_success_logs_info(self):
+        """ApplyRuleJob.run() with valid rule calls apply_rule_to_existing and logs (lines 30-36)."""
+        job = self._make_job()
+        job.run(rule_id=self.rule.pk)
+        job.logger.info.assert_called_once()
+
+    def test_job_run_exception_reraises_and_logs(self):
+        """ApplyRuleJob.run() re-raises exception from apply_rule_to_existing (lines 32-34)."""
+        job = self._make_job()
+        with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                job.run(rule_id=self.rule.pk)
+        job.logger.exception.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# utils.py — supports_module_path ImportError path (lines 16-17)
+# ---------------------------------------------------------------------------
+
+
+class UtilsModulePathFalseTest(TestCase):
+    """Test supports_module_path() returns False when MODULE_PATH_TOKEN is missing."""
+
+    def test_returns_false_when_token_missing(self):
+        """supports_module_path() returns False when MODULE_PATH_TOKEN is absent.
+
+        Temporarily removes the attribute from dcim.constants (if present) to
+        trigger the ImportError branch in supports_module_path, then restores it.
+        Asserts False regardless of whether the attribute existed beforehand.
+        """
+        import dcim.constants as dc
+
+        from netbox_interface_name_rules.utils import supports_module_path
+
+        had_attr = hasattr(dc, "MODULE_PATH_TOKEN")
+        original = getattr(dc, "MODULE_PATH_TOKEN", None)
+        try:
+            if had_attr:
+                delattr(dc, "MODULE_PATH_TOKEN")
+            result = supports_module_path()
+            self.assertFalse(result)
+        finally:
+            if had_attr:
+                dc.MODULE_PATH_TOKEN = original
