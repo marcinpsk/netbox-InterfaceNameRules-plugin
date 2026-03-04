@@ -311,7 +311,12 @@ class UtilsModulePathFalseTest(TestCase):
     """Test supports_module_path() returns False when MODULE_PATH_TOKEN is missing."""
 
     def test_returns_false_when_token_missing(self):
-        """supports_module_path() catches ImportError and returns False (lines 16-17)."""
+        """supports_module_path() returns False when MODULE_PATH_TOKEN is absent.
+
+        Temporarily removes the attribute from dcim.constants (if present) to
+        trigger the ImportError branch in supports_module_path, then restores it.
+        Asserts False regardless of whether the attribute existed beforehand.
+        """
         import dcim.constants as dc
 
         from netbox_interface_name_rules.utils import supports_module_path
@@ -322,11 +327,7 @@ class UtilsModulePathFalseTest(TestCase):
             if had_attr:
                 delattr(dc, "MODULE_PATH_TOKEN")
             result = supports_module_path()
-            if had_attr:
-                self.assertFalse(result)
-            else:
-                # Already False before this test; just verify the type
-                self.assertIsInstance(result, bool)
+            self.assertFalse(result)
         finally:
             if had_attr:
                 dc.MODULE_PATH_TOKEN = original
@@ -441,22 +442,32 @@ class RuleToggleNoPermissionNonAjaxTest(ViewTestBase2):
         )
 
     def test_toggle_non_ajax_no_permission_raises_403(self):
-        """Non-AJAX POST from user without change permission returns 403 (lines 430-432)."""
+        """Non-AJAX POST from user without change permission returns 403.
+
+        NetBox's ObjectView dispatch checks permissions via LoginRequiredMixin and
+        raises PermissionDenied when the user lacks change_interfacenamerule, which
+        Django converts to a 403 response.
+        """
         User.objects.create_user(username="noperm_tog_user2", password="testpass123")
         self.client.login(username="noperm_tog_user2", password="testpass123")
         url = self._toggle_url(self.rule.pk)
         response = self.client.post(url)
-        self.assertIn(response.status_code, [403, 302])
+        self.assertEqual(response.status_code, 403)
 
     def test_post_apply_apply_error_shows_error_message(self):
-        """POST apply when apply_rule_to_existing raises shows error message (lines 413-415)."""
+        """POST apply when apply_rule_to_existing raises shows error message and redirects.
+
+        Patches engine.apply_rule_to_existing to raise ValueError, verifying the
+        view catches the exception (lines 413-415), logs it, adds an error message,
+        and still issues the 302 redirect back to the apply detail page.
+        """
         url = reverse(
             "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
             kwargs={"pk": self.rule.pk},
         )
         with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", side_effect=ValueError("bad template")):
             response = self.client.post(url, {"action": "apply", "interface_ids": [str(self.rule.pk)]})
-        self.assertIn(response.status_code, [302])
+        self.assertEqual(response.status_code, 302)
 
     def test_apply_detail_get_value_error_shows_error(self):
         """GET apply detail when find_interfaces_for_rule raises ValueError shows error (lines 357-360)."""
@@ -638,7 +649,13 @@ class EngineFindRegexMatchErrorTest(TestCase):
         cls.bad_regex_rule.save()
 
     def test_invalid_regex_pattern_is_skipped_not_raised(self):
-        """_find_regex_match silently skips rules with bad regex (lines 355-356)."""
+        """_find_regex_match silently skips rules whose module_type_pattern is not valid regex.
+
+        The bad-pattern rule is inserted directly via save() to bypass clean()
+        validation. _find_regex_match wraps re.fullmatch in a try/except re.error
+        so an invalid pattern just moves on to the next candidate instead of
+        propagating the exception to the caller (lines 355-356).
+        """
         from netbox_interface_name_rules.engine import _find_regex_match
 
         candidates = [(None, None, None)]
@@ -897,7 +914,11 @@ class RuleTestViewSaveRuleWithScopeTest(ViewTestBase2):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def test_save_rule_with_device_type_filters_scope(self):
-        """POST save_rule with device_type set applies scope filter (line 203)."""
+        """POST save_rule with device_type set applies scope filter and redirects.
+
+        Verifies that when both module_type and device_type are provided, the view
+        looks up an existing matching rule (line 203) and redirects to it (302).
+        """
         data = {
             "name_template": "et-0/0/{bay_position}",
             "channel_count": "0",
@@ -907,8 +928,7 @@ class RuleTestViewSaveRuleWithScopeTest(ViewTestBase2):
             "action": "save_rule",
         }
         response = self.client.post(self._url(), data)
-        # Should redirect (either to existing rule or to add page)
-        self.assertIn(response.status_code, [302])
+        self.assertEqual(response.status_code, 302)
 
     def test_save_rule_no_match_with_device_type_redirects_to_add_with_pk(self):
         """POST save_rule with unmatched scope redirects to add page with device_type param (line 227)."""
@@ -1002,7 +1022,7 @@ class RuleApplyDetailViewBackgroundJobSuccessTest(ViewTestBase2):
         mock_job.pk = 42
         with patch("netbox_interface_name_rules.jobs.ApplyRuleJob.enqueue", return_value=mock_job):
             response = self.client.post(url, {"action": "background"})
-        self.assertIn(response.status_code, [302])
+        self.assertEqual(response.status_code, 302)
 
 
 # ---------------------------------------------------------------------------
@@ -1035,7 +1055,15 @@ class SignalModuleNullBayPathTest(TestCase):
         cls.bay = ModuleBay.objects.get(device=cls.device, name="NBBay 0")
 
     def test_module_with_null_bay_is_skipped(self):
-        """_apply_rules_for_device_deferred skips module when module_bay is None (line 214)."""
+        """_apply_rules_for_device_deferred continues past modules with module_bay=None.
+
+        The signal function iterates over all modules on a device and calls
+        apply_interface_name_rules for each one. When module_bay is None (e.g. due
+        to a data inconsistency), the loop must skip that entry via ``continue``
+        rather than passing None to the engine. A FakeModule with module_bay=None
+        is injected via a patch on Module.objects.filter so the DB doesn't need
+        to hold inconsistent data.
+        """
         from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
 
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
@@ -1077,7 +1105,13 @@ class EngineChannelRuleEntryValueErrorTest(TestCase):
         cls.bay = ModuleBay.objects.get(device=cls.device, name="CRBay 0")
 
     def test_valueerror_in_template_sets_error_name(self):
-        """_channel_rule_entry uses error name when template raises ValueError (lines 618-619)."""
+        """_channel_rule_entry stores an ``<error: …>`` placeholder when evaluate_name_template raises.
+
+        evaluate_name_template is patched to raise ValueError for every call so
+        the loop that builds expected_names catches it and collapses to a single
+        error-placeholder entry (lines 618-619). The result dict is then returned
+        because the placeholder is not in existing_names.
+        """
         from netbox_interface_name_rules.engine import _channel_rule_entry
 
         rule = InterfaceNameRule(
@@ -1147,7 +1181,13 @@ class EngineProcessChannelModuleLimitTest(TestCase):
         cls.bay = ModuleBay.objects.get(device=cls.device, name="CLBay 0")
 
     def test_limit_reached_returns_true(self):
-        """_process_channel_module returns should_stop=True when limit is reached (line 645)."""
+        """_process_channel_module returns should_stop=True when the result limit is hit.
+
+        ``results`` is pre-seeded with one entry so that after _channel_rule_entry
+        adds a new entry the total reaches ``limit=1``, triggering the early-stop
+        path (line 644-645). The module_qs mock with count=0 ensures no extra
+        work is counted from the remaining queryset.
+        """
         from netbox_interface_name_rules.engine import _process_channel_module
 
         rule = InterfaceNameRule.objects.create(
