@@ -76,7 +76,7 @@ source = ["netbox_interface_name_rules"]
 omit = ["*/migrations/*", "*/tests/*"]
 
 [tool.coverage.report]
-fail_under = 95
+fail_under = 97
 show_missing = true
 
 [tool.semantic_release]

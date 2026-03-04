@@ -328,9 +328,7 @@ class UtilsModulePathFalseTest(TestCase):
                 # Already False before this test; just verify the type
                 self.assertIsInstance(result, bool)
         finally:
-            if had_attr and original is not None:
-                dc.MODULE_PATH_TOKEN = original
-            elif had_attr:
+            if had_attr:
                 dc.MODULE_PATH_TOKEN = original
 
 
@@ -406,20 +404,23 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         """POST apply with no interface_ids warns and redirects (lines 408-409)."""
         url = self._url(self.rule.pk)
         response = self.client.post(url, {"action": "apply"})
-        self.assertIn(response.status_code, [200, 302])
+        self.assertEqual(response.status_code, 302)
 
     def test_post_apply_with_interface_ids_calls_apply(self):
         """POST apply with interface_ids calls apply_rule_to_existing (lines 410-412)."""
         url = self._url(self.rule.pk)
-        response = self.client.post(url, {"action": "apply", "interface_ids": ["1", "2"]})
-        self.assertIn(response.status_code, [302])
+        with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", return_value=2) as mock_apply:
+            response = self.client.post(url, {"action": "apply", "interface_ids": ["1", "2"]})
+        self.assertEqual(response.status_code, 302)
+        mock_apply.assert_called_once()
 
     def test_post_background_action_enqueues_job(self):
         """POST background action tries to enqueue ApplyRuleJob (lines 388-403)."""
         url = self._url(self.rule.pk)
-        with patch("netbox_interface_name_rules.jobs.ApplyRuleJob.enqueue", side_effect=Exception("no rq")):
+        with patch("netbox_interface_name_rules.jobs.ApplyRuleJob.enqueue", side_effect=Exception("no rq")) as mock_enq:
             response = self.client.post(url, {"action": "background"})
-        self.assertIn(response.status_code, [302])
+        self.assertEqual(response.status_code, 302)
+        mock_enq.assert_called_once()
 
     def test_post_no_change_permission_raises_forbidden(self):
         """POST apply without dcim.change_interface permission raises PermissionDenied (line 382-383)."""
@@ -427,7 +428,7 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         self.client.login(username="noperm_apply_user", password="testpass123")
         url = self._url(self.rule.pk)
         response = self.client.post(url, {"action": "apply"})
-        self.assertIn(response.status_code, [403, 302])
+        self.assertEqual(response.status_code, 403)
 
 
 class RuleToggleNoPermissionNonAjaxTest(ViewTestBase2):
@@ -736,6 +737,7 @@ class EngineBuildModuleQsPlatformTest(TestCase):
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name="PlatXMfg", slug="platxmfg")
         cls.platform = Platform.objects.create(name="PLATX-IOS", slug="platx-ios")
+        other_platform = Platform.objects.create(name="PLATX-NXOS", slug="platx-nxos")
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="PLATX-SFP", part_number="PLATX-SFP"
         )
@@ -744,14 +746,29 @@ class EngineBuildModuleQsPlatformTest(TestCase):
             platform=cls.platform,
             name_template="et-0/0/{bay_position}",
         )
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="PLATX-Dev", slug="platx-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="PLBay 0", position="0")
+        role = DeviceRole.objects.create(name="PlatXRole", slug="platxrole")
+        site = Site.objects.create(name="PlatXSite", slug="platxsite")
+        device_match = Device.objects.create(
+            name="platx-dev-match", device_type=device_type, role=role, site=site, platform=cls.platform
+        )
+        device_other = Device.objects.create(
+            name="platx-dev-other", device_type=device_type, role=role, site=site, platform=other_platform
+        )
+        bay_match = ModuleBay.objects.get(device=device_match)
+        bay_other = ModuleBay.objects.get(device=device_other)
+        cls.module_match = Module.objects.create(device=device_match, module_bay=bay_match, module_type=cls.module_type)
+        cls.module_other = Module.objects.create(device=device_other, module_bay=bay_other, module_type=cls.module_type)
 
     def test_platform_filter_applied(self):
-        """_build_module_qs applies rule.platform filter when set (line 588)."""
+        """_build_module_qs applies rule.platform filter — matching device is included, other is excluded."""
         from netbox_interface_name_rules.engine import _build_module_qs
 
         qs = _build_module_qs(self.rule)
-        # Verify the filter was applied by checking the queryset SQL
-        self.assertIn("platform", str(qs.query).lower())
+        pks = list(qs.values_list("pk", flat=True))
+        self.assertIn(self.module_match.pk, pks)
+        self.assertNotIn(self.module_other.pk, pks)
 
 
 # ---------------------------------------------------------------------------
@@ -1158,5 +1175,4 @@ class EngineProcessChannelModuleLimitTest(TestCase):
             processed_pks=set(),
         )
         # If the entry was added and limit=1 reached, should_stop should be True
-        # (or the entry might already be renamed; in any case we check the logic ran)
-        self.assertIsInstance(should_stop, bool)
+        self.assertTrue(should_stop)
