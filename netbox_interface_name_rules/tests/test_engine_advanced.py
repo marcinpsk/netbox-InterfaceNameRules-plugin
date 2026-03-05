@@ -3,6 +3,8 @@
 """Tests for advanced engine functions: find_interfaces_for_rule, apply_rule_to_existing,
 has_applicable_interfaces, _find_channel_base, _matching_moduletype_pks, build_variables edges."""
 
+from unittest.mock import MagicMock, patch
+
 from dcim.models import (
     Device,
     DeviceRole,
@@ -30,6 +32,7 @@ from netbox_interface_name_rules.engine import (
     find_interfaces_for_rule,
     has_applicable_interfaces,
 )
+from django.db import DatabaseError
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 
@@ -678,3 +681,829 @@ class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
         iface.refresh_from_db()
         tags = list(rule.tags.filter(slug="potentially-deprecated"))
         self.assertEqual(len(tags), 1)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — evaluate_name_template unsafe AST node (line 829)
+# ---------------------------------------------------------------------------
+
+
+class EngineEvaluateTemplateUnsafeASTTest(TestCase):
+    """Test evaluate_name_template raises for unsafe AST node types (line 829)."""
+
+    def test_unsafe_ast_node_raises_valueerror(self):
+        """A template with a call node (unsafe) raises ValueError (line 829).
+
+        We need to bypass the regex guard and get an unsafe AST node.
+        The regex guard only allows digits/spaces/operators; to get an unsafe node
+        we can use ast.parse directly but the simplest way is to mock the regex check.
+        """
+        from netbox_interface_name_rules.engine import evaluate_name_template
+
+        # The regex guard will reject most things, but we can craft a template
+        # that has a safe-looking expression that still hits the AST check.
+        # Actually the regex guard already catches non-arithmetic expressions.
+        # The AST check is a defense-in-depth: test it via a template where
+        # the regex passes but the AST would fail if reached.
+        # A clean way: mock re.match to return True so the AST check runs.
+        with patch("netbox_interface_name_rules.engine.re.match", return_value=MagicMock()):
+            with self.assertRaises(ValueError):
+                evaluate_name_template("{__import__('os')}", {})
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _find_regex_match re.error path (lines 355-356)
+# ---------------------------------------------------------------------------
+
+
+class EngineFindRegexMatchErrorTest(TestCase):
+    """Test that _find_regex_match silently skips rules with invalid regex patterns."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RegXMfg", slug="regxmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="RegX-Dev", slug="regx-dev")
+        cls.module_type_good = ModuleType.objects.create(
+            manufacturer=manufacturer, model="RegX-GOOD", part_number="RegX-GOOD"
+        )
+        # Create a rule with an invalid regex pattern (bypassing model validation)
+        cls.bad_regex_rule = InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern="[unclosed(",  # syntactically invalid
+            name_template="port{bay_position}",
+            enabled=True,
+        )
+        # Save without calling clean() to bypass validation
+        cls.bad_regex_rule.save()
+
+    def test_invalid_regex_pattern_is_skipped_not_raised(self):
+        """_find_regex_match silently skips rules whose module_type_pattern is not valid regex.
+
+        The bad-pattern rule is inserted directly via save() to bypass clean()
+        validation. _find_regex_match wraps re.fullmatch in a try/except re.error
+        so an invalid pattern just moves on to the next candidate instead of
+        propagating the exception to the caller (lines 355-356).
+        """
+        from netbox_interface_name_rules.engine import _find_regex_match
+
+        candidates = [(None, None, None)]
+        result = _find_regex_match("RegX-GOOD", candidates)
+        # The bad regex rule is skipped; result is None (no valid rule found)
+        self.assertIsNone(result)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.bad_regex_rule.pk:
+            InterfaceNameRule.objects.filter(pk=cls.bad_regex_rule.pk).delete()
+        super().tearDownClass()
+
+
+# ---------------------------------------------------------------------------
+# engine.py — has_applicable_interfaces exception path (lines 571-572)
+# ---------------------------------------------------------------------------
+
+
+class EngineHasApplicableExceptionTest(TestCase):
+    """Test has_applicable_interfaces() catches exceptions and returns False."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="AppXMfg", slug="appxmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="APPX-SFP", part_number="APPX-SFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+
+    def test_exception_in_find_interfaces_returns_false(self):
+        """has_applicable_interfaces() returns False when find_interfaces_for_rule raises (lines 571-572)."""
+        from netbox_interface_name_rules.engine import has_applicable_interfaces
+
+        with patch(
+            "netbox_interface_name_rules.engine.find_interfaces_for_rule",
+            side_effect=RuntimeError("scan fail"),
+        ):
+            result = has_applicable_interfaces(self.rule)
+        self.assertFalse(result)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _find_channel_base ValueError path (lines 535-536)
+# ---------------------------------------------------------------------------
+
+
+class EngineFindChannelBaseValueErrorTest(TestCase):
+    """Test _find_channel_base skips ValueError from template evaluation (lines 535-536)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ChanXMfg", slug="chanxmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="ChanX-Dev", slug="chanx-dev")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="ChanX-SFP", part_number="ChanX-SFP"
+        )
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="CXBay 0", position="0")
+        role = DeviceRole.objects.create(name="ChanXRole", slug="chanxrole")
+        site = Site.objects.create(name="ChanXSite", slug="chanxsite")
+        cls.device = Device.objects.create(name="chanx-dev-01", device_type=cls.device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="CXBay 0")
+
+    def test_find_channel_base_valueerror_skips_to_fallback(self):
+        """_find_channel_base catches ValueError and falls back to ifaces[0] (lines 535-536)."""
+        from netbox_interface_name_rules.engine import _find_channel_base
+
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface0 = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        iface1 = Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
+        ifaces = [iface0, iface1]
+        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+
+        with patch("netbox_interface_name_rules.engine.evaluate_name_template", side_effect=ValueError("bad template")):
+            result = _find_channel_base(rule, ifaces, variables)
+        # Falls back to ifaces[0] after ValueError
+        self.assertEqual(result, iface0)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _build_module_qs platform filter (line 588)
+# ---------------------------------------------------------------------------
+
+
+class EngineBuildModuleQsPlatformTest(TestCase):
+    """Test _build_module_qs applies platform filter correctly (line 588)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="PlatXMfg", slug="platxmfg")
+        cls.platform = Platform.objects.create(name="PLATX-IOS", slug="platx-ios")
+        other_platform = Platform.objects.create(name="PLATX-NXOS", slug="platx-nxos")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="PLATX-SFP", part_number="PLATX-SFP"
+        )
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            platform=cls.platform,
+            name_template="et-0/0/{bay_position}",
+        )
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="PLATX-Dev", slug="platx-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="PLBay 0", position="0")
+        role = DeviceRole.objects.create(name="PlatXRole", slug="platxrole")
+        site = Site.objects.create(name="PlatXSite", slug="platxsite")
+        device_match = Device.objects.create(
+            name="platx-dev-match", device_type=device_type, role=role, site=site, platform=cls.platform
+        )
+        device_other = Device.objects.create(
+            name="platx-dev-other", device_type=device_type, role=role, site=site, platform=other_platform
+        )
+        bay_match = ModuleBay.objects.get(device=device_match)
+        bay_other = ModuleBay.objects.get(device=device_other)
+        cls.module_match = Module.objects.create(device=device_match, module_bay=bay_match, module_type=cls.module_type)
+        cls.module_other = Module.objects.create(device=device_other, module_bay=bay_other, module_type=cls.module_type)
+
+    def test_platform_filter_applied(self):
+        """_build_module_qs applies rule.platform filter — matching device is included, other is excluded."""
+        from netbox_interface_name_rules.engine import _build_module_qs
+
+        qs = _build_module_qs(self.rule)
+        pks = list(qs.values_list("pk", flat=True))
+        self.assertIn(self.module_match.pk, pks)
+        self.assertNotIn(self.module_other.pk, pks)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — apply_rule_to_existing no-ifaces and id_set paths (lines 750, 753)
+# ---------------------------------------------------------------------------
+
+
+class EngineApplyRuleToExistingEdgeCasesTest(TestCase):
+    """Test apply_rule_to_existing edge cases: no interfaces, id_set filter."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ARXMfg", slug="arxmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="ARX-Dev", slug="arx-dev")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="ARX-SFP", part_number="ARX-SFP")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="ARXBay 0", position="0")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="ARXBay 1", position="1")
+        role = DeviceRole.objects.create(name="ARXRole", slug="arxrole")
+        site = Site.objects.create(name="ARXSite", slug="arxsite")
+        cls.device = Device.objects.create(name="arx-dev-01", device_type=cls.device_type, role=role, site=site)
+        cls.bay0 = ModuleBay.objects.get(device=cls.device, name="ARXBay 0")
+        cls.bay1 = ModuleBay.objects.get(device=cls.device, name="ARXBay 1")
+
+    def test_channel_rule_no_interfaces_skips(self):
+        """Channel rule skips module with no interfaces (line 750: continue)."""
+        from netbox_interface_name_rules.engine import apply_rule_to_existing
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        # Module with NO interfaces
+        Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        count = apply_rule_to_existing(rule)
+        self.assertEqual(count, 0)
+
+    def test_channel_rule_id_set_filters_base(self):
+        """Channel rule with id_set skips when base_iface.pk not in id_set (line 753)."""
+        from netbox_interface_name_rules.engine import apply_rule_to_existing
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="Eth99", type="100gbase-x-qsfp28")
+        # Pass an id_set that does NOT include iface.pk
+        count = apply_rule_to_existing(rule, interface_ids=[iface.pk + 9999])
+        self.assertEqual(count, 0)
+        # Interface should be unchanged
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "Eth99")
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _rename_device_interface template/full_clean exception paths (lines 131-156)
+# ---------------------------------------------------------------------------
+
+
+class EngineRenameDeviceInterfaceExceptionTest(TestCase):
+    """Test _rename_device_interface exception paths for template and validation errors."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="RDIXMfg", slug="rdixmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="RDIX-Dev", slug="rdix-dev")
+        cls.platform = Platform.objects.create(name="RDIX-IOS", slug="rdix-ios")
+        role = DeviceRole.objects.create(name="RDIXRole", slug="rdixrole")
+        site = Site.objects.create(name="RDIXSite", slug="rdixsite")
+        vc = VirtualChassis.objects.create(name="rdix-vc")
+        cls.device = Device.objects.create(
+            name="rdix-sw1",
+            device_type=cls.device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+            platform=cls.platform,
+        )
+
+    def test_template_exception_skips_interface(self):
+        """_rename_device_interface skips when template evaluation raises (lines 131-138)."""
+        from netbox_interface_name_rules.engine import apply_device_interface_rules
+
+        # Create a device-interface rule with an unsafe template that triggers ValueError
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="{1/0}",  # division not allowed — ValueError from evaluate_name_template
+        )
+        Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
+        apply_device_interface_rules(self.device)
+        # Interface should NOT be renamed (exception was caught)
+        iface = Interface.objects.get(device=self.device, name="Gi0/1")
+        self.assertIsNotNone(iface)
+        rule.delete()
+
+    def test_full_clean_exception_skips_interface(self):
+        """_rename_device_interface skips when full_clean raises (lines 147-156)."""
+        from netbox_interface_name_rules.engine import apply_device_interface_rules
+
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern=r"Gi\d+/\d+",
+            name_template="GigabitEthernet{vc_position}/{port}",
+        )
+        Interface.objects.create(device=self.device, name="Gi0/2", type="1000base-t")
+        with patch("dcim.models.Interface.full_clean", side_effect=Exception("validation fail")):
+            apply_device_interface_rules(self.device)
+        # Even with exception, no unhandled error
+        rule.delete()
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _channel_rule_entry ValueError path (lines 618-619)
+# ---------------------------------------------------------------------------
+
+
+class EngineChannelRuleEntryValueErrorTest(TestCase):
+    """Test _channel_rule_entry handles ValueError from template evaluation (lines 618-619)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ChRuleXMfg", slug="chrulexmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="ChRuleX-Dev", slug="chrulex-dev")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="ChRuleX-SFP", part_number="ChRuleX-SFP"
+        )
+        ModuleBayTemplate.objects.create(device_type=device_type, name="CRBay 0", position="0")
+        role = DeviceRole.objects.create(name="ChRuleXRole", slug="chrulexrole")
+        site = Site.objects.create(name="ChRuleXSite", slug="chrulexsite")
+        cls.device = Device.objects.create(name="chrulex-dev-01", device_type=device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="CRBay 0")
+
+    def test_valueerror_in_template_sets_error_name(self):
+        """_channel_rule_entry stores an ``<error: …>`` placeholder when evaluate_name_template raises.
+
+        evaluate_name_template is patched to raise ValueError for every call so
+        the loop that builds expected_names catches it and collapses to a single
+        error-placeholder entry (lines 618-619). The result dict is then returned
+        because the placeholder is not in existing_names.
+        """
+        from netbox_interface_name_rules.engine import _channel_rule_entry
+
+        rule = InterfaceNameRule(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+
+        with patch(
+            "netbox_interface_name_rules.engine.evaluate_name_template",
+            side_effect=ValueError("bad"),
+        ):
+            result = _channel_rule_entry(rule, module, [iface], variables)
+        # With ValueError, expected_names becomes ["<error: bad>"], which is not in existing_names
+        self.assertIsNotNone(result)
+        self.assertEqual(result["new_names"], ["<error: bad>"])
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _process_channel_module with empty ifaces (line 640)
+# ---------------------------------------------------------------------------
+
+
+class EngineProcessChannelModuleEmptyIfacesTest(TestCase):
+    """Test _process_channel_module returns early when ifaces is empty (line 640)."""
+
+    def test_empty_ifaces_returns_zero_checked_false(self):
+        """_process_channel_module returns (0, False) for empty ifaces list (line 640)."""
+        from netbox_interface_name_rules.engine import _process_channel_module
+
+        result = _process_channel_module(
+            rule=MagicMock(channel_count=2),
+            module=MagicMock(),
+            ifaces=[],
+            variables={},
+            limit=None,
+            results=[],
+            module_qs=MagicMock(),
+            processed_pks=set(),
+        )
+        self.assertEqual(result, (0, False))
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _process_channel_module limit reached (line 645)
+# ---------------------------------------------------------------------------
+
+
+class EngineProcessChannelModuleLimitTest(TestCase):
+    """Test _process_channel_module stops when limit is reached (line 645)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ChLimMfg", slug="chlimmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="ChLim-Dev", slug="chlim-dev")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="ChLim-SFP", part_number="ChLim-SFP"
+        )
+        ModuleBayTemplate.objects.create(device_type=device_type, name="CLBay 0", position="0")
+        role = DeviceRole.objects.create(name="ChLimRole", slug="chlimrole")
+        site = Site.objects.create(name="ChLimSite", slug="chlimsite")
+        cls.device = Device.objects.create(name="chlim-dev-01", device_type=device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="CLBay 0")
+
+    def test_limit_reached_returns_true(self):
+        """_process_channel_module returns should_stop=True when the result limit is hit.
+
+        ``results`` is pre-seeded with one entry so that after _channel_rule_entry
+        adds a new entry the total reaches ``limit=1``, triggering the early-stop
+        path (line 644-645). The module_qs mock with count=0 ensures no extra
+        work is counted from the remaining queryset.
+        """
+        from netbox_interface_name_rules.engine import _process_channel_module
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+
+        results = [{"fake": "entry"}]  # already 1 result
+        qs_mock = MagicMock()
+        qs_mock.exclude.return_value.count.return_value = 0
+
+        _checked, should_stop = _process_channel_module(
+            rule=rule,
+            module=module,
+            ifaces=[iface],
+            variables=variables,
+            limit=1,  # limit=1 means stop after first result
+            results=results,
+            module_qs=qs_mock,
+            processed_pks=set(),
+        )
+        # If the entry was added and limit=1 reached, should_stop should be True
+        self.assertTrue(should_stop)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — two-level nested bay grandparent slot (lines 418–419)
+# ---------------------------------------------------------------------------
+
+
+class TwoLevelNestedBayTest(TestCase):
+    """Test _resolve_slot grandparent-slot detection for a 3-deep bay hierarchy.
+
+    Real hardware: chassis → line card bay → SFP bay.
+    When build_variables is called for the innermost bay, slot must resolve
+    to the chassis bay position (the grandparent), not the immediate parent.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="NestMfg", slug="nestmfg")
+        # Device type with two top-level bays
+        cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="Nest-Chassis", slug="nest-chassis")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Chassis Bay", position="2")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Direct Bay", position="5")
+
+        # Chassis module type — has one sub-bay for line cards
+        cls.chassis_type = ModuleType.objects.create(manufacturer=mfg, model="Nest-LC-Chassis", part_number="NLC")
+        ModuleBayTemplate.objects.create(module_type=cls.chassis_type, name="LC Bay", position="1")
+
+        # Line-card module type — has one sub-bay for SFPs
+        cls.line_card_type = ModuleType.objects.create(manufacturer=mfg, model="Nest-LineCard", part_number="NLC-LC")
+        ModuleBayTemplate.objects.create(module_type=cls.line_card_type, name="SFP Bay", position="0")
+
+        # SFP module type (leaf, no sub-bays needed for the test)
+        cls.sfp_type = ModuleType.objects.create(manufacturer=mfg, model="Nest-SFP", part_number="NSFP")
+
+        role = DeviceRole.objects.create(name="NestRole", slug="nestrole")
+        site = Site.objects.create(name="NestSite", slug="nestsite")
+        cls.device = Device.objects.create(name="nest-sw-01", device_type=cls.device_type, role=role, site=site)
+        cls.outer_bay = ModuleBay.objects.get(device=cls.device, name="Chassis Bay")
+        cls.direct_bay = ModuleBay.objects.get(device=cls.device, name="Direct Bay")
+
+        # Install chassis → creates mid_bay (parent=outer_bay, auto via ModuleBay.save)
+        cls.chassis = Module.objects.create(device=cls.device, module_bay=cls.outer_bay, module_type=cls.chassis_type)
+        cls.mid_bay = ModuleBay.objects.get(device=cls.device, module=cls.chassis, name="LC Bay")
+
+        # Install line card in mid_bay → creates inner_bay (parent=mid_bay, auto via ModuleBay.save)
+        cls.line_card = Module.objects.create(device=cls.device, module_bay=cls.mid_bay, module_type=cls.line_card_type)
+        cls.inner_bay = ModuleBay.objects.get(device=cls.device, module=cls.line_card, name="SFP Bay")
+
+    def test_slot_resolves_to_grandparent_position(self):
+        """build_variables on inner_bay resolves slot to outer_bay.position (lines 418-419).
+
+        inner_bay.parent = mid_bay, mid_bay.parent = outer_bay,
+        outer_bay.installed_module = chassis → slot = outer_bay.position = '2'.
+        """
+        variables = build_variables(self.inner_bay)
+        self.assertEqual(variables["slot"], "2")
+
+    def test_parent_bay_position_is_mid_bay_position(self):
+        """parent_bay_position for inner_bay is mid_bay.position ('1')."""
+        variables = build_variables(self.inner_bay)
+        self.assertEqual(variables["parent_bay_position"], "1")
+
+
+# ---------------------------------------------------------------------------
+# engine.py — apply_rule_to_existing exception in plain-interface loop (lines 773-780)
+# ---------------------------------------------------------------------------
+
+
+class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
+    """Test that exception from _apply_rule_to_interface is caught per-interface.
+
+    The first interface is successfully renamed; the second raises an exception
+    that is swallowed by the loop (lines 773-780).  apply_rule_to_existing
+    must not propagate the exception and must return the count from successful calls.
+    """
+
+    def test_exception_on_second_call_is_swallowed(self):
+        """Second _apply_rule_to_interface failure is logged; first rename still counted."""
+        from netbox_interface_name_rules.engine import _apply_rule_to_interface as _real_fn
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        module0 = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        module1 = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
+        iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
+        iface1 = Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
+
+        call_count = [0]
+
+        def _side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise RuntimeError("forced failure on second call")
+            return _real_fn(*args, **kwargs)
+
+        with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
+            count = apply_rule_to_existing(rule)
+
+        self.assertEqual(count, 1)
+        iface0.refresh_from_db()
+        iface1.refresh_from_db()
+        self.assertEqual(iface0.name, "et-0/0/0")  # first was renamed
+        self.assertEqual(iface1.name, "1")  # second was skipped
+
+    def test_exception_on_channel_call_is_swallowed(self):
+        """Exception inside the channel-rule branch (lines 756-764) is logged and loop continues."""
+        from netbox_interface_name_rules.engine import _apply_rule_to_interface as _real_fn
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+        module0 = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        module1 = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
+        iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
+
+        call_count = [0]
+
+        def _side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise RuntimeError("forced channel failure")
+            return _real_fn(*args, **kwargs)
+
+        with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
+            count = apply_rule_to_existing(rule)
+
+        # First module produced channels; second raised and was skipped
+        self.assertGreaterEqual(count, 1)
+        iface0.refresh_from_db()
+        self.assertEqual(iface0.name, "xe-0/0/0:0")
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _build_module_qs parent_module_type filter (line 588)
+# ---------------------------------------------------------------------------
+
+
+class BuildModuleQsParentTypeTest(TestCase):
+    """Test _build_module_qs applies rule.parent_module_type filter (line 588).
+
+    A rule scoped to chassis_type as parent should include only SFPs installed
+    in bays whose parent bay hosts a chassis, not SFPs installed directly.
+    Uses an independent fixture (not the 3-level nested hierarchy) to keep
+    mid_bay available for SFP installation.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="BmqMfg", slug="bmqmfg")
+        device_type = DeviceType.objects.create(manufacturer=mfg, model="BMQ-Switch", slug="bmq-switch")
+        # Two top-level bays: one for the chassis, one for direct SFP
+        ModuleBayTemplate.objects.create(device_type=device_type, name="Outer Bay", position="2")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="Direct Bay", position="5")
+
+        # Chassis module type — has one sub-bay (mid_bay)
+        cls.chassis_type = ModuleType.objects.create(manufacturer=mfg, model="BMQ-Chassis", part_number="BMQ-C")
+        ModuleBayTemplate.objects.create(module_type=cls.chassis_type, name="Mid Bay", position="1")
+
+        cls.sfp_type = ModuleType.objects.create(manufacturer=mfg, model="BMQ-SFP", part_number="BMQ-SFP")
+
+        role = DeviceRole.objects.create(name="BmqRole", slug="bmqrole")
+        site = Site.objects.create(name="BmqSite", slug="bmqsite")
+        cls.device = Device.objects.create(name="bmq-sw-01", device_type=device_type, role=role, site=site)
+        cls.outer_bay = ModuleBay.objects.get(device=cls.device, name="Outer Bay")
+        cls.direct_bay = ModuleBay.objects.get(device=cls.device, name="Direct Bay")
+
+        # Install chassis → creates mid_bay (parent=outer_bay)
+        cls.chassis = Module.objects.create(device=cls.device, module_bay=cls.outer_bay, module_type=cls.chassis_type)
+        cls.mid_bay = ModuleBay.objects.get(device=cls.device, module=cls.chassis, name="Mid Bay")
+
+        # SFP installed in mid_bay (parent chain: mid_bay → outer_bay with chassis)
+        cls.sfp_in_mid = Module.objects.create(device=cls.device, module_bay=cls.mid_bay, module_type=cls.sfp_type)
+        # SFP installed directly in a top-level device bay (no chassis in parent chain)
+        cls.sfp_direct = Module.objects.create(device=cls.device, module_bay=cls.direct_bay, module_type=cls.sfp_type)
+
+    def test_parent_module_type_filters_to_matching_module(self):
+        """Only modules whose bay's parent has the matching module type are returned (line 588)."""
+        from netbox_interface_name_rules.engine import _build_module_qs
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.sfp_type,
+            parent_module_type=self.chassis_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        qs = _build_module_qs(rule)
+        pks = list(qs.values_list("pk", flat=True))
+        self.assertIn(self.sfp_in_mid.pk, pks)
+        self.assertNotIn(self.sfp_direct.pk, pks)
+
+    def test_no_parent_module_type_returns_all(self):
+        """Rule without parent_module_type returns all matching modules regardless of nesting."""
+        from netbox_interface_name_rules.engine import _build_module_qs
+
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.sfp_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        qs = _build_module_qs(rule)
+        pks = list(qs.values_list("pk", flat=True))
+        self.assertIn(self.sfp_in_mid.pk, pks)
+        self.assertIn(self.sfp_direct.pk, pks)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _flag_rule_potentially_deprecated exception handler (lines 282-283)
+# ---------------------------------------------------------------------------
+
+
+class FlagDeprecatedExceptionTest(TestCase):
+    """Test that _flag_rule_potentially_deprecated swallows exceptions (lines 282-283)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="FlagXMfg", slug="flagxmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=mfg, model="FlagX-SFP", part_number="FlagX-SFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+
+    def test_tags_add_exception_is_swallowed(self):
+        """_flag_rule_potentially_deprecated does not propagate exception from tags.add (lines 282-283)."""
+        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
+
+        with patch.object(self.rule.tags, "add", side_effect=Exception("tag DB error")):
+            _flag_rule_potentially_deprecated(self.rule)  # Must not raise
+
+    def test_tag_getorcreate_exception_is_swallowed(self):
+        """_flag_rule_potentially_deprecated swallows Tag.objects.get_or_create failures."""
+        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
+        from extras.models import Tag
+
+        with patch.object(Tag.objects, "get_or_create", side_effect=Exception("tag table error")):
+            _flag_rule_potentially_deprecated(self.rule)  # Must not raise
+
+
+# ---------------------------------------------------------------------------
+# engine.py — DB save exception rollback in _try_rename_device_interface (lines 159-168)
+# ---------------------------------------------------------------------------
+
+
+class DeviceInterfaceSaveExceptionTest(TestCase):
+    """Test _try_rename_device_interface rolls back name on iface.save() failure (lines 159-168)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="SaveXMfg", slug="savexmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="SaveX-Dev", slug="savex-dev")
+        role = DeviceRole.objects.create(name="SaveXRole", slug="savexrole")
+        site = Site.objects.create(name="SaveXSite", slug="savexsite")
+        vc = VirtualChassis.objects.create(name="savex-vc")
+        cls.device = Device.objects.create(
+            name="savex-sw1",
+            device_type=cls.device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+        )
+
+    def test_save_exception_restores_name_and_returns_false(self):
+        """When iface.save() raises, name is rolled back to old_name and False returned (lines 159-168)."""
+        from netbox_interface_name_rules.engine import _try_rename_device_interface
+
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="xe-{vc_position}/{port}",
+        )
+        iface = Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
+
+        with patch.object(Interface, "save", side_effect=DatabaseError("disk full")):
+            result = _try_rename_device_interface(rule, iface, "1", self.device, set())
+
+        self.assertFalse(result)
+        self.assertEqual(iface.name, "Gi0/1")  # rolled back
+
+
+# ---------------------------------------------------------------------------
+# engine.py — idempotency of force_reapply=True on breakout channel names (T7)
+# ---------------------------------------------------------------------------
+
+
+class ForceReapplyBreakoutIdempotencyTest(EngineAdvancedFixtures):
+    """Test that a second apply_interface_name_rules with force_reapply=True is idempotent.
+
+    The first call creates the breakout channel interfaces from a raw "0" interface.
+    The second call must not create duplicates or rename them again.
+    """
+
+    def test_second_force_reapply_does_not_create_duplicates(self):
+        """Calling apply_interface_name_rules twice with force_reapply=True produces no duplicates."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="Hu0/0/0/{bay_position}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
+
+        # First apply: renames base to :0 and creates :1 :2 :3
+        count1 = apply_interface_name_rules(module, self.bay0, force_reapply=False)
+        self.assertEqual(count1, 4)
+
+        iface_names_after_first = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+        expected = ["Hu0/0/0/0:0", "Hu0/0/0/0:1", "Hu0/0/0/0:2", "Hu0/0/0/0:3"]
+        self.assertEqual(iface_names_after_first, expected)
+
+        # Second apply with force_reapply=True: must not create duplicates or rename
+        count2 = apply_interface_name_rules(module, self.bay0, force_reapply=True)
+        self.assertEqual(count2, 0)
+
+        iface_names_after_second = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+        self.assertEqual(iface_names_after_second, expected)
+        self.assertEqual(Interface.objects.filter(module=module).count(), 4)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — regex rule specificity tie-breaking by pk (line 349)
+# ---------------------------------------------------------------------------
+
+
+class RegexTiebreakerTest(TestCase):
+    """Test that _find_regex_match returns the lower-pk rule when pattern lengths are equal (line 349).
+
+    The unique constraint on (module_type_pattern, parent_mt, device_type, platform) means two rules
+    cannot share an identical pattern with the same scope.  Tie-breaking is therefore exercised with
+    two *different* patterns of equal character length that both match the target module type.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="TieMfg", slug="tiemfg")
+        # "TSAME-100" is matched by both patterns below
+        cls.module_type = ModuleType.objects.create(manufacturer=mfg, model="TSAME-100", part_number="TSAME-100")
+        # Two rules with equal-length (9-char) patterns that both fullmatch "TSAME-100"
+        cls.rule_first = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="TSAME-1..",  # 9 chars
+            name_template="first-{bay_position}",
+        )
+        cls.rule_second = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="TSAME-...",  # 9 chars (different pattern, same length)
+            name_template="second-{bay_position}",
+        )
+
+    def test_lower_pk_wins_on_same_pattern_length(self):
+        """When two regex rules have equal-length patterns, the one with the lower pk is returned."""
+        from netbox_interface_name_rules.engine import find_matching_rule
+
+        self.assertLess(self.rule_first.pk, self.rule_second.pk)
+        matched = find_matching_rule(self.module_type, None, None)
+        self.assertEqual(matched, self.rule_first)
+
+    def test_longer_pattern_wins_over_shorter(self):
+        """A more specific (longer) pattern beats a shorter one regardless of pk order."""
+        from netbox_interface_name_rules.engine import find_matching_rule
+
+        mfg = Manufacturer.objects.get(name="TieMfg")
+        # Use a different prefix so these rules don't interact with the TSAME rules above
+        module_type_specific = ModuleType.objects.create(
+            manufacturer=mfg, model="TLONG-100G-LR4", part_number="TLONG-LR4"
+        )
+        rule_short = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="TLONG-.*",  # 8 chars
+            name_template="short-{bay_position}",
+        )
+        rule_long = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="TLONG-100G-LR4",  # 14 chars (more specific)
+            name_template="long-{bay_position}",
+        )
+        # rule_short was created first → lower pk; rule_long has longer pattern → must win
+        self.assertLess(rule_short.pk, rule_long.pk)
+        matched = find_matching_rule(module_type_specific, None, None)
+        self.assertEqual(matched, rule_long)

@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for Django signal handlers: module post_save and device VC membership changes."""
 
+from unittest.mock import MagicMock, patch
+
 from dcim.models import (
     Device,
     DeviceRole,
@@ -256,3 +258,249 @@ class SignalDeviceHandlerTest(TestCase):
             vc_position=2,
         )
         _apply_rules_for_device_deferred(device_no_modules.pk)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — exception paths (lines 39-40, 69, 115-116, 143-145, 214-234)
+# ---------------------------------------------------------------------------
+
+
+class SignalExceptionPathsTest(TestCase):
+    """Test exception handling in signal handlers."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="SigXMfg", slug="sigxmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="SigX-Dev", slug="sigx-dev")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="SigX-SFP", part_number="SigX-SFP")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="SigXBay 0", position="0")
+        role = DeviceRole.objects.create(name="SigXRole", slug="sigxrole")
+        site = Site.objects.create(name="SigXSite", slug="sigxsite")
+        cls.vc = VirtualChassis.objects.create(name="sigx-vc")
+        cls.device = Device.objects.create(
+            name="sigx-sw1",
+            device_type=cls.device_type,
+            role=role,
+            site=site,
+            virtual_chassis=cls.vc,
+            vc_position=1,
+        )
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="SigXBay 0")
+
+    def test_pre_save_module_exception_sets_none(self):
+        """on_module_pre_save catches DB exceptions and sets _prev_module_type_id=None (lines 39-40)."""
+        from netbox_interface_name_rules.signals import on_module_pre_save
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        with patch.object(Module.objects.__class__, "filter", side_effect=Exception("db error")):
+            on_module_pre_save(Module, module)
+        self.assertIsNone(module._prev_module_type_id)
+
+    def test_module_saved_no_prev_type_returns_early(self):
+        """on_module_saved returns early (line 69) when _prev_module_type_id is not set."""
+        from netbox_interface_name_rules.signals import on_module_saved
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        # _prev_module_type_id is not set → getattr returns None → line 69 return
+        if hasattr(module, "_prev_module_type_id"):
+            del module.__dict__["_prev_module_type_id"]
+        on_module_saved(Module, module, created=False)  # Should return without error
+
+    def test_pre_save_device_exception_sets_none(self):
+        """on_device_pre_save catches DB exceptions and sets attributes to None (lines 143-145)."""
+        from netbox_interface_name_rules.signals import on_device_pre_save
+
+        with patch.object(Device.objects.__class__, "filter", side_effect=Exception("db error")):
+            on_device_pre_save(Device, self.device)
+        self.assertIsNone(self.device._prev_virtual_chassis_id)
+        self.assertIsNone(self.device._prev_vc_position)
+
+    def test_deferred_apply_engine_exception_is_logged(self):
+        """_apply_rules_deferred catches apply_interface_name_rules exception (lines 115-116)."""
+        from netbox_interface_name_rules.signals import _apply_rules_deferred
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        with patch(
+            "netbox_interface_name_rules.engine.apply_interface_name_rules", side_effect=Exception("engine fail")
+        ):
+            _apply_rules_deferred(module.pk, self.bay.pk)  # Should not raise
+
+    def test_deferred_device_module_engine_exception_is_logged(self):
+        """_apply_rules_for_device_deferred catches exception from module loop (lines 218-225)."""
+        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+
+        Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        with patch("netbox_interface_name_rules.engine.apply_interface_name_rules", side_effect=Exception("loop fail")):
+            _apply_rules_for_device_deferred(self.device.pk)  # Should not raise
+
+    def test_deferred_device_device_interface_exception_is_logged(self):
+        """_apply_rules_for_device_deferred catches exception from device interface rules (lines 233-234)."""
+        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+
+        with patch(
+            "netbox_interface_name_rules.engine.apply_device_interface_rules",
+            side_effect=Exception("device rule fail"),
+        ):
+            _apply_rules_for_device_deferred(self.device.pk)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — module with null bay path (line 214)
+# ---------------------------------------------------------------------------
+
+
+class SignalModuleNullBayPathTest(TestCase):
+    """Test _apply_rules_for_device_deferred skips modules with null module_bay (line 214)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="NullBayMfg", slug="nullbaymfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="NullBay-Dev", slug="nullbay-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="NBBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="NullBay-SFP", part_number="NullBay-SFP"
+        )
+        role = DeviceRole.objects.create(name="NullBayRole", slug="nullbayrole")
+        site = Site.objects.create(name="NullBaySite", slug="nullbaysite")
+        vc = VirtualChassis.objects.create(name="nullbay-vc")
+        cls.device = Device.objects.create(
+            name="nullbay-sw1",
+            device_type=device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+        )
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="NBBay 0")
+
+    def test_module_with_null_bay_is_skipped(self):
+        """_apply_rules_for_device_deferred continues past modules with module_bay=None.
+
+        The signal function iterates over all modules on a device and calls
+        apply_interface_name_rules for each one. When module_bay is None (e.g. due
+        to a data inconsistency), the loop must skip that entry via ``continue``
+        rather than passing None to the engine. A FakeModule with module_bay=None
+        is injected via a patch on Module.objects.filter so the DB doesn't need
+        to hold inconsistent data.
+        """
+        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+
+        # Mock the module queryset to return a module whose module_bay attr is None
+        class FakeModule:
+            module_bay = None
+            module_type = module.module_type
+
+        with patch(
+            "dcim.models.Module.objects.filter",
+            return_value=MagicMock(
+                filter=MagicMock(return_value=MagicMock()),
+                select_related=MagicMock(return_value=[FakeModule()]),
+            ),
+        ):
+            _apply_rules_for_device_deferred(self.device.pk)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — _apply_rules_for_device_deferred outer exception handler (lines 224-225)
+# ---------------------------------------------------------------------------
+
+
+class SignalOuterModuleLoopExceptionTest(TestCase):
+    """Test the outer except in _apply_rules_for_device_deferred (lines 224-225).
+
+    Lines 208-225 wrap the entire module loop in a try/except.  Exceptions from
+    the inner loop (apply_interface_name_rules) are caught by the inner handler
+    (lines 218-223).  The outer handler catches anything raised *outside* the inner
+    try — for example, if accessing module.module_bay raises unexpectedly.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="OuterXMfg", slug="outerxmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="OuterX-Dev", slug="outerx-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="OXBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="OuterX-SFP", part_number="OuterX-SFP"
+        )
+        role = DeviceRole.objects.create(name="OuterXRole", slug="outerxrole")
+        site = Site.objects.create(name="OuterXSite", slug="outerxsite")
+        vc = VirtualChassis.objects.create(name="outerx-vc")
+        cls.device = Device.objects.create(
+            name="outerx-sw1",
+            device_type=device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+        )
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="OXBay 0")
+
+    def test_module_bay_access_exception_caught_by_outer_handler(self):
+        """Exception raised by module.module_bay outside the inner try is caught by outer handler (lines 224-225)."""
+        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+
+        # A fake module object whose .module_bay attribute raises — this escapes the inner try
+        class _RaisingModule:
+            @property
+            def module_bay(self):
+                raise RuntimeError("outer loop failure")
+
+        Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+
+        with patch(
+            "dcim.models.Module.objects.filter",
+            return_value=MagicMock(select_related=MagicMock(return_value=[_RaisingModule()])),
+        ):
+            _apply_rules_for_device_deferred(self.device.pk)  # Must not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — module deletion cascades to interfaces (documents CASCADE behavior)
+# ---------------------------------------------------------------------------
+
+
+class ModuleDeletionCascadeTest(TestCase):
+    """Verify that deleting a module also deletes its interfaces (CASCADE on_delete).
+
+    Interface.module uses on_delete=CASCADE, so when a module is removed from a bay
+    all its renamed interfaces are deleted rather than orphaned.  This test documents
+    the expected behavior so that any inadvertent change in cascade policy is caught.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="DelCasMfg", slug="delcasmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="DelCas-Dev", slug="delcas-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="DCBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="DelCas-SFP", part_number="DelCas-SFP"
+        )
+        role = DeviceRole.objects.create(name="DelCasRole", slug="delcasrole")
+        site = Site.objects.create(name="DelCasSite", slug="delcassite")
+        cls.device = Device.objects.create(name="delcas-sw1", device_type=device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="DCBay 0")
+
+    def test_interfaces_deleted_when_module_removed(self):
+        """Deleting a module cascades to its interfaces — renamed interfaces are removed."""
+        from netbox_interface_name_rules.engine import apply_interface_name_rules
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+
+        # Rename the interface
+        renamed = apply_interface_name_rules(module, self.bay)
+        self.assertEqual(renamed, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "et-0/0/0")
+
+        iface_pk = iface.pk
+        module.delete()
+
+        # Interface was cascade-deleted with the module
+        self.assertFalse(Interface.objects.filter(pk=iface_pk).exists())

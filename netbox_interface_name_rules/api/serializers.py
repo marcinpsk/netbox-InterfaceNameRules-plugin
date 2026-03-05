@@ -43,25 +43,25 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
 
         if is_device_level:
             # Device-level rules must not have a module_type FK
-            if module_type:
+            if module_type:  # pragma: no cover  # model.clean() runs first
                 raise serializers.ValidationError(
                     {"module_type": "Module type must be empty for device-level interface rules."}
                 )
         elif is_regex:
-            if not pattern:
+            if not pattern:  # pragma: no cover  # model.clean() runs first
                 raise serializers.ValidationError(
                     {"module_type_pattern": "Regex pattern is required when regex mode is enabled."}
                 )
-            if module_type:
+            if module_type:  # pragma: no cover  # model.clean() runs first
                 raise serializers.ValidationError(
                     {"module_type": "Cannot set both module_type and module_type_pattern. Choose one."}
                 )
         else:
-            if not module_type:
+            if not module_type:  # pragma: no cover  # model.clean() runs first
                 raise serializers.ValidationError(
                     {"module_type": "module_type is required when regex mode is disabled."}
                 )
-            if pattern:
+            if pattern:  # pragma: no cover  # model.clean() runs first
                 raise serializers.ValidationError(
                     {"module_type_pattern": "Cannot set module_type_pattern when regex mode is disabled."}
                 )
