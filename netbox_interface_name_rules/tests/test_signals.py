@@ -400,3 +400,107 @@ class SignalModuleNullBayPathTest(TestCase):
             ),
         ):
             _apply_rules_for_device_deferred(self.device.pk)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — _apply_rules_for_device_deferred outer exception handler (lines 224-225)
+# ---------------------------------------------------------------------------
+
+
+class SignalOuterModuleLoopExceptionTest(TestCase):
+    """Test the outer except in _apply_rules_for_device_deferred (lines 224-225).
+
+    Lines 208-225 wrap the entire module loop in a try/except.  Exceptions from
+    the inner loop (apply_interface_name_rules) are caught by the inner handler
+    (lines 218-223).  The outer handler catches anything raised *outside* the inner
+    try — for example, if accessing module.module_bay raises unexpectedly.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="OuterXMfg", slug="outerxmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="OuterX-Dev", slug="outerx-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="OXBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="OuterX-SFP", part_number="OuterX-SFP"
+        )
+        role = DeviceRole.objects.create(name="OuterXRole", slug="outerxrole")
+        site = Site.objects.create(name="OuterXSite", slug="outerxsite")
+        vc = VirtualChassis.objects.create(name="outerx-vc")
+        cls.device = Device.objects.create(
+            name="outerx-sw1",
+            device_type=device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+        )
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="OXBay 0")
+
+    def test_module_bay_access_exception_caught_by_outer_handler(self):
+        """Exception raised by module.module_bay outside the inner try is caught by outer handler (lines 224-225)."""
+        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+
+        # A fake module object whose .module_bay attribute raises — this escapes the inner try
+        class _RaisingModule:
+            @property
+            def module_bay(self):
+                raise RuntimeError("outer loop failure")
+
+        Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+
+        with patch(
+            "dcim.models.Module.objects.filter",
+            return_value=MagicMock(select_related=MagicMock(return_value=[_RaisingModule()])),
+        ):
+            _apply_rules_for_device_deferred(self.device.pk)  # Must not raise
+
+
+# ---------------------------------------------------------------------------
+# signals.py — module deletion cascades to interfaces (documents CASCADE behavior)
+# ---------------------------------------------------------------------------
+
+
+class ModuleDeletionCascadeTest(TestCase):
+    """Verify that deleting a module also deletes its interfaces (CASCADE on_delete).
+
+    Interface.module uses on_delete=CASCADE, so when a module is removed from a bay
+    all its renamed interfaces are deleted rather than orphaned.  This test documents
+    the expected behavior so that any inadvertent change in cascade policy is caught.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="DelCasMfg", slug="delcasmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="DelCas-Dev", slug="delcas-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="DCBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="DelCas-SFP", part_number="DelCas-SFP"
+        )
+        role = DeviceRole.objects.create(name="DelCasRole", slug="delcasrole")
+        site = Site.objects.create(name="DelCasSite", slug="delcassite")
+        cls.device = Device.objects.create(name="delcas-sw1", device_type=device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="DCBay 0")
+
+    def test_interfaces_deleted_when_module_removed(self):
+        """Deleting a module cascades to its interfaces — renamed interfaces are removed."""
+        from netbox_interface_name_rules.engine import apply_interface_name_rules
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+
+        # Rename the interface
+        renamed = apply_interface_name_rules(module, self.bay)
+        self.assertEqual(renamed, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "et-0/0/0")
+
+        iface_pk = iface.pk
+        module.delete()
+
+        # Interface was cascade-deleted with the module
+        self.assertFalse(Interface.objects.filter(pk=iface_pk).exists())
