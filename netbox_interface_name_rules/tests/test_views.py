@@ -13,6 +13,8 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 
 User = get_user_model()
 
+TEST_PASSWORD = "testpass123"  # noqa: S105 - test credential only
+
 
 class ViewTestBase(TestCase):
     """Base class that creates a superuser and logs in."""
@@ -22,7 +24,7 @@ class ViewTestBase(TestCase):
         """Create superuser and basic InterfaceNameRule for view tests."""
         cls.superuser = User.objects.create_superuser(
             username="viewtestuser",
-            password="testpass123",
+            password=TEST_PASSWORD,
             email="viewtest@example.com",
         )
         manufacturer = Manufacturer.objects.create(name="ViewMfg", slug="viewmfg")
@@ -47,7 +49,7 @@ class ViewTestBase(TestCase):
 
     def setUp(self):
         """Log in the superuser before each test."""
-        self.client.login(username="viewtestuser", password="testpass123")
+        self.client.login(username="viewtestuser", password=TEST_PASSWORD)
 
 
 class RuleListViewTest(ViewTestBase):
@@ -129,8 +131,8 @@ class RuleToggleViewTest(ViewTestBase):
     def test_toggle_ajax_no_permission_returns_403(self):
         """Authenticated user without change permission gets 403 on AJAX toggle."""
         # Create a regular user without permissions
-        User.objects.create_user(username="noperm_user", password="testpass123")
-        self.client.login(username="noperm_user", password="testpass123")
+        User.objects.create_user(username="noperm_user", password=TEST_PASSWORD)
+        self.client.login(username="noperm_user", password=TEST_PASSWORD)
         url = self._toggle_url(self.rule.pk)
         response = self.client.post(url, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
         self.assertEqual(response.status_code, 403)
@@ -342,7 +344,7 @@ class ViewTestBase2(TestCase):
     def setUpTestData(cls):
         cls.superuser = User.objects.create_superuser(
             username="covextrauser",
-            password="testpass123",
+            password=TEST_PASSWORD,
             email="covextra@example.com",
         )
         manufacturer = Manufacturer.objects.create(name="CovXMfg", slug="covxmfg")
@@ -359,7 +361,7 @@ class ViewTestBase2(TestCase):
         )
 
     def setUp(self):
-        self.client.login(username="covextrauser", password="testpass123")
+        self.client.login(username="covextrauser", password=TEST_PASSWORD)
 
 
 class RuleTestViewGetWithRuleIdTest(ViewTestBase2):
@@ -426,8 +428,8 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
 
     def test_post_no_change_permission_raises_forbidden(self):
         """POST apply without dcim.change_interface permission raises PermissionDenied (line 382-383)."""
-        User.objects.create_user(username="noperm_apply_user", password="testpass123")
-        self.client.login(username="noperm_apply_user", password="testpass123")
+        User.objects.create_user(username="noperm_apply_user", password=TEST_PASSWORD)
+        self.client.login(username="noperm_apply_user", password=TEST_PASSWORD)
         url = self._url(self.rule.pk)
         response = self.client.post(url, {"action": "apply"})
         self.assertEqual(response.status_code, 403)
@@ -449,8 +451,8 @@ class RuleToggleNoPermissionNonAjaxTest(ViewTestBase2):
         raises PermissionDenied when the user lacks change_interfacenamerule, which
         Django converts to a 403 response.
         """
-        User.objects.create_user(username="noperm_tog_user2", password="testpass123")
-        self.client.login(username="noperm_tog_user2", password="testpass123")
+        User.objects.create_user(username="noperm_tog_user2", password=TEST_PASSWORD)
+        self.client.login(username="noperm_tog_user2", password=TEST_PASSWORD)
         url = self._toggle_url(self.rule.pk)
         response = self.client.post(url)
         self.assertEqual(response.status_code, 403)
