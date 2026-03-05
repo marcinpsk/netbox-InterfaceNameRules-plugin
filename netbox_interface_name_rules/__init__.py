@@ -16,6 +16,8 @@ class InterfaceNameRulesConfig(PluginConfig):
     min_version = "4.2.0"
     required_settings = []
     default_settings = {}
+    author = "Marcin Zieba"
+    author_email = "marcinpsk@gmail.com"
 
     def ready(self):
         """Connect signal handlers after all apps are loaded."""
