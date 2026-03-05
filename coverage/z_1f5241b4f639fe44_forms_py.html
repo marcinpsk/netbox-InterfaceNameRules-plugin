@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for /home/runner/work/netbox-InterfaceNameRules-plugin/netbox-InterfaceNameRules-plugin/netbox-InterfaceNameRules-plugin/netbox_interface_name_rules/forms.py: 91%</title>
+    <title>Coverage for /home/runner/work/netbox-InterfaceNameRules-plugin/netbox-InterfaceNameRules-plugin/netbox-InterfaceNameRules-plugin/netbox_interface_name_rules/forms.py: 100%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_c827f16f.png">
     <link rel="stylesheet" href="style_cb_9ff733b0.css" type="text/css">
     <script src="coverage_html_cb_dd2e7eb5.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>&#8201;/&#8201;home&#8201;/&#8201;runner&#8201;/&#8201;work&#8201;/&#8201;netbox-InterfaceNameRules-plugin&#8201;/&#8201;netbox-InterfaceNameRules-plugin&#8201;/&#8201;netbox-InterfaceNameRules-plugin&#8201;/&#8201;netbox_interface_name_rules&#8201;/&#8201;forms.py</b>:
-            <span class="pc_cov">91%</span>
+            <span class="pc_cov">100%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -55,8 +55,8 @@
         </aside>
         <h2>
             <span class="text">70 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">64<span class="text"> run</span></button>
-            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">6<span class="text"> missing</span></button>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">70<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">0<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
         </h2>
         <p class="text">
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_1f5241b4f639fe44_jobs_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.13.4">coverage.py v7.13.4</a>,
-            created at 2026-03-01 16:51 +0000
+            created at 2026-03-05 12:48 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -194,22 +194,22 @@
     <p class="pln"><span class="n"><a id="t112" href="#t112">112</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t113" href="#t113">113</a></span><span class="t">        <span class="key">if</span> <span class="nam">module_type_is_regex</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t114" href="#t114">114</a></span><span class="t">            <span class="key">if</span> <span class="key">not</span> <span class="nam">module_type_pattern</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t115" href="#t115">115</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"A regex pattern is required when regex mode is enabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t115" href="#t115">115</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"A regex pattern is required when regex mode is enabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t116" href="#t116">116</a></span><span class="t">            <span class="key">else</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t117" href="#t117">117</a></span><span class="t">                <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t118" href="#t118">118</a></span><span class="t">                    <span class="nam">re</span><span class="op">.</span><span class="nam">compile</span><span class="op">(</span><span class="nam">module_type_pattern</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t119" href="#t119">119</a></span><span class="t">                <span class="key">except</span> <span class="nam">re</span><span class="op">.</span><span class="nam">error</span> <span class="key">as</span> <span class="nam">exc</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t120" href="#t120">120</a></span><span class="t">                    <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="fst">f"</span><span class="fst">Invalid regex: </span><span class="op">{</span><span class="nam">exc</span><span class="op">}</span><span class="fst">"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t119" href="#t119">119</a></span><span class="t">                <span class="key">except</span> <span class="nam">re</span><span class="op">.</span><span class="nam">error</span> <span class="key">as</span> <span class="nam">exc</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t120" href="#t120">120</a></span><span class="t">                    <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="fst">f"</span><span class="fst">Invalid regex: </span><span class="op">{</span><span class="nam">exc</span><span class="op">}</span><span class="fst">"</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t121" href="#t121">121</a></span><span class="t">                <span class="key">else</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t122" href="#t122">122</a></span><span class="t">                    <span class="key">from</span> <span class="op">.</span><span class="nam">models</span> <span class="key">import</span> <span class="nam">_REDOS_PATTERN</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t123" href="#t123">123</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t124" href="#t124">124</a></span><span class="t">                    <span class="key">if</span> <span class="nam">_REDOS_PATTERN</span><span class="op">.</span><span class="nam">search</span><span class="op">(</span><span class="nam">module_type_pattern</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t125" href="#t125">125</a></span><span class="t">                        <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"Pattern contains potentially unsafe nested quantifiers."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t125" href="#t125">125</a></span><span class="t">                        <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"Pattern contains potentially unsafe nested quantifiers."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t126" href="#t126">126</a></span><span class="t">            <span class="key">if</span> <span class="nam">module_type</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t127" href="#t127">127</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type"</span><span class="op">,</span> <span class="str">"Module Type (exact) must be empty when regex mode is enabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t127" href="#t127">127</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type"</span><span class="op">,</span> <span class="str">"Module Type (exact) must be empty when regex mode is enabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t128" href="#t128">128</a></span><span class="t">        <span class="key">else</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t129" href="#t129">129</a></span><span class="t">            <span class="key">if</span> <span class="nam">module_type_pattern</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"Module Type Pattern must be empty when regex mode is disabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t">                <span class="nam">self</span><span class="op">.</span><span class="nam">add_error</span><span class="op">(</span><span class="str">"module_type_pattern"</span><span class="op">,</span> <span class="str">"Module Type Pattern must be empty when regex mode is disabled."</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t131" href="#t131">131</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t132" href="#t132">132</a></span><span class="t">        <span class="key">return</span> <span class="nam">cleaned_data</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t133" href="#t133">133</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -354,7 +354,7 @@
             <a class="nav" href="z_1f5241b4f639fe44_jobs_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.13.4">coverage.py v7.13.4</a>,
-            created at 2026-03-01 16:51 +0000
+            created at 2026-03-05 12:48 +0000
         </p>
     </div>
 </footer>
