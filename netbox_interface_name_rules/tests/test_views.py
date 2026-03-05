@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for plugin views: list, detail, toggle, duplicate, test, apply."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from dcim.models import DeviceType, Manufacturer, ModuleType
 from django.contrib.auth import get_user_model
@@ -10,6 +10,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.views import APPLY_BATCH_LIMIT
 
 User = get_user_model()
 
@@ -337,31 +338,8 @@ class RuleDuplicateViewTest(ViewTestBase):
 # ---------------------------------------------------------------------------
 
 
-class ViewTestBase2(TestCase):
-    """Base class that creates a superuser and logs in for view tests."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.superuser = User.objects.create_superuser(
-            username="covextrauser",
-            password=TEST_PASSWORD,
-            email="covextra@example.com",
-        )
-        manufacturer = Manufacturer.objects.create(name="CovXMfg", slug="covxmfg")
-        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="COVX-SFP", part_number="COVX-SFP")
-        cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="COVX-Dev", slug="covx-dev")
-        cls.rule = InterfaceNameRule.objects.create(
-            module_type=cls.module_type,
-            name_template="et-0/0/{bay_position}",
-        )
-        cls.rule_regex = InterfaceNameRule.objects.create(
-            module_type_is_regex=True,
-            module_type_pattern="COVX-.*",
-            name_template="port{bay_position}",
-        )
-
-    def setUp(self):
-        self.client.login(username="covextrauser", password=TEST_PASSWORD)
+class ViewTestBase2(ViewTestBase):
+    """Base class for extra view tests; inherits all fixture setup from ViewTestBase."""
 
 
 class RuleTestViewGetWithRuleIdTest(ViewTestBase2):
@@ -416,7 +394,7 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", return_value=2) as mock_apply:
             response = self.client.post(url, {"action": "apply", "interface_ids": ["1", "2"]})
         self.assertEqual(response.status_code, 302)
-        mock_apply.assert_called_once()
+        mock_apply.assert_called_once_with(self.rule, limit=APPLY_BATCH_LIMIT, interface_ids=[1, 2])
 
     def test_post_background_action_enqueues_job(self):
         """POST background action tries to enqueue ApplyRuleJob (lines 388-403)."""
@@ -527,19 +505,15 @@ class RuleTestViewSaveRuleWithScopeTest(ViewTestBase2):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def test_save_rule_with_device_type_filters_scope(self):
-        """POST save_rule finds an existing scoped rule and redirects to its edit page.
+        """POST save_rule finds an existing matching rule and redirects to its edit page.
 
         Verifies that when both module_type and device_type are provided, the view
         looks up an existing matching rule (line 203) and redirects to its edit URL.
+        cls.rule (from ViewTestBase) already has module_type + device_type set.
         """
-        scoped_rule = InterfaceNameRule.objects.create(
-            module_type=self.module_type,
-            device_type=self.device_type,
-            name_template="et-0/0/{bay_position}",
-        )
-        expected_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[scoped_rule.pk])
+        expected_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[self.rule.pk])
         data = {
-            "name_template": "et-0/0/{bay_position}",
+            "name_template": self.rule.name_template,
             "channel_count": "0",
             "channel_start": "0",
             "module_type": str(self.module_type.pk),
@@ -633,7 +607,7 @@ class RuleApplyDetailViewBackgroundJobSuccessTest(ViewTestBase2):
         with patch("netbox_interface_name_rules.jobs.ApplyRuleJob.enqueue", return_value=mock_job) as mock_enq:
             response = self.client.post(url, {"action": "background"})
         self.assertEqual(response.status_code, 302)
-        mock_enq.assert_called_once()
+        mock_enq.assert_called_once_with(name=ANY, user=self.superuser, rule_id=self.rule.pk)
         msgs = list(get_messages(response.wsgi_request))
         success_msgs = [m for m in msgs if m.level == SUCCESS]
         self.assertTrue(success_msgs, "Expected a success-level message but none found")
