@@ -24,7 +24,7 @@ keywords = [
     "transceiver",
     "automation",
 ]
-dependencies = []
+dependencies = ["netbox>=4.2.0"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -57,7 +57,7 @@ dev = [
     "pytest-django",
     "pytest-cov>=6.0",
     "python-semantic-release",
-    "django>=6.0.2",
+    "django>=5.1,<6.0",
 ]
 docs = [
     "mkdocs>=1,<2",
