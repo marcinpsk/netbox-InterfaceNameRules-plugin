@@ -24,7 +24,7 @@ keywords = [
     "transceiver",
     "automation",
 ]
-dependencies = ["netbox>=4.2.0"]
+dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
