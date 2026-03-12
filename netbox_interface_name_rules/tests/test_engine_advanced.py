@@ -19,6 +19,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
+from django.db import DatabaseError
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
@@ -32,7 +33,6 @@ from netbox_interface_name_rules.engine import (
     find_interfaces_for_rule,
     has_applicable_interfaces,
 )
-from django.db import DatabaseError
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 
@@ -1358,8 +1358,9 @@ class FlagDeprecatedExceptionTest(TestCase):
 
     def test_tag_getorcreate_exception_is_swallowed(self):
         """_flag_rule_potentially_deprecated swallows Tag.objects.get_or_create failures."""
-        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
         from extras.models import Tag
+
+        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
 
         with patch.object(Tag.objects, "get_or_create", side_effect=Exception("tag table error")):
             _flag_rule_potentially_deprecated(self.rule)  # Must not raise

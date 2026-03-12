@@ -181,8 +181,8 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
 
         # ── Pre-clean: remove stale modules from test bays (idempotent) ─────
         try:
-            import urllib.request as _ureq_pre
             import json as _json_pre
+            import urllib.request as _ureq_pre
 
             _pre_opener = _ureq_pre.build_opener(_ureq_pre.ProxyHandler({}))
             _pre_cookies = ctx.cookies()
