@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-from rest_framework import serializers
-
 from netbox.api.serializers import NetBoxModelSerializer
+from rest_framework import serializers
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 

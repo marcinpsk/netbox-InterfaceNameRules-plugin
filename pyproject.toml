@@ -14,15 +14,38 @@ license = "Apache-2.0"
 authors = [
     {name = "Marcin Zieba"},
 ]
+keywords = [
+    "netbox",
+    "plugin",
+    "dcim",
+    "interface",
+    "naming",
+    "modules",
+    "transceiver",
+    "automation",
+]
+dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Framework :: Django",
+    "Environment :: Plugins",
+    "Topic :: System :: Networking",
 ]
+
+[project.urls]
+Homepage = "https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/"
+Repository = "https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin"
+Issues = "https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/issues"
+Documentation = "https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/"
+Changelog = "https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["netbox_interface_name_rules*"]
+
+[tool.setuptools.package-data]
+netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
 
 [dependency-groups]
 dev = [
@@ -48,7 +71,7 @@ pythonpath = ["/opt/netbox/netbox"]
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "D", "C901"]
+select = ["E", "F", "W", "D", "C901", "I", "RET", "UP"]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "F403",   # star imports

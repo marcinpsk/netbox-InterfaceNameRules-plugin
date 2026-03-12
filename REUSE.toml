@@ -12,6 +12,7 @@ path = [
     "netbox_interface_name_rules/migrations/**",
     ".gitignore",
     ".envrc",
+    ".editorconfig",
     ".devcontainer/devcontainer.json",
     ".devcontainer/.env.example",
     ".github/copilot-instructions.md",

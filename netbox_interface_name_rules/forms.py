@@ -2,8 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 import re
 
-from django import forms
 from dcim.models import DeviceType, ModuleType, Platform
+from django import forms
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm, NetBoxModelImportForm
 from utilities.forms.fields import CSVModelChoiceField
 

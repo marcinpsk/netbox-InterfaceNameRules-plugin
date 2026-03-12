@@ -831,5 +831,4 @@ def evaluate_name_template(template: str, variables: dict) -> str:
         except (SyntaxError, TypeError) as e:
             raise ValueError(f"Invalid arithmetic expression '{expr}': {e}") from e
 
-    result = re.sub(r"\{([^}]+)\}", _eval_expr, result)
-    return result
+    return re.sub(r"\{([^}]+)\}", _eval_expr, result)

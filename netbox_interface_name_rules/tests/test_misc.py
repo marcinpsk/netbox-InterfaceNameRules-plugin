@@ -11,7 +11,6 @@ from django.test import TestCase
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.utils import supports_module_path
 
-
 # ---------------------------------------------------------------------------
 # utils.py
 # ---------------------------------------------------------------------------

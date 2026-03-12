@@ -9,7 +9,6 @@ from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
-
 _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
 
 
