@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.2.2 (2026-03-12)
+
+### Bug Fixes
+
+- Added pyproject updates / ruff updates
+  ([#28](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/28),
+  [`cb526ca`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/cb526ca42c917a59c8503af8550a08eb2e412499))
+
+### Chores
+
+- Update dependabot
+  ([`6fba7f2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6fba7f2ab227da5d669a3bd384141fe8f7d9aaa0))
+
+- Update pyproject/__init__.py
+  ([`5c78985`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5c7898582f8e542979b6f820f611df72504ba606))
+
+- **deps**: Bump actions/upload-artifact from 6.0.0 to 7.0.0
+  ([#22](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/22),
+  [`386a38d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/386a38ddf352f2308ab5f3a53d5419ab15142f98))
+
+- **deps**: Bump amannn/action-semantic-pull-request from 5.5.3 to 6.1.1
+  ([#23](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/23),
+  [`56ee2e4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/56ee2e4d41361f37e93dc0a6c5cc2dc9c834a82d))
+
+- **deps**: Bump the github-actions group with 4 updates
+  ([#27](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/27),
+  [`022ca6d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/022ca6d4b947f4af7cbc41056264f8ca92fcdb35))
+
+### Testing
+
+- Add targeted coverage tests to reach 97%
+  ([#21](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/21),
+  [`5ca1ce6`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5ca1ce6b79371df877f78b5f70050600c2a7e6f2))
+
+
 ## v1.2.1 (2026-03-01)
 
 ### Bug Fixes
