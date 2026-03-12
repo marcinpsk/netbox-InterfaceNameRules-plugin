@@ -57,6 +57,7 @@ def skip(label, reason):
 def load_interface_name_rules_file(filename):
     """Load InterfaceNameRules from a single YAML file."""
     from dcim.models import DeviceType, ModuleType, Platform
+
     from netbox_interface_name_rules.models import InterfaceNameRule
 
     rows = load_yaml(filename)
@@ -604,6 +605,7 @@ print()
 print("🔄 Re-applying device-level interface rules for all VC members…")
 try:
     from dcim.models import Device
+
     from netbox_interface_name_rules.engine import apply_device_interface_rules
 
     _vc_devices = Device.objects.filter(virtual_chassis__isnull=False).select_related(

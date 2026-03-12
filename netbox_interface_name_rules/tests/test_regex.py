@@ -17,7 +17,7 @@ from dcim.models import (
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from netbox_interface_name_rules.engine import find_matching_rule, apply_interface_name_rules
+from netbox_interface_name_rules.engine import apply_interface_name_rules, find_matching_rule
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 

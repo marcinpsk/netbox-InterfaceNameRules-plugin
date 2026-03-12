@@ -1,5 +1,9 @@
 # NetBox Interface Name Rules Plugin
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/icon.svg" alt="NetBox Interface Name Rules" width="80"/>
+</p>
+
 [![PyPI](https://img.shields.io/pypi/v/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![CI](https://img.shields.io/github/actions/workflow/status/marcinpsk/netbox-InterfaceNameRules-plugin/test.yaml?branch=main&label=tests)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/actions/workflows/test.yaml)
@@ -48,6 +52,21 @@ Add to `configuration.py`:
 ```python
 PLUGINS = ['netbox_interface_name_rules']
 ```
+
+## Configuration
+
+Rules are managed through the NetBox UI under **Plugins → Interface Name Rules**, or via the REST API at `/api/plugins/interface-name-rules/rules/`.
+
+See the [full configuration guide](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/configuration/) for all rule fields, priority scoring, and template variable reference.
+
+## Screenshots
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/01-rule-list.png" alt="Rule list" width="700"/>
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/11-apply-rule-preview.png" alt="Apply-rules preview" width="700"/>
+</p>
 
 ## Compatibility
 
