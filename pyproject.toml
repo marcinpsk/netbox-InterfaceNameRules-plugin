@@ -57,7 +57,7 @@ dev = [
     "pytest-django",
     "pytest-cov>=6.0",
     "python-semantic-release",
-    "django>=5.1,<6.0",
+    "django>=5.1,<7.0",
 ]
 docs = [
     "mkdocs>=1,<2",
