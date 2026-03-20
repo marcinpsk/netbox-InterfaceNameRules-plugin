@@ -37,6 +37,7 @@ def on_module_pre_save(sender, instance, **kwargs):
         old = sender.objects.filter(pk=instance.pk).values("module_type_id").first()
         instance._prev_module_type_id = old["module_type_id"] if old else None
     except Exception:
+        logger.warning("Failed to capture previous module_type_id for Module pk=%s", instance.pk, exc_info=True)
         instance._prev_module_type_id = None
 
 
@@ -141,6 +142,7 @@ def on_device_pre_save(sender, instance, **kwargs):
         instance._prev_virtual_chassis_id = old["virtual_chassis_id"] if old else None
         instance._prev_vc_position = old["vc_position"] if old else None
     except Exception:
+        logger.warning("Failed to capture previous VC state for Device pk=%s", instance.pk, exc_info=True)
         instance._prev_virtual_chassis_id = None
         instance._prev_vc_position = None
 

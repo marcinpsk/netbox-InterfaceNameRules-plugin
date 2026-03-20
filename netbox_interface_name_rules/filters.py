@@ -53,7 +53,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
 
     def search(self, queryset, name, value):
         """Filter by pattern, template, description, or module type model name."""
-        return queryset.filter(
+        return queryset.select_related("module_type").filter(
             Q(module_type_pattern__icontains=value)
             | Q(name_template__icontains=value)
             | Q(description__icontains=value)

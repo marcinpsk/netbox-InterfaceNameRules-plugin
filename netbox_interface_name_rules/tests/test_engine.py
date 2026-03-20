@@ -101,3 +101,15 @@ class EvaluateNameTemplateTest(TestCase):
             {},
         )
         self.assertEqual(result, "port4")
+
+    def test_bay_position_num_non_numeric_uses_zero(self):
+        """When bay_position has no trailing digits, bay_position_num falls back to '0'."""
+        from netbox_interface_name_rules.engine import _resolve_bay_position
+
+        class FakeBay:
+            position = "abc"
+            name = "Bay abc"
+
+        bay_position, bay_position_num = _resolve_bay_position(FakeBay())
+        self.assertEqual(bay_position, "abc")
+        self.assertEqual(bay_position_num, "0")

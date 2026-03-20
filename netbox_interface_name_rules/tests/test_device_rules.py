@@ -283,3 +283,49 @@ class ApplyDeviceInterfaceRulesModuleTypeTest(TestCase):
         self.assertEqual(result, 1)
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi2/3")
+
+
+class DeviceInterfaceEdgeCaseNamesTest(TestCase):
+    """Test _try_rename_device_interface with edge-case interface names."""
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="EdgeMfg", slug="edgemfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="Edge-Dev", slug="edge-dev")
+        role = DeviceRole.objects.create(name="EdgeRole", slug="edgerole")
+        site = Site.objects.create(name="EdgeSite", slug="edgesite")
+        vc = VirtualChassis.objects.create(name="edge-vc")
+        cls.device = Device.objects.create(
+            name="edge-sw1",
+            device_type=cls.device_type,
+            role=role,
+            site=site,
+            virtual_chassis=vc,
+            vc_position=1,
+        )
+
+    def test_name_with_multiple_slashes(self):
+        """Interface name like FortyGigE1/2/3/4 extracts port='4'."""
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="Fo{vc_position}/2/3/{port}",
+        )
+        iface = Interface.objects.create(
+            device=self.device, name="FortyGigE1/2/3/4", type="40gbase-x-qsfpp", module=None
+        )
+        result = apply_device_interface_rules(self.device)
+        self.assertEqual(result, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "Fo1/2/3/4")
+
+    def test_name_without_slash(self):
+        """Interface name without / uses full name as port."""
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="eth{vc_position}-{port}",
+        )
+        iface = Interface.objects.create(device=self.device, name="eth0", type="1000base-t", module=None)
+        result = apply_device_interface_rules(self.device)
+        self.assertEqual(result, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "eth1-eth0")
