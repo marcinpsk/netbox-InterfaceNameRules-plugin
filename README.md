@@ -8,6 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![NetBox](https://img.shields.io/badge/NetBox-%E2%89%A54.2.0-blue)](https://github.com/netbox-community/netbox)
 [![Contributors](https://img.shields.io/github/contributors/marcinpsk/netbox-InterfaceNameRules-plugin)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/graphs/contributors)
+[![REUSE status](https://api.reuse.software/badge/github.com/marcinpsk/netbox-InterfaceNameRules-plugin)](https://api.reuse.software/info/github.com/marcinpsk/netbox-InterfaceNameRules-plugin)
 
 Automatic interface renaming when modules are installed into NetBox device bays.
 
