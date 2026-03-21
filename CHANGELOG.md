@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.2.3 (2026-03-21)
+
+### Bug Fixes
+
+- Harden engine, views, and signals from code review
+  ([#32](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/32),
+  [`1dfe0fc`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1dfe0fc63f857b57ec9a272d4b3a4fa3f57234d7))
+
+### Chores
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#31](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/31),
+  [`157c3d5`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/157c3d50253fa15943749c758fac3289f409627d))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#29](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/29),
+  [`5962490`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5962490147391056e7e3f10f7ff02307577c7d1e))
+
+- **deps-dev**: Update django requirement from <6.0,>=5.1 to >=5.1,<7.0
+  ([#30](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/30),
+  [`65496da`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/65496dad3e7b12765e9952f7b757ea42c50289dd))
+
+
 ## v1.2.2 (2026-03-12)
 
 ### Bug Fixes
