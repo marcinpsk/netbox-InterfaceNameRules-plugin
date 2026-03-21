@@ -19,7 +19,6 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.db import DatabaseError
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
@@ -784,7 +783,7 @@ class EngineHasApplicableExceptionTest(TestCase):
 
         with patch(
             "netbox_interface_name_rules.engine.find_interfaces_for_rule",
-            side_effect=RuntimeError("scan fail"),
+            side_effect=ValueError("scan fail"),
         ):
             result = has_applicable_interfaces(self.rule)
         self.assertFalse(result)
@@ -987,7 +986,9 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
             name_template="GigabitEthernet{vc_position}/{port}",
         )
         Interface.objects.create(device=self.device, name="Gi0/2", type="1000base-t")
-        with patch("dcim.models.Interface.full_clean", side_effect=Exception("validation fail")):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        with patch("dcim.models.Interface.full_clean", side_effect=DjangoValidationError("validation fail")):
             apply_device_interface_rules(self.device)
         # Even with exception, no unhandled error
         rule.delete()
@@ -1220,7 +1221,7 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         def _side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] >= 2:
-                raise RuntimeError("forced failure on second call")
+                raise ValueError("forced failure on second call")
             return _real_fn(*args, **kwargs)
 
         with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
@@ -1252,7 +1253,7 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         def _side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] >= 2:
-                raise RuntimeError("forced channel failure")
+                raise ValueError("forced channel failure")
             return _real_fn(*args, **kwargs)
 
         with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
@@ -1403,7 +1404,9 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         )
         iface = Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
 
-        with patch.object(Interface, "save", side_effect=DatabaseError("disk full")):
+        from django.db import IntegrityError
+
+        with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
             result = _try_rename_device_interface(rule, iface, "1", self.device, set())
 
         self.assertFalse(result)
