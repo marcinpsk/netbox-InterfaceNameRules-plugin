@@ -265,9 +265,12 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
             enabled=False,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
         result = apply_rule_to_existing(rule)
         self.assertEqual(result, 0)
+        # Verify interface name is unchanged
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "0")
 
     def test_renames_matching_interface(self):
         """apply_rule_to_existing renames interfaces matching the rule."""
@@ -1587,8 +1590,10 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
         variables = build_variables(module.module_bay, device=module.device)
         variables["base"] = iface.name
 
+        from django.core.exceptions import ValidationError
+
         with patch.object(Interface, "full_clean", failing_full_clean):
-            with self.assertRaises(Exception):
+            with self.assertRaises(ValidationError):
                 _apply_rule_to_interface(rule, iface, variables, module)
 
         # Transaction rolled back — only the original interface remains
@@ -1611,28 +1616,3 @@ class GetRawInterfaceNamesNoTemplatesTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = _get_raw_interface_names(module)
         self.assertEqual(result, set())
-
-
-# ---------------------------------------------------------------------------
-# engine.py — apply_rule_to_existing with disabled rule
-# ---------------------------------------------------------------------------
-
-
-class ApplyRuleToExistingDisabledTest(EngineAdvancedFixtures):
-    """Test apply_rule_to_existing returns 0 for disabled rules."""
-
-    def test_disabled_rule_returns_zero(self):
-        """apply_rule_to_existing returns 0 immediately for a disabled rule."""
-        rule = InterfaceNameRule.objects.create(
-            module_type=self.module_type,
-            name_template="et-0/0/{bay_position}",
-            enabled=False,
-        )
-        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
-
-        count = apply_rule_to_existing(rule)
-        self.assertEqual(count, 0)
-        # Interface name unchanged
-        iface = Interface.objects.get(module=module)
-        self.assertEqual(iface.name, "0")

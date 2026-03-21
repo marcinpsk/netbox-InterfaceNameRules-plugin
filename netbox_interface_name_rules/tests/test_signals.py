@@ -526,7 +526,7 @@ class ModulePreSaveExceptionLoggingTest(TestCase):
 
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
         with patch.object(Module.objects, "filter", side_effect=DatabaseError("db error")):
-            with self.assertLogs("netbox_interface_name_rules.signals", level="WARNING") as cm:
+            with self.assertLogs("netbox_interface_name_rules", level="WARNING") as cm:
                 on_module_pre_save(Module, module)
         self.assertIsNone(module._prev_module_type_id)
         self.assertTrue(any("db error" in msg for msg in cm.output))
@@ -536,7 +536,7 @@ class ModulePreSaveExceptionLoggingTest(TestCase):
         from django.db import DatabaseError
 
         with patch.object(Device.objects, "filter", side_effect=DatabaseError("db error")):
-            with self.assertLogs("netbox_interface_name_rules.signals", level="WARNING") as cm:
+            with self.assertLogs("netbox_interface_name_rules", level="WARNING") as cm:
                 on_device_pre_save(Device, self.device)
         self.assertIsNone(self.device._prev_virtual_chassis_id)
         self.assertIsNone(self.device._prev_vc_position)

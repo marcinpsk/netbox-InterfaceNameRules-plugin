@@ -383,7 +383,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
-                "can_apply": True,
+                "can_apply": request.user.has_perm("dcim.change_interface"),
             },
         )
 

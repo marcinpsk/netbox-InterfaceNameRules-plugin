@@ -611,6 +611,8 @@ def _evaluate_plain_interface(rule, module, iface, variables) -> dict | None:
 def _channel_rule_entry(rule, module, ifaces, variables) -> dict | None:
     """Return a result dict if the channel rule would change any name for this module, else None."""
     base_iface = _find_channel_base(rule, ifaces, variables)
+    if base_iface is None:
+        return None
     vars_copy = {**variables, "base": base_iface.name}
     expected_names = []
     try:
