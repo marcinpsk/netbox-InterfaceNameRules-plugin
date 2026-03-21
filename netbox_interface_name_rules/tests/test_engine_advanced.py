@@ -1556,6 +1556,8 @@ class FindInterfacesProcessedPksTest(EngineAdvancedFixtures):
         results, total = find_interfaces_for_rule(rule)
         self.assertEqual(total, 2)
         self.assertEqual(len(results), 2)
+        result_module_ids = {r["module"].pk for r in results}
+        self.assertEqual(result_module_ids, {module0.pk, module1.pk})
 
 
 # ---------------------------------------------------------------------------
