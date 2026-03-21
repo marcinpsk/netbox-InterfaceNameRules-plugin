@@ -10,7 +10,8 @@ import ast
 import logging
 import re
 
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models.functions import Length
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
 
     try:
         new_name = evaluate_name_template(rule.name_template, variables)
-    except Exception:
+    except (ValueError, TypeError, re.error):
         logger.exception(
             "Failed to evaluate template %r for interface %s (rule %s)",
             rule.name_template,
@@ -144,7 +145,7 @@ def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
     iface.name = new_name
     try:
         iface.full_clean()
-    except Exception:
+    except ValidationError:
         logger.exception(
             "Validation failed for device interface %s → %s (rule %s, device %s)",
             old_name,
@@ -156,7 +157,7 @@ def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
         return False
     try:
         iface.save()
-    except Exception:
+    except (IntegrityError, ValidationError):
         logger.exception(
             "DB save failed for device interface %s → %s (rule %s, device %s)",
             old_name,
@@ -401,7 +402,7 @@ def _resolve_bay_position(module_bay):
         digits = _extract_trailing_digits(module_bay.name)
         bay_position = digits if digits else "0"
     digits = _extract_trailing_digits(bay_position)
-    bay_position_num = digits if digits else bay_position
+    bay_position_num = digits if digits else "0"
     return bay_position, bay_position_num
 
 
@@ -524,6 +525,8 @@ def _find_channel_base(rule, ifaces, variables):
     _apply_rule_to_interface exactly ONCE per module for channel rules, preventing
     duplicate-name IntegrityErrors when channels already exist.
     """
+    if not ifaces:
+        return None
     for iface in ifaces:
         vars_copy = dict(variables)
         vars_copy["base"] = iface.name
@@ -568,7 +571,7 @@ def has_applicable_interfaces(rule) -> bool:
     try:
         results, _ = find_interfaces_for_rule(rule, limit=1)
         return len(results) > 0
-    except Exception:
+    except (ValueError, re.error):
         return False
 
 
@@ -608,6 +611,8 @@ def _evaluate_plain_interface(rule, module, iface, variables) -> dict | None:
 def _channel_rule_entry(rule, module, ifaces, variables) -> dict | None:
     """Return a result dict if the channel rule would change any name for this module, else None."""
     base_iface = _find_channel_base(rule, ifaces, variables)
+    if base_iface is None:
+        return None
     vars_copy = {**variables, "base": base_iface.name}
     expected_names = []
     try:
@@ -680,6 +685,8 @@ def find_interfaces_for_rule(rule, limit=None):
     If *limit* is set the list is truncated after that many changed entries, but
     *total_checked* always reflects the full count of interfaces examined.
     """
+    from collections import defaultdict
+
     from dcim.models import Interface
 
     module_qs = _build_module_qs(rule).select_related(
@@ -693,13 +700,18 @@ def find_interfaces_for_rule(rule, limit=None):
     )
     process_fn = _process_channel_module if rule.channel_count > 0 else _process_plain_module
 
-    processed_pks = []
+    # Batch-load all interfaces for matching modules to avoid N+1 queries.
+    ifaces_by_module = defaultdict(list)
+    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
+        ifaces_by_module[iface.module_id].append(iface)
+
+    processed_pks = set()
     results = []
     total_checked = 0
     for module in module_qs:
-        processed_pks.append(module.pk)
+        processed_pks.add(module.pk)
         variables = build_variables(module.module_bay, device=module.device)
-        ifaces = list(Interface.objects.filter(module=module).order_by("name"))
+        ifaces = ifaces_by_module.get(module.pk, [])
         checked, stop = process_fn(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
         total_checked += checked
         if stop:
@@ -726,6 +738,8 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
 
     Returns the number of interfaces renamed/created.
     """
+    from collections import defaultdict
+
     from dcim.models import Interface
 
     id_set = frozenset(interface_ids) if interface_ids is not None else None
@@ -737,15 +751,20 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
 
     module_qs = _build_module_qs(rule)
 
+    # Batch-load interfaces to avoid N+1 queries in the module loop.
+    ifaces_by_module = defaultdict(list)
+    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
+        ifaces_by_module[iface.module_id].append(iface)
+
     count = 0
     for module in module_qs.select_related("module_bay", "module_type", "device", "device__virtual_chassis"):
         variables = build_variables(module.module_bay, device=module.device)
+        ifaces = ifaces_by_module.get(module.pk, [])
 
         if rule.channel_count > 0:
             # Channel rule: process module ONCE using the best base interface.
             # Calling _apply_rule_to_interface for each existing interface would
             # attempt to create the same channel names multiple times.
-            ifaces = list(Interface.objects.filter(module=module).order_by("name"))
             if not ifaces:
                 continue
             base_iface = _find_channel_base(rule, ifaces, variables)
@@ -755,7 +774,7 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
             vars_copy["base"] = base_iface.name
             try:
                 count += _apply_rule_to_interface(rule, base_iface, vars_copy, module)
-            except Exception:
+            except (ValueError, ValidationError, IntegrityError):
                 logger.exception(
                     "Failed to apply channel rule '%s' to module '%s' (id=%s); skipping.",
                     rule,
@@ -763,14 +782,14 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
                     module.pk,
                 )
         else:
-            for iface in list(Interface.objects.filter(module=module).order_by("name")):
+            for iface in ifaces:
                 if id_set is not None and iface.pk not in id_set:
                     continue
                 vars_copy = dict(variables)
                 vars_copy["base"] = iface.name
                 try:
                     count += _apply_rule_to_interface(rule, iface, vars_copy, module)
-                except Exception:
+                except (ValueError, ValidationError, IntegrityError):
                     logger.exception(
                         "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
                         rule,

@@ -122,6 +122,30 @@ class FindMatchingRuleTest(TestCase):
         result = find_matching_rule(self.module_type, None, None)
         self.assertIsNone(result)
 
+    def test_platform_none_does_not_match_platform_scoped_rule(self):
+        """With platform=None, a platform-scoped rule is NOT matched."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            platform=self.platform,
+            name_template="platform-only{bay_position}",
+        )
+        result = find_matching_rule(self.module_type, None, None, platform=None)
+        self.assertIsNone(result)
+
+    def test_platform_none_falls_back_to_unscoped_rule(self):
+        """With platform=None, an unscoped rule is preferred over a platform-scoped one."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            platform=self.platform,
+            name_template="platform{bay_position}",
+        )
+        unscoped = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="generic{bay_position}",
+        )
+        result = find_matching_rule(self.module_type, None, None, platform=None)
+        self.assertEqual(result, unscoped)
+
 
 class BuildVariablesTest(TestCase):
     """Test build_variables from module bay context."""

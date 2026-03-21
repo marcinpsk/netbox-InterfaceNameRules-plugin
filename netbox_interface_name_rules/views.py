@@ -10,6 +10,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from netbox.views import generic
 from utilities.views import ConditionalLoginRequiredMixin, register_model_view
@@ -115,7 +116,7 @@ class InterfaceNameRuleDuplicateView(ConditionalLoginRequiredMixin, View):
         """Redirect to the add view pre-populated with fields cloned from rule pk."""
         from utilities.querydict import prepare_cloned_fields
 
-        rule = get_object_or_404(InterfaceNameRule.objects.all(), pk=pk)
+        rule = get_object_or_404(InterfaceNameRule, pk=pk)
         params = prepare_cloned_fields(rule)
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
         return redirect(f"{url}?{params.urlencode()}")
@@ -126,8 +127,13 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
 
     template_name = "netbox_interface_name_rules/rule_test.html"
 
+    def _check_permission(self, request):
+        if not request.user.has_perm("netbox_interface_name_rules.add_interfacenamerule"):
+            raise PermissionDenied
+
     def get(self, request):
         """Render the test form, pre-populated from rule_id query param if given."""
+        self._check_permission(request)
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
@@ -153,6 +159,7 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
 
     def post(self, request):
         """Evaluate the submitted template and return a preview or redirect to save."""
+        self._check_permission(request)
         form = RuleTestForm(request.POST)
         preview_results = None
         db_preview = None
@@ -347,10 +354,15 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
 
     template_name = "netbox_interface_name_rules/rule_apply_detail.html"
 
+    def _check_permission(self, request):
+        if not request.user.has_perm("dcim.change_interface"):
+            raise PermissionDenied
+
     def get(self, request, pk):
         """Render a preview of all interfaces that would be renamed by this rule."""
         from .engine import find_interfaces_for_rule
 
+        self._check_permission(request)
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
         try:
             preview, total_checked = find_interfaces_for_rule(rule, limit=APPLY_BATCH_LIMIT)
@@ -379,8 +391,7 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
         """Apply the rule (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
-        if not request.user.has_perm("dcim.change_interface"):
-            raise PermissionDenied
+        self._check_permission(request)
 
         rule = get_object_or_404(InterfaceNameRule, pk=pk)
         action = request.POST.get("action", "apply")
@@ -436,8 +447,6 @@ class RuleToggleView(generic.ObjectView):
             return JsonResponse({"enabled": rule.enabled, "pk": pk})
         state = "enabled" if rule.enabled else "disabled"
         messages.success(request, f"Rule '{rule}' {state}.")
-        from django.utils.http import url_has_allowed_host_and_scheme
-
         referer = request.META.get("HTTP_REFERER", "")
         if referer and url_has_allowed_host_and_scheme(
             referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()

@@ -504,3 +504,40 @@ class ModuleDeletionCascadeTest(TestCase):
 
         # Interface was cascade-deleted with the module
         self.assertFalse(Interface.objects.filter(pk=iface_pk).exists())
+
+
+class ModulePreSaveExceptionLoggingTest(TestCase):
+    """Test on_module_pre_save logs exceptions instead of silently swallowing them."""
+
+    @classmethod
+    def setUpTestData(cls):
+        mfg = Manufacturer.objects.create(name="PreSaveLogMfg", slug="presavelogmfg")
+        cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="PSL-Dev", slug="psl-dev")
+        cls.module_type = ModuleType.objects.create(manufacturer=mfg, model="PSL-SFP", part_number="PSL-SFP")
+        ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Bay 0", position="0")
+        role = DeviceRole.objects.create(name="PSLRole", slug="pslrole")
+        site = Site.objects.create(name="PSLSite", slug="pslsite")
+        cls.device = Device.objects.create(name="psl-dev-01", device_type=cls.device_type, role=role, site=site)
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="Bay 0")
+
+    def test_pre_save_db_error_logs_warning(self):
+        """on_module_pre_save logs a warning when DB lookup fails."""
+        from django.db import DatabaseError
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        with patch.object(Module.objects, "filter", side_effect=DatabaseError("db error")):
+            with self.assertLogs("netbox_interface_name_rules", level="WARNING") as cm:
+                on_module_pre_save(Module, module)
+        self.assertIsNone(module._prev_module_type_id)
+        self.assertTrue(any("db error" in msg for msg in cm.output))
+
+    def test_device_pre_save_db_error_logs_warning(self):
+        """on_device_pre_save logs a warning when DB lookup fails."""
+        from django.db import DatabaseError
+
+        with patch.object(Device.objects, "filter", side_effect=DatabaseError("db error")):
+            with self.assertLogs("netbox_interface_name_rules", level="WARNING") as cm:
+                on_device_pre_save(Device, self.device)
+        self.assertIsNone(self.device._prev_virtual_chassis_id)
+        self.assertIsNone(self.device._prev_vc_position)
+        self.assertTrue(any("db error" in msg for msg in cm.output))

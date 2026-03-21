@@ -19,7 +19,6 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.db import DatabaseError
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
@@ -265,9 +264,12 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
             enabled=False,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
         result = apply_rule_to_existing(rule)
         self.assertEqual(result, 0)
+        # Verify interface name is unchanged
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "0")
 
     def test_renames_matching_interface(self):
         """apply_rule_to_existing renames interfaces matching the rule."""
@@ -781,7 +783,7 @@ class EngineHasApplicableExceptionTest(TestCase):
 
         with patch(
             "netbox_interface_name_rules.engine.find_interfaces_for_rule",
-            side_effect=RuntimeError("scan fail"),
+            side_effect=ValueError("scan fail"),
         ):
             result = has_applicable_interfaces(self.rule)
         self.assertFalse(result)
@@ -984,7 +986,9 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
             name_template="GigabitEthernet{vc_position}/{port}",
         )
         Interface.objects.create(device=self.device, name="Gi0/2", type="1000base-t")
-        with patch("dcim.models.Interface.full_clean", side_effect=Exception("validation fail")):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        with patch("dcim.models.Interface.full_clean", side_effect=DjangoValidationError("validation fail")):
             apply_device_interface_rules(self.device)
         # Even with exception, no unhandled error
         rule.delete()
@@ -1217,7 +1221,7 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         def _side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] >= 2:
-                raise RuntimeError("forced failure on second call")
+                raise ValueError("forced failure on second call")
             return _real_fn(*args, **kwargs)
 
         with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
@@ -1249,7 +1253,7 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         def _side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] >= 2:
-                raise RuntimeError("forced channel failure")
+                raise ValueError("forced channel failure")
             return _real_fn(*args, **kwargs)
 
         with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
@@ -1400,7 +1404,9 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         )
         iface = Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
 
-        with patch.object(Interface, "save", side_effect=DatabaseError("disk full")):
+        from django.db import IntegrityError
+
+        with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
             result = _try_rename_device_interface(rule, iface, "1", self.device, set())
 
         self.assertFalse(result)
@@ -1508,3 +1514,110 @@ class RegexTiebreakerTest(TestCase):
         self.assertLess(rule_short.pk, rule_long.pk)
         matched = find_matching_rule(module_type_specific, None, None)
         self.assertEqual(matched, rule_long)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _find_channel_base with empty interface list
+# ---------------------------------------------------------------------------
+
+
+class FindChannelBaseEmptyIfacesTest(TestCase):
+    """Test _find_channel_base handles empty interface list gracefully."""
+
+    def test_empty_ifaces_returns_none(self):
+        """_find_channel_base returns None when ifaces is empty."""
+        rule = MagicMock()
+        rule.name_template = "port{bay_position}:{channel}"
+        rule.channel_start = 0
+        variables = {"bay_position": "0", "bay_position_num": "0", "slot": "0"}
+        result = _find_channel_base(rule, [], variables)
+        self.assertIsNone(result)
+
+
+# ---------------------------------------------------------------------------
+# engine.py — find_interfaces_for_rule uses set for processed_pks
+# ---------------------------------------------------------------------------
+
+
+class FindInterfacesProcessedPksTest(EngineAdvancedFixtures):
+    """Test find_interfaces_for_rule correctness with multiple modules."""
+
+    def test_multiple_modules_all_counted(self):
+        """find_interfaces_for_rule processes all matching modules without duplication."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        module0 = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        module1 = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
+
+        results, total = find_interfaces_for_rule(rule)
+        self.assertEqual(total, 2)
+        self.assertEqual(len(results), 2)
+        result_module_ids = {r["module"].pk for r in results}
+        self.assertEqual(result_module_ids, {module0.pk, module1.pk})
+
+
+# ---------------------------------------------------------------------------
+# engine.py — breakout transaction rollback on mid-channel failure
+# ---------------------------------------------------------------------------
+
+
+class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
+    """Test that _apply_rule_to_interface rolls back on mid-breakout failure."""
+
+    def test_partial_breakout_rolls_back(self):
+        """If channel 2 fails validation, channels 0–1 are rolled back too."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="Hu0/0/0/{bay_position}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
+
+        original_full_clean = Interface.full_clean
+        call_count = [0]
+
+        def failing_full_clean(self_iface, *args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 3:  # Fail on channel 2
+                from django.core.exceptions import ValidationError
+
+                raise ValidationError("simulated failure")
+            return original_full_clean(self_iface, *args, **kwargs)
+
+        from netbox_interface_name_rules.engine import _apply_rule_to_interface
+
+        variables = build_variables(module.module_bay, device=module.device)
+        variables["base"] = iface.name
+
+        from django.core.exceptions import ValidationError
+
+        with patch.object(Interface, "full_clean", failing_full_clean):
+            with self.assertRaises(ValidationError):
+                _apply_rule_to_interface(rule, iface, variables, module)
+
+        # Transaction rolled back — only the original interface remains
+        iface_names = list(Interface.objects.filter(module=module).values_list("name", flat=True))
+        self.assertEqual(iface_names, ["0"])
+
+
+# ---------------------------------------------------------------------------
+# engine.py — _get_raw_interface_names with no templates
+# ---------------------------------------------------------------------------
+
+
+class GetRawInterfaceNamesNoTemplatesTest(EngineAdvancedFixtures):
+    """Test _get_raw_interface_names when module_type has no InterfaceTemplate entries."""
+
+    def test_no_templates_returns_empty_set(self):
+        """_get_raw_interface_names returns empty set when module_type has no templates."""
+        from netbox_interface_name_rules.engine import _get_raw_interface_names
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = _get_raw_interface_names(module)
+        self.assertEqual(result, set())

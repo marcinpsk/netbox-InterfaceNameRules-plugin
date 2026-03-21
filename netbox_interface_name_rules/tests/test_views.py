@@ -369,6 +369,54 @@ class RuleTestViewGetWithRuleIdTest(ViewTestBase2):
         self.assertEqual(response.status_code, 200)
 
 
+class RuleTestViewPermissionTest(ViewTestBase2):
+    """Test RuleTestView permission checks for unprivileged users."""
+
+    def _url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
+    def test_get_no_permission_raises_403(self):
+        """GET to rule test view without add_interfacenamerule permission returns 403."""
+        User.objects.create_user(username="noperm_test_get", password=TEST_PASSWORD)
+        self.client.login(username="noperm_test_get", password=TEST_PASSWORD)
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_with_rule_id_no_permission_raises_403(self):
+        """GET with ?rule_id= without add_interfacenamerule permission returns 403."""
+        User.objects.create_user(username="noperm_test_get2", password=TEST_PASSWORD)
+        self.client.login(username="noperm_test_get2", password=TEST_PASSWORD)
+        response = self.client.get(self._url() + f"?rule_id={self.rule.pk}")
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_no_permission_raises_403(self):
+        """POST to rule test view without add_interfacenamerule permission returns 403."""
+        User.objects.create_user(username="noperm_test_post", password=TEST_PASSWORD)
+        self.client.login(username="noperm_test_post", password=TEST_PASSWORD)
+        data = {
+            "name_template": "et-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 403)
+
+
+class RuleApplyDetailViewGetPermissionTest(ViewTestBase2):
+    """Test RuleApplyDetailView.get() permission check for unprivileged users."""
+
+    def test_get_no_change_permission_raises_403(self):
+        """GET apply detail without dcim.change_interface permission returns 403."""
+        User.objects.create_user(username="noperm_apply_get", password=TEST_PASSWORD)
+        self.client.login(username="noperm_apply_get", password=TEST_PASSWORD)
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
+            kwargs={"pk": self.rule.pk},
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+
+
 class RuleApplyDetailViewPostTest(ViewTestBase2):
     """Test RuleApplyDetailView.post() — foreground apply, background job, no permission."""
 

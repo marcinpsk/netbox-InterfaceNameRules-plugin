@@ -116,6 +116,20 @@ class InterfaceNameRuleAPITest(APITestCase):
         response = self.client.post(url, data, format="json", **self.header)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_create_with_both_module_type_and_pattern_fails(self):
+        """POST with both module_type FK and module_type_pattern set is rejected."""
+        url = self._get_list_url()
+        data = {
+            "module_type": self.module_type.pk,
+            "module_type_is_regex": True,
+            "module_type_pattern": "QSFP-.*",
+            "name_template": "port{bay_position}",
+            "channel_count": 0,
+            "channel_start": 0,
+        }
+        response = self.client.post(url, data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_update_rule_to_regex(self):
         """PATCH a rule to switch it to regex mode."""
         rule = InterfaceNameRule.objects.create(
