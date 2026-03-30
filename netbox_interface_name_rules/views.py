@@ -4,10 +4,11 @@ import dataclasses
 import logging
 import re
 
+import yaml
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -112,6 +113,46 @@ class InterfaceNameRuleDuplicateView(ConditionalLoginRequiredMixin, View):
         params = prepare_cloned_fields(rule)
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
         return redirect(f"{url}?{params.urlencode()}")
+
+
+class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
+    """Export selected or all rules as a YAML file importable via BulkImportView."""
+
+    def _rules_to_yaml_data(self, queryset):
+        """Return a list of dicts (one per rule) using import-form field names."""
+        records = []
+        for rule in queryset.select_related("module_type", "parent_module_type", "device_type", "platform"):
+            entry = {}
+            for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
+                # Omit empty/falsy optional fields to keep output readable,
+                # but always include required fields.
+                required = {"name_template"}
+                if value != "" and value is not None:
+                    entry[header] = value
+                elif header in required:
+                    entry[header] = value
+            records.append(entry)
+        return records
+
+    def _build_response(self, queryset):
+        data = self._rules_to_yaml_data(queryset)
+        content = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        response = HttpResponse(content, content_type="application/x-yaml; charset=utf-8")
+        response["Content-Disposition"] = 'attachment; filename="interface_name_rules.yaml"'
+        return response
+
+    def get(self, request):
+        """Export all rules as YAML."""
+        return self._build_response(InterfaceNameRule.objects.all())
+
+    def post(self, request):
+        """Export selected rules (pk_<n> form fields) as YAML, or all if none selected."""
+        pk_list = [int(v) for k, v in request.POST.items() if k.startswith("pk_") and v.isdigit()]
+        if pk_list:
+            queryset = InterfaceNameRule.objects.filter(pk__in=pk_list)
+        else:
+            queryset = InterfaceNameRule.objects.all()
+        return self._build_response(queryset)
 
 
 class RuleTestView(ConditionalLoginRequiredMixin, View):
