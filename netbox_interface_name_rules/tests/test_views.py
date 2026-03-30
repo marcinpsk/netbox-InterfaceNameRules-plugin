@@ -725,13 +725,12 @@ class YAMLExportViewTest(ViewTestBase):
 
     YAML_URL = "/plugins/interface-name-rules/rules/export/yaml/"
 
-    def test_yaml_export_requires_login(self):
-        """Unauthenticated request behaviour depends on LOGIN_REQUIRED setting.
+    def test_yaml_export_unauthenticated_responds(self):
+        """Unauthenticated GET must not return a server error (4xx or 2xx is acceptable).
 
-        ConditionalLoginRequiredMixin only enforces authentication when
-        LOGIN_REQUIRED=True (the default in production). In the test environment
-        LOGIN_REQUIRED may be False, so we just assert the view responds without
-        a server error rather than asserting a redirect.
+        ViewTestBase does not log in by default — this exercises anonymous access.
+        ConditionalLoginRequiredMixin enforces auth only when LOGIN_REQUIRED=True;
+        in the test environment that setting may be False, so 200 is also valid.
         """
         response = self.client.get(self.YAML_URL)
         self.assertIn(response.status_code, [200, 301, 302])

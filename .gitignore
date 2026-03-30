@@ -60,3 +60,6 @@ site/
 
 # direnv
 .envrc
+
+# Brainstorming / design specs (local only, not for version control)
+docs/superpowers/

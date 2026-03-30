@@ -124,12 +124,7 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
         for rule in queryset.select_related("module_type", "parent_module_type", "device_type", "platform"):
             entry = {}
             for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
-                # Omit empty/falsy optional fields to keep output readable,
-                # but always include required fields.
-                required = {"name_template"}
-                if value != "" and value is not None:
-                    entry[header] = value
-                elif header in required:
+                if value != "" and value is not None or header in {"name_template"}:
                     entry[header] = value
             records.append(entry)
         return records
@@ -137,7 +132,7 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
     def _build_response(self, queryset):
         data = self._rules_to_yaml_data(queryset)
         content = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        response = HttpResponse(content, content_type="application/x-yaml; charset=utf-8")
+        response = HttpResponse(content, content_type="application/yaml; charset=utf-8")
         response["Content-Disposition"] = 'attachment; filename="interface_name_rules.yaml"'
         return response
 
