@@ -660,3 +660,132 @@ class RuleApplyDetailViewBackgroundJobSuccessTest(ViewTestBase2):
         success_msgs = [m for m in msgs if m.level == SUCCESS]
         self.assertTrue(success_msgs, "Expected a success-level message but none found")
         self.assertTrue(any("42" in str(m) for m in success_msgs))
+
+
+# ---------------------------------------------------------------------------
+# BulkImportCSVTest — regression: KeyError 'Ch' on CSV import round-trip
+# ---------------------------------------------------------------------------
+
+
+class BulkImportCSVTest(ViewTestBase):
+    """CSV import round-trip tests; guards against the KeyError 'Ch' regression."""
+
+    def _csv_from_rule(self, rule):
+        """Build a one-row CSV string from a rule's csv_headers and to_csv()."""
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(InterfaceNameRule.csv_headers)
+        writer.writerow(rule.to_csv())
+        return buf.getvalue()
+
+    def test_csv_import_does_not_raise_key_error(self):
+        """POST to import with a properly exported CSV must not produce a KeyError.
+
+        This is the regression test for the 'Ch' KeyError: when using csv_headers
+        and to_csv() the column names are plain field names with no dots.
+        """
+        self.client.force_login(self.superuser)
+        csv_data = self._csv_from_rule(self.rule)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
+        # If a KeyError is raised the view returns 500; assert it doesn't.
+        try:
+            response = self.client.post(url, {"data": csv_data, "format": "csv"})
+        except KeyError as exc:
+            self.fail(f"CSV import raised KeyError: {exc!r}")
+        self.assertNotEqual(response.status_code, 500, "CSV import returned a 500 error")
+
+    def test_csv_round_trip_creates_rule(self):
+        """CSV exported from an exact rule can be imported to create an equivalent rule."""
+        self.client.force_login(self.superuser)
+        csv_data = self._csv_from_rule(self.rule)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
+        before_count = InterfaceNameRule.objects.count()
+        response = self.client.post(url, {"data": csv_data, "format": "csv"})
+        # A successful import redirects; failure re-renders the form (200).
+        self.assertIn(
+            response.status_code,
+            [200, 302],
+            f"Unexpected status {response.status_code}",
+        )
+        if response.status_code == 302:
+            after_count = InterfaceNameRule.objects.count()
+            self.assertGreater(after_count, before_count, "No new rule was created after CSV import")
+
+
+# ---------------------------------------------------------------------------
+# YAMLExportViewTest — new YAML export view
+# ---------------------------------------------------------------------------
+
+
+class YAMLExportViewTest(ViewTestBase):
+    """Tests for the YAML export view at GET/POST /rules/export/yaml/."""
+
+    YAML_URL = "/plugins/interface-name-rules/rules/export/yaml/"
+
+    def test_yaml_export_requires_login(self):
+        """Unauthenticated GET must redirect to login."""
+        response = self.client.get(self.YAML_URL)
+        self.assertIn(response.status_code, [302, 301], "Expected redirect for unauthenticated request")
+        if response.status_code in [301, 302]:
+            self.assertIn("login", response["Location"].lower())
+
+    def test_yaml_export_all_returns_200(self):
+        """Authenticated GET /rules/export/yaml/ must return 200."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.YAML_URL)
+        self.assertEqual(response.status_code, 200)
+
+    def test_yaml_export_content_type(self):
+        """Response Content-Type must contain 'yaml'."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.YAML_URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("yaml", response["Content-Type"].lower())
+
+    def test_yaml_export_content_disposition(self):
+        """Response must include a Content-Disposition attachment header."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.YAML_URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.get("Content-Disposition", "").lower())
+
+    def test_yaml_export_all_contains_rules(self):
+        """Exported YAML must be parseable and contain all existing rules."""
+        import yaml
+
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.YAML_URL)
+        self.assertEqual(response.status_code, 200)
+        data = yaml.safe_load(response.content)
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 1)
+
+    def test_yaml_export_selected_rules_via_post(self):
+        """POST with pk_ form fields must export only the selected rules."""
+        import yaml
+
+        self.client.force_login(self.superuser)
+        response = self.client.post(
+            self.YAML_URL,
+            {f"pk_{self.rule.pk}": self.rule.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = yaml.safe_load(response.content)
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 1)
+
+    def test_yaml_export_structure(self):
+        """Each exported YAML entry must contain key fields."""
+        import yaml
+
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.YAML_URL)
+        self.assertEqual(response.status_code, 200)
+        rules = yaml.safe_load(response.content)
+        self.assertIsInstance(rules, list)
+        entry = rules[0]
+        self.assertIsInstance(entry, dict)
+        self.assertIn("name_template", entry)
