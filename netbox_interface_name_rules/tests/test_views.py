@@ -723,15 +723,20 @@ class BulkImportCSVTest(ViewTestBase):
 class YAMLExportViewTest(ViewTestBase):
     """Tests for the YAML export view at GET/POST /rules/export/yaml/."""
 
-    YAML_URL = "/plugins/interface-name-rules/rules/export/yaml/"
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.YAML_URL = reverse("plugins:netbox_interface_name_rules:interfacenamerule_export_yaml")
 
     def test_yaml_export_unauthenticated_responds(self):
-        """Unauthenticated GET must not return a server error (4xx or 2xx is acceptable).
+        """Unauthenticated GET must not return a server error.
 
-        ViewTestBase does not log in by default — this exercises anonymous access.
-        ConditionalLoginRequiredMixin enforces auth only when LOGIN_REQUIRED=True;
-        in the test environment that setting may be False, so 200 is also valid.
+        setUp() logs in the superuser, so we explicitly logout first to exercise
+        anonymous access. ConditionalLoginRequiredMixin only enforces auth when
+        LOGIN_REQUIRED=True; in the test environment that setting may be False,
+        so 200 is also valid alongside a redirect.
         """
+        self.client.logout()
         response = self.client.get(self.YAML_URL)
         self.assertIn(response.status_code, [200, 301, 302])
 

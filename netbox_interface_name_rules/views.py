@@ -138,6 +138,8 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
 
     def get(self, request):
         """Export all rules as YAML."""
+        if not request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
+            raise PermissionDenied
         return self._build_response(InterfaceNameRule.objects.all())
 
     def post(self, request):
@@ -147,6 +149,8 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
         post their PKs as repeated ``pk`` inputs.  Falls back to all rules when
         nothing is selected.
         """
+        if not request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
+            raise PermissionDenied
         pk_list = [int(v) for v in request.POST.getlist("pk") if v.isdigit()]
         if pk_list:
             queryset = InterfaceNameRule.objects.filter(pk__in=pk_list)
