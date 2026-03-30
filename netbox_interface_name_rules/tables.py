@@ -96,7 +96,7 @@ class InterfaceNameRuleTable(NetBoxTable):
     applies_to_device_interfaces = columns.BooleanColumn(verbose_name="Device Ifaces")
     name_template = tables.Column(verbose_name="Name Template")
     channel_count = tables.Column(verbose_name="Channels")
-    channel_start = tables.Column(verbose_name="Ch. Start")
+    channel_start = tables.Column(verbose_name="Channel Start")
     description = tables.Column(verbose_name="Description", linkify=False)
     actions = columns.ActionsColumn(
         actions=("edit", "delete"),

@@ -283,3 +283,35 @@ class InterfaceNameRule(NetBoxModel):
         device = f" on {self.device_type.model}" if self.device_type else ""
         platform = f" [{self.platform.name}]" if self.platform else ""
         return f"{module}{parent}{device}{platform} → {self.name_template}"
+
+    csv_headers = [
+        "module_type",
+        "module_type_pattern",
+        "module_type_is_regex",
+        "parent_module_type",
+        "device_type",
+        "platform",
+        "name_template",
+        "channel_count",
+        "channel_start",
+        "description",
+        "enabled",
+        "applies_to_device_interfaces",
+    ]
+
+    def to_csv(self):
+        """Return a tuple of field values for CSV export (matches csv_headers order)."""
+        return (
+            self.module_type.model if self.module_type else "",
+            self.module_type_pattern,
+            self.module_type_is_regex,
+            self.parent_module_type.model if self.parent_module_type else "",
+            self.device_type.model if self.device_type else "",
+            self.platform.name if self.platform else "",
+            self.name_template,
+            self.channel_count,
+            self.channel_start,
+            self.description,
+            self.enabled,
+            self.applies_to_device_interfaces,
+        )
