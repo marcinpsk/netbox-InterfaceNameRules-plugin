@@ -53,14 +53,6 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     filterset_form = InterfaceNameRuleFilterForm
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
 
-    def get_extra_context(self, request):
-        """Inject feature-detection flags into the list template context."""
-        from .utils import supports_module_path
-
-        return {
-            "supports_module_path": supports_module_path(),
-        }
-
 
 class InterfaceNameRuleCreateView(generic.ObjectEditView):
     """Create view for InterfaceNameRule."""

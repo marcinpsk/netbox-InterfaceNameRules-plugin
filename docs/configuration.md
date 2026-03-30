@@ -49,21 +49,6 @@ NetBox installs:  interface name = "5"   (raw bay position)
 Plugin renames:   interface name = "et-0/0/5"
 ```
 
-### `{module_path}` (NetBox ≥ 4.9)
-
-When a module type's interface template uses `{module_path}`, NetBox resolves
-the full module bay path at install time.  For a transceiver in "X2 Port 1"
-inside a line card in "Slot 1", `{module_path}` resolves to `1/1`.  The plugin
-signal still fires, but may compute the same name the interface already has —
-so it becomes a no-op.
-
-For directly-attached pluggables (single bay depth), `{module_path}` resolves to
-just the bay position, behaving identically to `{module}`.
-
-!!! tip
-    New module types should use `{module_path}` for best NetBox compatibility.
-    Legacy module types using `{module}` continue to work — the plugin handles the rename.
-
 ### The `potentially-deprecated` Tag
 
 After installing a module, if the plugin's signal fires but finds the interface
@@ -71,8 +56,7 @@ is already correctly named, it automatically tags the rule `potentially-deprecat
 This means:
 
 - For **new installs**: the rule may no longer be needed (NetBox generates the name)
-- For **retroactive applies**: the rule is still useful for modules installed before
-  `{module_path}` support was added, or before the rule existed
+- For **retroactive applies**: the rule is still useful for modules installed before the rule existed
 
 The tag is informational only — the rule remains active.
 

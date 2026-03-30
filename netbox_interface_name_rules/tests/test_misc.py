@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Tests for utils, jobs, model properties, and API serializer edge-cases."""
+"""Tests for jobs, model properties, and API serializer edge-cases."""
 
 from unittest.mock import MagicMock, patch
 
@@ -9,21 +9,6 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.utils import supports_module_path
-
-# ---------------------------------------------------------------------------
-# utils.py
-# ---------------------------------------------------------------------------
-
-
-class SupportModulePathTest(TestCase):
-    """Test the supports_module_path feature-detection helper."""
-
-    def test_returns_bool(self):
-        """supports_module_path() returns a boolean (True or False)."""
-        result = supports_module_path()
-        self.assertIsInstance(result, bool)
-
 
 # ---------------------------------------------------------------------------
 # jobs.py
@@ -739,34 +724,3 @@ class JobRunSuccessAndExceptionTest(TestCase):
             with self.assertRaises(RuntimeError):
                 job.run(rule_id=self.rule.pk)
         job.logger.exception.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# utils.py — supports_module_path ImportError path (lines 16-17)
-# ---------------------------------------------------------------------------
-
-
-class UtilsModulePathFalseTest(TestCase):
-    """Test supports_module_path() returns False when MODULE_PATH_TOKEN is missing."""
-
-    def test_returns_false_when_token_missing(self):
-        """supports_module_path() returns False when MODULE_PATH_TOKEN is absent.
-
-        Temporarily removes the attribute from dcim.constants (if present) to
-        trigger the ImportError branch in supports_module_path, then restores it.
-        Asserts False regardless of whether the attribute existed beforehand.
-        """
-        import dcim.constants as dc
-
-        from netbox_interface_name_rules.utils import supports_module_path
-
-        had_attr = hasattr(dc, "MODULE_PATH_TOKEN")
-        original = getattr(dc, "MODULE_PATH_TOKEN", None)
-        try:
-            if had_attr:
-                delattr(dc, "MODULE_PATH_TOKEN")
-            result = supports_module_path()
-            self.assertFalse(result)
-        finally:
-            if had_attr:
-                dc.MODULE_PATH_TOKEN = original
