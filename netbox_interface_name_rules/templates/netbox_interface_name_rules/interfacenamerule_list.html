@@ -153,3 +153,13 @@
         <i class="mdi mdi-download"></i> Export YAML
     </a>
 {% endblock %}
+
+{% block bulk_buttons %}
+    {{ block.super }}
+    <button type="submit"
+            formaction="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_export_yaml' %}"
+            class="btn btn-outline-secondary btn-sm"
+            title="Export selected rules as YAML">
+        <i class="mdi mdi-download"></i> Export Selected YAML
+    </button>
+{% endblock %}

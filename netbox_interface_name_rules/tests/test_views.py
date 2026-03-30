@@ -767,13 +767,13 @@ class YAMLExportViewTest(ViewTestBase):
         self.assertGreaterEqual(len(data), 1)
 
     def test_yaml_export_selected_rules_via_post(self):
-        """POST with pk_ form fields must export only the selected rules."""
+        """POST with NetBox bulk-select pk inputs must export only the selected rules."""
         import yaml
 
         self.client.force_login(self.superuser)
         response = self.client.post(
             self.YAML_URL,
-            {f"pk_{self.rule.pk}": self.rule.pk},
+            {"pk": [self.rule.pk]},
         )
         self.assertEqual(response.status_code, 200)
         data = yaml.safe_load(response.content)

@@ -141,8 +141,13 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
         return self._build_response(InterfaceNameRule.objects.all())
 
     def post(self, request):
-        """Export selected rules (pk_<n> form fields) as YAML, or all if none selected."""
-        pk_list = [int(v) for k, v in request.POST.items() if k.startswith("pk_") and v.isdigit()]
+        """Export selected rules as YAML using NetBox's bulk-select form (pk inputs).
+
+        The parent object_list.html wraps the table in a POST form; selected rows
+        post their PKs as repeated ``pk`` inputs.  Falls back to all rules when
+        nothing is selected.
+        """
+        pk_list = [int(v) for v in request.POST.getlist("pk") if v.isdigit()]
         if pk_list:
             queryset = InterfaceNameRule.objects.filter(pk__in=pk_list)
         else:
