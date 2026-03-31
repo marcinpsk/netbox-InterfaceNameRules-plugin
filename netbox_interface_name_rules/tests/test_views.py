@@ -409,11 +409,12 @@ class RuleTestViewAddOnlyPermissionTest(ViewTestBase2):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def _create_add_only_user(self):
-        from django.contrib.contenttypes.models import ContentType
         from users.models import ObjectPermission
 
         user = User.objects.create_user(username="add_only_tester", password=TEST_PASSWORD)
-        ct = ContentType.objects.get_for_model(InterfaceNameRule)
+        # object_types targets ContentType on older NetBox and ObjectType on newer NetBox
+        obj_type_model = ObjectPermission._meta.get_field("object_types").related_model
+        ct = obj_type_model.objects.get_for_model(InterfaceNameRule)
         obj_perm = ObjectPermission.objects.create(name="add_only_rule", actions=["add"])
         obj_perm.object_types.add(ct)
         obj_perm.users.add(user)
