@@ -231,6 +231,22 @@ class RuleTestView(BaseMultiObjectView):
             },
         )
 
+    def _find_existing_rule(self, cd):
+        """Return the first existing rule matching the form data, or None."""
+        module_type_is_regex = cd.get("module_type_is_regex", False)
+        qs = InterfaceNameRule.objects.all()
+        if module_type_is_regex:
+            qs = qs.filter(module_type_is_regex=True, module_type_pattern=cd.get("module_type_pattern", ""))
+        else:
+            qs = qs.filter(module_type_is_regex=False, module_type=cd.get("module_type"))
+        for field in ("parent_module_type", "device_type", "platform"):
+            val = cd.get(field)
+            if val:
+                qs = qs.filter(**{field: val})
+            else:
+                qs = qs.filter(**{f"{field}__isnull": True})
+        return qs.first()
+
     def _handle_save_rule(self, request, cd):
         """Find an existing matching rule or redirect to the add-rule form with pre-filled params."""
         from urllib.parse import urlencode
@@ -240,24 +256,12 @@ class RuleTestView(BaseMultiObjectView):
         channel_start = cd.get("channel_start") or 0
         module_type_is_regex = cd.get("module_type_is_regex", False)
         module_type = cd.get("module_type")
-        module_type_pattern = cd.get("module_type_pattern", "")
 
         # Skip duplicate detection when the user lacks view permission — we cannot
         # query existing rules without it, so add-only users always land on the
         # create form (potentially allowing duplicates).
         if request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
-            qs = InterfaceNameRule.objects.all()
-            if module_type_is_regex:
-                qs = qs.filter(module_type_is_regex=True, module_type_pattern=module_type_pattern)
-            else:
-                qs = qs.filter(module_type_is_regex=False, module_type=module_type)
-            for field in ("parent_module_type", "device_type", "platform"):
-                val = cd.get(field)
-                if val:
-                    qs = qs.filter(**{field: val})
-                else:
-                    qs = qs.filter(**{f"{field}__isnull": True})
-            existing = qs.first()
+            existing = self._find_existing_rule(cd)
             if existing:
                 messages.info(
                     request,
@@ -274,7 +278,7 @@ class RuleTestView(BaseMultiObjectView):
             "channel_start": channel_start,
         }
         if module_type_is_regex:
-            params["module_type_pattern"] = module_type_pattern
+            params["module_type_pattern"] = cd.get("module_type_pattern", "")
         elif module_type:
             params["module_type"] = module_type.pk
         for field in ("parent_module_type", "device_type", "platform"):
