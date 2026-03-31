@@ -146,7 +146,7 @@ class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
 
     def get(self, request):
         """Export all rules as YAML."""
-        return self._build_response(self.queryset)
+        return self._build_response(self.queryset.order_by("pk"))
 
     def post(self, request):
         """Export selected rules as YAML using NetBox's bulk-select form (pk inputs).
@@ -157,9 +157,9 @@ class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
         """
         pk_list = [int(v) for v in request.POST.getlist("pk") if v.isdigit()]
         if pk_list:
-            queryset = self.queryset.filter(pk__in=pk_list)
+            queryset = self.queryset.filter(pk__in=pk_list).order_by("pk")
         else:
-            queryset = self.queryset
+            queryset = self.queryset.order_by("pk")
         return self._build_response(queryset)
 
 
@@ -178,7 +178,8 @@ class RuleTestView(BaseMultiObjectView):
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
-        if rule_id:
+        can_view = request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule")
+        if rule_id and can_view:
             try:
                 loaded_rule = InterfaceNameRule.objects.select_related(
                     "module_type", "parent_module_type", "device_type", "platform"
@@ -239,24 +240,27 @@ class RuleTestView(BaseMultiObjectView):
         module_type = cd.get("module_type")
         module_type_pattern = cd.get("module_type_pattern", "")
 
-        qs = InterfaceNameRule.objects.all()
-        if module_type_is_regex:
-            qs = qs.filter(module_type_is_regex=True, module_type_pattern=module_type_pattern)
-        else:
-            qs = qs.filter(module_type_is_regex=False, module_type=module_type)
-        for field in ("parent_module_type", "device_type", "platform"):
-            val = cd.get(field)
-            if val:
-                qs = qs.filter(**{field: val})
+        if request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
+            qs = InterfaceNameRule.objects.all()
+            if module_type_is_regex:
+                qs = qs.filter(module_type_is_regex=True, module_type_pattern=module_type_pattern)
             else:
-                qs = qs.filter(**{f"{field}__isnull": True})
-        existing = qs.first()
-        if existing:
-            messages.info(
-                request,
-                f"A matching rule already exists (#{existing.pk}). Redirecting to edit it.",
-            )
-            return redirect(reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[existing.pk]))
+                qs = qs.filter(module_type_is_regex=False, module_type=module_type)
+            for field in ("parent_module_type", "device_type", "platform"):
+                val = cd.get(field)
+                if val:
+                    qs = qs.filter(**{field: val})
+                else:
+                    qs = qs.filter(**{f"{field}__isnull": True})
+            existing = qs.first()
+            if existing:
+                messages.info(
+                    request,
+                    f"A matching rule already exists (#{existing.pk}). Redirecting to edit it.",
+                )
+                return redirect(
+                    reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[existing.pk])
+                )
 
         params = {
             "name_template": name_template,

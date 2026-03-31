@@ -810,6 +810,7 @@ class YAMLExportViewTest(ViewTestBase):
         data = yaml.safe_load(response.content)
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["name_template"], self.rule.name_template)
 
     def test_yaml_export_structure(self):
         """Each exported YAML entry must contain key fields."""
