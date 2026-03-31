@@ -698,21 +698,47 @@ class BulkImportCSVTest(ViewTestBase):
         self.assertNotEqual(response.status_code, 500, "CSV import returned a 500 error")
 
     def test_csv_round_trip_creates_rule(self):
-        """CSV exported from an exact rule can be imported to create an equivalent rule."""
+        """CSV exported from a fresh rule can be imported to create a new rule."""
+        import csv
+        import io
+        import uuid
+
         self.client.force_login(self.superuser)
-        csv_data = self._csv_from_rule(self.rule)
+        # Build a unique ModuleType so the imported row doesn't collide with fixtures.
+        unique_model = f"ROUND-TRIP-{uuid.uuid4().hex[:8]}"
+        mt = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer,
+            model=unique_model,
+            part_number=unique_model,
+        )
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(InterfaceNameRule.csv_headers)
+        writer.writerow(
+            [
+                mt.model,  # module_type
+                "",  # module_type_pattern
+                False,  # module_type_is_regex
+                "",  # parent_module_type
+                "",  # device_type
+                "",  # platform
+                "et-0/0/{bay_position}",  # name_template
+                0,  # channel_count
+                0,  # channel_start
+                "round-trip test",  # description
+                True,  # enabled
+                False,  # applies_to_device_interfaces
+            ]
+        )
+        csv_data = buf.getvalue()
+
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
         before_count = InterfaceNameRule.objects.count()
         response = self.client.post(url, {"data": csv_data, "format": "csv"})
-        # A successful import redirects; failure re-renders the form (200).
-        self.assertIn(
-            response.status_code,
-            [200, 302],
-            f"Unexpected status {response.status_code}",
-        )
-        if response.status_code == 302:
-            after_count = InterfaceNameRule.objects.count()
-            self.assertGreater(after_count, before_count, "No new rule was created after CSV import")
+        # A successful import redirects (302); failure re-renders the form (200).
+        self.assertEqual(response.status_code, 302, f"Import did not redirect; status={response.status_code}")
+        after_count = InterfaceNameRule.objects.count()
+        self.assertGreater(after_count, before_count, "No new rule was created after CSV import")
 
 
 # ---------------------------------------------------------------------------
@@ -729,16 +755,16 @@ class YAMLExportViewTest(ViewTestBase):
         cls.YAML_URL = reverse("plugins:netbox_interface_name_rules:interfacenamerule_export_yaml")
 
     def test_yaml_export_unauthenticated_responds(self):
-        """Unauthenticated GET must not return a server error.
+        """Unauthenticated GET must not serve content to anonymous users.
 
         setUp() logs in the superuser, so we explicitly logout first to exercise
-        anonymous access. ConditionalLoginRequiredMixin only enforces auth when
-        LOGIN_REQUIRED=True; in the test environment that setting may be False,
-        so 200 is also valid alongside a redirect.
+        anonymous access.  When LOGIN_REQUIRED=True the mixin redirects (302);
+        when False the view's explicit has_perm check raises PermissionDenied
+        (403).  200 is never valid because AnonymousUser lacks the permission.
         """
         self.client.logout()
         response = self.client.get(self.YAML_URL)
-        self.assertIn(response.status_code, [200, 301, 302])
+        self.assertIn(response.status_code, [301, 302, 403])
 
     def test_yaml_export_all_returns_200(self):
         """Authenticated GET /rules/export/yaml/ must return 200."""
@@ -769,7 +795,7 @@ class YAMLExportViewTest(ViewTestBase):
         self.assertEqual(response.status_code, 200)
         data = yaml.safe_load(response.content)
         self.assertIsInstance(data, list)
-        self.assertGreaterEqual(len(data), 1)
+        self.assertEqual(len(data), InterfaceNameRule.objects.count())
 
     def test_yaml_export_selected_rules_via_post(self):
         """POST with NetBox bulk-select pk inputs must export only the selected rules."""
