@@ -402,6 +402,53 @@ class RuleTestViewPermissionTest(ViewTestBase2):
         self.assertEqual(response.status_code, 403)
 
 
+class RuleTestViewAddOnlyPermissionTest(ViewTestBase2):
+    """Test RuleTestView behaviour for users with add but not view permission."""
+
+    def _url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
+    def _create_add_only_user(self):
+        from django.contrib.auth.models import Permission
+        from django.contrib.contenttypes.models import ContentType
+
+        user = User.objects.create_user(username="add_only_tester", password=TEST_PASSWORD)
+        ct = ContentType.objects.get_for_model(InterfaceNameRule)
+        perm = Permission.objects.get(content_type=ct, codename="add_interfacenamerule")
+        user.user_permissions.add(perm)
+        return user
+
+    def test_get_with_rule_id_add_only_shows_blank_form_with_warning(self):
+        """GET with ?rule_id= when user has add but not view permission returns blank form."""
+        user = self._create_add_only_user()
+        self.client.force_login(user)
+        response = self.client.get(self._url() + f"?rule_id={self.rule.pk}")
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertFalse(form.initial, "Form should have no initial data for add-only user")
+        self.assertIsNone(response.context.get("loaded_rule"))
+        from django.contrib.messages import get_messages
+
+        msgs = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("permission" in m.lower() for m in msgs))
+
+    def test_save_rule_add_only_skips_duplicate_check(self):
+        """POST save_rule with add-only permission skips duplicate detection, redirects to add."""
+        user = self._create_add_only_user()
+        self.client.force_login(user)
+        add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+        data = {
+            "name_template": "ge-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type": str(self.module_type.pk),
+            "action": "save_rule",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(add_url, response["Location"])
+
+
 class RuleApplyDetailViewGetPermissionTest(ViewTestBase2):
     """Test RuleApplyDetailView.get() permission check for unprivileged users."""
 

@@ -132,7 +132,7 @@ class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
         for rule in queryset.select_related("module_type", "parent_module_type", "device_type", "platform"):
             entry = {}
             for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
-                if value != "" and value is not None or header in {"name_template"}:
+                if (value != "" and value is not None) or header in {"name_template"}:
                     entry[header] = value
             records.append(entry)
         return records
@@ -179,6 +179,8 @@ class RuleTestView(BaseMultiObjectView):
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
         can_view = request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule")
+        if rule_id and not can_view:
+            messages.warning(request, "You do not have permission to load an existing rule.")
         if rule_id and can_view:
             try:
                 loaded_rule = InterfaceNameRule.objects.select_related(
@@ -240,6 +242,9 @@ class RuleTestView(BaseMultiObjectView):
         module_type = cd.get("module_type")
         module_type_pattern = cd.get("module_type_pattern", "")
 
+        # Skip duplicate detection when the user lacks view permission — we cannot
+        # query existing rules without it, so add-only users always land on the
+        # create form (potentially allowing duplicates).
         if request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
             qs = InterfaceNameRule.objects.all()
             if module_type_is_regex:
