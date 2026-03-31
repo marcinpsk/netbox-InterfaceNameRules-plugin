@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.3.0 (2026-03-31)
+
+### Chores
+
+- **deps**: Bump github/codeql-action from 4.33.0 to 4.34.1 in the github-actions group
+  ([#33](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/33),
+  [`f610cc5`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f610cc5b7a3fd8816cdbc97edcf682abe0e6f396))
+
+### Features
+
+- Remove module path plus add YAML export option
+  ([#34](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/34),
+  [`66fbf7b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/66fbf7b5ddb9f97b4c3ec2ba8f54d2e6800f132e))
+
+
 ## v1.2.3 (2026-03-21)
 
 ### Bug Fixes
