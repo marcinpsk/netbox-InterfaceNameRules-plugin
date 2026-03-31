@@ -416,7 +416,8 @@ class RuleTestViewAddOnlyPermissionTest(ViewTestBase2):
         ct = ContentType.objects.get_for_model(InterfaceNameRule)
         perm = Permission.objects.get(content_type=ct, codename="add_interfacenamerule")
         user.user_permissions.add(perm)
-        return user
+        # Re-fetch to clear Django's permission cache on the User instance.
+        return User.objects.get(pk=user.pk)
 
     def test_get_with_rule_id_add_only_shows_blank_form_with_warning(self):
         """GET with ?rule_id= when user has add but not view permission returns blank form."""
