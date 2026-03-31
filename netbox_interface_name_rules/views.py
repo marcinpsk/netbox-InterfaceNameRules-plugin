@@ -12,6 +12,7 @@ from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
+from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
@@ -45,6 +46,12 @@ class RulePreview:
     channel_start: int
 
 
+class _YAMLOnlyExport(BulkExport):
+    """Export action that only offers YAML (no CSV "Current View" option)."""
+
+    template_name = "netbox_interface_name_rules/buttons/export_yaml_only.html"
+
+
 class InterfaceNameRuleListView(generic.ObjectListView):
     """List view for InterfaceNameRule."""
 
@@ -53,6 +60,7 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     filterset = InterfaceNameRuleFilterSet
     filterset_form = InterfaceNameRuleFilterForm
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
+    actions = (AddObject, BulkImport, _YAMLOnlyExport, BulkEdit, BulkRename, BulkDelete)
 
     def export_yaml(self):
         """Export all rules as a single YAML list (overrides NetBox's per-object concatenation)."""
