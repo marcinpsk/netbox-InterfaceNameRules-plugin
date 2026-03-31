@@ -23,8 +23,6 @@ from .tables import InterfaceNameRuleTable
 
 logger = logging.getLogger(__name__)
 
-PERM_VIEW_RULE = "netbox_interface_name_rules.view_interfacenamerule"
-
 try:
     _plugins_config = getattr(settings, "PLUGINS_CONFIG", {})
     APPLY_BATCH_LIMIT = max(1, int(_plugins_config.get("netbox_interface_name_rules", {}).get("apply_batch_limit", 50)))
@@ -126,7 +124,7 @@ class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
 
     def get_required_permission(self):
         """Return the permission required to export rules."""
-        return PERM_VIEW_RULE
+        return "netbox_interface_name_rules.view_interfacenamerule"
 
     def _rules_to_yaml_data(self, queryset):
         """Return a list of dicts (one per rule) using import-form field names."""
@@ -180,7 +178,7 @@ class RuleTestView(BaseMultiObjectView):
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
-        can_view = request.user.has_perm(PERM_VIEW_RULE)
+        can_view = request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule")
         if rule_id and not can_view:
             messages.warning(request, "You do not have permission to load an existing rule.")
         if rule_id and can_view:
@@ -262,7 +260,7 @@ class RuleTestView(BaseMultiObjectView):
         # Skip duplicate detection when the user lacks view permission — we cannot
         # query existing rules without it, so add-only users always land on the
         # create form (potentially allowing duplicates).
-        if request.user.has_perm(PERM_VIEW_RULE):
+        if request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
             existing = self._find_existing_rule(cd)
             if existing:
                 messages.info(
@@ -374,7 +372,7 @@ class RuleApplyListView(BaseMultiObjectView):
 
     def get_required_permission(self):
         """Return the permission required to access the apply-rules page."""
-        return PERM_VIEW_RULE
+        return "netbox_interface_name_rules.view_interfacenamerule"
 
     def get(self, request):
         """Render the list of all rules with apply/preview buttons."""
