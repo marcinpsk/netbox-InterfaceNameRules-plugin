@@ -409,15 +409,15 @@ class RuleTestViewAddOnlyPermissionTest(ViewTestBase2):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def _create_add_only_user(self):
-        from django.contrib.auth.models import Permission
         from django.contrib.contenttypes.models import ContentType
+        from users.models import ObjectPermission
 
         user = User.objects.create_user(username="add_only_tester", password=TEST_PASSWORD)
         ct = ContentType.objects.get_for_model(InterfaceNameRule)
-        perm = Permission.objects.get(content_type=ct, codename="add_interfacenamerule")
-        user.user_permissions.add(perm)
-        # Re-fetch to clear Django's permission cache on the User instance.
-        return User.objects.get(pk=user.pk)
+        obj_perm = ObjectPermission.objects.create(name="add_only_rule", actions=["add"])
+        obj_perm.object_types.add(ct)
+        obj_perm.users.add(user)
+        return user
 
     def test_get_with_rule_id_add_only_shows_blank_form_with_warning(self):
         """GET with ?rule_id= when user has add but not view permission returns blank form."""
