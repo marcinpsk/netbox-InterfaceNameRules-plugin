@@ -78,23 +78,6 @@
                     (device-level rule, pattern <code>Ethernet\d+/\d+</code>)</li>
             </ul>
 
-            {% if supports_module_path %}
-            <div class="alert alert-success mt-3 mb-0">
-                <i class="mdi mdi-check-circle me-1"></i>
-                <strong><code>{module_path}</code> supported:</strong>
-                Platform naming rules (e.g., <code>et-0/0/{bay_position}</code>)
-                may be replaceable by using <code>{module_path}</code> in module type interface templates directly.
-                Converter offset and breakout rules are still needed.
-            </div>
-            {% else %}
-            <div class="alert alert-warning mt-3 mb-0">
-                <i class="mdi mdi-information-outline me-1"></i>
-                <strong><code>{module_path}</code> not available:</strong>
-                Platform naming rules
-                (e.g., Juniper <code>et-0/0/{bay_position}</code>) are required for correct interface naming.
-                Upgrade NetBox to get native <code>{module_path}</code> support.
-            </div>
-            {% endif %}
         </div>
     </div>
     <script>

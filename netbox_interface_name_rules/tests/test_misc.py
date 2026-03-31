@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Tests for utils, jobs, model properties, and API serializer edge-cases."""
+"""Tests for jobs, model properties, and API serializer edge-cases."""
 
 from unittest.mock import MagicMock, patch
 
@@ -9,21 +9,6 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.utils import supports_module_path
-
-# ---------------------------------------------------------------------------
-# utils.py
-# ---------------------------------------------------------------------------
-
-
-class SupportModulePathTest(TestCase):
-    """Test the supports_module_path feature-detection helper."""
-
-    def test_returns_bool(self):
-        """supports_module_path() returns a boolean (True or False)."""
-        result = supports_module_path()
-        self.assertIsInstance(result, bool)
-
 
 # ---------------------------------------------------------------------------
 # jobs.py
@@ -742,31 +727,77 @@ class JobRunSuccessAndExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# utils.py — supports_module_path ImportError path (lines 16-17)
+# Model csv_headers / to_csv() — regression: KeyError 'Ch' on CSV import
 # ---------------------------------------------------------------------------
 
 
-class UtilsModulePathFalseTest(TestCase):
-    """Test supports_module_path() returns False when MODULE_PATH_TOKEN is missing."""
+class ModelCSVExportTest(TestCase):
+    """Test that InterfaceNameRule exposes csv_headers and to_csv() for round-trip CSV."""
 
-    def test_returns_false_when_token_missing(self):
-        """supports_module_path() returns False when MODULE_PATH_TOKEN is absent.
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="CSVMfg", slug="csvmfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="CSV-SFP", part_number="CSV-SFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+            channel_count=4,
+            channel_start=0,
+            description="CSV test rule",
+        )
+        cls.regex_rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="QSFP-.*",
+            name_template="{base}/{channel}",
+            channel_count=4,
+            channel_start=1,
+            description="Regex CSV rule",
+        )
 
-        Temporarily removes the attribute from dcim.constants (if present) to
-        trigger the ImportError branch in supports_module_path, then restores it.
-        Asserts False regardless of whether the attribute existed beforehand.
-        """
-        import dcim.constants as dc
+    def test_csv_headers_attribute_exists(self):
+        """InterfaceNameRule.csv_headers class attribute must exist."""
+        self.assertTrue(hasattr(InterfaceNameRule, "csv_headers"), "InterfaceNameRule.csv_headers missing")
 
-        from netbox_interface_name_rules.utils import supports_module_path
+    def test_csv_headers_is_list_or_tuple(self):
+        """csv_headers must be a list or tuple of strings."""
+        self.assertIsInstance(InterfaceNameRule.csv_headers, (list, tuple))
 
-        had_attr = hasattr(dc, "MODULE_PATH_TOKEN")
-        original = getattr(dc, "MODULE_PATH_TOKEN", None)
-        try:
-            if had_attr:
-                delattr(dc, "MODULE_PATH_TOKEN")
-            result = supports_module_path()
-            self.assertFalse(result)
-        finally:
-            if had_attr:
-                dc.MODULE_PATH_TOKEN = original
+    def test_csv_headers_matches_import_form_fields(self):
+        """csv_headers must exactly match InterfaceNameRuleImportForm.Meta.fields."""
+        from netbox_interface_name_rules.forms import InterfaceNameRuleImportForm
+
+        form_fields = list(InterfaceNameRuleImportForm.Meta.fields)
+        self.assertEqual(list(InterfaceNameRule.csv_headers), form_fields)
+
+    def test_to_csv_method_exists(self):
+        """InterfaceNameRule instances must have a to_csv() method."""
+        self.assertTrue(callable(getattr(self.rule, "to_csv", None)), "InterfaceNameRule.to_csv() missing")
+
+    def test_to_csv_returns_sequence(self):
+        """to_csv() must return a tuple or list."""
+        result = self.rule.to_csv()
+        self.assertIsInstance(result, (tuple, list))
+
+    def test_to_csv_length_matches_csv_headers(self):
+        """to_csv() must return exactly len(csv_headers) values."""
+        result = self.rule.to_csv()
+        self.assertEqual(len(result), len(InterfaceNameRule.csv_headers))
+
+    def test_to_csv_exact_rule_module_type(self):
+        """to_csv() for exact rule must include the module_type model string."""
+        result = self.rule.to_csv()
+        values = list(result)
+        idx = list(InterfaceNameRule.csv_headers).index("module_type")
+        self.assertEqual(values[idx], "CSV-SFP")
+
+    def test_to_csv_regex_rule_no_module_type(self):
+        """to_csv() for regex rule must have empty string for module_type."""
+        result = self.regex_rule.to_csv()
+        values = list(result)
+        idx = list(InterfaceNameRule.csv_headers).index("module_type")
+        self.assertEqual(values[idx], "")
+
+    def test_to_csv_no_dots_in_headers(self):
+        """csv_headers must not contain dots (regression guard for KeyError 'Ch' bug)."""
+        for header in InterfaceNameRule.csv_headers:
+            self.assertNotIn(".", header, f"csv_headers entry '{header}' contains a dot — would break import")

@@ -402,6 +402,55 @@ class RuleTestViewPermissionTest(ViewTestBase2):
         self.assertEqual(response.status_code, 403)
 
 
+class RuleTestViewAddOnlyPermissionTest(ViewTestBase2):
+    """Test RuleTestView behaviour for users with add but not view permission."""
+
+    def _url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
+    def _create_add_only_user(self):
+        from users.models import ObjectPermission
+
+        user = User.objects.create_user(username="add_only_tester", password=TEST_PASSWORD)
+        # object_types targets ContentType on older NetBox and ObjectType on newer NetBox
+        obj_type_model = ObjectPermission._meta.get_field("object_types").related_model
+        ct = obj_type_model.objects.get_for_model(InterfaceNameRule)
+        obj_perm = ObjectPermission.objects.create(name="add_only_rule", actions=["add"])
+        obj_perm.object_types.add(ct)
+        obj_perm.users.add(user)
+        return user
+
+    def test_get_with_rule_id_add_only_shows_blank_form_with_warning(self):
+        """GET with ?rule_id= when user has add but not view permission returns blank form."""
+        user = self._create_add_only_user()
+        self.client.force_login(user)
+        response = self.client.get(self._url() + f"?rule_id={self.rule.pk}")
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertFalse(form.initial, "Form should have no initial data for add-only user")
+        self.assertIsNone(response.context.get("loaded_rule"))
+        from django.contrib.messages import get_messages
+
+        msgs = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("permission" in m.lower() for m in msgs))
+
+    def test_save_rule_add_only_skips_duplicate_check(self):
+        """POST save_rule with add-only permission skips duplicate detection, redirects to add."""
+        user = self._create_add_only_user()
+        self.client.force_login(user)
+        add_url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+        data = {
+            "name_template": "ge-0/0/{bay_position}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "module_type": str(self.module_type.pk),
+            "action": "save_rule",
+        }
+        response = self.client.post(self._url(), data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(add_url, response["Location"])
+
+
 class RuleApplyDetailViewGetPermissionTest(ViewTestBase2):
     """Test RuleApplyDetailView.get() permission check for unprivileged users."""
 
@@ -660,3 +709,152 @@ class RuleApplyDetailViewBackgroundJobSuccessTest(ViewTestBase2):
         success_msgs = [m for m in msgs if m.level == SUCCESS]
         self.assertTrue(success_msgs, "Expected a success-level message but none found")
         self.assertTrue(any("42" in str(m) for m in success_msgs))
+
+
+# ---------------------------------------------------------------------------
+# BulkImportCSVTest — regression: KeyError 'Ch' on CSV import round-trip
+# ---------------------------------------------------------------------------
+
+
+class BulkImportCSVTest(ViewTestBase):
+    """CSV import round-trip tests; guards against the KeyError 'Ch' regression."""
+
+    def _csv_from_rule(self, rule):
+        """Build a one-row CSV string from a rule's csv_headers and to_csv()."""
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(InterfaceNameRule.csv_headers)
+        writer.writerow(rule.to_csv())
+        return buf.getvalue()
+
+    def test_csv_import_does_not_raise_key_error(self):
+        """POST to import with a properly exported CSV must not produce a KeyError.
+
+        This is the regression test for the 'Ch' KeyError: when using csv_headers
+        and to_csv() the column names are plain field names with no dots.
+        """
+        self.client.force_login(self.superuser)
+        csv_data = self._csv_from_rule(self.rule)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
+        # If a KeyError is raised the view returns 500; assert it doesn't.
+        try:
+            response = self.client.post(url, {"data": csv_data, "format": "csv", "csv_delimiter": "auto"})
+        except KeyError as exc:
+            self.fail(f"CSV import raised KeyError: {exc!r}")
+        self.assertNotEqual(response.status_code, 500, "CSV import returned a 500 error")
+
+    def test_csv_round_trip_creates_rule(self):
+        """CSV exported from a fresh rule can be imported to create a new rule."""
+        import csv
+        import io
+        import uuid
+
+        self.client.force_login(self.superuser)
+        # Build a unique ModuleType so the imported row doesn't collide with fixtures.
+        unique_model = f"ROUND-TRIP-{uuid.uuid4().hex[:8]}"
+        mt = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer,
+            model=unique_model,
+            part_number=unique_model,
+        )
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(InterfaceNameRule.csv_headers)
+        writer.writerow(
+            [
+                mt.model,  # module_type
+                "",  # module_type_pattern
+                False,  # module_type_is_regex
+                "",  # parent_module_type
+                "",  # device_type
+                "",  # platform
+                "et-0/0/{bay_position}",  # name_template
+                0,  # channel_count
+                0,  # channel_start
+                "round-trip test",  # description
+                True,  # enabled
+                False,  # applies_to_device_interfaces
+            ]
+        )
+        csv_data = buf.getvalue()
+
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
+        before_count = InterfaceNameRule.objects.count()
+        response = self.client.post(url, {"data": csv_data, "format": "csv", "csv_delimiter": "auto"})
+        # A successful import redirects (302); failure re-renders the form (200).
+        self.assertEqual(response.status_code, 302, f"Import did not redirect; status={response.status_code}")
+        after_count = InterfaceNameRule.objects.count()
+        self.assertGreater(after_count, before_count, "No new rule was created after CSV import")
+
+
+# ---------------------------------------------------------------------------
+# YAMLExportTest — YAML export via NetBox's built-in Export dropdown
+# ---------------------------------------------------------------------------
+
+
+class YAMLExportTest(ViewTestBase):
+    """Tests for YAML export via the list view's ?export query parameter."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.LIST_URL = reverse("plugins:netbox_interface_name_rules:interfacenamerule_list")
+
+    def test_yaml_export_unauthenticated_responds(self):
+        """Unauthenticated export must not serve content to anonymous users."""
+        self.client.logout()
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertIn(response.status_code, [301, 302, 403])
+
+    def test_yaml_export_all_returns_200(self):
+        """Authenticated GET ?export= must return 200."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertEqual(response.status_code, 200)
+
+    def test_yaml_export_content_type(self):
+        """Response Content-Type must contain 'yaml'."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("yaml", response["Content-Type"].lower())
+
+    def test_yaml_export_content_disposition(self):
+        """Response must include a Content-Disposition attachment header."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.get("Content-Disposition", "").lower())
+
+    def test_yaml_export_all_contains_rules(self):
+        """Exported YAML must be parseable, contain all rules, in PK order."""
+        import yaml
+
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertEqual(response.status_code, 200)
+        data = yaml.safe_load(response.content)
+        self.assertIsInstance(data, list)
+        expected_templates = list(InterfaceNameRule.objects.order_by("pk").values_list("name_template", flat=True))
+        exported_templates = [entry["name_template"] for entry in data]
+        self.assertEqual(exported_templates, expected_templates)
+
+    def test_yaml_export_structure(self):
+        """Each exported YAML entry must contain key fields and no blank optional keys."""
+        import yaml
+
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.LIST_URL, {"export": ""})
+        self.assertEqual(response.status_code, 200)
+        rules = yaml.safe_load(response.content)
+        self.assertIsInstance(rules, list)
+        optional_headers = set(InterfaceNameRule.csv_headers) - {"name_template"}
+        for entry in rules:
+            self.assertIsInstance(entry, dict)
+            self.assertIn("name_template", entry)
+            for key, value in entry.items():
+                if key in optional_headers:
+                    self.assertNotIn(value, ["", None], f"Key {key!r} has blank value in exported rule")

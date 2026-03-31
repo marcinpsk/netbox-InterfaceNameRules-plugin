@@ -561,8 +561,7 @@ def has_applicable_interfaces(rule) -> bool:
     Calls find_interfaces_for_rule(limit=1) to determine if any currently installed
     interface would receive a new name.  Returns False when:
       - no matching modules/interfaces are installed, OR
-      - all matching interfaces are already correctly named (e.g. NetBox resolved
-        {module_path} at install time, making the rule a no-op for existing interfaces).
+      - all matching interfaces are already correctly named.
 
     This is more expensive than a plain EXISTS query but ensures the Applicable
     column in the Apply Rules list accurately reflects "would something change?"
