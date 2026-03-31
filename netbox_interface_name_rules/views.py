@@ -12,7 +12,6 @@ from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
-from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
@@ -46,10 +45,17 @@ class RulePreview:
     channel_start: int
 
 
-class _YAMLOnlyExport(BulkExport):
-    """Export action that only offers YAML (no CSV "Current View" option)."""
+try:
+    from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
 
-    template_name = "netbox_interface_name_rules/buttons/export_yaml_only.html"
+    class _YAMLOnlyExport(BulkExport):
+        """Export action that only offers YAML (no CSV "Current View" option)."""
+
+        template_name = "netbox_interface_name_rules/buttons/export_yaml_only.html"
+
+    _LIST_VIEW_ACTIONS: tuple = (AddObject, BulkImport, _YAMLOnlyExport, BulkEdit, BulkRename, BulkDelete)
+except ImportError:
+    _LIST_VIEW_ACTIONS = None
 
 
 class InterfaceNameRuleListView(generic.ObjectListView):
@@ -60,7 +66,8 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     filterset = InterfaceNameRuleFilterSet
     filterset_form = InterfaceNameRuleFilterForm
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
-    actions = (AddObject, BulkImport, _YAMLOnlyExport, BulkEdit, BulkRename, BulkDelete)
+    if _LIST_VIEW_ACTIONS is not None:
+        actions = _LIST_VIEW_ACTIONS
 
     def export_yaml(self):
         """Export all rules as a single YAML list (overrides NetBox's per-object concatenation)."""
@@ -158,9 +165,11 @@ class RuleTestView(BaseMultiObjectView):
             messages.warning(request, "You do not have permission to load an existing rule.")
         if rule_id and can_view:
             try:
-                loaded_rule = InterfaceNameRule.objects.select_related(
-                    "module_type", "parent_module_type", "device_type", "platform"
-                ).get(pk=int(rule_id))
+                loaded_rule = (
+                    InterfaceNameRule.objects.restrict(request.user, "view")
+                    .select_related("module_type", "parent_module_type", "device_type", "platform")
+                    .get(pk=int(rule_id))
+                )
                 initial = {
                     "name_template": loaded_rule.name_template,
                     "module_type_is_regex": loaded_rule.module_type_is_regex,
@@ -206,10 +215,10 @@ class RuleTestView(BaseMultiObjectView):
             },
         )
 
-    def _find_existing_rule(self, cd):
+    def _find_existing_rule(self, cd, user=None):
         """Return the first existing rule matching the form data, or None."""
         module_type_is_regex = cd.get("module_type_is_regex", False)
-        qs = InterfaceNameRule.objects.all()
+        qs = InterfaceNameRule.objects.restrict(user, "view") if user else InterfaceNameRule.objects.all()
         if module_type_is_regex:
             qs = qs.filter(module_type_is_regex=True, module_type_pattern=cd.get("module_type_pattern", ""))
         else:
@@ -236,7 +245,7 @@ class RuleTestView(BaseMultiObjectView):
         # query existing rules without it, so add-only users always land on the
         # create form (potentially allowing duplicates).
         if request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
-            existing = self._find_existing_rule(cd)
+            existing = self._find_existing_rule(cd, request.user)
             if existing:
                 messages.info(
                     request,

@@ -829,7 +829,7 @@ class YAMLExportTest(ViewTestBase):
         self.assertIn("attachment", response.get("Content-Disposition", "").lower())
 
     def test_yaml_export_all_contains_rules(self):
-        """Exported YAML must be parseable and contain all existing rules."""
+        """Exported YAML must be parseable, contain all rules, in PK order."""
         import yaml
 
         self.client.force_login(self.superuser)
@@ -837,10 +837,12 @@ class YAMLExportTest(ViewTestBase):
         self.assertEqual(response.status_code, 200)
         data = yaml.safe_load(response.content)
         self.assertIsInstance(data, list)
-        self.assertEqual(len(data), InterfaceNameRule.objects.count())
+        expected_templates = list(InterfaceNameRule.objects.order_by("pk").values_list("name_template", flat=True))
+        exported_templates = [entry["name_template"] for entry in data]
+        self.assertEqual(exported_templates, expected_templates)
 
     def test_yaml_export_structure(self):
-        """Each exported YAML entry must contain key fields."""
+        """Each exported YAML entry must contain key fields and no blank optional keys."""
         import yaml
 
         self.client.force_login(self.superuser)
@@ -848,6 +850,10 @@ class YAMLExportTest(ViewTestBase):
         self.assertEqual(response.status_code, 200)
         rules = yaml.safe_load(response.content)
         self.assertIsInstance(rules, list)
-        entry = rules[0]
-        self.assertIsInstance(entry, dict)
-        self.assertIn("name_template", entry)
+        optional_headers = set(InterfaceNameRule.csv_headers) - {"name_template"}
+        for entry in rules:
+            self.assertIsInstance(entry, dict)
+            self.assertIn("name_template", entry)
+            for key, value in entry.items():
+                if key in optional_headers:
+                    self.assertNotIn(value, ["", None], f"Key {key!r} has blank value in exported rule")
