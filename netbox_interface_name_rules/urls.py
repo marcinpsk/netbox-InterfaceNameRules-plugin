@@ -12,7 +12,6 @@ urlpatterns = [
     path("rules/add/", views.InterfaceNameRuleCreateView.as_view(), name="interfacenamerule_add"),
     path("rules/import/", views.InterfaceNameRuleBulkImportView.as_view(), name="interfacenamerule_bulk_import"),
     path("rules/bulk_delete/", views.InterfaceNameRuleBulkDeleteView.as_view(), name="interfacenamerule_bulk_delete"),
-    path("rules/export/yaml/", views.InterfaceNameRuleYAMLExportView.as_view(), name="interfacenamerule_export_yaml"),
     # Rule tester (Build Rule)
     path("rules/test/", views.RuleTestView.as_view(), name="interfacenamerule_test"),
     # Apply rules to existing interfaces

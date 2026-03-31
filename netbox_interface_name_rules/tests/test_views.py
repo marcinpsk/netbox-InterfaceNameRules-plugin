@@ -790,47 +790,41 @@ class BulkImportCSVTest(ViewTestBase):
 
 
 # ---------------------------------------------------------------------------
-# YAMLExportViewTest — new YAML export view
+# YAMLExportTest — YAML export via NetBox's built-in Export dropdown
 # ---------------------------------------------------------------------------
 
 
-class YAMLExportViewTest(ViewTestBase):
-    """Tests for the YAML export view at GET/POST /rules/export/yaml/."""
+class YAMLExportTest(ViewTestBase):
+    """Tests for YAML export via the list view's ?export query parameter."""
 
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.YAML_URL = reverse("plugins:netbox_interface_name_rules:interfacenamerule_export_yaml")
+        cls.LIST_URL = reverse("plugins:netbox_interface_name_rules:interfacenamerule_list")
 
     def test_yaml_export_unauthenticated_responds(self):
-        """Unauthenticated GET must not serve content to anonymous users.
-
-        setUp() logs in the superuser, so we explicitly logout first to exercise
-        anonymous access.  When LOGIN_REQUIRED=True the mixin redirects (302);
-        when False the view's explicit has_perm check raises PermissionDenied
-        (403).  200 is never valid because AnonymousUser lacks the permission.
-        """
+        """Unauthenticated export must not serve content to anonymous users."""
         self.client.logout()
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertIn(response.status_code, [301, 302, 403])
 
     def test_yaml_export_all_returns_200(self):
-        """Authenticated GET /rules/export/yaml/ must return 200."""
+        """Authenticated GET ?export= must return 200."""
         self.client.force_login(self.superuser)
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertEqual(response.status_code, 200)
 
     def test_yaml_export_content_type(self):
         """Response Content-Type must contain 'yaml'."""
         self.client.force_login(self.superuser)
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertEqual(response.status_code, 200)
         self.assertIn("yaml", response["Content-Type"].lower())
 
     def test_yaml_export_content_disposition(self):
         """Response must include a Content-Disposition attachment header."""
         self.client.force_login(self.superuser)
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertEqual(response.status_code, 200)
         self.assertIn("attachment", response.get("Content-Disposition", "").lower())
 
@@ -839,33 +833,18 @@ class YAMLExportViewTest(ViewTestBase):
         import yaml
 
         self.client.force_login(self.superuser)
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertEqual(response.status_code, 200)
         data = yaml.safe_load(response.content)
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), InterfaceNameRule.objects.count())
-
-    def test_yaml_export_selected_rules_via_post(self):
-        """POST with NetBox bulk-select pk inputs must export only the selected rules."""
-        import yaml
-
-        self.client.force_login(self.superuser)
-        response = self.client.post(
-            self.YAML_URL,
-            {"pk": [self.rule.pk]},
-        )
-        self.assertEqual(response.status_code, 200)
-        data = yaml.safe_load(response.content)
-        self.assertIsInstance(data, list)
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["name_template"], self.rule.name_template)
 
     def test_yaml_export_structure(self):
         """Each exported YAML entry must contain key fields."""
         import yaml
 
         self.client.force_login(self.superuser)
-        response = self.client.get(self.YAML_URL)
+        response = self.client.get(self.LIST_URL, {"export": ""})
         self.assertEqual(response.status_code, 200)
         rules = yaml.safe_load(response.content)
         self.assertIsInstance(rules, list)

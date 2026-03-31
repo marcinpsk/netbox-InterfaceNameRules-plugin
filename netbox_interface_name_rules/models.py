@@ -315,3 +315,13 @@ class InterfaceNameRule(NetBoxModel):
             self.enabled,
             self.applies_to_device_interfaces,
         )
+
+    def to_yaml(self):
+        """Return a YAML document for this rule (used by NetBox's built-in Export)."""
+        import yaml
+
+        entry = {}
+        for header, value in zip(self.csv_headers, self.to_csv()):
+            if (value != "" and value is not None) or header in {"name_template"}:
+                entry[header] = value
+        return yaml.dump([entry], default_flow_style=False, allow_unicode=True, sort_keys=False)

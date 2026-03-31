@@ -8,7 +8,7 @@ import yaml
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -53,6 +53,19 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     filterset = InterfaceNameRuleFilterSet
     filterset_form = InterfaceNameRuleFilterForm
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
+
+    def export_yaml(self):
+        """Export all rules as a single YAML list (overrides NetBox's per-object concatenation)."""
+        data = []
+        for rule in self.queryset.order_by("pk").select_related(
+            "module_type", "parent_module_type", "device_type", "platform"
+        ):
+            entry = {}
+            for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
+                if (value != "" and value is not None) or header in {"name_template"}:
+                    entry[header] = value
+            data.append(entry)
+        return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 class InterfaceNameRuleCreateView(generic.ObjectEditView):
@@ -115,52 +128,6 @@ class InterfaceNameRuleDuplicateView(generic.ObjectView):
         params = prepare_cloned_fields(rule)
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
         return redirect(f"{url}?{params.urlencode()}")
-
-
-class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
-    """Export selected or all rules as a YAML file importable via BulkImportView."""
-
-    queryset = InterfaceNameRule.objects.all()
-
-    def get_required_permission(self):
-        """Return the permission required to export rules."""
-        return "netbox_interface_name_rules.view_interfacenamerule"
-
-    def _rules_to_yaml_data(self, queryset):
-        """Return a list of dicts (one per rule) using import-form field names."""
-        records = []
-        for rule in queryset.select_related("module_type", "parent_module_type", "device_type", "platform"):
-            entry = {}
-            for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
-                if (value != "" and value is not None) or header in {"name_template"}:
-                    entry[header] = value
-            records.append(entry)
-        return records
-
-    def _build_response(self, queryset):
-        data = self._rules_to_yaml_data(queryset)
-        content = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        response = HttpResponse(content, content_type="application/yaml; charset=utf-8")
-        response["Content-Disposition"] = 'attachment; filename="interface_name_rules.yaml"'
-        return response
-
-    def get(self, request):
-        """Export all rules as YAML."""
-        return self._build_response(self.queryset.order_by("pk"))
-
-    def post(self, request):
-        """Export selected rules as YAML using NetBox's bulk-select form (pk inputs).
-
-        The parent object_list.html wraps the table in a POST form; selected rows
-        post their PKs as repeated ``pk`` inputs.  Falls back to all rules when
-        nothing is selected.
-        """
-        pk_list = [int(v) for v in request.POST.getlist("pk") if v.isdigit()]
-        if pk_list:
-            queryset = self.queryset.filter(pk__in=pk_list).order_by("pk")
-        else:
-            queryset = self.queryset.order_by("pk")
-        return self._build_response(queryset)
 
 
 class RuleTestView(BaseMultiObjectView):
