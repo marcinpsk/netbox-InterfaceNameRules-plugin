@@ -434,17 +434,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#module_path-netbox-49" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        {module_path} (NetBox ≥ 4.9)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#the-potentially-deprecated-tag" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -698,17 +687,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#module_path-netbox-49" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        {module_path} (NetBox ≥ 4.9)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#the-potentially-deprecated-tag" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -853,27 +831,13 @@ This is the primary workflow the plugin was designed for.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>NetBox installs:  interface name = &quot;5&quot;   (raw bay position)
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Plugin renames:   interface name = &quot;et-0/0/5&quot;
 </code></pre></div>
-<h3 id="module_path-netbox-49"><code>{module_path}</code> (NetBox ≥ 4.9)</h3>
-<p>When a module type's interface template uses <code>{module_path}</code>, NetBox resolves
-the full module bay path at install time.  For a transceiver in "X2 Port 1"
-inside a line card in "Slot 1", <code>{module_path}</code> resolves to <code>1/1</code>.  The plugin
-signal still fires, but may compute the same name the interface already has —
-so it becomes a no-op.</p>
-<p>For directly-attached pluggables (single bay depth), <code>{module_path}</code> resolves to
-just the bay position, behaving identically to <code>{module}</code>.</p>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>New module types should use <code>{module_path}</code> for best NetBox compatibility.
-Legacy module types using <code>{module}</code> continue to work — the plugin handles the rename.</p>
-</div>
 <h3 id="the-potentially-deprecated-tag">The <code>potentially-deprecated</code> Tag</h3>
 <p>After installing a module, if the plugin's signal fires but finds the interface
 is already correctly named, it automatically tags the rule <code>potentially-deprecated</code>.
 This means:</p>
 <ul>
 <li>For <strong>new installs</strong>: the rule may no longer be needed (NetBox generates the name)</li>
-<li>For <strong>retroactive applies</strong>: the rule is still useful for modules installed before
-  <code>{module_path}</code> support was added, or before the rule existed</li>
+<li>For <strong>retroactive applies</strong>: the rule is still useful for modules installed before the rule existed</li>
 </ul>
 <p>The tag is informational only — the rule remains active.</p>
 <h3 id="apply-rules-and-the-applicable-column">Apply Rules and the Applicable Column</h3>
