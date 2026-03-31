@@ -692,7 +692,7 @@ class BulkImportCSVTest(ViewTestBase):
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
         # If a KeyError is raised the view returns 500; assert it doesn't.
         try:
-            response = self.client.post(url, {"data": csv_data, "format": "csv"})
+            response = self.client.post(url, {"data": csv_data, "format": "csv", "csv_delimiter": "auto"})
         except KeyError as exc:
             self.fail(f"CSV import raised KeyError: {exc!r}")
         self.assertNotEqual(response.status_code, 500, "CSV import returned a 500 error")
@@ -734,7 +734,7 @@ class BulkImportCSVTest(ViewTestBase):
 
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_import")
         before_count = InterfaceNameRule.objects.count()
-        response = self.client.post(url, {"data": csv_data, "format": "csv"})
+        response = self.client.post(url, {"data": csv_data, "format": "csv", "csv_delimiter": "auto"})
         # A successful import redirects (302); failure re-renders the form (200).
         self.assertEqual(response.status_code, 302, f"Import did not redirect; status={response.status_code}")
         after_count = InterfaceNameRule.objects.count()

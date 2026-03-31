@@ -9,12 +9,12 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views import View
 from netbox.views import generic
-from utilities.views import ConditionalLoginRequiredMixin, register_model_view
+from netbox.views.generic.base import BaseMultiObjectView
+from utilities.views import register_model_view
 
 from .filters import InterfaceNameRuleFilterSet
 from .forms import InterfaceNameRuleFilterForm, InterfaceNameRuleForm, InterfaceNameRuleImportForm, RuleTestForm
@@ -102,21 +102,29 @@ class InterfaceNameRuleChangeLogView(generic.ObjectChangeLogView):
     queryset = InterfaceNameRule.objects.all()
 
 
-class InterfaceNameRuleDuplicateView(ConditionalLoginRequiredMixin, View):
+class InterfaceNameRuleDuplicateView(generic.ObjectView):
     """Redirect to the add view pre-populated with a clone of the given rule."""
 
-    def get(self, request, pk):
-        """Redirect to the add view pre-populated with fields cloned from rule pk."""
+    queryset = InterfaceNameRule.objects.all()
+
+    def get(self, request, **kwargs):
+        """Redirect to the add view pre-populated with fields cloned from the given rule."""
         from utilities.querydict import prepare_cloned_fields
 
-        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        rule = self.get_object(**kwargs)
         params = prepare_cloned_fields(rule)
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
         return redirect(f"{url}?{params.urlencode()}")
 
 
-class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
+class InterfaceNameRuleYAMLExportView(BaseMultiObjectView):
     """Export selected or all rules as a YAML file importable via BulkImportView."""
+
+    queryset = InterfaceNameRule.objects.all()
+
+    def get_required_permission(self):
+        """Return the permission required to export rules."""
+        return "netbox_interface_name_rules.view_interfacenamerule"
 
     def _rules_to_yaml_data(self, queryset):
         """Return a list of dicts (one per rule) using import-form field names."""
@@ -138,9 +146,7 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
 
     def get(self, request):
         """Export all rules as YAML."""
-        if not request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
-            raise PermissionDenied
-        return self._build_response(InterfaceNameRule.objects.all())
+        return self._build_response(self.queryset)
 
     def post(self, request):
         """Export selected rules as YAML using NetBox's bulk-select form (pk inputs).
@@ -149,28 +155,26 @@ class InterfaceNameRuleYAMLExportView(ConditionalLoginRequiredMixin, View):
         post their PKs as repeated ``pk`` inputs.  Falls back to all rules when
         nothing is selected.
         """
-        if not request.user.has_perm("netbox_interface_name_rules.view_interfacenamerule"):
-            raise PermissionDenied
         pk_list = [int(v) for v in request.POST.getlist("pk") if v.isdigit()]
         if pk_list:
-            queryset = InterfaceNameRule.objects.filter(pk__in=pk_list)
+            queryset = self.queryset.filter(pk__in=pk_list)
         else:
-            queryset = InterfaceNameRule.objects.all()
+            queryset = self.queryset
         return self._build_response(queryset)
 
 
-class RuleTestView(ConditionalLoginRequiredMixin, View):
+class RuleTestView(BaseMultiObjectView):
     """Live-preview a name template with user-supplied variable values and optional DB lookup."""
 
+    queryset = InterfaceNameRule.objects.all()
     template_name = "netbox_interface_name_rules/rule_test.html"
 
-    def _check_permission(self, request):
-        if not request.user.has_perm("netbox_interface_name_rules.add_interfacenamerule"):
-            raise PermissionDenied
+    def get_required_permission(self):
+        """Return the permission required to access the rule test tool."""
+        return "netbox_interface_name_rules.add_interfacenamerule"
 
     def get(self, request):
         """Render the test form, pre-populated from rule_id query param if given."""
-        self._check_permission(request)
         initial = {}
         loaded_rule = None
         rule_id = request.GET.get("rule_id")
@@ -196,7 +200,6 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
 
     def post(self, request):
         """Evaluate the submitted template and return a preview or redirect to save."""
-        self._check_permission(request)
         form = RuleTestForm(request.POST)
         preview_results = None
         db_preview = None
@@ -348,37 +351,42 @@ class RuleTestView(ConditionalLoginRequiredMixin, View):
             return [], 0, f"Unexpected error: {type(exc).__name__}"
 
 
-class RuleApplyListView(ConditionalLoginRequiredMixin, View):
+class RuleApplyListView(BaseMultiObjectView):
     """Display all rules with buttons to preview/apply each one."""
 
+    queryset = InterfaceNameRule.objects.all()
     template_name = "netbox_interface_name_rules/rule_apply.html"
+
+    def get_required_permission(self):
+        """Return the permission required to access the apply-rules page."""
+        return "netbox_interface_name_rules.view_interfacenamerule"
 
     def get(self, request):
         """Render the list of all rules with apply/preview buttons."""
-        rules = InterfaceNameRule.objects.select_related(
-            "module_type", "parent_module_type", "device_type", "platform"
-        ).order_by("pk")
+        rules = self.queryset.select_related("module_type", "parent_module_type", "device_type", "platform").order_by(
+            "pk"
+        )
         return render(request, self.template_name, {"rules": rules, "batch_limit": APPLY_BATCH_LIMIT})
 
 
-class RuleApplicableView(ConditionalLoginRequiredMixin, View):
+class RuleApplicableView(generic.ObjectView):
     """Return JSON indicating whether a rule would rename at least one interface.
 
     Called on demand from the Apply Rules page — NOT at page load — to avoid
     expensive full-scan queries blocking the initial render.
     """
 
-    def get(self, request, pk):
+    queryset = InterfaceNameRule.objects.all()
+
+    def get(self, request, **kwargs):
         """Return JSON {"applicable": bool} for the rule identified by pk."""
         from .engine import has_applicable_interfaces
 
-        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        rule = self.get_object(**kwargs)
         try:
             applicable = has_applicable_interfaces(rule)
         except Exception as exc:
-            logger.exception("applicability scan failed for rule %s", pk)
-            # Only expose the exception class name to avoid leaking internals
-            # (SQL, file paths, etc.).  Full details are in the server log.
+            logger.exception("applicability scan failed for rule %s", kwargs.get("pk"))
             return JsonResponse(
                 {"applicable": None, "error": f"scan failed: {type(exc).__name__}"},
                 status=500,
@@ -386,21 +394,18 @@ class RuleApplicableView(ConditionalLoginRequiredMixin, View):
         return JsonResponse({"applicable": applicable})
 
 
-class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
+class RuleApplyDetailView(generic.ObjectView):
     """Show a preview of changes for a specific rule and allow applying them."""
 
+    queryset = InterfaceNameRule.objects.all()
     template_name = "netbox_interface_name_rules/rule_apply_detail.html"
+    additional_permissions = ["dcim.change_interface"]
 
-    def _check_permission(self, request):
-        if not request.user.has_perm("dcim.change_interface"):
-            raise PermissionDenied
-
-    def get(self, request, pk):
+    def get(self, request, **kwargs):
         """Render a preview of all interfaces that would be renamed by this rule."""
         from .engine import find_interfaces_for_rule
 
-        self._check_permission(request)
-        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        rule = self.get_object(**kwargs)
         try:
             preview, total_checked = find_interfaces_for_rule(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
@@ -424,13 +429,11 @@ class RuleApplyDetailView(ConditionalLoginRequiredMixin, View):
             },
         )
 
-    def post(self, request, pk):
+    def post(self, request, **kwargs):
         """Apply the rule (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
-        self._check_permission(request)
-
-        rule = get_object_or_404(InterfaceNameRule, pk=pk)
+        rule = self.get_object(**kwargs)
         action = request.POST.get("action", "apply")
 
         if action == "background":
