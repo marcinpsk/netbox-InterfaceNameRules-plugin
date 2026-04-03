@@ -29,10 +29,10 @@ services:
       # Proxy settings (optional)
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      http_proxy: ${HTTP_PROXY:-}
-      https_proxy: ${HTTPS_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
       NO_PROXY: ${NO_PROXY:-}
-      no_proxy: ${NO_PROXY:-}
+      no_proxy: ${no_proxy:-}
       REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       CURL_CA_BUNDLE: ${CURL_CA_BUNDLE:-}

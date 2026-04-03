@@ -37,10 +37,10 @@
     "SKIP_SUPERUSER": "${localEnv:SKIP_SUPERUSER:false}",
     "HTTP_PROXY": "${localEnv:HTTP_PROXY}",
     "HTTPS_PROXY": "${localEnv:HTTPS_PROXY}",
-    "http_proxy": "${localEnv:HTTP_PROXY}",
-    "https_proxy": "${localEnv:HTTPS_PROXY}",
+    "http_proxy": "${localEnv:http_proxy}",
+    "https_proxy": "${localEnv:https_proxy}",
     "NO_PROXY": "${localEnv:NO_PROXY}",
-    "no_proxy": "${localEnv:NO_PROXY}",
+    "no_proxy": "${localEnv:no_proxy}",
     "REQUESTS_CA_BUNDLE": "${localEnv:REQUESTS_CA_BUNDLE}",
     "SSL_CERT_FILE": "${localEnv:SSL_CERT_FILE}",
     "CURL_CA_BUNDLE": "${localEnv:CURL_CA_BUNDLE}"

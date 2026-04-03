@@ -35,7 +35,14 @@ detect_plugin_workspace() {
   fi
 }
 
-# Proxy/CA setup
+# Proxy/CA setup — normalize: uppercase takes precedence, fallback to lowercase
+HTTP_PROXY="${HTTP_PROXY:-$http_proxy}"
+HTTPS_PROXY="${HTTPS_PROXY:-$https_proxy}"
+NO_PROXY="${NO_PROXY:-$no_proxy}"
+http_proxy="$HTTP_PROXY"
+https_proxy="$HTTPS_PROXY"
+no_proxy="$NO_PROXY"
+
 if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
   echo "🌐 Configuring proxy settings..."
   [ -n "$HTTP_PROXY" ] && echo "Acquire::http::Proxy \"$HTTP_PROXY\";" > /etc/apt/apt.conf.d/80proxy
