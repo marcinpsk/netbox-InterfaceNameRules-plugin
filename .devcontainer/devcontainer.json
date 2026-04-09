@@ -18,8 +18,8 @@
     "onAutoForward": "ignore"
   },
   "hostRequirements": {
-    "memory": "4gb",
-    "storage": "32gb"
+    "memory": "8gb",
+    "storage": "48gb"
   },
   "containerEnv": {
     "NETBOX_VERSION": "${localEnv:NETBOX_VERSION:latest}",

@@ -5,6 +5,8 @@
 services:
   devcontainer:
     image: netboxcommunity/netbox:${NETBOX_VERSION:-latest}
+    mem_limit: 8g
+    memswap_limit: 8g
     volumes:
       - ../..:/workspaces:cached
       - netbox_media:/opt/netbox/netbox/media
