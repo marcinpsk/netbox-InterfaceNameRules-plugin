@@ -6,6 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.3.1 (2026-05-13)
+
+### Bug Fixes
+
+- Replace deprecated CheckConstraint check= with condition= for Django 5.x compatibility
+  ([`bd8b193`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/bd8b1937a6d59109ac6e824e41d42bd21e56c0fa))
+
+### Chores
+
+- **deps**: Bump astral-sh/setup-uv from 8.0.0 to 8.1.0 in the github-actions group
+  ([#38](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/38),
+  [`1cb9181`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1cb918111375dfd9017f151ae467c479a45308c7))
+
+- **deps**: Bump github/codeql-action from 4.35.2 to 4.35.3 in the github-actions group
+  ([#39](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/39),
+  [`2e49d35`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2e49d35ec08b8e93203ce221b2f6e323d457eeff))
+
+- **deps**: Bump pypa/gh-action-pypi-publish from 1.13.0 to 1.14.0 in the github-actions group
+  ([#36](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/36),
+  [`603b457`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/603b45757786fce28c3289ec36af41f05bcd3f65))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#37](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/37),
+  [`9e200a9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9e200a97a09b70264d3efb81099a623cf7714b06))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#35](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/35),
+  [`625ea99`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/625ea99de4815d77d9678632cd64b9cf261136c0))
+
+
 ## v1.3.0 (2026-03-31)
 
 ### Chores
