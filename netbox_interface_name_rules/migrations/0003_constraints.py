@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="interfacenamerule",
             constraint=models.CheckConstraint(
-                check=(
+                condition=(
                     models.Q(module_type_is_regex=True, module_type__isnull=True)
                     | models.Q(module_type_is_regex=False, module_type__isnull=False)
                 ),

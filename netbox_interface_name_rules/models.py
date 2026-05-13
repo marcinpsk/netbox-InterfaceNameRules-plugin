@@ -238,7 +238,7 @@ class InterfaceNameRule(NetBoxModel):
         ordering = ["module_type__model", "pk"]
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     models.Q(applies_to_device_interfaces=True, module_type__isnull=True)
                     | models.Q(
                         applies_to_device_interfaces=False,
