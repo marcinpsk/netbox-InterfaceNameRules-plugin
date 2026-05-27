@@ -20,5 +20,6 @@ Examples:
 
 EXTRA_PLUGINS = [
     # {"name": "netbox-librenms-plugin", "source": "/workspaces/netbox-librenms-plugin"},
+    # {"name": "netbox-example-plugin", "source": "/workspaces/myorg/netbox-example-plugin"},
     # {"name": "netbox-secrets", "source": "pip"},
 ]
