@@ -1621,3 +1621,82 @@ class GetRawInterfaceNamesNoTemplatesTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = _get_raw_interface_names(module)
         self.assertEqual(result, set())
+
+
+class PredictRuleOutputTest(EngineAdvancedFixtures):
+    """Tests for predict_rule_output — pure name prediction without DB mutations."""
+
+    def test_no_rule_returns_input_unchanged(self):
+        """When no rule matches, the raw names pass through verbatim."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = predict_rule_output(module, self.bay0, ["raw-a", "raw-b"])
+        self.assertEqual(result, ["raw-a", "raw-b"])
+
+    def test_simple_rule_rewrites_each_name(self):
+        """Channel-less rule: 1 input → 1 output, evaluated through name_template."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}/1",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = predict_rule_output(module, self.bay0, ["2/x1/1/c9"])
+        self.assertEqual(result, ["2/x1/1/c9/1"])
+
+    def test_breakout_rule_expands_each_name_to_channel_count(self):
+        """channel_count=4 rule: 1 input → 4 outputs (one per channel)."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = predict_rule_output(module, self.bay0, ["xe-0/0/0"])
+        self.assertEqual(result, ["xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"])
+
+    def test_multiple_raw_names_all_transformed(self):
+        """Each raw name is independently transformed; output preserves order."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}/1",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = predict_rule_output(module, self.bay0, ["a", "b", "c"])
+        self.assertEqual(result, ["a/1", "b/1", "c/1"])
+
+    def test_pure_does_not_touch_interfaces(self):
+        """predict_rule_output must not create, rename, or delete Interface rows."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}/1",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="leave-me", type="10gbase-x-sfpp")
+
+        predict_rule_output(module, self.bay0, ["leave-me"])
+
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "leave-me")
+        self.assertEqual(Interface.objects.filter(module=module).count(), 1)
+
+    def test_template_eval_failure_falls_back_to_raw(self):
+        """When evaluate_name_template raises, the raw name is kept in the output."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{nonexistent_variable}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        result = predict_rule_output(module, self.bay0, ["fallback-me"])
+        self.assertEqual(result, ["fallback-me"])

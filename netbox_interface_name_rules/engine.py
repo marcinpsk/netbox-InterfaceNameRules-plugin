@@ -108,6 +108,44 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed
 
 
+def predict_rule_output(module, module_bay, raw_names):
+    """Predict the names apply_interface_name_rules would produce for raw_names.
+
+    Pure function — does not save, mutate, or query the Interface table. Used
+    by external integrations (e.g., netbox-librenms-plugin) that need to know
+    the post-rename names without actually applying any rule.
+
+    For breakout rules (channel_count > 0), each raw name expands to
+    channel_count predicted names. For simple renames, one name in → one name
+    out. Returns raw_names unchanged when no rule matches or evaluation fails.
+    """
+    device_type = module.device.device_type if module.device else None
+    platform = module.device.platform if module.device else None
+    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
+    if not rule:
+        return list(raw_names)
+
+    variables = build_variables(module_bay, device=module.device)
+
+    output = []
+    for raw_name in raw_names:
+        vars_copy = dict(variables)
+        vars_copy["base"] = raw_name
+        try:
+            if rule.channel_count > 0:
+                for ch in range(rule.channel_count):
+                    vars_copy["channel"] = str(rule.channel_start + ch)
+                    output.append(evaluate_name_template(rule.name_template, vars_copy))
+            else:
+                output.append(evaluate_name_template(rule.name_template, vars_copy))
+        except (ValueError, TypeError, re.error):
+            # Template eval failed; apply path would also fail and leave the
+            # interface alone, so the predicted name is the raw name.
+            output.append(raw_name)
+
+    return output
+
+
 def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
     """Attempt to rename a single device-level interface using *rule*.
 
