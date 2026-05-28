@@ -89,6 +89,5 @@ networks:
     driver: bridge
     ipam:
       config:
-        # Pinned to avoid Docker auto-assigning 172.30.x.x which would
-        # conflict with the corporate MITM proxy at 172.30.180.23
+        # Pinned to avoid Docker auto-assigning 172.30.x.x
         - subnet: "172.28.200.0/24"
