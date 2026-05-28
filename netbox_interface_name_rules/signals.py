@@ -261,24 +261,30 @@ except ImportError:
     _librenms_predict_signal = None
 
 
-if _librenms_predict_signal is not None:
+def on_librenms_predict_module_interface_names(sender, device, module, names, **kwargs):
+    """Rewrite librenms-plugin's predicted template names through our rule engine.
 
-    @receiver(
+    Always defined so it can be imported and tested in isolation even when
+    netbox-librenms-plugin is not installed.  Signal registration is guarded
+    below so it only connects when the signal actually exists.
+    """
+    module_bay = getattr(module, "module_bay", None)
+    if module_bay is None:
+        return None
+    try:
+        from .engine import predict_rule_output
+
+        return predict_rule_output(module, module_bay, names)
+    except Exception:
+        logger.exception(
+            "predict_rule_output failed for module pk=%s; leaving names unchanged",
+            getattr(module, "pk", "?"),
+        )
+        return None
+
+
+if _librenms_predict_signal is not None:
+    receiver(
         _librenms_predict_signal,
         dispatch_uid="interface_name_rules_predict_module_interface_names",
-    )
-    def on_librenms_predict_module_interface_names(sender, device, module, names, **kwargs):
-        """Rewrite librenms-plugin's predicted template names through our rule engine."""
-        module_bay = getattr(module, "module_bay", None)
-        if module_bay is None:
-            return None
-        try:
-            from .engine import predict_rule_output
-
-            return predict_rule_output(module, module_bay, names)
-        except Exception:
-            logger.exception(
-                "predict_rule_output failed for module pk=%s; leaving names unchanged",
-                getattr(module, "pk", "?"),
-            )
-            return None
+    )(on_librenms_predict_module_interface_names)

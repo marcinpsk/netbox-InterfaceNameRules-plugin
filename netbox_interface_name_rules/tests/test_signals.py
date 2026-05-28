@@ -2,6 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for Django signal handlers: module post_save and device VC membership changes."""
 
+import importlib.util
 from unittest.mock import MagicMock, patch
 
 from dcim.models import (
@@ -17,7 +18,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.test import TestCase
+from django.test import TestCase, skipUnless
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import (
@@ -28,6 +29,8 @@ from netbox_interface_name_rules.signals import (
     on_module_pre_save,
     on_module_saved,
 )
+
+_librenms_available = importlib.util.find_spec("netbox_librenms_plugin") is not None
 
 
 class SignalModuleHandlerTest(TestCase):
@@ -558,6 +561,7 @@ class LibrenmsPredictReceiverTest(TestCase):
         cls.device = Device.objects.create(name="pred-test-01", device_type=cls.device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="PredBay 0")
 
+    @skipUnless(_librenms_available, "netbox_librenms_plugin not installed")
     def test_receiver_returns_rewritten_names_via_signal(self):
         """Sending the librenms-plugin signal returns names processed by the rule engine."""
         from netbox_librenms_plugin.signals import predict_module_interface_names
@@ -573,6 +577,7 @@ class LibrenmsPredictReceiverTest(TestCase):
         returned_lists = [r for _, r in responses if r is not None]
         self.assertEqual(returned_lists, [["c9/1"]])
 
+    @skipUnless(_librenms_available, "netbox_librenms_plugin not installed")
     def test_receiver_returns_none_when_module_bay_missing(self):
         """A module without a module_bay yields None from the receiver."""
         from netbox_librenms_plugin.signals import predict_module_interface_names
