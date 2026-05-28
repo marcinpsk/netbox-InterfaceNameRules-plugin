@@ -3,6 +3,7 @@
 """Tests for Django signal handlers: module post_save and device VC membership changes."""
 
 import importlib.util
+from unittest import skipUnless
 from unittest.mock import MagicMock, patch
 
 from dcim.models import (
@@ -18,7 +19,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.test import TestCase, skipUnless
+from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import (
