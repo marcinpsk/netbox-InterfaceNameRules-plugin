@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.4.0 (2026-05-28)
+
+### Chores
+
+- **deps**: Bump github/codeql-action from 4.35.3 to 4.35.4 in the github-actions group
+  ([#40](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/40),
+  [`f10b003`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f10b00377767bf8572ce62504659e476cb484505))
+
+- **deps**: Bump github/codeql-action from 4.35.5 to 4.36.0 in the github-actions group
+  ([#43](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/43),
+  [`0a773ab`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0a773abff110a031ee93345cc392513ff1cefca5))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#41](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/41),
+  [`65882d5`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/65882d5f4f2c255deffaf08ce0cab1d8c9f5036b))
+
+### Features
+
+- Dev fixes, added receiver for signal to provide mutated inteface name
+  ([#42](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/42),
+  [`43abd6f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/43abd6f949c551657dc7dbed1b03046da6338cda))
+
+
 ## v1.3.1 (2026-05-13)
 
 ### Bug Fixes
