@@ -133,9 +133,11 @@ def predict_rule_output(module, module_bay, raw_names):
         vars_copy["base"] = raw_name
         try:
             if rule.channel_count > 0:
+                temp = []
                 for ch in range(rule.channel_count):
                     vars_copy["channel"] = str(rule.channel_start + ch)
-                    output.append(evaluate_name_template(rule.name_template, vars_copy))
+                    temp.append(evaluate_name_template(rule.name_template, vars_copy))
+                output.extend(temp)
             else:
                 output.append(evaluate_name_template(rule.name_template, vars_copy))
         except (ValueError, TypeError, re.error):
