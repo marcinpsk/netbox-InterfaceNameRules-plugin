@@ -41,11 +41,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    dns_search: ["."]
     ports:
       - "8000:8000"
 
   postgres:
     image: postgres:18
+    command: postgres -c max_connections=200
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
@@ -57,6 +59,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      default:
+        ipv4_address: 172.28.200.3
 
   redis:
     image: redis:8-alpine
@@ -68,6 +73,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      default:
+        ipv4_address: 172.28.200.2
 
 volumes:
   postgres_data:
@@ -75,3 +83,11 @@ volumes:
   netbox_media:
   netbox_static:
   gh_config:
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        # Pinned to avoid Docker auto-assigning 172.30.x.x
+        - subnet: "172.28.200.0/24"

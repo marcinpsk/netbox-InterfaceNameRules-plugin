@@ -10,8 +10,13 @@ Plugin configuration for the NetBox Interface Name Rules Plugin in the dev conta
 
 PLUGINS = [
     "netbox_interface_name_rules",
+    # "netbox_example_plugin",  # uncomment once the package is in EXTRA_PLUGINS above
 ]
 
 PLUGINS_CONFIG = {
     "netbox_interface_name_rules": {},
+    # "netbox_example_plugin": {
+    #     "api_url": "",
+    #     "api_token": "",
+    # },
 }
