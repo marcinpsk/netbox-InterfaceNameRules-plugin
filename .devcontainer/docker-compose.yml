@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 services:
   devcontainer:
     image: netboxcommunity/netbox:${NETBOX_VERSION:-latest}

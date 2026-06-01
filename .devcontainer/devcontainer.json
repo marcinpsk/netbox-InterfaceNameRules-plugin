@@ -1,6 +1,6 @@
 {
   "name": "NetBox Interface Name Rules Plugin Dev",
-  "dockerComposeFile": "docker-compose.yml",
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.override.yml"],
   "service": "devcontainer",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "forwardPorts": [
