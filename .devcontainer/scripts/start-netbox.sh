@@ -30,6 +30,13 @@ fi
 
 # Kill any orphaned processes (not tracked by PID file)
 echo "🧹 Cleaning up orphaned processes..."
+# Kill the watchmedo autoreload supervisor first: if a worker is killed while
+# watchmedo is still alive, watchmedo just respawns it. Killing the parent first
+# avoids that race (it also stops its child worker on shutdown).
+if pgrep -f "watchmedo.*rqworker" >/dev/null 2>&1; then
+  echo "   Found orphaned watchmedo RQ supervisors, killing..."
+  graceful_kill_pattern "watchmedo.*rqworker"
+fi
 if pgrep -f "python.*rqworker" >/dev/null 2>&1; then
   echo "   Found orphaned RQ workers, killing..."
   graceful_kill_pattern "python.*rqworker"
