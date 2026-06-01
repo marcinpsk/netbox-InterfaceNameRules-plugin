@@ -75,7 +75,21 @@ echo "⚙️  Starting RQ worker..."
     echo "ERROR: RQ worker subshell: failed to cd into /opt/netbox/netbox" >&2
     exit 1
   fi
-  python manage.py rqworker --verbosity=1
+  # rqworker has no built-in autoreload (unlike `runserver`), so plugin code
+  # edits don't take effect until the worker is restarted — stale workers
+  # silently serve old code for background jobs. Wrap it with watchmedo
+  # (watchdog) to restart on *.py changes under the workspace; fall back to a
+  # plain worker if watchmedo isn't installed. Override the watched path with
+  # RQWORKER_WATCH_DIR.
+  RQWORKER_WATCH_DIR="${RQWORKER_WATCH_DIR:-/workspaces}"
+  if command -v watchmedo >/dev/null 2>&1; then
+    echo "   (autoreload via watchmedo, watching ${RQWORKER_WATCH_DIR})"
+    exec watchmedo auto-restart \
+      --directory="${RQWORKER_WATCH_DIR}" --pattern='*.py' --recursive \
+      -- python manage.py rqworker --verbosity=1
+  else
+    exec python manage.py rqworker --verbosity=1
+  fi
 ) > /tmp/rqworker.log 2>&1 &
 
 RQ_PID=$!
