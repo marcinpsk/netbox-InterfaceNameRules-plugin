@@ -123,6 +123,22 @@ netbox-test() {
   cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && python manage.py test netbox_interface_name_rules "$@"
 }
 
+# Run tests on a per-session ISOLATED test database, so concurrent suites in the
+# shared devcontainer don't collide on test_netbox (which corrupts migrations and
+# can leave lock-holding zombie connections). Pass the app(s) + any test flags,
+# e.g.  netbox-test-isolated netbox_nso_plugin --keepdb
+# Override the DB name with TEST_DB_NAME=...; otherwise it's derived from the first
+# app argument (a stable name so --keepdb can reuse it).
+netbox-test-isolated() {
+  local first_app="netbox_interface_name_rules"
+  case "${1:-}" in -*|"") ;; *) first_app="$1" ;; esac
+  local db_name="${TEST_DB_NAME:-test_$(printf '%s' "$first_app" | tr -c 'a-zA-Z0-9' '_')}"
+  cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && \
+    PYTHONPATH="$PLUGIN_DIR/.devcontainer/config${PYTHONPATH:+:$PYTHONPATH}" \
+    TEST_DB_NAME="$db_name" \
+    python manage.py test "$@" --settings=isolated_test_settings
+}
+
 netbox-manage() {
   cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && python manage.py "$@"
 }
@@ -199,6 +215,7 @@ dev-help() {
   echo "🛠️  Development Tools:"
   echo "  netbox-shell        : Open NetBox Django shell"
   echo "  netbox-test         : Run plugin tests"
+  echo "  netbox-test-isolated: Run tests on a per-session isolated test DB (concurrency-safe)"
   echo "  netbox-manage       : Run Django management commands"
   echo "  plugin-install      : Reinstall plugin in development mode"
   echo ""
