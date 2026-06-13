@@ -4,13 +4,22 @@
 
 from unittest.mock import ANY, MagicMock, patch
 
-from dcim.models import DeviceType, Manufacturer, ModuleType
+from dcim.models import (
+    Device,
+    DeviceRole,
+    DeviceType,
+    Interface,
+    Manufacturer,
+    Module,
+    ModuleBay,
+    ModuleType,
+    Site,
+)
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.views import APPLY_BATCH_LIMIT
 
 User = get_user_model()
 
@@ -485,13 +494,26 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         msgs = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any("No interfaces selected" in m for m in msgs))
 
-    def test_post_apply_with_interface_ids_calls_apply(self):
-        """POST apply with interface_ids calls apply_rule_to_existing (lines 410-412)."""
+    def test_post_apply_with_interface_ids_renames_real_interfaces(self):
+        """POST apply renames the selected interface in the DB (real view→engine→DB path)."""
+        from django.contrib.messages import get_messages
+
+        # cls.rule matches module_type VIEW-SFP on device_type VIEW-Dev → "et-0/0/{bay_position}".
+        role = DeviceRole.objects.create(name="ApplyRole", slug="applyrole")
+        site = Site.objects.create(name="ApplySite", slug="applysite")
+        device = Device.objects.create(name="apply-dev-01", device_type=self.device_type, role=role, site=site)
+        bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
+        module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
+
         url = self._url(self.rule.pk)
-        with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", return_value=2) as mock_apply:
-            response = self.client.post(url, {"action": "apply", "interface_ids": ["1", "2"]})
+        response = self.client.post(url, {"action": "apply", "interface_ids": [str(iface.pk)]})
+
         self.assertEqual(response.status_code, 302)
-        mock_apply.assert_called_once_with(self.rule, limit=APPLY_BATCH_LIMIT, interface_ids=[1, 2])
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "et-0/0/0")  # actually renamed by the rule
+        msgs = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("1 interface(s) renamed" in m for m in msgs))
 
     def test_post_background_action_enqueues_job(self):
         """POST background action tries to enqueue ApplyRuleJob (lines 388-403)."""

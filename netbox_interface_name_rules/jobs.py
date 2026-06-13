@@ -27,10 +27,13 @@ class ApplyRuleJob(JobRunner):
             self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
             return
 
+        conflicts = []
         try:
-            count = apply_rule_to_existing(rule)
+            count = apply_rule_to_existing(rule, conflicts=conflicts)
         except Exception as exc:
             self.logger.exception("Failed to apply rule '%s': %s", rule_id, exc)
             raise
 
         self.logger.info("Renamed %d interface(s) using rule '%s'", count, rule)
+        if conflicts:
+            self.logger.warning("%d interface(s) skipped — target name already in use on the device.", len(conflicts))

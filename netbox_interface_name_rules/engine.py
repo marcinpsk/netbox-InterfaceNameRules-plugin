@@ -95,14 +95,17 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         return 0  # Already renamed (idempotent guard)
 
     renamed = 0
+    conflicts: list = []
     for iface in unrenamed:
         vars_copy = dict(variables)
         vars_copy["base"] = iface.name
-        renamed += _apply_rule_to_interface(rule, iface, vars_copy, module)
+        renamed += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
 
-    if unrenamed and renamed == 0:
+    if unrenamed and renamed == 0 and not conflicts:
         # All interfaces already have the names the rule would produce — flag as
         # potentially obsolete (e.g., newer NetBox generates correct names natively).
+        # Skipped when the 0-count was caused by name collisions (a different reason
+        # than a no-op rule), so a collision never mislabels the rule as deprecated.
         _flag_rule_potentially_deprecated(rule)
 
     return renamed
@@ -148,11 +151,16 @@ def predict_rule_output(module, module_bay, raw_names):
     return output
 
 
-def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
+def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts=None):
     """Attempt to rename a single device-level interface using *rule*.
 
     Returns ``True`` if the interface was successfully renamed, ``False`` otherwise.
     Mutates ``renamed_pks`` on success.
+
+    A computed name already taken by another interface on the device is skipped
+    with a tidy WARNING (no traceback), mirroring the module-install path; pass a
+    list as *conflicts* to also collect them.  ``full_clean()`` remains the
+    backstop for the rarer cross-member (VC) uniqueness violation.
     """
     if iface.pk in renamed_pks:
         return False  # Already renamed by a higher-priority rule
@@ -181,17 +189,24 @@ def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks):
     if new_name == iface.name:
         return False
 
+    # Pre-check device-scope name uniqueness so an expected collision is a clean
+    # WARNING + skip instead of an ERROR traceback out of full_clean().
+    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
+        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
+        return False
+
     old_name = iface.name
     iface.name = new_name
     try:
         iface.full_clean()
-    except ValidationError:
-        logger.exception(
-            "Validation failed for device interface %s → %s (rule %s, device %s)",
+    except ValidationError as exc:
+        logger.warning(
+            "Validation failed renaming device interface %r → %r (rule %s, device %s); skipping: %s",
             old_name,
             new_name,
             rule.pk,
             device.pk,
+            exc,
         )
         iface.name = old_name
         return False
@@ -505,17 +520,100 @@ def build_variables(module_bay, device=None):
     return result
 
 
-def _apply_rule_to_interface(rule, iface, variables, module):
-    """Apply a single rule to an interface, handling breakout channels.
+def _name_exists_on_device(device, name, exclude_pk=None):
+    """Return True if another interface on *device* already uses *name*.
 
-    All saves are wrapped in a transaction so a failure mid-breakout rolls
-    back any partially created interfaces.
-
-    Returns the number of interfaces renamed/created.
+    Pre-checks the per-device interface-name uniqueness NetBox enforces so a
+    rename/create that would collide is skipped cleanly instead of raising
+    mid-transaction.  (VC-wide uniqueness is not pre-checked here; full_clean()
+    remains the authoritative validator for that rarer cross-member case.)
     """
     from dcim.models import Interface
 
+    qs = Interface.objects.filter(device=device, name=name)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    return qs.exists()
+
+
+def _record_conflict(conflicts, device, current_name, attempted_name, interface_pk=None):
+    """Log a name collision at WARNING and append it to *conflicts* when collecting.
+
+    Collisions are expected during automatic renaming (module install, type
+    change, VC change) when the computed name is already taken on the device;
+    they must never abort the batch, so callers skip the rename and carry on.
+    """
+    logger.warning(
+        "Interface name %r already exists on device %s — skipping rename of %r → %r",
+        attempted_name,
+        device,
+        current_name,
+        attempted_name,
+    )
+    if conflicts is not None:
+        conflicts.append(
+            {
+                "device": str(device),
+                "current_name": current_name,
+                "attempted_name": attempted_name,
+                "interface_pk": interface_pk,
+            }
+        )
+
+
+def _rename_in_place(iface, new_name, device, conflicts):
+    """Rename *iface* to *new_name*; return 1 if renamed, 0 if no-op or collision."""
+    if new_name == iface.name:
+        return 0
+    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
+        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
+        return 0
+    iface.name = new_name
+    iface.full_clean()
+    iface.save()
+    return 1
+
+
+def _create_channel(iface, module, new_name, device, conflicts):
+    """Create a breakout channel interface *new_name*; return 1 if created, else 0.
+
+    Silently skips when this module already has the channel (idempotent
+    re-apply); records a conflict when *new_name* is taken by a different
+    interface on the device.
+    """
+    from dcim.models import Interface
+
+    if Interface.objects.filter(module=module, name=new_name).exists():
+        return 0  # idempotent: channel already created on this module
+    if _name_exists_on_device(device, new_name):
+        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
+        return 0
+    breakout_iface = Interface(
+        device=device,
+        module=module,
+        name=new_name,
+        type=iface.type,
+        enabled=iface.enabled,
+    )
+    breakout_iface.full_clean()
+    breakout_iface.save()
+    return 1
+
+
+def _apply_rule_to_interface(rule, iface, variables, module, conflicts=None):
+    """Apply a single rule to an interface, handling breakout channels.
+
+    All saves are wrapped in a transaction so a failure mid-breakout rolls
+    back any partially created interfaces.  A computed name that already exists
+    on the device is skipped (logged, and recorded in *conflicts* when a list
+    is passed) instead of raising — so automatic renaming (module install,
+    module-type change, VC change) never aborts the rest of the batch on a
+    name collision.
+
+    Returns the number of interfaces renamed/created.
+    """
     count = 0
+    device = module.device
 
     with transaction.atomic():
         if rule.channel_count > 0:
@@ -524,31 +622,13 @@ def _apply_rule_to_interface(rule, iface, variables, module):
                 variables["channel"] = str(rule.channel_start + ch)
                 new_name = evaluate_name_template(rule.name_template, variables)
                 if ch == 0:
-                    if new_name != iface.name:
-                        iface.name = new_name
-                        iface.full_clean()
-                        iface.save()
-                        count += 1
+                    count += _rename_in_place(iface, new_name, device, conflicts)
                 else:
-                    if not Interface.objects.filter(module=module, name=new_name).exists():
-                        breakout_iface = Interface(
-                            device=module.device,
-                            module=module,
-                            name=new_name,
-                            type=iface.type,
-                            enabled=iface.enabled,
-                        )
-                        breakout_iface.full_clean()
-                        breakout_iface.save()
-                        count += 1
+                    count += _create_channel(iface, module, new_name, device, conflicts)
         else:
             # Simple rename (converter offset, platform naming, etc.)
             new_name = evaluate_name_template(rule.name_template, variables)
-            if new_name != iface.name:
-                iface.name = new_name
-                iface.full_clean()
-                iface.save()
-                count += 1
+            count += _rename_in_place(iface, new_name, device, conflicts)
 
     return count
 
@@ -759,7 +839,7 @@ def find_interfaces_for_rule(rule, limit=None):
     return results, total_checked
 
 
-def apply_rule_to_existing(rule, limit=None, interface_ids=None):
+def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None):
     """Apply a rule retroactively to all matching installed modules.
 
     Unlike apply_interface_name_rules(), this does not skip already-renamed
@@ -774,6 +854,10 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
     interfaces are processed; all others are skipped.  For channel rules the
     base interface PK is used as the selector.  An empty *interface_ids*
     collection returns 0 immediately without touching the database.
+
+    If *conflicts* is a list, each interface skipped because its target name is
+    already taken on the device is appended to it (and logged) — letting the
+    caller report how many renames were dropped.  Collisions never raise.
 
     Returns the number of interfaces renamed/created.
     """
@@ -812,7 +896,7 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
             vars_copy = dict(variables)
             vars_copy["base"] = base_iface.name
             try:
-                count += _apply_rule_to_interface(rule, base_iface, vars_copy, module)
+                count += _apply_rule_to_interface(rule, base_iface, vars_copy, module, conflicts=conflicts)
             except (ValueError, ValidationError, IntegrityError):
                 logger.exception(
                     "Failed to apply channel rule '%s' to module '%s' (id=%s); skipping.",
@@ -827,7 +911,7 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None):
                 vars_copy = dict(variables)
                 vars_copy["base"] = iface.name
                 try:
-                    count += _apply_rule_to_interface(rule, iface, vars_copy, module)
+                    count += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
                 except (ValueError, ValidationError, IntegrityError):
                     logger.exception(
                         "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
