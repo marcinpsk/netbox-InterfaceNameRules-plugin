@@ -100,6 +100,7 @@ max-complexity = 15
 [tool.coverage.run]
 source = ["netbox_interface_name_rules"]
 omit = ["*/migrations/*", "*/tests/*"]
+branch = true
 
 [tool.coverage.report]
 fail_under = 97
