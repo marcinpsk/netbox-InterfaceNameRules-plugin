@@ -105,8 +105,11 @@ wedges every later run). The helper points the test DB at a unique name —
 derived from the first app argument, or `TEST_DB_NAME=...` — via the
 [`isolated_test_settings`](.devcontainer/config/isolated_test_settings.py) shim
 (`--settings=isolated_test_settings` with `.devcontainer/config` on `PYTHONPATH`).
-With no override it falls back to `test_netbox`, so existing workflows are
-unchanged. Example — test a sibling plugin without disturbing a parallel run:
+Plain `netbox-test` keeps using the shared default (`test_netbox`);
+`netbox-test-isolated` instead derives a per-app DB name by default — `test_<app>`
+from the first app argument (this plugin when none is given) — unless you set
+`TEST_DB_NAME` explicitly. Example — test a sibling plugin without disturbing a
+parallel run:
 
 ```bash
 netbox-test-isolated netbox_nso_plugin --keepdb

@@ -1803,6 +1803,46 @@ class NameCollisionTest(EngineAdvancedFixtures):
         # The pre-existing device-level interface is untouched.
         self.assertTrue(Interface.objects.filter(device=self.device, module=None, name="Hu0/0/0/0:2").exists())
 
+    def test_install_path_save_race_skips_one_interface_without_aborting_batch(self):
+        """A post-check save race on one interface is logged + skipped; the rest still rename.
+
+        The collision pre-check closes the common case, but a concurrent insert can
+        still win between the check and the save — a true race we cannot reproduce
+        deterministically, so the IntegrityError is injected on the first save only
+        (everything else is a real rule / real interfaces / the real install path).
+        Without the per-interface guard in apply_interface_name_rules this exception
+        propagates and aborts the whole batch.
+        """
+        from django.db import IntegrityError
+
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-{base}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        Interface.objects.create(device=self.device, module=module, name="a", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="b", type="10gbase-x-sfpp")
+
+        real_save = Interface.save
+        calls = {"n": 0}
+
+        def flaky_save(self_iface, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:  # first interface loses the race
+                raise IntegrityError("duplicate key value violates unique constraint")
+            return real_save(self_iface, *args, **kwargs)
+
+        with patch.object(Interface, "save", flaky_save):
+            # force_reapply so both interfaces are in scope regardless of raw names.
+            renamed = apply_interface_name_rules(module, self.bay0, force_reapply=True)
+
+        # Batch continued past the racing interface: exactly one renamed, one rolled back.
+        self.assertEqual(renamed, 1)
+        names = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+        self.assertEqual(len(names), 2)
+        self.assertEqual(len([n for n in names if n.startswith("et-")]), 1)  # one renamed
+        self.assertEqual(len([n for n in names if not n.startswith("et-")]), 1)  # one raced (unchanged)
+
     def test_idempotent_breakout_reapply_records_no_conflict(self):
         """Re-applying an already-applied breakout records no false conflicts for its own channels."""
         rule = InterfaceNameRule.objects.create(

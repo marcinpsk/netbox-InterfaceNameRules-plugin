@@ -99,7 +99,21 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     for iface in unrenamed:
         vars_copy = dict(variables)
         vars_copy["base"] = iface.name
-        renamed += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
+        try:
+            renamed += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
+        except (ValueError, ValidationError, IntegrityError):
+            # The collision pre-check closes the common case, but a concurrent
+            # insert can still win between that check and the save — surfacing
+            # here as IntegrityError/ValidationError out of the per-interface
+            # atomic block (which has already rolled back cleanly).  Log and keep
+            # going so one racing interface never aborts the whole install batch,
+            # mirroring apply_rule_to_existing().
+            logger.exception(
+                "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
+                rule,
+                iface.name,
+                iface.pk,
+            )
 
     if unrenamed and renamed == 0 and not conflicts:
         # All interfaces already have the names the rule would produce — flag as
@@ -839,6 +853,56 @@ def find_interfaces_for_rule(rule, limit=None):
     return results, total_checked
 
 
+def _apply_channel_rule_to_module(rule, module, ifaces, variables, id_set, conflicts):
+    """Apply a channel rule to one module via its base interface; return the rename count.
+
+    A channel rule is processed ONCE per module (not per interface) so existing
+    channel names are not re-created.  An unexpected failure (e.g. a save race)
+    is logged and skipped so it never aborts the surrounding batch.
+    """
+    if not ifaces:
+        return 0
+    base_iface = _find_channel_base(rule, ifaces, variables)
+    if id_set is not None and base_iface.pk not in id_set:
+        return 0
+    vars_copy = dict(variables)
+    vars_copy["base"] = base_iface.name
+    try:
+        return _apply_rule_to_interface(rule, base_iface, vars_copy, module, conflicts=conflicts)
+    except (ValueError, ValidationError, IntegrityError):
+        logger.exception(
+            "Failed to apply channel rule '%s' to module '%s' (id=%s); skipping.",
+            rule,
+            module,
+            module.pk,
+        )
+        return 0
+
+
+def _apply_plain_rule_to_module(rule, module, ifaces, variables, id_set, conflicts):
+    """Apply a non-channel rule to each selected interface on one module; return the rename count.
+
+    Each interface is independent: an unexpected failure on one is logged and
+    skipped so the rest of the module (and batch) still process.
+    """
+    count = 0
+    for iface in ifaces:
+        if id_set is not None and iface.pk not in id_set:
+            continue
+        vars_copy = dict(variables)
+        vars_copy["base"] = iface.name
+        try:
+            count += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
+        except (ValueError, ValidationError, IntegrityError):
+            logger.exception(
+                "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
+                rule,
+                iface.name,
+                iface.pk,
+            )
+    return count
+
+
 def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None):
     """Apply a rule retroactively to all matching installed modules.
 
@@ -885,41 +949,9 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None)
         ifaces = ifaces_by_module.get(module.pk, [])
 
         if rule.channel_count > 0:
-            # Channel rule: process module ONCE using the best base interface.
-            # Calling _apply_rule_to_interface for each existing interface would
-            # attempt to create the same channel names multiple times.
-            if not ifaces:
-                continue
-            base_iface = _find_channel_base(rule, ifaces, variables)
-            if id_set is not None and base_iface.pk not in id_set:
-                continue
-            vars_copy = dict(variables)
-            vars_copy["base"] = base_iface.name
-            try:
-                count += _apply_rule_to_interface(rule, base_iface, vars_copy, module, conflicts=conflicts)
-            except (ValueError, ValidationError, IntegrityError):
-                logger.exception(
-                    "Failed to apply channel rule '%s' to module '%s' (id=%s); skipping.",
-                    rule,
-                    module,
-                    module.pk,
-                )
+            count += _apply_channel_rule_to_module(rule, module, ifaces, variables, id_set, conflicts)
         else:
-            for iface in ifaces:
-                if id_set is not None and iface.pk not in id_set:
-                    continue
-                vars_copy = dict(variables)
-                vars_copy["base"] = iface.name
-                try:
-                    count += _apply_rule_to_interface(rule, iface, vars_copy, module, conflicts=conflicts)
-                except (ValueError, ValidationError, IntegrityError):
-                    logger.exception(
-                        "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
-                        rule,
-                        iface.name,
-                        iface.pk,
-                    )
-                    continue
+            count += _apply_plain_rule_to_module(rule, module, ifaces, variables, id_set, conflicts)
 
         if limit is not None and count >= limit:
             return count
