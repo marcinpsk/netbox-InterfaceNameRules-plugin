@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.4.1 (2026-06-15)
+
+### Bug Fixes
+
+- Update tests, update interface name conflict, support isolated test db
+  ([#47](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/47),
+  [`2ca8086`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2ca8086bd19cca93e502e0b720aa4fcc02963940))
+
+### Chores
+
+- Rqworker autoreload ([#44](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/44),
+  [`b9a3d87`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b9a3d87ce4699d21c4c7bd1dbf1fb0fb46bfbae5))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#46](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/46),
+  [`eefc835`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/eefc835d81693f3754d77c06aeff6755f5d8ae74))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#45](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/45),
+  [`4f97f2e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4f97f2ee5f195c5b4bc17fde05a605f207fc9c03))
+
+
 ## v1.4.0 (2026-05-28)
 
 ### Chores
