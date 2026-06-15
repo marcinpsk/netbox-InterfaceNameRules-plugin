@@ -87,3 +87,30 @@ Apache 2.0
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to submit code or interface name rules.
 
 Community-contributed rules for various vendors are in the [`contrib/`](contrib/) directory.
+
+## Testing
+
+Inside the devcontainer:
+
+```bash
+netbox-test                 # run this plugin's tests (shared test_netbox DB)
+netbox-test-isolated <app> [flags]   # run on a per-session ISOLATED test DB
+```
+
+`netbox-test-isolated` is concurrency-safe: Django otherwise names the test
+database `test_<DB_NAME>` (`test_netbox`), so two `manage.py test` runs in the
+same devcontainer collide on one DB and corrupt each other's migrations (a
+crashed run can even leave an `idle in transaction` connection holding locks that
+wedges every later run). The helper points the test DB at a unique name —
+derived from the first app argument, or `TEST_DB_NAME=...` — via the
+[`isolated_test_settings`](.devcontainer/config/isolated_test_settings.py) shim
+(`--settings=isolated_test_settings` with `.devcontainer/config` on `PYTHONPATH`).
+Plain `netbox-test` keeps using the shared default (`test_netbox`);
+`netbox-test-isolated` instead derives a per-app DB name by default — `test_<app>`
+from the first app argument (this plugin when none is given) — unless you set
+`TEST_DB_NAME` explicitly. Example — test a sibling plugin without disturbing a
+parallel run:
+
+```bash
+netbox-test-isolated netbox_nso_plugin --keepdb
+```

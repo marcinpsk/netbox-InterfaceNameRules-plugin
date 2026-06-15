@@ -456,8 +456,16 @@ class RuleApplyDetailView(generic.ObjectView):
                 if not interface_ids:
                     messages.warning(request, "No interfaces selected; nothing was applied.")
                 else:
-                    count = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
+                    conflicts = []
+                    count = apply_rule_to_existing(
+                        rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids, conflicts=conflicts
+                    )
                     messages.success(request, f"Applied rule: {count} interface(s) renamed.")
+                    if conflicts:
+                        messages.warning(
+                            request,
+                            f"{len(conflicts)} interface(s) skipped — target name already in use on the device.",
+                        )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)
                 messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
