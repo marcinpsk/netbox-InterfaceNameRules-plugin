@@ -7,8 +7,10 @@ after Django is fully initialised.
 """
 
 import ast
+import contextlib
 import logging
 import re
+import threading
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -31,6 +33,43 @@ _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 # on overflow the memo is cleared wholesale and rebuilt lazily. The cap is far above the number
 # of contexts in any single module-sync render, so it never churns mid-render.
 _MEMO_MAX = 4096
+
+# Per-thread pin depth (see pinned_rule_cache). While > 0 on the current thread, _get_enabled_rules
+# trusts the loaded set without re-reading the fingerprint, so a batch caller that wraps its loop
+# turns N per-call fingerprint queries into one. Thread-local so concurrent requests don't affect
+# each other; tests never enter the context, so default behaviour is unchanged.
+_pin = threading.local()
+
+
+@contextlib.contextmanager
+def pinned_rule_cache():
+    """Pin the enabled-rule set for the duration of the block, skipping the per-call fingerprint query.
+
+    find_matching_rule() normally re-reads a cheap fingerprint on every call to detect rule-set
+    changes. A read-heavy batch caller that makes many calls within a single request — e.g. the
+    netbox-librenms-plugin module-sync table, which predicts names once per module row — can wrap
+    its loop in this context manager so the set is loaded and fingerprinted once and reused for
+    every call inside the block, turning N fingerprint queries into one::
+
+        with pinned_rule_cache():
+            for module in modules:
+                predict_rule_output(module, module.module_bay, names)
+
+    Scope is explicit and per-thread: outside the block (and in any other thread/request) the normal
+    self-invalidating behaviour is unchanged, so there is no global staleness window. Nesting is
+    safe — only the outermost block manages the pin. Priming is lazy: the first find_matching_rule
+    inside the block does the one real fingerprint read + reload, and the rest reuse it — so a block
+    that makes no lookups does no query at all. Rule edits made *inside* the block are not observed
+    until it exits, so use it only for read-only, edit-free batches.
+    """
+    depth = getattr(_pin, "depth", 0)
+    _pin.depth = depth + 1
+    if depth == 0:
+        _pin.primed = False  # the first lookup inside primes the cache (lazily — an empty block stays query-free)
+    try:
+        yield
+    finally:
+        _pin.depth -= 1
 
 
 def _compile_pattern(pattern):
@@ -88,7 +127,14 @@ def _get_enabled_rules():
     is a tuple of ``(compiled_pattern, rule)`` pairs, pre-sorted once by ``(-pattern length, pk)``
     and with each pattern compiled once, so the regex tier neither re-sorts nor recompiles per
     call. ``memo`` caches find_matching_rule results for the current rule-set version.
+
+    Inside a ``pinned_rule_cache()`` block on this thread, once the set has been primed (by the first
+    lookup in the block) the fingerprint query is skipped and the already-loaded set is returned.
     """
+    pinned = getattr(_pin, "depth", 0) > 0
+    if pinned and getattr(_pin, "primed", False):
+        return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
+
     from .models import InterfaceNameRule
 
     version = _enabled_rules_version()
@@ -102,6 +148,8 @@ def _get_enabled_rules():
         _RULE_CACHE["regex"] = tuple((_compile_pattern(r.module_type_pattern), r) for r in regex_rules)
         _RULE_CACHE["memo"] = {}
         _RULE_CACHE["version"] = version
+    if pinned:
+        _pin.primed = True  # subsequent lookups in this block skip the fingerprint
     return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
 
 

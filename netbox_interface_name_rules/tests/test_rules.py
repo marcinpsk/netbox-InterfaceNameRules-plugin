@@ -418,3 +418,43 @@ class FindMatchingRuleCachingTest(TestCase):
             self.assertLessEqual(len(engine._RULE_CACHE["memo"]), engine._MEMO_MAX)
         finally:
             engine._MEMO_MAX = original_max
+
+    def test_pinned_rule_cache_skips_per_call_fingerprint(self):
+        """Inside pinned_rule_cache() the per-call fingerprint query is elided; outside it still runs."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+        find_matching_rule(self.module_type, None, self.device_type)  # warm + memoize this context
+
+        # Outside the pin, every call (even a memoized repeat) issues the fingerprint aggregate.
+        with CaptureQueriesContext(connection) as unpinned:
+            for _ in range(5):
+                find_matching_rule(self.module_type, None, self.device_type)
+        self.assertEqual(len(unpinned), 5, [q["sql"] for q in unpinned.captured_queries])
+
+        # Inside the pin, the first lookup primes the set (one query) and the rest reuse it: a loop of
+        # many lookups costs a single fingerprint query instead of one per call.
+        with pinned_rule_cache(), CaptureQueriesContext(connection) as pinned:
+            for _ in range(5):
+                find_matching_rule(self.module_type, None, self.device_type)
+        self.assertEqual(len(pinned), 1, [q["sql"] for q in pinned.captured_queries])
+
+    def test_pinned_block_uses_set_loaded_at_entry_then_resumes(self):
+        """A pinned block matches against the set loaded at entry; normal self-invalidation resumes after."""
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        universal = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
+
+        with pinned_rule_cache():
+            self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)
+            # A more specific rule added inside the block is intentionally not observed until exit.
+            specific = InterfaceNameRule.objects.create(
+                module_type=self.module_type, device_type=self.device_type, name_template="b{bay_position}"
+            )
+            self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)
+
+        # After the block, the fingerprint is re-read and the more specific rule wins.
+        self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), specific)
