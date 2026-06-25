@@ -281,3 +281,38 @@ class ApplyInterfaceNameRulesTest(TestCase):
         module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
         renamed = apply_interface_name_rules(module, bay)
         self.assertEqual(renamed, 0)
+
+
+class FindMatchingRuleCachingTest(TestCase):
+    """find_matching_rule loads rules once and memoizes per context, and reloads when rules change."""
+
+    @classmethod
+    def setUpTestData(cls):
+        mfr = Manufacturer.objects.create(name="CacheMfg", slug="cachemfg")
+        cls.module_type = ModuleType.objects.create(manufacturer=mfr, model="C-SFP", part_number="C-SFP")
+        cls.device_type = DeviceType.objects.create(manufacturer=mfr, model="C-DEV", slug="c-dev")
+
+    def test_repeated_calls_do_not_re_query_rules(self):
+        """A second identical call is served from the cache — only the cheap version-fingerprint query runs."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="port{bay_position}")
+        find_matching_rule(self.module_type, None, self.device_type)  # warm (rule create bumped the version)
+
+        with CaptureQueriesContext(connection) as ctx:
+            find_matching_rule(self.module_type, None, self.device_type)
+
+        # No per-candidate rule lookups — at most the (count, max last_updated) fingerprint query.
+        self.assertLessEqual(len(ctx), 1, [q["sql"] for q in ctx.captured_queries])
+
+    def test_rule_change_invalidates_cache(self):
+        """Adding a more specific rule changes the fingerprint, so the next call reloads and matches it."""
+        find_matching_rule(self.module_type, None, self.device_type)  # warm with the current rule set
+
+        specific = InterfaceNameRule.objects.create(
+            module_type=self.module_type, device_type=self.device_type, name_template="specific{bay_position}"
+        )
+        result = find_matching_rule(self.module_type, None, self.device_type)
+
+        self.assertEqual(result, specific)
