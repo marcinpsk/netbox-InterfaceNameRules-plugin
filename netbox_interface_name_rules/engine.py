@@ -13,7 +13,9 @@ import re
 import threading
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Aggregate, F, TextField, Value
+from django.db.models.functions import Cast, Coalesce, Concat
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,47 @@ _VERSION_COLUMNS = (
     "applies_to_device_interfaces",
 )
 
+# Field and row separators for the fingerprint: NUL-free ASCII control characters (unit/record
+# separator) that cannot occur in the text columns, so distinct rule sets can never collide.
+_FIELD_SEP = "\x1f"
+_ROW_SEP = "\x1e"
+
+
+class _Md5OrderedStringAgg(Aggregate):
+    """``md5(string_agg(<row>, <delim> ORDER BY id))`` expressed as one ORM aggregate.
+
+    Built through the ORM rather than a hand-formatted SQL string, so the table/column identifiers are
+    quoted by Django's compiler and the delimiter is a bound parameter — there is no string-interpolated
+    SQL to audit for injection. The template is ours, so it does not depend on ``StringAgg``'s Python
+    signature, which differs across the Django 5.x–6.x versions in CI. ``ORDER BY id`` makes string_agg
+    deterministic — a stable row order yields a stable hash for an unchanged set.
+    """
+
+    function = "STRING_AGG"
+    template = "MD5(%(function)s(%(expressions)s ORDER BY id))"
+    output_field = TextField()
+
+
+def _version_row_signature():
+    """Build the per-rule text signature expression for the fingerprint.
+
+    Each matching/output column is cast to text and joined by ``_FIELD_SEP``. A nullable FK is
+    coalesced to '' (a real id never renders empty), so null stays distinct from any value while
+    keeping the column's slot in the row.
+    """
+    empty = Value("", output_field=TextField())
+    parts = []
+    for index, column in enumerate(_VERSION_COLUMNS):
+        if index:
+            parts.append(Value(_FIELD_SEP, output_field=TextField()))
+        cast = Cast(F(column), output_field=TextField())
+        parts.append(Coalesce(cast, empty, output_field=TextField()) if column.endswith("_id") else cast)
+    return Concat(*parts, output_field=TextField())
+
+
+# The signature expression is constant, so build it once and reuse it across calls.
+_ROW_SIGNATURE = _version_row_signature()
+
 
 def _enabled_rules_version():
     """Return a deterministic content fingerprint of the enabled-rule set.
@@ -123,24 +166,16 @@ def _enabled_rules_version():
     Fields are joined with chr(31) and rows with chr(30) — NUL-free ASCII control characters that
     cannot occur in the text columns, so distinct rule sets never collide. A nullable FK renders as
     the empty string (a real id never does), keeping null distinct from any value. The empty set
-    aggregates to NULL → md5('') → a stable constant, so "no enabled rules" has a fixed version.
+    aggregates to NULL → coalesced to a stable empty fingerprint, so "no enabled rules" is fixed.
     """
     from .models import InterfaceNameRule
 
-    table = connection.ops.quote_name(InterfaceNameRule._meta.db_table)
-    row = ", ".join(
-        # FKs are nullable; coalesce so a null id stays distinct from a real one without dropping the
-        # field's position in the row. The other columns are NOT NULL, so concat_ws keeps their slots.
-        f"coalesce({col}::text, '')" if col.endswith("_id") else f"{col}::text"
-        for col in _VERSION_COLUMNS
-    )
-    sql = (
-        f"SELECT md5(coalesce(string_agg(concat_ws(chr(31), {row}), chr(30) ORDER BY id), ''))"
-        f" FROM {table} WHERE enabled"
-    )
-    with connection.cursor() as cursor:
-        cursor.execute(sql)
-        return cursor.fetchone()[0]
+    return InterfaceNameRule.objects.filter(enabled=True).aggregate(
+        fingerprint=Coalesce(
+            _Md5OrderedStringAgg(_ROW_SIGNATURE, Value(_ROW_SEP, output_field=TextField())),
+            Value("", output_field=TextField()),
+        )
+    )["fingerprint"]
 
 
 def _get_enabled_rules():
