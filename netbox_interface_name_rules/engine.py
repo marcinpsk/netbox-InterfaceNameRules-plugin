@@ -26,6 +26,24 @@ logger = logging.getLogger(__name__)
 # .update() of a scope field) and across test transactions — with no signal wiring.
 _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
+# Per-version cap on the find_matching_rule memo. A long-lived worker that sees many distinct
+# (module_type, scope) contexts under a stable rule set would otherwise grow it without bound;
+# on overflow the memo is cleared wholesale and rebuilt lazily. The cap is far above the number
+# of contexts in any single module-sync render, so it never churns mid-render.
+_MEMO_MAX = 4096
+
+
+def _compile_pattern(pattern):
+    """Compile a regex *pattern* once, returning the compiled object or None for an invalid pattern.
+
+    A None result is skipped at match time, mirroring the previous per-match ``try/except re.error``
+    without recompiling the pattern on every lookup.
+    """
+    try:
+        return re.compile(pattern)
+    except re.error:
+        return None
+
 
 def _enabled_rules_version():
     """Return a cheap fingerprint of the enabled-rule set.
@@ -65,9 +83,11 @@ def _enabled_rules_version():
 def _get_enabled_rules():
     """Return ``(exact_rules, regex_rules, memo)``, reloading only when the rule set changes.
 
-    ``exact_rules`` are ordered by ``(module_type__model, pk)`` to mirror the model's
-    default ordering (so an in-memory ``first match`` equals the previous ``.first()``);
-    ``memo`` caches find_matching_rule results for the current rule-set version.
+    ``exact_rules`` are ordered by ``(module_type__model, pk)`` to mirror the model's default
+    ordering (so an in-memory ``first match`` equals the previous ``.first()``). ``regex_rules``
+    is a tuple of ``(compiled_pattern, rule)`` pairs, pre-sorted once by ``(-pattern length, pk)``
+    and with each pattern compiled once, so the regex tier neither re-sorts nor recompiles per
+    call. ``memo`` caches find_matching_rule results for the current rule-set version.
     """
     from .models import InterfaceNameRule
 
@@ -75,7 +95,11 @@ def _get_enabled_rules():
     if _RULE_CACHE["version"] != version:
         rules = list(InterfaceNameRule.objects.filter(enabled=True).order_by("module_type__model", "pk"))
         _RULE_CACHE["exact"] = tuple(r for r in rules if not r.module_type_is_regex)
-        _RULE_CACHE["regex"] = tuple(r for r in rules if r.module_type_is_regex)
+        regex_rules = sorted(
+            (r for r in rules if r.module_type_is_regex),
+            key=lambda r: (-len(r.module_type_pattern or ""), r.pk),
+        )
+        _RULE_CACHE["regex"] = tuple((_compile_pattern(r.module_type_pattern), r) for r in regex_rules)
         _RULE_CACHE["memo"] = {}
         _RULE_CACHE["version"] = version
     return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
@@ -417,14 +441,24 @@ def _flag_rule_potentially_deprecated(rule):
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
 
 
-def _scope_filter(field: str, value) -> dict:
-    """Return ``{field: value}`` or ``{field__isnull: True}`` for a nullable FK.
+def _scope_ids(parent_module_type, device_type, platform):
+    """Map the (parent_module_type, device_type, platform) scope objects to their FK ids.
 
-    Avoids repeating the ``if value is None`` pattern throughout rule lookup.
+    ``None`` (no constraint) maps to ``None`` so it compares equal to a rule's unset scope FK.
+    Centralises the ``x.pk if x is not None else None`` coalescing used by both match tiers and
+    the memo key.
     """
-    if value is None:
-        return {f"{field}__isnull": True}
-    return {field: value}
+    return (
+        parent_module_type.pk if parent_module_type is not None else None,
+        device_type.pk if device_type is not None else None,
+        platform.pk if platform is not None else None,
+    )
+
+
+def _rule_scope_matches(rule, scope_ids):
+    """Return True when *rule*'s (parent_module_type, device_type, platform) FKs equal *scope_ids*."""
+    pmt_id, dt_id, pl_id = scope_ids
+    return rule.parent_module_type_id == pmt_id and rule.device_type_id == dt_id and rule.platform_id == pl_id
 
 
 def _build_candidates(parent_module_type, device_type, platform) -> list:
@@ -462,12 +496,10 @@ def _find_exact_match(module_type, candidates, exact_rules=None):
     # module_type fixed below → the (module_type__model, pk) ordering reduces to pk, so the
     # first matching rule equals the previous ``.filter(...).first()``.
     scoped = [r for r in exact_rules if r.module_type_id == module_type.pk]
-    for pmt, dt, pl in candidates:
-        pmt_id = pmt.pk if pmt is not None else None
-        dt_id = dt.pk if dt is not None else None
-        pl_id = pl.pk if pl is not None else None
+    for candidate in candidates:
+        scope_ids = _scope_ids(*candidate)
         for rule in scoped:
-            if rule.parent_module_type_id == pmt_id and rule.device_type_id == dt_id and rule.platform_id == pl_id:
+            if _rule_scope_matches(rule, scope_ids):
                 return rule
     return None
 
@@ -475,31 +507,19 @@ def _find_exact_match(module_type, candidates, exact_rules=None):
 def _find_regex_match(model_name: str, candidates, regex_rules=None):
     """Tier 2: return the first enabled regex rule whose pattern fullmatches *model_name*, or None.
 
-    Tries candidates in specificity order; within each level longer patterns
-    are tried first (more specific).  Invalid regex patterns are silently skipped.
-    ``regex_rules`` is the preloaded enabled regex-rule set; loaded on demand when omitted.
+    Tries candidates in specificity order; within each level longer patterns are tried first
+    (more specific).  ``regex_rules`` is the preloaded ``(compiled_pattern, rule)`` set — pre-sorted
+    by ``(-pattern length, pk)`` with each pattern compiled once (a None compile is an invalid
+    pattern, silently skipped); loaded on demand when omitted.
     """
     if regex_rules is None:
         _, regex_rules, _ = _get_enabled_rules()
 
-    for pmt, dt, pl in candidates:
-        pmt_id = pmt.pk if pmt is not None else None
-        dt_id = dt.pk if dt is not None else None
-        pl_id = pl.pk if pl is not None else None
-        scoped = [
-            r
-            for r in regex_rules
-            if r.parent_module_type_id == pmt_id and r.device_type_id == dt_id and r.platform_id == pl_id
-        ]
-        # Longer patterns first (more specific), then pk — mirrors the previous
-        # ``.order_by("-pattern_length", "pk")``.
-        scoped.sort(key=lambda r: (-len(r.module_type_pattern or ""), r.pk))
-        for rule in scoped:
-            try:
-                if re.fullmatch(rule.module_type_pattern, model_name):
-                    return rule
-            except re.error:
-                continue
+    for candidate in candidates:
+        scope_ids = _scope_ids(*candidate)
+        for compiled, rule in regex_rules:
+            if compiled is not None and _rule_scope_matches(rule, scope_ids) and compiled.fullmatch(model_name):
+                return rule
     return None
 
 
@@ -521,16 +541,15 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
 
     Returns the first matching rule, or None if no rule matches.
     """
+    if module_type is None:
+        # Module rules are always keyed on a module type; both tiers dereference it
+        # (module_type.pk / .model), so there is nothing to match without one.
+        return None
+
     exact_rules, regex_rules, memo = _get_enabled_rules()
     # The regex tier matches against module_type.model (a live string), so the memo must key on
     # it too — otherwise a ModuleType.model rename (same pk) would return a stale regex result.
-    sig = (
-        module_type.pk if module_type is not None else None,
-        module_type.model if module_type is not None else None,
-        parent_module_type.pk if parent_module_type is not None else None,
-        device_type.pk if device_type is not None else None,
-        platform.pk if platform is not None else None,
-    )
+    sig = (module_type.pk, module_type.model, *_scope_ids(parent_module_type, device_type, platform))
     if sig in memo:
         return memo[sig]
 
@@ -538,6 +557,8 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     result = _find_exact_match(module_type, candidates, exact_rules) or _find_regex_match(
         module_type.model, candidates, regex_rules
     )
+    if len(memo) >= _MEMO_MAX:
+        memo.clear()  # bound per-version memory; entries are rebuilt lazily on the next miss
     memo[sig] = result
     return result
 

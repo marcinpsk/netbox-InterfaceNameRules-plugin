@@ -384,3 +384,29 @@ class FindMatchingRuleCachingTest(TestCase):
         mt.save()
 
         self.assertEqual(find_matching_rule(mt, None, None), rule)  # now matches; must not serve the stale miss
+
+    def test_none_module_type_returns_none(self):
+        """find_matching_rule(None, ...) returns None instead of raising — module rules need a module type."""
+        self.assertIsNone(find_matching_rule(None, None, None))
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+        self.assertIsNone(find_matching_rule(None, None, self.device_type))
+
+    def test_memo_is_bounded(self):
+        """The per-version memo is capped, so it can't grow without bound under a stable rule set."""
+        from netbox_interface_name_rules import engine
+
+        original_max = engine._MEMO_MAX
+        engine._MEMO_MAX = 2
+        try:
+            mfr = Manufacturer.objects.create(name="MemoMfg", slug="memomfg")
+            module_types = [
+                ModuleType.objects.create(manufacturer=mfr, model=f"MEMO-{i}", part_number=f"MEMO-{i}")
+                for i in range(5)
+            ]
+            for mt in module_types:  # five distinct contexts → five distinct memo keys
+                find_matching_rule(mt, None, None)
+
+            self.assertLessEqual(len(engine._RULE_CACHE["memo"]), engine._MEMO_MAX)
+        finally:
+            engine._MEMO_MAX = original_max
