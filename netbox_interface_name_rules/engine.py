@@ -12,7 +12,7 @@ import re
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Sum
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +20,46 @@ logger = logging.getLogger(__name__)
 # of that set. find_matching_rule() is called once per module row when a device's
 # module-sync table is rendered, and each call used to run a DB query per scope
 # candidate per tier; loading the (small) rule set once and matching in memory removes
-# that per-row query storm. Keyed on (count, max last_updated) so it self-invalidates on
-# any create/delete/edit — including across test transactions — with no signal wiring.
+# that per-row query storm. The fingerprint (see _enabled_rules_version) is re-read once
+# per call and the set reloaded only when it changes, so it self-invalidates on any
+# create/delete/edit — including edits that bypass auto_now (SET_NULL cascades, bulk
+# .update() of a scope field) and across test transactions — with no signal wiring.
 _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
 
 def _enabled_rules_version():
-    """Return a cheap fingerprint of the enabled-rule set: (count, latest last_updated)."""
+    """Return a cheap fingerprint of the enabled-rule set.
+
+    ``(count, latest last_updated)`` catches creates, deletes and any ``.save()`` edit. The
+    FK-id and channel sums additionally catch changes that bypass ``auto_now`` while keeping the
+    count constant — a ``SET_NULL`` cascade nulling a scope FK, or a bulk ``.update()`` of a
+    scope/channel field — so the cache self-invalidates on those too. The one edit it cannot
+    see is a raw bulk ``.update()`` of a *text* field (name_template / module_type_pattern),
+    which bumps neither the count, the sums, nor last_updated; use ``.save()`` for such edits.
+    """
     from .models import InterfaceNameRule
 
-    agg = InterfaceNameRule.objects.filter(enabled=True).aggregate(n=Count("pk"), latest=Max("last_updated"))
+    agg = InterfaceNameRule.objects.filter(enabled=True).aggregate(
+        n=Count("pk"),
+        latest=Max("last_updated"),
+        mt=Sum("module_type"),
+        pmt=Sum("parent_module_type"),
+        dt=Sum("device_type"),
+        pl=Sum("platform"),
+        chan=Sum("channel_count"),
+        chs=Sum("channel_start"),
+    )
     latest = agg["latest"]
-    return (agg["n"] or 0, latest.isoformat() if latest else "")
+    return (
+        agg["n"] or 0,
+        latest.isoformat() if latest else "",
+        agg["mt"] or 0,
+        agg["pmt"] or 0,
+        agg["dt"] or 0,
+        agg["pl"] or 0,
+        agg["chan"] or 0,
+        agg["chs"] or 0,
+    )
 
 
 def _get_enabled_rules():
@@ -494,8 +522,11 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     Returns the first matching rule, or None if no rule matches.
     """
     exact_rules, regex_rules, memo = _get_enabled_rules()
+    # The regex tier matches against module_type.model (a live string), so the memo must key on
+    # it too — otherwise a ModuleType.model rename (same pk) would return a stale regex result.
     sig = (
         module_type.pk if module_type is not None else None,
+        module_type.model if module_type is not None else None,
         parent_module_type.pk if parent_module_type is not None else None,
         device_type.pk if device_type is not None else None,
         platform.pk if platform is not None else None,

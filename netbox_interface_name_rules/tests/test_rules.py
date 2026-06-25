@@ -284,7 +284,7 @@ class ApplyInterfaceNameRulesTest(TestCase):
 
 
 class FindMatchingRuleCachingTest(TestCase):
-    """find_matching_rule loads rules once and memoizes per context, and reloads when rules change."""
+    """find_matching_rule loads rules once, memoizes per context, and reloads when rules change."""
 
     @classmethod
     def setUpTestData(cls):
@@ -293,18 +293,41 @@ class FindMatchingRuleCachingTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=mfr, model="C-DEV", slug="c-dev")
 
     def test_repeated_calls_do_not_re_query_rules(self):
-        """A second identical call is served from the cache — only the cheap version-fingerprint query runs."""
+        """A second identical call issues at most the cheap fingerprint query — no per-candidate lookups."""
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="port{bay_position}")
-        find_matching_rule(self.module_type, None, self.device_type)  # warm (rule create bumped the version)
+        find_matching_rule(self.module_type, None, self.device_type)  # warm (rule create bumped the fingerprint)
 
         with CaptureQueriesContext(connection) as ctx:
             find_matching_rule(self.module_type, None, self.device_type)
 
-        # No per-candidate rule lookups — at most the (count, max last_updated) fingerprint query.
+        # No per-candidate rule lookups — at most the single (count, max last_updated, sums) fingerprint query.
         self.assertLessEqual(len(ctx), 1, [q["sql"] for q in ctx.captured_queries])
+
+    def test_memoized_result_is_not_recomputed(self):
+        """A repeat call with the same context returns the memoized rule without re-running tier matching."""
+        from netbox_interface_name_rules import engine
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="port{bay_position}")
+        first = find_matching_rule(self.module_type, None, self.device_type)  # warm, populates the memo
+
+        calls = []
+        real_find_exact = engine._find_exact_match
+
+        def counting_find_exact(*args, **kwargs):
+            calls.append(1)
+            return real_find_exact(*args, **kwargs)
+
+        engine._find_exact_match = counting_find_exact
+        try:
+            second = find_matching_rule(self.module_type, None, self.device_type)
+        finally:
+            engine._find_exact_match = real_find_exact
+
+        self.assertEqual(second, first)
+        self.assertEqual(calls, [], "second call must be served from the memo, not re-matched")
 
     def test_rule_change_invalidates_cache(self):
         """Adding a more specific rule changes the fingerprint, so the next call reloads and matches it."""
@@ -316,3 +339,48 @@ class FindMatchingRuleCachingTest(TestCase):
         result = find_matching_rule(self.module_type, None, self.device_type)
 
         self.assertEqual(result, specific)
+
+    def test_save_edit_invalidates_cache(self):
+        """A same-count .save() edit bumps last_updated, so the fingerprint changes and the cache reloads."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="old{bay_position}")
+        self.assertEqual(find_matching_rule(self.module_type, None, None).name_template, "old{bay_position}")
+
+        rule.name_template = "new{bay_position}"
+        rule.save()
+
+        self.assertEqual(find_matching_rule(self.module_type, None, None).name_template, "new{bay_position}")
+
+    def test_scope_fk_update_invalidates_cache(self):
+        """An FK edit that bypasses last_updated (bulk .update()/SET_NULL cascade) still changes the fingerprint."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type, device_type=self.device_type, name_template="x{bay_position}"
+        )
+        cached = find_matching_rule(self.module_type, None, self.device_type)
+        self.assertEqual(cached, rule)
+        self.assertEqual(cached.device_type_id, self.device_type.pk)  # the device-scoped copy is cached
+
+        # Null the scope FK the way a SET_NULL cascade / bulk .update() does: a straight UPDATE that
+        # does NOT bump last_updated and leaves the enabled-rule count unchanged. The fingerprint's
+        # device_type-id sum still changes, so the next call reloads instead of serving the stale copy.
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(device_type=None)
+
+        refreshed = find_matching_rule(self.module_type, None, self.device_type)
+        self.assertIsNone(
+            refreshed.device_type_id,
+            "served a stale device_type-scoped rule after an FK edit that bypassed last_updated",
+        )
+
+    def test_module_type_model_rename_reevaluated(self):
+        """Renaming ModuleType.model re-evaluates regex rules — the memo is keyed on the live model name."""
+        mfr = Manufacturer.objects.create(name="RenameMfg", slug="renamemfg")
+        mt = ModuleType.objects.create(manufacturer=mfr, model="OLD-XCVR", part_number="OLD-XCVR")
+        rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True, module_type_pattern=r"NEW-.*", name_template="p{bay_position}"
+        )
+
+        self.assertIsNone(find_matching_rule(mt, None, None))  # "OLD-XCVR" does not match NEW-.*
+
+        mt.model = "NEW-XCVR"
+        mt.save()
+
+        self.assertEqual(find_matching_rule(mt, None, None), rule)  # now matches; must not serve the stale miss
