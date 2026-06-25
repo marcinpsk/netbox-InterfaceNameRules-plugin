@@ -303,7 +303,7 @@ class FindMatchingRuleCachingTest(TestCase):
         with CaptureQueriesContext(connection) as ctx:
             find_matching_rule(self.module_type, None, self.device_type)
 
-        # No per-candidate rule lookups — at most the single (count, max last_updated, sums) fingerprint query.
+        # No per-candidate rule lookups — at most the single content-hash fingerprint query.
         self.assertLessEqual(len(ctx), 1, [q["sql"] for q in ctx.captured_queries])
 
     def test_memoized_result_is_not_recomputed(self):
@@ -369,6 +369,67 @@ class FindMatchingRuleCachingTest(TestCase):
             refreshed.device_type_id,
             "served a stale device_type-scoped rule after an FK edit that bypassed last_updated",
         )
+
+    def test_bulk_text_update_invalidates_cache(self):
+        """A raw bulk .update() of name_template (no auto_now, same count/sums) still reloads the cache.
+
+        This is the case a count/sum aggregate fingerprint cannot see: a direct column write that
+        bumps neither last_updated nor any FK/channel sum. The content-hash fingerprint catches it,
+        so the engine never serves a stale template.
+        """
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="old{bay_position}")
+        self.assertEqual(find_matching_rule(self.module_type, None, None).name_template, "old{bay_position}")
+
+        # Bulk .update() writes the column directly — no .save(), so auto_now/last_updated is NOT
+        # bumped and the enabled-rule count and column sums are unchanged. Only the text differs.
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(name_template="new{bay_position}")
+
+        self.assertEqual(
+            find_matching_rule(self.module_type, None, None).name_template,
+            "new{bay_position}",
+            "served a stale name_template after a bulk .update() the count/sum fingerprint missed",
+        )
+
+    def test_bulk_pattern_update_invalidates_cache(self):
+        """A raw bulk .update() of module_type_pattern (regex tier) also reloads the cache."""
+        mfr = Manufacturer.objects.create(name="PatMfg", slug="patmfg")
+        mt = ModuleType.objects.create(manufacturer=mfr, model="OLD-XCVR", part_number="OLD-XCVR")
+        rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True, module_type_pattern=r"OLD-.*", name_template="p{bay_position}"
+        )
+        self.assertEqual(find_matching_rule(mt, None, None), rule)  # OLD-XCVR matches OLD-.*
+
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(module_type_pattern=r"NEW-.*")
+
+        self.assertIsNone(
+            find_matching_rule(mt, None, None),
+            "served a stale regex pattern after a bulk .update() the count/sum fingerprint missed",
+        )
+
+    def test_compensating_fk_swap_changes_fingerprint(self):
+        """Swapping two rules' device_type keeps the FK-id SUM constant but must still change the version.
+
+        A Sum()-based fingerprint collides here (the summed ids are identical after the swap, count
+        and last_updated unchanged); the per-row, pk-anchored content hash distinguishes them.
+        """
+        from netbox_interface_name_rules import engine
+
+        mfr = Manufacturer.objects.create(name="SwapMfg", slug="swapmfg")
+        mt_a = ModuleType.objects.create(manufacturer=mfr, model="SWAP-A", part_number="SWAP-A")
+        mt_b = ModuleType.objects.create(manufacturer=mfr, model="SWAP-B", part_number="SWAP-B")
+        dt_x = DeviceType.objects.create(manufacturer=mfr, model="SWAP-X", slug="swap-x")
+        dt_y = DeviceType.objects.create(manufacturer=mfr, model="SWAP-Y", slug="swap-y")
+        rule_a = InterfaceNameRule.objects.create(module_type=mt_a, device_type=dt_x, name_template="a{bay_position}")
+        rule_b = InterfaceNameRule.objects.create(module_type=mt_b, device_type=dt_y, name_template="b{bay_position}")
+
+        before = engine._enabled_rules_version()
+        # Swap device_type between the two rules via bulk .update(): SUM(device_type) is unchanged
+        # (x+y == y+x), count unchanged, last_updated unbumped. Only the per-rule pairing differs.
+        InterfaceNameRule.objects.filter(pk=rule_a.pk).update(device_type=dt_y)
+        InterfaceNameRule.objects.filter(pk=rule_b.pk).update(device_type=dt_x)
+        after = engine._enabled_rules_version()
+
+        self.assertNotEqual(before, after, "fingerprint collided on a compensating FK swap (Sum-aggregate weakness)")
 
     def test_module_type_model_rename_reevaluated(self):
         """Renaming ModuleType.model re-evaluates regex rules — the memo is keyed on the live model name."""

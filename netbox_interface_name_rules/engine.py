@@ -13,8 +13,7 @@ import re
 import threading
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Sum
+from django.db import IntegrityError, connection, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +23,8 @@ logger = logging.getLogger(__name__)
 # candidate per tier; loading the (small) rule set once and matching in memory removes
 # that per-row query storm. The fingerprint (see _enabled_rules_version) is re-read once
 # per call and the set reloaded only when it changes, so it self-invalidates on any
-# create/delete/edit — including edits that bypass auto_now (SET_NULL cascades, bulk
-# .update() of a scope field) and across test transactions — with no signal wiring.
+# create/delete/edit — including raw bulk ``.update()`` of any matching field and SET_NULL
+# cascades that bypass auto_now, and across test transactions — with no signal wiring.
 _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
 # Per-version cap on the find_matching_rule memo. A long-lived worker that sees many distinct
@@ -91,39 +90,57 @@ def _compile_pattern(pattern):
         return None
 
 
-def _enabled_rules_version():
-    """Return a cheap fingerprint of the enabled-rule set.
+# Rule columns that affect matching or output, in a fixed order. The enabled-set fingerprint
+# (see _enabled_rules_version) is an md5 over these for every enabled rule, so it changes on ANY
+# edit that could change a lookup result. ``description`` is excluded — it is operator notes that
+# never affect matching. ``id`` anchors each row to its identity, so a compensating swap between
+# two rules (which leaves count + column sums unchanged) still changes the hash.
+_VERSION_COLUMNS = (
+    "id",
+    "module_type_id",
+    "module_type_is_regex",
+    "module_type_pattern",
+    "parent_module_type_id",
+    "device_type_id",
+    "platform_id",
+    "name_template",
+    "channel_count",
+    "channel_start",
+    "applies_to_device_interfaces",
+)
 
-    ``(count, latest last_updated)`` catches creates, deletes and any ``.save()`` edit. The
-    FK-id and channel sums additionally catch changes that bypass ``auto_now`` while keeping the
-    count constant — a ``SET_NULL`` cascade nulling a scope FK, or a bulk ``.update()`` of a
-    scope/channel field — so the cache self-invalidates on those too. The one edit it cannot
-    see is a raw bulk ``.update()`` of a *text* field (name_template / module_type_pattern),
-    which bumps neither the count, the sums, nor last_updated; use ``.save()`` for such edits.
+
+def _enabled_rules_version():
+    """Return a deterministic content fingerprint of the enabled-rule set.
+
+    Computed server-side as an md5 over every enabled rule's matching/output columns, row-ordered
+    by pk, so the fingerprint changes on ANY edit that could change a lookup — including a raw bulk
+    ``.update()`` of a text field (name_template / module_type_pattern) or a boolean
+    (module_type_is_regex), which an aggregate of counts/sums cannot see, and a compensating edit
+    that keeps the column sums constant. It is one query returning a single 32-char hash, so it
+    stays cheap enough to re-read on every call.
+
+    Fields are joined with chr(31) and rows with chr(30) — NUL-free ASCII control characters that
+    cannot occur in the text columns, so distinct rule sets never collide. A nullable FK renders as
+    the empty string (a real id never does), keeping null distinct from any value. The empty set
+    aggregates to NULL → md5('') → a stable constant, so "no enabled rules" has a fixed version.
     """
     from .models import InterfaceNameRule
 
-    agg = InterfaceNameRule.objects.filter(enabled=True).aggregate(
-        n=Count("pk"),
-        latest=Max("last_updated"),
-        mt=Sum("module_type"),
-        pmt=Sum("parent_module_type"),
-        dt=Sum("device_type"),
-        pl=Sum("platform"),
-        chan=Sum("channel_count"),
-        chs=Sum("channel_start"),
+    table = connection.ops.quote_name(InterfaceNameRule._meta.db_table)
+    row = ", ".join(
+        # FKs are nullable; coalesce so a null id stays distinct from a real one without dropping the
+        # field's position in the row. The other columns are NOT NULL, so concat_ws keeps their slots.
+        f"coalesce({col}::text, '')" if col.endswith("_id") else f"{col}::text"
+        for col in _VERSION_COLUMNS
     )
-    latest = agg["latest"]
-    return (
-        agg["n"] or 0,
-        latest.isoformat() if latest else "",
-        agg["mt"] or 0,
-        agg["pmt"] or 0,
-        agg["dt"] or 0,
-        agg["pl"] or 0,
-        agg["chan"] or 0,
-        agg["chs"] or 0,
+    sql = (
+        f"SELECT md5(coalesce(string_agg(concat_ws(chr(31), {row}), chr(30) ORDER BY id), ''))"
+        f" FROM {table} WHERE enabled"
     )
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        return cursor.fetchone()[0]
 
 
 def _get_enabled_rules():
