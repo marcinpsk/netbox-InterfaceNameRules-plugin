@@ -292,6 +292,18 @@ class FindMatchingRuleCachingTest(TestCase):
         cls.module_type = ModuleType.objects.create(manufacturer=mfr, model="C-SFP", part_number="C-SFP")
         cls.device_type = DeviceType.objects.create(manufacturer=mfr, model="C-DEV", slug="c-dev")
 
+    def setUp(self):
+        # These tests mutate find_matching_rule()'s module-level _RULE_CACHE / _pin, which TestCase does
+        # NOT roll back (only the DB is). Reset them before each method so the class is order-independent
+        # and a stale snapshot from a prior method can't be reused for a same-content rule set.
+        from netbox_interface_name_rules import engine
+
+        engine._RULE_CACHE.update({"version": None, "exact": (), "regex": (), "memo": {}})
+        engine._pin.depth = 0
+        engine._pin.primed = False
+        for attr in ("exact", "regex", "memo"):
+            engine._pin.__dict__.pop(attr, None)
+
     def test_repeated_calls_do_not_re_query_rules(self):
         """A second identical call issues at most the cheap fingerprint query — no per-candidate lookups."""
         from django.db import connection
@@ -519,3 +531,32 @@ class FindMatchingRuleCachingTest(TestCase):
 
         # After the block, the fingerprint is re-read and the more specific rule wins.
         self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), specific)
+
+    def test_pinned_block_holds_snapshot_across_concurrent_cache_reload(self):
+        """A pinned batch keeps its rule-set snapshot even if another thread reloads the shared cache.
+
+        The pin must capture exact/regex/memo at prime time; if it re-read the live module-level
+        _RULE_CACHE, a concurrent request reloading it mid-block would silently switch this batch to a
+        different rule set — renaming one device's modules with mixed rule versions.
+        """
+        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        universal = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
+
+        with pinned_rule_cache():
+            self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)  # primes
+
+            # Simulate a concurrent request on another thread reloading _RULE_CACHE to a different
+            # version mid-block — exactly what _get_enabled_rules() does on a version change.
+            engine._RULE_CACHE["version"] = "concurrent-reload-other-version"
+            engine._RULE_CACHE["exact"] = ()
+            engine._RULE_CACHE["regex"] = ()
+            engine._RULE_CACHE["memo"] = {}
+
+            # Still inside the pin: must serve the snapshot captured at entry, not the now-empty global.
+            self.assertEqual(
+                find_matching_rule(self.module_type, None, self.device_type),
+                universal,
+                "pinned block switched rule sets after a concurrent _RULE_CACHE reload",
+            )

@@ -66,9 +66,11 @@ def pinned_rule_cache():
     Scope is explicit and per-thread: outside the block (and in any other thread/request) the normal
     self-invalidating behaviour is unchanged, so there is no global staleness window. Nesting is
     safe — only the outermost block manages the pin. Priming is lazy: the first find_matching_rule
-    inside the block does the one real fingerprint read + reload, and the rest reuse it — so a block
-    that makes no lookups does no query at all. The loop may rename interfaces, but it must not edit
-    rules: edits to InterfaceNameRule made *inside* the block are not observed until it exits.
+    inside the block does the one real fingerprint read + reload and captures that rule set into
+    thread-local state; the rest reuse that *snapshot* — so a block that makes no lookups does no
+    query at all, and a concurrent request reloading the shared cache on another thread cannot switch
+    this batch's rule set mid-loop. The loop may rename interfaces, but it must not edit rules: edits
+    to InterfaceNameRule made *inside* the block are not observed until it exits.
     """
     depth = getattr(_pin, "depth", 0)
     _pin.depth = depth + 1
@@ -78,6 +80,11 @@ def pinned_rule_cache():
         yield
     finally:
         _pin.depth -= 1
+        if _pin.depth == 0:
+            # Release the per-thread snapshot so the next block re-primes from the live cache.
+            _pin.primed = False
+            for attr in ("exact", "regex", "memo"):
+                _pin.__dict__.pop(attr, None)
 
 
 def _compile_pattern(pattern):
@@ -188,11 +195,15 @@ def _get_enabled_rules():
     call. ``memo`` caches find_matching_rule results for the current rule-set version.
 
     Inside a ``pinned_rule_cache()`` block on this thread, once the set has been primed (by the first
-    lookup in the block) the fingerprint query is skipped and the already-loaded set is returned.
+    lookup in the block) the fingerprint query is skipped and the snapshot captured at prime time is
+    returned — never the live ``_RULE_CACHE``, which another thread may reload mid-block.
     """
     pinned = getattr(_pin, "depth", 0) > 0
     if pinned and getattr(_pin, "primed", False):
-        return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
+        # Serve the snapshot captured when this block primed, not the shared cache: a concurrent
+        # request on another thread may reload _RULE_CACHE to a different version while we iterate, and
+        # a pinned batch must match every item against one consistent rule set.
+        return _pin.exact, _pin.regex, _pin.memo
 
     from .models import InterfaceNameRule
 
@@ -208,7 +219,14 @@ def _get_enabled_rules():
         _RULE_CACHE["memo"] = {}
         _RULE_CACHE["version"] = version
     if pinned:
-        _pin.primed = True  # subsequent lookups in this block skip the fingerprint
+        # Pin this thread to the freshly-resolved set for the rest of the block. The tuples are
+        # immutable and the memo dict is now this thread's own reference, so a later global reload
+        # leaves our snapshot — and the entries we memoize into it — untouched.
+        _pin.exact = _RULE_CACHE["exact"]
+        _pin.regex = _RULE_CACHE["regex"]
+        _pin.memo = _RULE_CACHE["memo"]
+        _pin.primed = True
+        return _pin.exact, _pin.regex, _pin.memo
     return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
 
 
