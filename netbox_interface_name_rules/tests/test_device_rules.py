@@ -148,10 +148,23 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
     def test_validation_failure_is_logged_and_skipped(self):
         """A computed name that fails full_clean (here, exceeds Interface.name max_length) is logged and
         skipped with the original name restored — it must not raise out of the VC re-rename batch."""
-        self._make_rule("G" * 70 + "{vc_position}")  # 71-char result exceeds Interface.name max_length (64)
+        # Derive the over-length name from the live field limit so the test still exercises the
+        # validation branch if Interface.name's max_length ever changes. vc_position=1 adds one char,
+        # so (max_length + 1) literal chars guarantees the rendered name exceeds the limit.
+        max_length = Interface._meta.get_field("name").max_length
+        self._make_rule("G" * (max_length + 1) + "{vc_position}")
         iface = self._make_interface("Gi0/1")
-        result = apply_device_interface_rules(self.device1)
+
+        # assertLogs asserts the warning branch actually fired — without it, "no rule matched" would
+        # also yield result==0 and a preserved name, so the test would pass without covering the path.
+        with self.assertLogs("netbox_interface_name_rules.engine", level="WARNING") as logs:
+            result = apply_device_interface_rules(self.device1)
+
         self.assertEqual(result, 0)  # validation failed → nothing renamed
+        self.assertTrue(
+            any("Validation failed renaming device interface" in line for line in logs.output),
+            logs.output,
+        )
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi0/1")  # original name preserved (reverted)
 
