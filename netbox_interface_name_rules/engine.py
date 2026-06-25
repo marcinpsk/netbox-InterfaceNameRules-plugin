@@ -15,7 +15,7 @@ import threading
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Aggregate, F, TextField, Value
-from django.db.models.functions import Cast, Coalesce, Concat
+from django.db.models.functions import Cast, Coalesce, Concat, Length
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +118,6 @@ _VERSION_COLUMNS = (
     "applies_to_device_interfaces",
 )
 
-# Field and row separators for the fingerprint: NUL-free ASCII control characters (unit/record
-# separator) that cannot occur in the text columns, so distinct rule sets can never collide.
-_FIELD_SEP = "\x1f"
-_ROW_SEP = "\x1e"
-
 
 class _Md5OrderedStringAgg(Aggregate):
     """``md5(string_agg(<row>, <delim> ORDER BY id))`` expressed as one ORM aggregate.
@@ -142,17 +137,21 @@ class _Md5OrderedStringAgg(Aggregate):
 def _version_row_signature():
     """Build the per-rule text signature expression for the fingerprint.
 
-    Each matching/output column is cast to text and joined by ``_FIELD_SEP``. A nullable FK is
-    coalesced to '' (a real id never renders empty), so null stays distinct from any value while
-    keeping the column's slot in the row.
+    Each matching/output column is cast to text and emitted length-prefixed as ``<char length>:<value>``.
+    That makes the row encoding self-delimiting: distinct column tuples can never serialize to the same
+    string, even if a text column (name_template / module_type_pattern) contains digits, a colon, or the
+    control characters a plain separator scheme would rely on being absent. A nullable FK is coalesced to
+    '' (length 0), so null stays distinct from any value while keeping the column's slot.
     """
     empty = Value("", output_field=TextField())
+    colon = Value(":", output_field=TextField())
     parts = []
-    for index, column in enumerate(_VERSION_COLUMNS):
-        if index:
-            parts.append(Value(_FIELD_SEP, output_field=TextField()))
+    for column in _VERSION_COLUMNS:
         cast = Cast(F(column), output_field=TextField())
-        parts.append(Coalesce(cast, empty, output_field=TextField()) if column.endswith("_id") else cast)
+        value = Coalesce(cast, empty, output_field=TextField()) if column.endswith("_id") else cast
+        parts.append(Cast(Length(value), output_field=TextField()))
+        parts.append(colon)
+        parts.append(value)
     return Concat(*parts, output_field=TextField())
 
 
@@ -170,16 +169,17 @@ def _enabled_rules_version():
     that keeps the column sums constant. It is one query returning a single 32-char hash, so it
     stays cheap enough to re-read on every call.
 
-    Fields are joined with chr(31) and rows with chr(30) — NUL-free ASCII control characters that
-    cannot occur in the text columns, so distinct rule sets never collide. A nullable FK renders as
-    the empty string (a real id never does), keeping null distinct from any value. The empty set
-    aggregates to NULL → coalesced to a stable empty fingerprint, so "no enabled rules" is fixed.
+    Each column is length-prefixed (see _version_row_signature), so the per-row encoding is
+    self-delimiting and rows concatenate unambiguously — distinct rule sets cannot collide even if a
+    text column contains arbitrary bytes. A nullable FK renders as the empty string (a real id never
+    does), keeping null distinct from any value. The empty set aggregates to NULL → coalesced to a
+    stable empty fingerprint, so "no enabled rules" is fixed.
     """
     from .models import InterfaceNameRule
 
     return InterfaceNameRule.objects.filter(enabled=True).aggregate(
         fingerprint=Coalesce(
-            _Md5OrderedStringAgg(_ROW_SIGNATURE, Value(_ROW_SEP, output_field=TextField())),
+            _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
             Value("", output_field=TextField()),
         )
     )["fingerprint"]

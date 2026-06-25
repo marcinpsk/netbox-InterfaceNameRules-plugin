@@ -560,3 +560,42 @@ class FindMatchingRuleCachingTest(TestCase):
                 universal,
                 "pinned block switched rule sets after a concurrent _RULE_CACHE reload",
             )
+
+    def test_fingerprint_resists_separator_injection_in_text_fields(self):
+        r"""Separators embedded in a text field must not let one rule set forge another's fingerprint.
+
+        No model validation rejects \x1e/\x1f in name_template/module_type_pattern, so a single rule
+        whose name_template embeds those bytes could reproduce the exact byte stream a separator-joined
+        encoding produced for a two-rule set — two distinct rule sets hashing the same, silently missing
+        a cache invalidation. Length-prefixed fields make the encoding self-delimiting, so they differ.
+        """
+        from netbox_interface_name_rules import engine
+
+        field_sep, row_sep = "\x1f", "\x1e"
+
+        # Two device-level rules (module_type=None → every FK column renders ''). Distinct patterns keep
+        # them unique (the device-rule constraint is on pattern/device/platform); created() bypasses model
+        # validation, so the control chars in the forged template below are stored as-is.
+        r1 = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, module_type_pattern="p1", name_template="a"
+        )
+        r2 = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, module_type_pattern="p2", name_template="b"
+        )
+        fp_two_rules = engine._enabled_rules_version()
+
+        # Forge a one-rule set whose name_template embeds r1's trailing columns, a row separator, and
+        # r2's columns up to its name_template. Column order: id, module_type_id, is_regex, pattern,
+        # parent_id, device_id, platform_id, name_template, channel_count, channel_start, adi — so r2's
+        # rendered cells through its name are [pk, '', 'false', 'p2', '', '', '', 'b'].
+        r2_cells_through_name = field_sep.join([str(r2.pk), "", "false", "p2", "", "", "", "b"])
+        forged_name_template = field_sep.join(["a", "0", "0", "true"]) + row_sep + r2_cells_through_name
+        InterfaceNameRule.objects.filter(pk=r2.pk).delete()
+        InterfaceNameRule.objects.filter(pk=r1.pk).update(name_template=forged_name_template)
+        fp_forged_one_rule = engine._enabled_rules_version()
+
+        self.assertNotEqual(
+            fp_two_rules,
+            fp_forged_one_rule,
+            "distinct rule sets collided — a text-field separator forged a row boundary in the fingerprint",
+        )
