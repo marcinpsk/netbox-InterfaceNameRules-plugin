@@ -208,21 +208,25 @@ def _apply_rules_for_device_deferred(device_pk):
         "device__virtual_chassis",
     )
     try:
-        from .engine import apply_interface_name_rules
+        from .engine import apply_interface_name_rules, pinned_rule_cache
 
-        for module in modules:
-            module_bay = module.module_bay
-            if not module_bay:
-                continue
-            try:
-                renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
-                total += renamed or 0
-            except Exception:
-                logger.exception(
-                    "Failed to re-apply rules for %s in %s after VC change",
-                    module.module_type,
-                    module_bay.name,
-                )
+        # Every module on this device matches against the same enabled-rule set, so pin it for the
+        # loop: the fingerprint is read once when the first lookup primes the cache instead of once
+        # per module. Safe because the loop only renames interfaces — it never edits rules.
+        with pinned_rule_cache():
+            for module in modules:
+                module_bay = module.module_bay
+                if not module_bay:
+                    continue
+                try:
+                    renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
+                    total += renamed or 0
+                except Exception:
+                    logger.exception(
+                        "Failed to re-apply rules for %s in %s after VC change",
+                        module.module_type,
+                        module_bay.name,
+                    )
     except Exception:
         logger.exception("Failed to re-apply module rules for device %s after VC change", device_pk)
 

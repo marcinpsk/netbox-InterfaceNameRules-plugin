@@ -35,9 +35,10 @@ _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 _MEMO_MAX = 4096
 
 # Per-thread pin depth (see pinned_rule_cache). While > 0 on the current thread, _get_enabled_rules
-# trusts the loaded set without re-reading the fingerprint, so a batch caller that wraps its loop
+# trusts the loaded set without re-reading the fingerprint, so an internal batch that wraps its loop
 # turns N per-call fingerprint queries into one. Thread-local so concurrent requests don't affect
-# each other; tests never enter the context, so default behaviour is unchanged.
+# each other; the depth defaults to 0, so any path that does not pin (the per-row signal handler,
+# single applies) re-reads the fingerprint on every call exactly as before.
 _pin = threading.local()
 
 
@@ -46,21 +47,27 @@ def pinned_rule_cache():
     """Pin the enabled-rule set for the duration of the block, skipping the per-call fingerprint query.
 
     find_matching_rule() normally re-reads a cheap fingerprint on every call to detect rule-set
-    changes. A read-heavy batch caller that makes many calls within a single request — e.g. the
-    netbox-librenms-plugin module-sync table, which predicts names once per module row — can wrap
-    its loop in this context manager so the set is loaded and fingerprinted once and reused for
-    every call inside the block, turning N fingerprint queries into one::
+    changes. An internal batch that makes many lookups against an unchanging rule set — e.g.
+    _apply_rules_for_device_deferred(), which re-applies rules to every module on a device after a
+    virtual-chassis change — can wrap its loop in this context manager so the set is loaded and
+    fingerprinted once and reused for every call inside the block, turning N fingerprint queries
+    into one::
 
         with pinned_rule_cache():
             for module in modules:
-                predict_rule_output(module, module.module_bay, names)
+                apply_interface_name_rules(module, module.module_bay, force_reapply=True)
+
+    This is an INR-internal helper: only code that owns the batch loop pins, so it never becomes a
+    cross-plugin dependency. Other plugins integrate through the ``predict_module_interface_names``
+    signal, which is dispatched one row at a time — so an external caller neither can nor needs to
+    pin, and INR exposes no batch API across the plugin boundary.
 
     Scope is explicit and per-thread: outside the block (and in any other thread/request) the normal
     self-invalidating behaviour is unchanged, so there is no global staleness window. Nesting is
     safe — only the outermost block manages the pin. Priming is lazy: the first find_matching_rule
     inside the block does the one real fingerprint read + reload, and the rest reuse it — so a block
-    that makes no lookups does no query at all. Rule edits made *inside* the block are not observed
-    until it exits, so use it only for read-only, edit-free batches.
+    that makes no lookups does no query at all. The loop may rename interfaces, but it must not edit
+    rules: edits to InterfaceNameRule made *inside* the block are not observed until it exits.
     """
     depth = getattr(_pin, "depth", 0)
     _pin.depth = depth + 1
