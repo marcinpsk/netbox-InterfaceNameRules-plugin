@@ -392,6 +392,14 @@ class FindMatchingRuleCachingTest(TestCase):
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
         self.assertIsNone(find_matching_rule(None, None, self.device_type))
 
+    def test_find_exact_match_loads_rules_on_demand(self):
+        """_find_exact_match loads the rule set itself when called without preloaded rules (direct-caller path)."""
+        from netbox_interface_name_rules.engine import _find_exact_match
+
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+        # No exact_rules argument → the function loads them via _get_enabled_rules() rather than a passed-in set.
+        self.assertEqual(_find_exact_match(self.module_type, [(None, None, None)]), rule)
+
     def test_memo_is_bounded(self):
         """The per-version memo is capped, so it can't grow without bound under a stable rule set."""
         from netbox_interface_name_rules import engine

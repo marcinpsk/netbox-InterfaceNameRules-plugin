@@ -145,6 +145,16 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi1/3")
 
+    def test_validation_failure_is_logged_and_skipped(self):
+        """A computed name that fails full_clean (here, exceeds Interface.name max_length) is logged and
+        skipped with the original name restored — it must not raise out of the VC re-rename batch."""
+        self._make_rule("G" * 70 + "{vc_position}")  # 71-char result exceeds Interface.name max_length (64)
+        iface = self._make_interface("Gi0/1")
+        result = apply_device_interface_rules(self.device1)
+        self.assertEqual(result, 0)  # validation failed → nothing renamed
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "Gi0/1")  # original name preserved (reverted)
+
     def test_rename_multiple_interfaces(self):
         """Multiple interfaces on same device renamed in one call."""
         self._make_rule("Gi{vc_position}/{port}")
