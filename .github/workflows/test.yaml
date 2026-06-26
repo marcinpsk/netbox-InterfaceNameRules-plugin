@@ -24,7 +24,7 @@ jobs:
       max-parallel: 6
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        netbox-version: ["v4.3.7", "v4.4.10", "v4.5.3"]
+        netbox-version: ["v4.3.7", "v4.5.3", "v4.6.3"]
         exclude:
           - python-version: "3.14"
             netbox-version: "v4.3.7"  # strawberry-graphql incompatible with Python 3.14 on this NetBox version

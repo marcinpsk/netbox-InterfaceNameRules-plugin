@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- NetBox ≥ 4.4.0
+- NetBox ≥ 4.3.0
 - Python ≥ 3.12
 
 ## Install from PyPI

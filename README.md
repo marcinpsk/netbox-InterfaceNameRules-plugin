@@ -70,7 +70,7 @@ See the [full configuration guide](https://marcinpsk.github.io/netbox-InterfaceN
 
 ## Compatibility
 
-- NetBox ≥ 4.2.0
+- NetBox ≥ 4.3.0 (CI tests 4.3, 4.5, 4.6)
 - Python ≥ 3.12
 
 ## License

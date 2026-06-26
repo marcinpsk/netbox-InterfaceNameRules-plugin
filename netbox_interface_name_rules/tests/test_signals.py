@@ -246,6 +246,43 @@ class SignalDeviceHandlerTest(TestCase):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "et-0/0/0")
 
+    def test_deferred_device_reapply_pins_rule_cache_across_modules(self):
+        """The multi-module VC re-apply loop pins the rule set: the fingerprint is read once, not per module.
+
+        Exercises the real internal consumer of pinned_rule_cache() end-to-end — it renames every
+        module's interface (real work) while reading the enabled-rule fingerprint a single time for
+        the whole device, proving the pin is engaged on INR's own batch path (no cross-plugin API).
+        """
+        from netbox_interface_name_rules import engine
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
+
+        # A second module on the same device so the re-apply loop runs more than once.
+        bay1 = ModuleBay.objects.create(device=self.device, name="SDBay 1", position="1")
+        module1 = Module.objects.create(device=self.device, module_bay=bay1, module_type=self.module_type)
+        iface0 = Interface.objects.create(device=self.device, module=self.module, name="old-0", type="10gbase-x-sfpp")
+        iface1 = Interface.objects.create(device=self.device, module=module1, name="old-1", type="10gbase-x-sfpp")
+
+        calls = []
+        real_version = engine._enabled_rules_version
+
+        def counting_version(*args, **kwargs):
+            calls.append(1)
+            return real_version(*args, **kwargs)
+
+        engine._enabled_rules_version = counting_version
+        try:
+            _apply_rules_for_device_deferred(self.device.pk)
+        finally:
+            engine._enabled_rules_version = real_version
+
+        iface0.refresh_from_db()
+        iface1.refresh_from_db()
+        self.assertEqual(iface0.name, "et-0/0/0")  # both modules actually renamed — real work happened
+        self.assertEqual(iface1.name, "et-0/0/1")
+        # Two modules, but the pinned loop primes the enabled-rule set exactly once.
+        self.assertEqual(calls, [1], "VC re-apply must read the rule-set fingerprint once for the whole device")
+
     def test_deferred_device_no_modules_no_error(self):
         """_apply_rules_for_device_deferred with device having no modules runs without error."""
         manufacturer = Manufacturer.objects.create(name="SigDevMfg2", slug="sigdevmfg2")
