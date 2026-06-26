@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.4.2 (2026-06-26)
+
+### Performance Improvements
+
+- **engine**: Load the enabled rule set once and memoize find_matching_rule
+  ([#49](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/49),
+  [`7d79295`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7d79295f38c6f56b9cb1b65453ad1087414577e2))
+
+
 ## v1.4.1 (2026-06-15)
 
 ### Bug Fixes
