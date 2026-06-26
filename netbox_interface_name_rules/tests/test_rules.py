@@ -485,10 +485,25 @@ class FindMatchingRuleCachingTest(TestCase):
                 ModuleType.objects.create(manufacturer=mfr, model=f"MEMO-{i}", part_number=f"MEMO-{i}")
                 for i in range(5)
             ]
-            for mt in module_types:  # five distinct contexts → five distinct memo keys
+            for i, mt in enumerate(module_types, start=1):  # five distinct contexts → five distinct memo keys
                 find_matching_rule(mt, None, None)
+                # Check the bound after EVERY insert, not just once at the end. The memo size must never
+                # exceed the cap at any point. A regression that let it leak toward 2*cap before clearing
+                # would slip past an end-of-loop `<=` snapshot (which only sees the post-clear size) but
+                # trips here on the very insert that crosses the cap.
+                self.assertLessEqual(
+                    len(engine._RULE_CACHE["memo"]),
+                    engine._MEMO_MAX,
+                    f"memo exceeded the cap mid-insertion after {i} contexts",
+                )
 
-            self.assertLessEqual(len(engine._RULE_CACHE["memo"]), engine._MEMO_MAX)
+            # And the eviction actually fired: the final size is below the number of distinct contexts,
+            # so the test isn't vacuously green on a memo that simply never reached the cap.
+            self.assertLess(
+                len(engine._RULE_CACHE["memo"]),
+                len(module_types),
+                "memo never evicted — the cap was never exercised",
+            )
         finally:
             engine._MEMO_MAX = original_max
 
@@ -533,33 +548,85 @@ class FindMatchingRuleCachingTest(TestCase):
         self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), specific)
 
     def test_pinned_block_holds_snapshot_across_concurrent_cache_reload(self):
-        """A pinned batch keeps its rule-set snapshot even if another thread reloads the shared cache.
+        """A pinned batch keeps its rule-set snapshot even when a real second thread reloads the cache.
 
         The pin must capture exact/regex/memo at prime time; if it re-read the live module-level
         _RULE_CACHE, a concurrent request reloading it mid-block would silently switch this batch to a
-        different rule set — renaming one device's modules with mixed rule versions.
+        different rule set — renaming one device's modules with mixed rule versions. This exercises the
+        guarantee across an actual thread: the worker must NOT inherit this thread's pin (``_pin`` is
+        ``threading.local``), and its reload — published the way ``_get_enabled_rules`` does, by
+        rebinding ``_RULE_CACHE`` to a fresh dict — must leave our primed snapshot untouched. A plain
+        global ``_pin`` would leak the pin into the worker and pass the old same-thread test, but fail here.
         """
+        import threading
+
         from netbox_interface_name_rules import engine
         from netbox_interface_name_rules.engine import pinned_rule_cache
 
         universal = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
 
-        with pinned_rule_cache():
-            self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)  # primes
+        worker_pin_depth = []
 
-            # Simulate a concurrent request on another thread reloading _RULE_CACHE to a different
-            # version mid-block — exactly what _get_enabled_rules() does on a version change.
-            engine._RULE_CACHE["version"] = "concurrent-reload-other-version"
-            engine._RULE_CACHE["exact"] = ()
-            engine._RULE_CACHE["regex"] = ()
-            engine._RULE_CACHE["memo"] = {}
+        def concurrent_reload():
+            # A genuine second thread. _pin is thread-local, so this worker must see depth 0 — it never
+            # inherits the main thread's active pin. It then publishes a different rule-set version the
+            # way _get_enabled_rules() does: one atomic rebind of the module global. (No DB access — a
+            # separate thread has its own connection and cannot see this TestCase's uncommitted rows.)
+            worker_pin_depth.append(getattr(engine._pin, "depth", 0))
+            engine._RULE_CACHE = {"version": "concurrent-reload-other-version", "exact": (), "regex": (), "memo": {}}
 
-            # Still inside the pin: must serve the snapshot captured at entry, not the now-empty global.
-            self.assertEqual(
-                find_matching_rule(self.module_type, None, self.device_type),
-                universal,
-                "pinned block switched rule sets after a concurrent _RULE_CACHE reload",
-            )
+        try:
+            with pinned_rule_cache():
+                self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)  # primes
+
+                worker = threading.Thread(target=concurrent_reload)
+                worker.start()
+                worker.join()
+
+                # The worker did not inherit our pin — proves _pin is per-thread, not a shared global.
+                self.assertEqual(worker_pin_depth, [0], "pin leaked across threads — _pin is not thread-local")
+                # ...and its reload really did replace the shared cache.
+                self.assertEqual(engine._RULE_CACHE["version"], "concurrent-reload-other-version")
+
+                # Still inside the pin: must serve the snapshot captured at entry, not the worker's reload.
+                self.assertEqual(
+                    find_matching_rule(self.module_type, None, self.device_type),
+                    universal,
+                    "pinned block switched rule sets after a concurrent _RULE_CACHE reload",
+                )
+        finally:
+            # This test deliberately rebinds the module global from another thread; restore a clean
+            # sentinel so the simulated reload can't leak into sibling tests even if setUp() is weakened.
+            engine._RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
+
+    def test_reload_publishes_a_fresh_cache_dict_atomically(self):
+        """A version change rebinds _RULE_CACHE to a new dict instead of mutating the old one in place.
+
+        This is what makes the unpinned three-key read a consistent snapshot: a reader that grabbed the
+        cache before a concurrent reload keeps one whole rule-set version, never exact from V1 paired
+        with memo from V2. We assert the published dict is a *new object* and that a reference captured
+        before the reload is left untouched — the in-place mutation the previous code did would fail both.
+        """
+        from netbox_interface_name_rules import engine
+
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
+        find_matching_rule(self.module_type, None, self.device_type)  # prime version 1
+
+        snap = engine._RULE_CACHE
+        snap_version = snap["version"]
+        snap_exact = snap["exact"]
+
+        # Change the rule set so the next lookup must reload to a new version.
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type, device_type=self.device_type, name_template="b{bay_position}"
+        )
+        find_matching_rule(self.module_type, None, self.device_type)  # reload to version 2
+
+        self.assertIsNot(
+            engine._RULE_CACHE, snap, "reload mutated the cache dict in place instead of publishing a new one"
+        )
+        self.assertEqual(snap["version"], snap_version, "a reload mutated a previously-published cache dict")
+        self.assertEqual(snap["exact"], snap_exact, "the captured exact snapshot changed under a concurrent reload")
 
     def test_fingerprint_resists_separator_injection_in_text_fields(self):
         r"""Separators embedded in a text field must not let one rule set forge another's fingerprint.
@@ -598,4 +665,45 @@ class FindMatchingRuleCachingTest(TestCase):
             fp_two_rules,
             fp_forged_one_rule,
             "distinct rule sets collided — a text-field separator forged a row boundary in the fingerprint",
+        )
+
+
+class EnabledRuleFingerprintColumnsTest(TestCase):
+    """_VERSION_COLUMNS must stay exhaustive over the model's match-affecting columns."""
+
+    def test_version_columns_account_for_every_concrete_column(self):
+        """Every concrete InterfaceNameRule column must be fingerprinted or deliberately excluded.
+
+        The enabled-rule fingerprint (engine._enabled_rules_version) hashes exactly
+        engine._VERSION_COLUMNS. If a future field that affects matching is added to the model but not
+        to that hand-maintained tuple, edits to it won't change the fingerprint and find_matching_rule
+        will keep serving a stale cached rule. This guard fails the moment a new concrete column appears
+        that hasn't been consciously classified — forcing the author to either add it to _VERSION_COLUMNS
+        (so the cache invalidates on its edits) or list it below with a reason it can't affect a match.
+        """
+        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules.models import InterfaceNameRule
+
+        # Columns intentionally NOT in the fingerprint, each with the reason it cannot change a match:
+        excluded = {
+            # the fingerprint's own filter predicate (filter(enabled=True)) — toggling it adds/removes
+            # the row from the aggregate, so the hash already changes; it must not also be a column
+            "enabled",
+            "description",  # operator notes; never consulted by the engine
+            "created",  # audit timestamp
+            "last_updated",  # audit timestamp
+            "custom_field_data",  # NetBox custom fields; not part of rule matching
+        }
+        concrete_columns = {
+            f.column
+            for f in InterfaceNameRule._meta.get_fields()
+            if getattr(f, "concrete", False) and not f.many_to_many and f.column
+        }
+        classified = set(engine._VERSION_COLUMNS) | excluded
+        self.assertEqual(
+            concrete_columns,
+            classified,
+            "InterfaceNameRule has concrete columns that are neither fingerprinted nor excluded. "
+            "Classify each: add match-affecting columns to engine._VERSION_COLUMNS so the rule cache "
+            "invalidates when they change, or add audit/notes columns to this test's `excluded` set.",
         )
