@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.4.3 (2026-06-29)
+
+### Bug Fixes
+
+- **engine**: Close unpinned rule-cache torn-read + review follow-ups to #49
+  ([#50](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/50),
+  [`1dd0a09`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1dd0a09b2bd4a1a906cc22d89b688a1e1bef6ead))
+
+
 ## v1.4.2 (2026-06-26)
 
 ### Performance Improvements
