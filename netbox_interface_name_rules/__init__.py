@@ -13,7 +13,7 @@ class InterfaceNameRulesConfig(PluginConfig):
     description = "Automatic interface renaming when modules are installed into bays."
     version = __version__
     base_url = "interface-name-rules"
-    min_version = "4.2.0"
+    min_version = "4.3.0"
     required_settings = []
     default_settings = {}
     author = "Marcin Zieba"

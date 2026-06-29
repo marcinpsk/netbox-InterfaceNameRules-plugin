@@ -801,3 +801,22 @@ class ModelCSVExportTest(TestCase):
         """csv_headers must not contain dots (regression guard for KeyError 'Ch' bug)."""
         for header in InterfaceNameRule.csv_headers:
             self.assertNotIn(".", header, f"csv_headers entry '{header}' contains a dot — would break import")
+
+
+# ---------------------------------------------------------------------------
+# __init__.py — PluginConfig version gate (must match the documented floor)
+# ---------------------------------------------------------------------------
+
+
+class PluginConfigVersionTest(TestCase):
+    """The enforced min_version gate must match the compatibility floor stated in the docs."""
+
+    def test_min_version_matches_documented_floor(self):
+        """min_version is the gate NetBox uses to refuse loading the plugin, so it must equal the
+        floor advertised in README.md / docs/installation.md (NetBox >= 4.3.0). A drift here would
+        let an unsupported NetBox load the plugin (or reject a supported one) with no other guard —
+        the inconsistency a reviewer flagged when the docs were raised to 4.3.0 but the gate stayed 4.2.0.
+        """
+        from netbox_interface_name_rules import InterfaceNameRulesConfig
+
+        self.assertEqual(InterfaceNameRulesConfig.min_version, "4.3.0")
