@@ -38,6 +38,13 @@ _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 # of contexts in any single module-sync render, so it never churns mid-render.
 _MEMO_MAX = 4096
 
+# Sentinel for the memo read. A single ``memo.get(sig, _MEMO_MISS)`` is one atomic dict lookup, so a
+# concurrent ``memo.clear()`` at the cap can't wedge between a membership test and the subscript the
+# way ``if sig in memo: return memo[sig]`` could — that compound read can raise a sporadic KeyError
+# under threaded workers sharing one per-version memo. A real "no rule matched" is memoized as None,
+# so the miss sentinel must be a distinct object, not None.
+_MEMO_MISS = object()
+
 # Per-thread pin depth (see pinned_rule_cache). While > 0 on the current thread, _get_enabled_rules
 # trusts the loaded set without re-reading the fingerprint, so an internal batch that wraps its loop
 # turns N per-call fingerprint queries into one. Thread-local so concurrent requests don't affect
@@ -233,12 +240,14 @@ def _get_enabled_rules():
         _RULE_CACHE = cache
     if pinned:
         # Pin this thread to the freshly-resolved set for the rest of the block. The tuples are
-        # immutable and the memo dict is now this thread's own reference, so a later global reload
-        # leaves our snapshot — and the entries we memoize into it — untouched.
+        # immutable and the memo is COPIED into thread-local state — not aliased — so the pinned batch
+        # neither shares nor races the global memo: another thread clearing the shared memo at the cap
+        # can't evict our warmed entries (or wedge a KeyError) mid-loop, and entries we add stay private.
         _pin.exact = cache["exact"]
         _pin.regex = cache["regex"]
-        _pin.memo = cache["memo"]
+        _pin.memo = dict(cache["memo"])
         _pin.primed = True
+        return _pin.exact, _pin.regex, _pin.memo
     return cache["exact"], cache["regex"], cache["memo"]
 
 
@@ -687,8 +696,11 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     # The regex tier matches against module_type.model (a live string), so the memo must key on
     # it too — otherwise a ModuleType.model rename (same pk) would return a stale regex result.
     sig = (module_type.pk, module_type.model, *_scope_ids(parent_module_type, device_type, platform))
-    if sig in memo:
-        return memo[sig]
+    # One atomic lookup, not `if sig in memo: return memo[sig]`: another thread sharing this per-version
+    # memo can clear it at the cap between a membership test and the subscript, raising KeyError.
+    cached = memo.get(sig, _MEMO_MISS)
+    if cached is not _MEMO_MISS:
+        return cached
 
     candidates = _build_candidates(parent_module_type, device_type, platform)
     result = _find_exact_match(module_type, candidates, exact_rules) or _find_regex_match(

@@ -628,6 +628,63 @@ class FindMatchingRuleCachingTest(TestCase):
         self.assertEqual(snap["version"], snap_version, "a reload mutated a previously-published cache dict")
         self.assertEqual(snap["exact"], snap_exact, "the captured exact snapshot changed under a concurrent reload")
 
+    def test_find_matching_rule_survives_concurrent_memo_clear(self):
+        """A memo cleared between the membership check and the lookup must not raise KeyError.
+
+        Threaded workers share one per-version memo dict; if one thread clears it at the cap while
+        another is mid-read, the old ``if sig in memo: return memo[sig]`` raised KeyError because the
+        membership test and the subscript are two operations with a thread switch possible between them.
+        We reproduce that exact interleave deterministically with a dict whose membership test clears
+        itself, then assert find_matching_rule still returns the rule. The sentinel ``.get()`` read is a
+        single atomic lookup, so it never performs the separate membership test the race needs.
+        """
+        from netbox_interface_name_rules import engine
+
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+        self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), rule)  # warm the memo
+
+        class _RacingMemo(dict):
+            # Emulate another thread clearing the shared memo the instant a membership test sees the key.
+            def __contains__(self, key):
+                present = super().__contains__(key)
+                if present:
+                    self.clear()
+                return present
+
+        # Same version → no reload; the racing memo is what find_matching_rule reads next.
+        engine._RULE_CACHE["memo"] = _RacingMemo(engine._RULE_CACHE["memo"])
+
+        self.assertEqual(
+            find_matching_rule(self.module_type, None, self.device_type),
+            rule,
+            "find_matching_rule raised/missed when the shared memo was cleared mid-read",
+        )
+
+    def test_pinned_block_uses_a_private_memo_copy(self):
+        """A pinned batch gets its own memo copy, so another thread clearing the shared memo can't
+        evict the batch's warmed entries (or wedge a KeyError) mid-loop."""
+        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+
+        with pinned_rule_cache():
+            find_matching_rule(self.module_type, None, self.device_type)  # primes + memoizes into the copy
+
+            self.assertIsNot(
+                engine._pin.memo,
+                engine._RULE_CACHE["memo"],
+                "pinned memo aliases the shared cache memo instead of holding a private copy",
+            )
+
+            # An unpinned thread clearing the shared memo at the cap must not disturb the pinned batch.
+            engine._RULE_CACHE["memo"].clear()
+            self.assertEqual(
+                find_matching_rule(self.module_type, None, self.device_type),
+                rule,
+                "pinned lookup was disturbed by a clear of the shared memo",
+            )
+
     def test_fingerprint_resists_separator_injection_in_text_fields(self):
         r"""Separators embedded in a text field must not let one rule set forge another's fingerprint.
 
