@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 from netbox.plugins import PluginConfig
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 
 class InterfaceNameRulesConfig(PluginConfig):
@@ -13,7 +13,7 @@ class InterfaceNameRulesConfig(PluginConfig):
     description = "Automatic interface renaming when modules are installed into bays."
     version = __version__
     base_url = "interface-name-rules"
-    min_version = "4.2.0"
+    min_version = "4.3.0"
     required_settings = []
     default_settings = {}
     author = "Marcin Zieba"

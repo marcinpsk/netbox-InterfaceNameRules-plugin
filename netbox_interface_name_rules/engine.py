@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # per call and the set reloaded only when it changes, so it self-invalidates on any
 # create/delete/edit — including raw bulk ``.update()`` of any matching field and SET_NULL
 # cascades that bypass auto_now, and across test transactions — with no signal wiring.
+# A reload publishes the new set by rebinding this name to a fresh dict in one atomic assignment
+# (see _get_enabled_rules), so a concurrent reader on another worker thread sees either the whole
+# old set or the whole new one — never exact/regex/memo torn across two versions.
 _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
 # Per-version cap on the find_matching_rule memo. A long-lived worker that sees many distinct
@@ -34,6 +37,13 @@ _RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 # on overflow the memo is cleared wholesale and rebuilt lazily. The cap is far above the number
 # of contexts in any single module-sync render, so it never churns mid-render.
 _MEMO_MAX = 4096
+
+# Sentinel for the memo read. A single ``memo.get(sig, _MEMO_MISS)`` is one atomic dict lookup, so a
+# concurrent ``memo.clear()`` at the cap can't wedge between a membership test and the subscript the
+# way ``if sig in memo: return memo[sig]`` could — that compound read can raise a sporadic KeyError
+# under threaded workers sharing one per-version memo. A real "no rule matched" is memoized as None,
+# so the miss sentinel must be a distinct object, not None.
+_MEMO_MISS = object()
 
 # Per-thread pin depth (see pinned_rule_cache). While > 0 on the current thread, _get_enabled_rules
 # trusts the loaded set without re-reading the fingerprint, so an internal batch that wraps its loop
@@ -198,6 +208,8 @@ def _get_enabled_rules():
     lookup in the block) the fingerprint query is skipped and the snapshot captured at prime time is
     returned — never the live ``_RULE_CACHE``, which another thread may reload mid-block.
     """
+    global _RULE_CACHE
+
     pinned = getattr(_pin, "depth", 0) > 0
     if pinned and getattr(_pin, "primed", False):
         # Serve the snapshot captured when this block primed, not the shared cache: a concurrent
@@ -207,27 +219,36 @@ def _get_enabled_rules():
 
     from .models import InterfaceNameRule
 
+    # Read the module global exactly once. A reload below publishes the new set by rebinding
+    # _RULE_CACHE to a brand-new dict (a single atomic name assignment) rather than mutating this
+    # one in place, so this local is a consistent snapshot: exact/regex/memo can never be torn
+    # across two rule-set versions even if another thread reloads between the reads at the end.
+    cache = _RULE_CACHE
     version = _enabled_rules_version()
-    if _RULE_CACHE["version"] != version:
+    if cache["version"] != version:
         rules = list(InterfaceNameRule.objects.filter(enabled=True).order_by("module_type__model", "pk"))
-        _RULE_CACHE["exact"] = tuple(r for r in rules if not r.module_type_is_regex)
+        exact = tuple(r for r in rules if not r.module_type_is_regex)
         regex_rules = sorted(
             (r for r in rules if r.module_type_is_regex),
             key=lambda r: (-len(r.module_type_pattern or ""), r.pk),
         )
-        _RULE_CACHE["regex"] = tuple((_compile_pattern(r.module_type_pattern), r) for r in regex_rules)
-        _RULE_CACHE["memo"] = {}
-        _RULE_CACHE["version"] = version
+        regex = tuple((_compile_pattern(r.module_type_pattern), r) for r in regex_rules)
+        # Publish the whole new version atomically: a reader either sees the old dict or this one,
+        # never a mix of the two. Last writer wins; a concurrent reload to the same version just
+        # rebuilds redundantly, never corrupts.
+        cache = {"version": version, "exact": exact, "regex": regex, "memo": {}}
+        _RULE_CACHE = cache
     if pinned:
         # Pin this thread to the freshly-resolved set for the rest of the block. The tuples are
-        # immutable and the memo dict is now this thread's own reference, so a later global reload
-        # leaves our snapshot — and the entries we memoize into it — untouched.
-        _pin.exact = _RULE_CACHE["exact"]
-        _pin.regex = _RULE_CACHE["regex"]
-        _pin.memo = _RULE_CACHE["memo"]
+        # immutable and the memo is COPIED into thread-local state — not aliased — so the pinned batch
+        # neither shares nor races the global memo: another thread clearing the shared memo at the cap
+        # can't evict our warmed entries (or wedge a KeyError) mid-loop, and entries we add stay private.
+        _pin.exact = cache["exact"]
+        _pin.regex = cache["regex"]
+        _pin.memo = dict(cache["memo"])
         _pin.primed = True
         return _pin.exact, _pin.regex, _pin.memo
-    return _RULE_CACHE["exact"], _RULE_CACHE["regex"], _RULE_CACHE["memo"]
+    return cache["exact"], cache["regex"], cache["memo"]
 
 
 def _get_parent_module_type(module_bay):
@@ -675,8 +696,11 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     # The regex tier matches against module_type.model (a live string), so the memo must key on
     # it too — otherwise a ModuleType.model rename (same pk) would return a stale regex result.
     sig = (module_type.pk, module_type.model, *_scope_ids(parent_module_type, device_type, platform))
-    if sig in memo:
-        return memo[sig]
+    # One atomic lookup, not `if sig in memo: return memo[sig]`: another thread sharing this per-version
+    # memo can clear it at the cap between a membership test and the subscript, raising KeyError.
+    cached = memo.get(sig, _MEMO_MISS)
+    if cached is not _MEMO_MISS:
+        return cached
 
     candidates = _build_candidates(parent_module_type, device_type, platform)
     result = _find_exact_match(module_type, candidates, exact_rules) or _find_regex_match(
