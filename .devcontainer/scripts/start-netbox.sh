@@ -13,6 +13,32 @@ echo "🌐 Starting NetBox development server..."
 # Set required environment variables
 export DEBUG="${DEBUG:-True}"
 
+# debug_toolbar 7.0's shadow DOM breaks its own toolbar.js; NetBox hardcodes
+# DEBUG_TOOLBAR_CONFIG in settings.py, so patch it there (a rebuild reverts it).
+NETBOX_SETTINGS="/opt/netbox/netbox/netbox/settings.py"
+if [ -f "$NETBOX_SETTINGS" ] && ! grep -q "USE_SHADOW_DOM" "$NETBOX_SETTINGS"; then
+  if grep -q "'SHOW_TOOLBAR_CALLBACK': 'utilities.debug.show_toolbar'," "$NETBOX_SETTINGS"; then
+    sed -i "/'SHOW_TOOLBAR_CALLBACK': 'utilities.debug.show_toolbar',/a\\    'USE_SHADOW_DOM': False," "$NETBOX_SETTINGS"
+    echo "🔧 Patched debug-toolbar USE_SHADOW_DOM=False in settings.py"
+  else
+    echo "⚠️  debug-toolbar USE_SHADOW_DOM patch skipped: DEBUG_TOOLBAR_CONFIG anchor not found"
+  fi
+fi
+
+# ProfilingPanel 500s on concurrent embedded sub-requests under Python 3.12+; drop it via
+# local_settings.py, which is imported last (a rebuild reverts it).
+NETBOX_LOCAL_SETTINGS="/opt/netbox/netbox/netbox/local_settings.py"
+if [ -f "$NETBOX_LOCAL_SETTINGS" ] && ! grep -q "DEBUG_TOOLBAR_PANELS" "$NETBOX_LOCAL_SETTINGS"; then
+  cat >> "$NETBOX_LOCAL_SETTINGS" <<'PYEOF'
+
+# cProfile is interpreter-global under Python 3.12+, so ProfilingPanel crashes on
+# concurrent embedded sub-requests.
+from debug_toolbar.settings import PANELS_DEFAULTS as _DT_PANELS
+DEBUG_TOOLBAR_PANELS = [p for p in _DT_PANELS if not p.endswith("ProfilingPanel")]
+PYEOF
+  echo "🔧 Patched debug-toolbar: dropped ProfilingPanel in local_settings.py"
+fi
+
 # Detect Codespaces and set access URL
 if [ "$CODESPACES" = "true" ] && [ -n "$CODESPACE_NAME" ]; then
   GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
