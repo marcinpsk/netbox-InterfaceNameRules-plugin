@@ -29,3 +29,6 @@ jobs:
 
       - name: Run Ruff formatting check
         run: ruff format --check .
+
+      - name: Run devcontainer script tests
+        run: bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
