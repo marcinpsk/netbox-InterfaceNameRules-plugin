@@ -12,12 +12,20 @@ import strawberry_django
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 
+_FILTER_BASE_MODULE = "netbox.graphql.filters"
+
 try:
     from netbox.graphql.filters import NetBoxModelFilter
-    from strawberry_django import BaseFilterLookup
-except ImportError:  # pragma: no cover — only taken on NetBox 4.3
+except ModuleNotFoundError as exc:  # pragma: no cover — only taken on NetBox 4.3
+    # Degrade only when the module is genuinely absent (or one of its parents). Any other
+    # ImportError is a real breakage and must not masquerade as "old NetBox".
+    _missing = exc.name or ""
+    if _missing != _FILTER_BASE_MODULE and not _FILTER_BASE_MODULE.startswith(f"{_missing}."):
+        raise
     InterfaceNameRuleFilter = None
 else:  # pragma: no cover — field declarations; behaviour is covered by the GraphQL tests
+    from strawberry_django import BaseFilterLookup
+
     try:
         from strawberry_django import StrFilterLookup
     except ImportError:

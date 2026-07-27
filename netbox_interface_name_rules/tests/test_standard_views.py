@@ -37,10 +37,20 @@ class GraphQLFilterRegistrationTest(SimpleTestCase):
     StrFilterLookup in 0.86, and importing the wrong one just skipped the filter on 4.5.
     """
 
-    def test_filter_is_registered_when_netbox_provides_the_base(self):
+    @staticmethod
+    def _netbox_provides_filter_base():
+        """True on NetBox 4.5+. Only a genuinely absent module counts — anything else raises."""
         try:
             import netbox.graphql.filters  # noqa: F401
-        except ImportError:
+        except ModuleNotFoundError as exc:
+            missing = exc.name or ""
+            if missing == "netbox.graphql.filters" or "netbox.graphql.filters".startswith(f"{missing}."):
+                return False
+            raise
+        return True
+
+    def test_filter_is_registered_when_netbox_provides_the_base(self):
+        if not self._netbox_provides_filter_base():
             self.skipTest("NetBox 4.3 has no shared GraphQL filter base")
 
         from netbox_interface_name_rules.graphql.filters import InterfaceNameRuleFilter
@@ -49,6 +59,30 @@ class GraphQLFilterRegistrationTest(SimpleTestCase):
             InterfaceNameRuleFilter,
             "GraphQL filter failed to import on a NetBox version that supports filters",
         )
+
+    def test_unexpected_import_error_is_not_swallowed(self):
+        """A renamed strawberry_django symbol must raise, not quietly drop the filter.
+
+        Loads a fresh copy of filters.py with strawberry_django replaced by a module that
+        lacks BaseFilterLookup. The decorator never runs, so nothing is registered twice.
+        """
+        if not self._netbox_provides_filter_base():
+            self.skipTest("NetBox 4.3 legitimately has no filter base")
+
+        import importlib.util
+        import sys
+        import types
+        from unittest import mock
+
+        from netbox_interface_name_rules.graphql import filters as real_filters
+
+        spec = importlib.util.spec_from_file_location("_inr_filters_probe", real_filters.__file__)
+        probe = importlib.util.module_from_spec(spec)
+        stand_in = types.ModuleType("strawberry_django")  # no BaseFilterLookup on it
+
+        with mock.patch.dict(sys.modules, {"strawberry_django": stand_in}):
+            with self.assertRaises(ImportError):
+                spec.loader.exec_module(probe)
 
     def test_type_declares_the_filter_when_available(self):
         from netbox_interface_name_rules.graphql.filters import InterfaceNameRuleFilter
