@@ -10,6 +10,7 @@ Behaviour unique to this plugin (test/apply/toggle/duplicate) is covered in test
 """
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
+from django.test import SimpleTestCase
 from utilities.testing import APIViewTestCases, ViewTestCases
 
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -26,6 +27,36 @@ def _create_dcim_fixtures():
     device_type = DeviceType.objects.create(manufacturer=manufacturer, model="TEST-DT-1", slug="test-dt-1")
     platform = Platform.objects.create(name="Test Platform", slug="test-platform")
     return module_types, device_type, platform
+
+
+class GraphQLFilterRegistrationTest(SimpleTestCase):
+    """Guards against the GraphQL filter silently disabling itself.
+
+    filters.py degrades to no filter when its imports fail, which is correct on NetBox 4.3
+    but hides a real breakage anywhere else — strawberry_django renamed FilterLookup to
+    StrFilterLookup in 0.86, and importing the wrong one just skipped the filter on 4.5.
+    """
+
+    def test_filter_is_registered_when_netbox_provides_the_base(self):
+        try:
+            import netbox.graphql.filters  # noqa: F401
+        except ImportError:
+            self.skipTest("NetBox 4.3 has no shared GraphQL filter base")
+
+        from netbox_interface_name_rules.graphql.filters import InterfaceNameRuleFilter
+
+        self.assertIsNotNone(
+            InterfaceNameRuleFilter,
+            "GraphQL filter failed to import on a NetBox version that supports filters",
+        )
+
+    def test_type_declares_the_filter_when_available(self):
+        from netbox_interface_name_rules.graphql.filters import InterfaceNameRuleFilter
+        from netbox_interface_name_rules.graphql.types import _type_kwargs
+
+        if InterfaceNameRuleFilter is None:
+            self.skipTest("No GraphQL filter base on this NetBox version")
+        self.assertIs(_type_kwargs.get("filters"), InterfaceNameRuleFilter)
 
 
 class InterfaceNameRuleViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):

@@ -14,10 +14,15 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 
 try:
     from netbox.graphql.filters import NetBoxModelFilter
-    from strawberry_django import BaseFilterLookup, StrFilterLookup
+    from strawberry_django import BaseFilterLookup
 except ImportError:  # pragma: no cover — only taken on NetBox 4.3
     InterfaceNameRuleFilter = None
-else:
+else:  # pragma: no cover — field declarations; behaviour is covered by the GraphQL tests
+    try:
+        from strawberry_django import StrFilterLookup
+    except ImportError:
+        # strawberry-graphql-django < 0.86, which is what NetBox 4.5 pins.
+        from strawberry_django import FilterLookup as StrFilterLookup
 
     @strawberry_django.filter_type(InterfaceNameRule, lookups=True)
     class InterfaceNameRuleFilter(NetBoxModelFilter):

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 # The filter base only exists on NetBox 4.5+; register without one where it doesn't.
 _type_kwargs = {"fields": "__all__", "pagination": True}
-if InterfaceNameRuleFilter is not None:  # pragma: no branch — always set except on NetBox 4.3
+if InterfaceNameRuleFilter is not None:  # pragma: no cover — absent only on NetBox 4.3
     _type_kwargs["filters"] = InterfaceNameRuleFilter
 
 
