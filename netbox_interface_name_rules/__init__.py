@@ -14,6 +14,8 @@ class InterfaceNameRulesConfig(PluginConfig):
     version = __version__
     base_url = "interface-name-rules"
     min_version = "4.3.0"
+    # The default "graphql.schema" would resolve to the submodule, not the schema list.
+    graphql_schema = "graphql.schema.schema"
     required_settings = []
     default_settings = {}
     author = "Marcin Zieba"
