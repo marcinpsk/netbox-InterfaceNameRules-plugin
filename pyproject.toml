@@ -51,7 +51,7 @@ netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
 dev = [
     "build",
     "reuse",
-    "ruff",
+    "ruff>=0.16",
     "pre-commit",
     "pytest",
     "pytest-django",
