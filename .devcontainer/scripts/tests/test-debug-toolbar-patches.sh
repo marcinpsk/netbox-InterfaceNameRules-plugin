@@ -50,10 +50,10 @@ run_blocks "$S" "$L" > /dev/null
 
 echo "case: anchor missing -> warns and leaves the file untouched"
 S3="$WORK/no_anchor.py"; L3="$WORK/l3.py"; echo "DEBUG_TOOLBAR_CONFIG = {}" > "$S3"; : > "$L3"
-BEFORE="$(md5sum < "$S3")"
+cp "$S3" "$WORK/no_anchor.before"
 OUT="$(run_blocks "$S3" "$L3")"
 echo "$OUT" | grep -q "anchor not found" && ok "anchor warning emitted" || fail "no anchor warning"
-[ "$BEFORE" = "$(md5sum < "$S3")" ] && ok "file untouched" || fail "file mutated"
+cmp -s "$S3" "$WORK/no_anchor.before" && ok "file untouched" || fail "file mutated"
 
 echo "case: files missing -> warns instead of skipping silently"
 OUT="$(run_blocks "$WORK/absent_a.py" "$WORK/absent_b.py")"
