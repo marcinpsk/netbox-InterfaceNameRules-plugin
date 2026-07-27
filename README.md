@@ -47,7 +47,7 @@ pip install netbox-interface-name-rules
 
 Add to `configuration.py`:
 ```python
-PLUGINS = ['netbox_interface_name_rules']
+PLUGINS = ["netbox_interface_name_rules"]
 ```
 
 ## Configuration

@@ -308,6 +308,7 @@ Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device typ
     ```python
     from dcim.models import Device
     from netbox_interface_name_rules.engine import apply_device_interface_rules
+
     for dev in Device.objects.filter(virtual_chassis__isnull=False):
         apply_device_interface_rules(dev)
     ```
