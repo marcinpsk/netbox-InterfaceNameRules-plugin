@@ -85,6 +85,11 @@ class EvaluateNameTemplateTest(TestCase):
         )
         self.assertEqual(result, "port3")
 
+    def test_floor_division_by_zero_rejected(self):
+        """A zero divisor is a bad template, reported like every other one so callers can skip it."""
+        with self.assertRaises(ValueError):
+            evaluate_name_template("port{10 // 0}", {})
+
     def test_modulo_not_allowed(self):
         """Modulo operator is not in the allowed character set."""
         with self.assertRaises(ValueError):

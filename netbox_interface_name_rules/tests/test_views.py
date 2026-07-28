@@ -183,6 +183,19 @@ class RuleApplyDetailViewTest(ViewTestBase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_apply_detail_counts_unit_matches_capability(self):
+        """The preview counts label says families only where NetBox models channelization."""
+        from netbox_interface_name_rules.engine import supports_channelization
+
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
+            kwargs={"pk": self.rule.pk},
+        )
+        response = self.client.get(url)
+        expected = "families" if supports_channelization() else "interfaces"
+        self.assertEqual(response.context["checked_unit"], expected)
+        self.assertEqual(response.context["families_supported"], supports_channelization())
+
 
 class RuleApplicableViewTest(ViewTestBase):
     """Test the RuleApplicableView (AJAX applicable check)."""

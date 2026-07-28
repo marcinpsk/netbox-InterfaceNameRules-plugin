@@ -225,8 +225,10 @@
                 <td><code class="text-muted">{{ entry.current_name }}</code></td>
                 <td><i class="mdi mdi-arrow-right text-muted"></i></td>
                 <td>
-                  {% for new_name in entry.new_names %}
-                    <code class="text-success">{{ new_name }}</code>{% if not forloop.last %}, {% endif %}
+                  {% for detail in entry.name_details %}
+                    <code class="text-success">{{ detail.name }}</code>{% if detail.channel_id %}<span
+                      class="badge text-bg-secondary ms-1"
+                      title="Channel {{ detail.channel_id }} of this interface">ch {{ detail.channel_id }}</span>{% endif %}{% if not forloop.last %}, {% endif %}
                   {% endfor %}
                 </td>
               </tr>
