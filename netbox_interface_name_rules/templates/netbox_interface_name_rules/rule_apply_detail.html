@@ -67,12 +67,13 @@
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <h5 class="card-title mb-0"><i class="mdi mdi-eye me-2"></i>Preview</h5>
-    <span class="badge text-bg-info fs-6 fw-normal">
+    <span class="badge text-bg-info fs-6 fw-normal"
+          title="A channelized interface and its channels count as one family">
       {% if has_more %}
-        Showing {{ preview|length }} of {{ total_checked }}+ examined that would change
+        Showing {{ preview|length }} of {{ total_checked }}+ families examined that would change
         <span class="ms-1 badge text-bg-warning">(batch limit: {{ batch_limit }})</span>
       {% else %}
-        {{ preview|length }} would change ({{ total_checked }} examined)
+        {{ preview|length }} would change ({{ total_checked }} families examined)
       {% endif %}
     </span>
   </div>
@@ -115,8 +116,14 @@
               <td><code class="text-danger">{{ entry.current_name }}</code></td>
               <td class="text-muted">→</td>
               <td>
-                {% for new_name in entry.new_names %}
-                  <code class="text-success">{{ new_name }}</code>{% if not forloop.last %}<br>{% endif %}
+                {% for detail in entry.name_details %}
+                  <code class="text-success">{{ detail.name }}</code>
+                  {% if detail.channel_id %}
+                    <span class="badge text-bg-secondary" title="Channel {{ detail.channel_id }} of this interface">
+                      ch {{ detail.channel_id }}
+                    </span>
+                  {% endif %}
+                  {% if not forloop.last %}<br>{% endif %}
                 {% endfor %}
               </td>
             </tr>

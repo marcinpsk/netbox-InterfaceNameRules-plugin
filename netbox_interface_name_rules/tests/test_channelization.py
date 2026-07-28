@@ -169,10 +169,12 @@ class ChannelizedSimpleRuleTest(ChannelizationTestCase):
     def test_reapply_after_install_is_idempotent(self):
         """A second pass over an already-renamed family changes nothing."""
         module, bay = self._install(self.module_type, "3")
-        before = self._names(module)
 
         self.assertEqual(apply_interface_name_rules(module, bay), 0)
-        self.assertEqual(self._names(module), before)
+        self.assertEqual(
+            self._names(module),
+            ["et-0/0/3", "et-0/0/3:1", "et-0/0/3:2", "et-0/0/3:3", "et-0/0/3:4"],
+        )
 
     def test_template_without_base_does_not_collide_on_children(self):
         """Child targets derive from the parent's new name, so a template without {base} is collision-free."""
@@ -220,6 +222,8 @@ class ChannelizedCollisionTest(ChannelizationTestCase):
         self.assertEqual(renamed, 0)
         self.assertEqual(self._names(module), ["3", "3:1", "3:2", "3:3", "3:4"])
         self.assertTrue(any("et-0/0/3" in line for line in logs.output), logs.output)
+        # Only the parent was attempted: no child was tried against the taken name either.
+        self.assertFalse(any("3:" in line for line in logs.output), logs.output)
         # A collision is not evidence that the rule is obsolete.
         self.assertFalse(self.rule.tags.filter(slug="potentially-deprecated").exists())
 
@@ -317,6 +321,22 @@ class ChannelizedBreakoutRuleTest(ChannelizationTestCase):
         self.assertEqual(self._names(module), ["m8", "m8:1", "m8:2", "m8:3", "m8:4"])
         self.assertTrue(any("m8" in line for line in logs.output), logs.output)
 
+    def test_preview_offers_channel_renames_and_no_new_interfaces(self):
+        """The preview mirrors the apply: the parent keeps its name and no channel is invented."""
+        self._install(self.module_type, "3", run_rules=False)
+        rule = InterfaceNameRule.objects.get(module_type=self.module_type)
+
+        results, total_checked = find_interfaces_for_rule(rule)
+
+        self.assertEqual(total_checked, 1)  # the family is one candidate
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["current_name"], "3")
+        self.assertEqual(results[0]["new_names"], ["3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
+        self.assertEqual(
+            [(detail["role"], detail["channel_id"]) for detail in results[0]["name_details"]],
+            [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
+        )
+
     def test_stale_children_repaired_when_parent_already_correct(self):
         """The parent needs no rename, so the run must still reach — and repair — its children."""
         module, bay = self._install(self.module_type, "3")
@@ -336,12 +356,18 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanEnum", ["3"])
+        manufacturer, cls.device = _build_device("ChanEnum", ["3", "9"])
         cls.module_type = _channelized_module_type(manufacturer, "ChanEnum-QSFP")
         # A standalone interface alongside the family, so "families counted once" stays distinguishable
         # from "interfaces not counted at all".
         InterfaceTemplate.objects.create(module_type=cls.module_type, name="{module}-mgmt", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="et-{base}")
+        # A second family whose template does not feed the current name back in, so "already correctly
+        # named" is a state the rule can actually reach (an "et-{base}" rule renames on every pass).
+        cls.stable_type = _channelized_module_type(manufacturer, "ChanEnum-QSFP-STABLE")
+        cls.stable_rule = InterfaceNameRule.objects.create(
+            module_type=cls.stable_type, name_template="et-0/0/{bay_position}"
+        )
 
     def test_find_interfaces_for_rule_excludes_children_and_counts_families_once(self):
         """The scan offers the parent and the standalone interface — never a child on its own."""
@@ -352,14 +378,36 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         self.assertEqual({entry["current_name"] for entry in results}, {"3", "3-mgmt"})
         self.assertEqual(total_checked, 2)
 
+    def test_preview_annotates_the_family_behind_the_parent_entry(self):
+        """The family's channels ride along in the parent's entry, each tagged with its channel."""
+        self._install(self.module_type, "3", run_rules=False)
+
+        results, _ = find_interfaces_for_rule(self.rule)
+        family = next(entry for entry in results if entry["current_name"] == "3")
+        standalone = next(entry for entry in results if entry["current_name"] == "3-mgmt")
+
+        self.assertEqual(family["new_names"], ["et-3", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
+        self.assertEqual(
+            family["name_details"],
+            [
+                {"name": "et-3", "role": "parent", "channel_id": None},
+                {"name": "et-3:1", "role": "channel", "channel_id": 1},
+                {"name": "et-3:2", "role": "channel", "channel_id": 2},
+                {"name": "et-3:3", "role": "channel", "channel_id": 3},
+                {"name": "et-3:4", "role": "channel", "channel_id": 4},
+            ],
+        )
+        self.assertEqual(family["interface"], self._parent(family["module"]))
+        self.assertEqual(standalone["name_details"], [{"name": "et-3-mgmt", "role": "interface", "channel_id": None}])
+
     def test_has_applicable_interfaces_ignores_a_renamed_family(self):
         """Children must not keep the rule looking 'applicable' after the family is correctly named."""
-        module, bay = self._install(self.module_type, "3", run_rules=False)
-        self.assertTrue(has_applicable_interfaces(self.rule))
+        module, bay = self._install(self.stable_type, "9", run_rules=False)
+        self.assertTrue(has_applicable_interfaces(self.stable_rule))
 
         apply_interface_name_rules(module, bay)
 
-        self.assertFalse(has_applicable_interfaces(self.rule))
+        self.assertFalse(has_applicable_interfaces(self.stable_rule))
 
     def test_apply_rule_to_existing_renames_family_without_conflicts(self):
         """A retroactive apply renames the family through its parent, so no child fights another for a name."""
@@ -371,6 +419,10 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         self.assertEqual(count, 6)
         self.assertEqual(conflicts, [])
         self.assertEqual(self._names(module), ["et-3", "et-3-mgmt", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
+        # The rename went through the family, so the structure it hangs on is still intact.
+        parent = self._parent(module)
+        self.assertEqual(parent.channels, 4)
+        self.assertEqual([self._child(module, cid).parent_id for cid in range(1, 5)], [parent.pk] * 4)
 
     def test_apply_rule_to_existing_selected_parent_renames_whole_family(self):
         """Selecting the parent PK (what the Apply view submits) carries the children along."""
