@@ -101,12 +101,12 @@ On NetBox releases that model channelized interfaces (4.7+), a module whose temp
 create a channelized family — a physical parent with `channels` set plus its channel
 subinterfaces — is renamed rather than expanded: the existing channels take the names the
 template produces, `{channel}` is `channel_start + channel_id - 1`, no interfaces are created,
-and the parent keeps its own name. A rule whose `channel_count` disagrees with the parent's
-`channels` skips that family and logs a warning instead of renaming it into a shape it does not
-have. On older releases nothing changes: the base is renamed to the first channel and the
-remaining channels are created as flat sibling interfaces.
+and the parent keeps its own name. A breakout rule (non-zero `channel_count`) whose count
+disagrees with the parent's `channels` skips that family and logs a warning instead of renaming
+it into a shape it does not have. On older releases nothing changes: the base is renamed to the
+first channel and the remaining channels are created as flat sibling interfaces.
 
-For a rule without `channel_count`, a channelized family is renamed in lockstep: the parent gets
+For a simple rule (`channel_count: 0`, the default), a channelized family is renamed in lockstep: the parent gets
 the template's name and each channel keeps its own suffix (`et-0/0/3` → `et-0/0/3:1`). A channel
 whose name shares no prefix with its parent is left alone and logged — the engine does not guess
 at free-form names.

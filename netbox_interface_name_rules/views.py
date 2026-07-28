@@ -416,7 +416,7 @@ class RuleApplyDetailView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         """Render a preview of all interfaces that would be renamed by this rule."""
-        from .engine import find_interfaces_for_rule
+        from .engine import find_interfaces_for_rule, supports_channelization
 
         rule = self.get_object(**kwargs)
         try:
@@ -439,6 +439,9 @@ class RuleApplyDetailView(generic.ObjectView):
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
                 "can_apply": request.user.has_perm("dcim.change_interface"),
+                # Families exist only where NetBox models channelization; older releases count plain interfaces.
+                "families_supported": supports_channelization(),
+                "checked_unit": "families" if supports_channelization() else "interfaces",
             },
         )
 
