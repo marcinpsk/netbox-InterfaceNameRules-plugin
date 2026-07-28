@@ -741,6 +741,17 @@ def apply_device_interface_rules(device):
     return total
 
 
+# The bay chain InterfaceTemplate.resolve_name() dereferences while resolving {module}.
+_BAY_CHAIN_RELATIONS = (
+    "module_bay",
+    "module_bay__parent",
+    "module_bay__module",
+    "module_bay__module__module_bay",
+    "module_bay__module__module_bay__parent",
+    "module_bay__module__module_bay__module",
+)
+
+
 def _module_with_bay_chain(module):
     """Re-fetch *module* with the bay chain InterfaceTemplate.resolve_name() dereferences.
 
@@ -748,14 +759,7 @@ def _module_with_bay_chain(module):
     """
     from dcim.models import Module
 
-    return Module.objects.select_related(
-        "module_bay",
-        "module_bay__parent",
-        "module_bay__module",
-        "module_bay__module__module_bay",
-        "module_bay__module__module_bay__parent",
-        "module_bay__module__module_bay__module",
-    ).get(pk=module.pk)
+    return Module.objects.select_related(*_BAY_CHAIN_RELATIONS).get(pk=module.pk)
 
 
 def _get_raw_interface_names(module):
@@ -765,6 +769,23 @@ def _get_raw_interface_names(module):
     module_fresh = _module_with_bay_chain(module)
     templates = InterfaceTemplate.objects.filter(module_type=module_fresh.module_type)
     return {tmpl.resolve_name(module_fresh) for tmpl in templates}
+
+
+def _raw_names_by_module(modules):  # pragma: no cover - only the conversion scan batches names
+    """Return ``{module pk: raw template names}`` for *modules*, in one template query for all of them.
+
+    Raw names are a property of the module type, but ``_get_raw_interface_names`` costs a module
+    refetch and a template query each — a scan over a fleet would pay that per module.  *modules*
+    must already carry ``_BAY_CHAIN_RELATIONS``, since the names are resolved against them in memory.
+    """
+    from dcim.models import InterfaceTemplate
+
+    by_module_type = defaultdict(list)
+    for tmpl in InterfaceTemplate.objects.filter(module_type__in={module.module_type_id for module in modules}):
+        by_module_type[tmpl.module_type_id].append(tmpl)
+    return {
+        module.pk: {tmpl.resolve_name(module) for tmpl in by_module_type[module.module_type_id]} for module in modules
+    }
 
 
 def _template_families(module):
@@ -1960,21 +1981,23 @@ _ConversionFamily = namedtuple("_ConversionFamily", ("module", "base", "current_
 def _conversion_offered(rule):
     """Return True when *rule* describes a topology an installed flat family could be converted into.
 
-    A flat family has no parent row — its ch-0 interface *is* the base — so without a parent name
-    there is nowhere for that base to go, and the conversion is not offered at all.
+    A disabled rule renames nothing on any apply path, so it converts nothing either.  A flat family
+    has no parent row — its ch-0 interface *is* the base — so without a parent name there is nowhere
+    for that base to go, and the conversion is not offered at all.
     """
-    return _is_channelized_rule(rule) and rule.channel_count > 0 and bool(rule.parent_name_template)
+    return rule.enabled and _is_channelized_rule(rule) and rule.channel_count > 0 and bool(rule.parent_name_template)
 
 
-def _conversion_family(rule, module, interfaces, variables):  # pragma: no cover - channelization support only
+def _conversion_family(rule, module, interfaces, variables, raw_names):  # pragma: no cover - channelization only
     """Return the flat family *rule* would convert on *module*, or None when it carries none.
 
     Identification is by name: ``name_template`` is evaluated over the rule's channel range against
-    each raw template name, and the ch-0 name has to still be a plain interface — a family that was
-    already converted (its ch-0 name now belongs to a channel row) is therefore never offered twice.
+    each raw template name in *raw_names*, and the ch-0 name has to still be a plain interface — a
+    family that was already converted (its ch-0 name now belongs to a channel row) is therefore
+    never offered twice.
     """
     by_name = {iface.name: iface for iface in interfaces}
-    for raw_name in sorted(_get_raw_interface_names(module)):
+    for raw_name in sorted(raw_names):
         family_vars = {**variables, "base": raw_name}
         parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
         channel_names = [
@@ -2002,13 +2025,15 @@ def _conversion_families(rule):  # pragma: no cover - requires channelization su
     """
     from dcim.models import Interface
 
-    module_qs = _build_module_qs(rule).select_related("module_bay", "module_bay__parent", "module_type", "device")
+    modules = list(_build_module_qs(rule).select_related("module_type", "device", *_BAY_CHAIN_RELATIONS))
+    raw_names = _raw_names_by_module(modules)
     ifaces_by_module = defaultdict(list)
-    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
+    for iface in Interface.objects.filter(module__in=[module.pk for module in modules]).order_by("module_id", "name"):
         ifaces_by_module[iface.module_id].append(iface)
-    for module in module_qs:
+    for module in modules:
         variables = build_variables(module.module_bay, device=module.device)
-        family = _conversion_family(rule, module, ifaces_by_module.get(module.pk, []), variables)
+        ifaces = ifaces_by_module.get(module.pk, [])
+        family = _conversion_family(rule, module, ifaces, variables, raw_names[module.pk])
         if family is not None:
             yield family
 
@@ -2073,9 +2098,10 @@ def _rewrite_family(rule, family):  # pragma: no cover - requires channelization
     """Convert *family* in place, raising ValidationError with the reason when it cannot be converted.
 
     Only what upstream cannot decide for us is checked here: the parent's name has to be free, every
-    sibling has to be present, and a cabled sibling cannot become a channel — TYPE_CHANNEL is
-    nonconnectable but not virtual, so ``Interface.clean()`` accepts a cable on one.  Everything else
-    is left to ``full_clean()`` on each prospective row, which inherits upstream's rules as they grow.
+    sibling has to be present, a sibling already bound to another parent's channel is not ours to
+    take, and a cabled sibling cannot become a channel — TYPE_CHANNEL is nonconnectable but not
+    virtual, so ``Interface.clean()`` accepts a cable on one.  Everything else is left to
+    ``full_clean()`` on each prospective row, which inherits upstream's rules as they grow.
     """
     from dcim.choices import InterfaceTypeChoices
     from dcim.models import Interface
@@ -2092,6 +2118,13 @@ def _rewrite_family(rule, family):  # pragma: no cover - requires channelization
         sibling = by_name.get(name)
         if sibling is None or sibling.pk == base.pk:
             raise ValidationError(f"{name!r} is missing: this module carries no complete flat family")
+        # Rebinding it validates cleanly, so only this check keeps the other family whole.
+        if _is_channel_child(sibling):
+            owner = sibling.parent.name if sibling.parent_id else "another parent"
+            raise ValidationError(
+                f"{name!r} is already channel {sibling.channel_id} of {owner}; "
+                f"converting would take it out of that family"
+            )
         if sibling.cable_id:
             raise ValidationError(f"{name!r} has a cable attached; a channel takes its cable from the parent")
         siblings.append((channel_id, sibling))
