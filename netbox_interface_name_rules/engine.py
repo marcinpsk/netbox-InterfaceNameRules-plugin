@@ -264,6 +264,22 @@ def _get_parent_module_type(module_bay):
     return None
 
 
+def supports_channelization():
+    """Return True when this NetBox models channelized subinterfaces (NetBox 4.7+).
+
+    Probed from the Interface model rather than a version comparison, so a backport or a
+    development build is detected by what it actually provides.
+    """
+    from dcim.models import Interface
+    from django.core.exceptions import FieldDoesNotExist
+
+    try:
+        Interface._meta.get_field("channel_id")
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
 def _collect_unrenamed(interfaces, rule, raw_names, force_reapply):
     """Return the subset of *interfaces* that should be processed by the rule.
 
