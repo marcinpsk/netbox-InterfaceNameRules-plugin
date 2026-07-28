@@ -237,6 +237,16 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
         self._assert_nothing_was_built(module, "4")
         self.assertTrue(any("xe-0/0/4:2" in line for line in logs.output), logs.output)
 
+    def test_a_blocked_family_logs_the_collision_once(self):
+        """One event, one line — the recorder must not add a second generic warning."""
+        self._occupy("et-0/0/3")
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            apply_interface_name_rules(module, bay)
+
+        self.assertEqual(len(logs.records), 1, logs.output)
+
     def test_a_blocked_family_is_not_read_as_an_obsolete_rule(self):
         """A collision says the names are taken, not that the rule stopped being needed."""
         self._occupy("et-0/0/3")

@@ -1362,7 +1362,7 @@ def _build_channelized_family(rule, base, variables, module, conflicts):  # prag
             device,
             blocker,
         )
-        _record_conflict(conflicts, device, base.name, blocker, base.pk)
+        _record_skip(conflicts, device, base.name, blocker, base.pk)
         return 0
 
     count = 0
