@@ -23,6 +23,8 @@ from dcim.choices import InterfaceModeChoices
 from dcim.models import Cable, Interface
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils.html import escape
 from extras.models import CustomField, Tag
@@ -44,6 +46,7 @@ from netbox_interface_name_rules.tests.test_breakout_mode import (
 )
 from netbox_interface_name_rules.tests.test_channelization import (
     CHANNEL_TYPE,
+    PARENT_TYPE,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
@@ -204,6 +207,13 @@ class ConversionVerdictTest(ConversionTestCase):
 
         self.assertEqual(find_convertible_families(self.rule), [])
 
+    def test_a_disabled_rule_offers_no_conversion(self):
+        """A disabled rule renames nothing; offering it the most invasive rewrite of all would be worse."""
+        self.rule.enabled = False
+        self.rule.save()
+
+        self.assertEqual(find_convertible_families(self.rule), [])
+
     def test_a_converted_family_is_not_offered_again(self):
         """It is a native family now; offering it again would invite a second, duplicate conversion."""
         base = self._iface("xe-0/0/3:0")
@@ -314,6 +324,23 @@ class ConversionTest(ConversionTestCase):
 
         self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), child_pks)
+
+    def test_a_disabled_rule_converts_nothing_when_a_family_is_confirmed(self):
+        """Every other apply path stops at ``enabled``; a confirmed conversion cannot be the exception."""
+        self.rule.enabled = False
+        self.rule.save()
+
+        self.assertEqual(self._convert(self.base), 0)
+        self._assert_still_flat(self.module, "3")
+
+    def test_a_disabled_rule_converts_nothing_in_the_whole_rule_batch(self):
+        """This is what the background job runs, so a disabled rule has to yield an empty batch."""
+        self.rule.enabled = False
+        self.rule.save()
+
+        self.assertEqual(self._convert(), 0)
+        self._assert_still_flat(self.module, "3")
+        self._assert_still_flat(self.other_module, "4")
 
     def test_applying_the_rule_afterwards_changes_nothing(self):
         """The family is native now, so ordinary apply is back to renaming it in place — a no-op here."""
@@ -454,6 +481,19 @@ class ConversionPreflightTest(ConversionTestCase):
         peer = Interface.objects.create(device=self.device, name=f"peer-{iface.name}", type=PLAIN_TYPE)
         Cable.objects.create(a_terminations=[iface], b_terminations=[peer])
 
+    def _bind_to_another_family(self, name):
+        """Move the interface called *name* into a second, genuine channelized family on the module."""
+        parent = Interface.objects.create(
+            device=self.device, module=self.module, name="et-0/0/9", type=PARENT_TYPE, channels=4
+        )
+        child = self._iface(name)
+        child.type = CHANNEL_TYPE
+        child.parent = parent
+        child.channel_id = 1
+        child.full_clean()
+        child.save()
+        return parent
+
     def test_a_cabled_sibling_blocks_the_family(self):
         """A channel derives its cable from the parent, so a cabled sibling cannot become one."""
         self._cable_up(self._iface("xe-0/0/3:2"))
@@ -519,6 +559,27 @@ class ConversionPreflightTest(ConversionTestCase):
 
         self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
         self.assertEqual(self._names(self.module), self._flat_names("3"))
+        self.assertIsNone(self._iface("xe-0/0/3:0").channels)
+
+    def test_a_sibling_bound_to_another_family_blocks_the_family(self):
+        """That row is already a channel of another parent, and rebinding it would be a valid save."""
+        self._bind_to_another_family("xe-0/0/3:1")
+
+        verdict = self._blocked_verdict()
+
+        self.assertIn("xe-0/0/3:1", verdict["reason"])
+        self.assertIn("et-0/0/9", verdict["reason"])
+
+    def test_a_sibling_bound_to_another_family_is_not_taken_from_it(self):
+        """Converting past it would silently drop a channel from a family nobody asked about."""
+        parent = self._bind_to_another_family("xe-0/0/3:1")
+
+        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+
+        foreign_child = self._iface("xe-0/0/3:1")
+        self.assertEqual(foreign_child.parent_id, parent.pk)
+        self.assertEqual(foreign_child.channel_id, 1)
+        self.assertEqual(self._names(self.module), ["et-0/0/9", *self._flat_names("3")])
         self.assertIsNone(self._iface("xe-0/0/3:0").channels)
 
     def test_a_blocked_family_is_reported_to_the_caller(self):
@@ -621,6 +682,16 @@ class ConversionApplyViewTest(ConversionTestCase):
         self.assertFalse(response.context["conversions"])
         self.assertNotIn('value="convert"', response.content.decode())
 
+    def test_a_disabled_rule_is_offered_no_conversion(self):
+        """A disabled rule is inert everywhere else on this page; the conversion section is no different."""
+        self.rule.enabled = False
+        self.rule.save()
+
+        response = self.client.get(self._url())
+
+        self.assertFalse(response.context["conversions"])
+        self.assertNotIn('value="convert"', response.content.decode())
+
     def test_the_ordinary_apply_action_never_converts(self):
         """Applying a rule is a rename; it must not rewrite an installed family behind the operator."""
         response = self.client.post(self._url(), {"action": "apply", "interface_ids": [str(self.base.pk)]})
@@ -673,6 +744,52 @@ class ConversionApplyViewTest(ConversionTestCase):
 
         self.assertEqual(response.status_code, 403)
         self._assert_still_flat(self.module, "3")
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ConversionScanCostTest(ConversionTestCase):
+    """The Apply page runs this scan on every GET, so its cost cannot grow with the fleet.
+
+    Identifying a family needs the module's raw template names, which are a property of its module
+    type — one query over every type in scope, not a module refetch plus a template query per
+    module.  The modules here carry no flat family at all: what is pinned is the cost of the scan
+    itself, which an operator pays on every page load even when nothing can be converted.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ConvCost", ["3", "4"])
+        cls.module_type = _plain_module_type(manufacturer, "ConvCost-QSFP")
+        cls.rule = cls._flat_rule(cls.module_type)
+
+    def setUp(self):
+        """Install one raw module and switch the rule; the second module is installed per test."""
+        self._install(self.module_type, "3", run_rules=False)
+        self._switch_to_channelized()
+
+    def _scan_queries(self):
+        """Return the queries one full scan runs."""
+        with CaptureQueriesContext(connection) as captured:
+            find_convertible_families(self.rule)
+        return captured.captured_queries
+
+    def test_a_second_module_of_the_same_type_costs_the_scan_no_extra_queries(self):
+        """Resolving the names per module turns an Apply page load into a fleet-sized scan."""
+        one_module = len(self._scan_queries())
+
+        self._install(self.module_type, "4", run_rules=False)
+
+        with self.assertNumQueries(one_module):
+            find_convertible_families(self.rule)
+
+    def test_the_scan_reads_the_interface_templates_once_for_the_module_type(self):
+        """The names come from the module type, so two modules of one type are one template query."""
+        self._install(self.module_type, "4", run_rules=False)
+
+        queries = self._scan_queries()
+
+        template_queries = [query for query in queries if "dcim_interfacetemplate" in query["sql"]]
+        self.assertEqual(len(template_queries), 1, [query["sql"] for query in queries])
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

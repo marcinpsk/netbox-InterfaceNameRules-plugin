@@ -169,18 +169,19 @@ applied as a flat breakout.
 Devices provisioned before the channelized mode existed carry flat families:
 four sibling interfaces where NetBox now models a parent and four channels.
 **Apply Rules → Preview & Apply** offers to convert them, per family, once the
-rule is set to `breakout_mode: channelized` with a `parent_name_template` — the
-flat family has no parent row, so without a parent name there is nowhere for the
-ch-0 interface to go and nothing is offered.
+rule is enabled and set to `breakout_mode: channelized` with a
+`parent_name_template` — the flat family has no parent row, so without a parent
+name there is nowhere for the ch-0 interface to go and nothing is offered. A
+disabled rule converts nothing, on this page or in the background job.
 
 Conversion is only ever performed from that page, by an operator who confirmed
 it: **Apply** renames, it never rewrites a family. Each family gets its own
 verdict before anything is written, produced by performing the whole conversion
 inside a transaction that is rolled back again — so a family that NetBox would
 reject is reported with NetBox's own reason (a cabled sibling, an occupied
-parent name, a missing sibling, a sibling already channelized) instead of being
-half converted. Selecting a blocked family converts the others and skips that
-one.
+parent name, a missing sibling, a sibling already channelized, a sibling that is
+already a channel of another parent) instead of being half converted. Selecting
+a blocked family converts the others and skips that one.
 
 What the conversion does to the ch-0 row, per family:
 
