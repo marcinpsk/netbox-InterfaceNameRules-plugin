@@ -4,8 +4,15 @@ import re
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django import forms
-from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelForm, NetBoxModelImportForm
-from utilities.forms.fields import CSVModelChoiceField
+from netbox.forms import (
+    NetBoxModelBulkEditForm,
+    NetBoxModelFilterSetForm,
+    NetBoxModelForm,
+    NetBoxModelImportForm,
+)
+from utilities.forms.fields import CSVModelChoiceField, DynamicModelChoiceField
+from utilities.forms.rendering import FieldSet
+from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .models import InterfaceNameRule
 
@@ -231,6 +238,32 @@ class InterfaceNameRuleImportForm(NetBoxModelImportForm):
             "enabled",
             "applies_to_device_interfaces",
         ]
+
+
+class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
+    """Bulk-edit form for InterfaceNameRule.
+
+    Only fields that are meaningful to set across many rules at once are offered;
+    module_type and the regex-mode flags are per-rule and stay out of it.
+    """
+
+    model = InterfaceNameRule
+
+    parent_module_type = DynamicModelChoiceField(queryset=ModuleType.objects.all(), required=False)
+    device_type = DynamicModelChoiceField(queryset=DeviceType.objects.all(), required=False)
+    platform = DynamicModelChoiceField(queryset=Platform.objects.all(), required=False)
+    name_template = forms.CharField(max_length=255, required=False)
+    channel_count = forms.IntegerField(min_value=0, required=False)
+    channel_start = forms.IntegerField(min_value=0, required=False)
+    description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))
+    enabled = forms.NullBooleanField(required=False, widget=BulkEditNullBooleanSelect())
+
+    fieldsets = (
+        FieldSet("name_template", "channel_count", "channel_start", "enabled", name="Rule"),
+        FieldSet("parent_module_type", "device_type", "platform", name="Scope"),
+        FieldSet("description", name="Description"),
+    )
+    nullable_fields = ("parent_module_type", "device_type", "platform", "description")
 
 
 class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):

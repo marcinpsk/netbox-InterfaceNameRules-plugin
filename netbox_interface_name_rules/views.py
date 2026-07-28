@@ -17,7 +17,13 @@ from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
 
 from .filters import InterfaceNameRuleFilterSet
-from .forms import InterfaceNameRuleFilterForm, InterfaceNameRuleForm, InterfaceNameRuleImportForm, RuleTestForm
+from .forms import (
+    InterfaceNameRuleBulkEditForm,
+    InterfaceNameRuleFilterForm,
+    InterfaceNameRuleForm,
+    InterfaceNameRuleImportForm,
+    RuleTestForm,
+)
 from .models import InterfaceNameRule
 from .tables import InterfaceNameRuleTable
 
@@ -46,14 +52,15 @@ class RulePreview:
 
 
 try:
-    from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkExport, BulkImport, BulkRename
+    from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkExport, BulkImport
 
     class _YAMLOnlyExport(BulkExport):
         """Export action that only offers YAML (no CSV "Current View" option)."""
 
         template_name = "netbox_interface_name_rules/buttons/export_yaml_only.html"
 
-    _LIST_VIEW_ACTIONS: tuple = (AddObject, BulkImport, _YAMLOnlyExport, BulkEdit, BulkRename, BulkDelete)
+    # No BulkRename: rules have no name field, and its button template renders nothing anyway.
+    _LIST_VIEW_ACTIONS: tuple = (AddObject, BulkImport, _YAMLOnlyExport, BulkEdit, BulkDelete)
 except ImportError:
     _LIST_VIEW_ACTIONS = None
 
@@ -115,6 +122,15 @@ class InterfaceNameRuleDeleteView(generic.ObjectDeleteView):
     """Delete view for InterfaceNameRule."""
 
     queryset = InterfaceNameRule.objects.all()
+
+
+class InterfaceNameRuleBulkEditView(generic.BulkEditView):
+    """Bulk edit view for InterfaceNameRule."""
+
+    queryset = InterfaceNameRule.objects.all()
+    filterset = InterfaceNameRuleFilterSet
+    table = InterfaceNameRuleTable
+    form = InterfaceNameRuleBulkEditForm
 
 
 class InterfaceNameRuleBulkDeleteView(generic.BulkDeleteView):

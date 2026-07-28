@@ -24,10 +24,18 @@ jobs:
       max-parallel: 6
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        netbox-version: ["v4.3.7", "v4.5.3", "v4.6.3"]
+        netbox-version: ["v4.3.7", "v4.5.3", "v4.6.5"]
         exclude:
           - python-version: "3.14"
             netbox-version: "v4.3.7"  # strawberry-graphql incompatible with Python 3.14 on this NetBox version
+        include:
+          # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
+          # for reasons that are not ours, so this must not gate a PR.
+          - python-version: "3.13"
+            netbox-version: "main"
+            experimental: true
+
+    continue-on-error: ${{ matrix.experimental || false }}
 
     services:
       redis:

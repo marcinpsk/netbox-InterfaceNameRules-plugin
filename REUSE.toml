@@ -28,6 +28,12 @@ path = [
 SPDX-FileCopyrightText = "2025 Marcin Zieba <marcinpsk@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"
 
+# NetBox writes this query-count baseline itself, and JSON takes no header comment.
+[[annotations]]
+path = "netbox_interface_name_rules/tests/query_counts.json"
+SPDX-FileCopyrightText = "2025 Marcin Zieba <marcinpsk@gmail.com>"
+SPDX-License-Identifier = "Apache-2.0"
+
 # CODEOWNERS (auto-request review); added via API so it had no license info — annotate it here.
 [[annotations]]
 path = ".github/CODEOWNERS"

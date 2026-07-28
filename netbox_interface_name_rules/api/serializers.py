@@ -13,6 +13,8 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
         model = InterfaceNameRule
         fields = [
             "id",
+            "url",
+            "display",
             "module_type",
             "module_type_pattern",
             "module_type_is_regex",
@@ -25,7 +27,12 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
             "description",
             "enabled",
             "applies_to_device_interfaces",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
         ]
+        brief_fields = ["id", "url", "display", "name_template", "description"]
 
     def validate(self, attrs):
         """Ensure module_type XOR module_type_pattern depending on regex mode."""

@@ -3,6 +3,7 @@
 from django.urls import path
 
 from . import views
+from .models import InterfaceNameRule
 
 app_name = "netbox_interface_name_rules"
 
@@ -11,6 +12,7 @@ urlpatterns = [
     path("rules/", views.InterfaceNameRuleListView.as_view(), name="interfacenamerule_list"),
     path("rules/add/", views.InterfaceNameRuleCreateView.as_view(), name="interfacenamerule_add"),
     path("rules/import/", views.InterfaceNameRuleBulkImportView.as_view(), name="interfacenamerule_bulk_import"),
+    path("rules/edit/", views.InterfaceNameRuleBulkEditView.as_view(), name="interfacenamerule_bulk_edit"),
     path("rules/bulk_delete/", views.InterfaceNameRuleBulkDeleteView.as_view(), name="interfacenamerule_bulk_delete"),
     # Rule tester (Build Rule)
     path("rules/test/", views.RuleTestView.as_view(), name="interfacenamerule_test"),
@@ -27,6 +29,8 @@ urlpatterns = [
         "rules/<int:pk>/changelog/",
         views.InterfaceNameRuleChangeLogView.as_view(),
         name="interfacenamerule_changelog",
+        # ObjectChangeLogView.get() takes the model as a URL kwarg; without it the tab 500s.
+        kwargs={"model": InterfaceNameRule},
     ),
     path("rules/<int:pk>/apply/", views.RuleApplyDetailView.as_view(), name="interfacenamerule_apply_detail"),
     path("rules/<int:pk>/applicable/", views.RuleApplicableView.as_view(), name="interfacenamerule_applicable"),
