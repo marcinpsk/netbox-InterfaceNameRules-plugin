@@ -13,6 +13,7 @@ Everything here runs on every NetBox the plugin supports; behaviour that only ex
 models channelized interfaces lives in test_channelized_mode.py.
 """
 
+import contextlib
 import csv
 import io
 import json
@@ -21,11 +22,15 @@ from unittest import skipIf
 
 import yaml
 from dcim.models import Interface, InterfaceTemplate, ModuleType
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.questioner import NonInteractiveMigrationQuestioner
+from django.db.migrations.state import ProjectState
 from django.test import TestCase
 from django.urls import reverse
 from utilities.testing import APITestCase
@@ -162,6 +167,37 @@ class BreakoutModeValidationTest(TestCase):
         )
 
         self._assert_rejected(rule, "parent_name_template")
+
+    def test_a_parent_template_must_not_reference_the_channel_in_any_spelling(self):
+        """Same reference, different syntax — each one reaches the engine and fails there instead."""
+        for template in (
+            "et-0/0/{bay_position}:{channel!r}",
+            "et-0/0/{bay_position}:{channel:>2}",
+            "et-0/0/{bay_position}:{ channel }",
+            "et-0/0/{{channel} + 1}",
+        ):
+            with self.subTest(parent_name_template=template):
+                rule = self._rule(breakout_mode=CHANNELIZED, channel_count=4, parent_name_template=template)
+
+                self._assert_rejected(rule, "parent_name_template")
+
+    def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
+        """The rule is 'no channel', not 'no expressions' — arithmetic parent names must still save."""
+        rule = self._rule(
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            parent_name_template="et-0/0/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}",
+        )
+
+        rule.full_clean()
+
+    def test_a_malformed_parent_template_is_answered_with_validation_not_a_traceback(self):
+        """Stray braces are user input; the operator must get an error page, not a 500."""
+        for template in ("et-0/0/{channel", "et-0/0/}{", "et-0/0/{bay_position"):
+            with self.subTest(parent_name_template=template), contextlib.suppress(ValidationError):
+                rule = self._rule(breakout_mode=CHANNELIZED, channel_count=4, parent_name_template=template)
+
+                rule.full_clean()
 
     def test_device_interface_rules_cannot_be_channelized(self):
         """The device-level path renames existing interfaces; it never creates a family."""
@@ -740,8 +776,8 @@ class RuleTestFormTopologyTest(TestCase):
         )
 
     @staticmethod
-    def _form(**overrides):
-        """Return a bound tester form with *overrides* applied over a valid breakout rule."""
+    def _data(**overrides):
+        """Return tester-form POST data with *overrides* applied over a valid breakout rule."""
         data = {
             "name_template": "xe-0/0/{bay_position}:{channel}",
             "breakout_mode": FLAT,
@@ -749,7 +785,19 @@ class RuleTestFormTopologyTest(TestCase):
             "channel_start": "0",
         }
         data.update(overrides)
-        return RuleTestForm(data=data)
+        return data
+
+    @classmethod
+    def _form(cls, **overrides):
+        """Return a bound tester form built from the same data the view would receive."""
+        return RuleTestForm(data=cls._data(**overrides))
+
+    def _post(self, **overrides):
+        """Submit the tester form through the real view and return the rendered response."""
+        self.client.force_login(self.superuser)
+        return self.client.post(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_test"), self._data(**overrides)
+        )
 
     def _assert_rejected(self, form, field):
         """Assert *form* is invalid and blames *field*."""
@@ -772,6 +820,27 @@ class RuleTestFormTopologyTest(TestCase):
             self._form(breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}:{channel}"),
             "parent_name_template",
         )
+
+    def test_a_parent_template_must_not_reference_the_channel_in_any_spelling(self):
+        """The tester has to refuse every spelling the model refuses, or it previews an unsavable rule."""
+        for template in (
+            "et-0/0/{bay_position}:{channel!r}",
+            "et-0/0/{bay_position}:{channel:>2}",
+            "et-0/0/{bay_position}:{ channel }",
+            "et-0/0/{{channel} + 1}",
+        ):
+            with self.subTest(parent_name_template=template):
+                self._assert_rejected(
+                    self._form(breakout_mode=CHANNELIZED, parent_name_template=template), "parent_name_template"
+                )
+
+    def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
+        """Arithmetic parent names are a documented form and must still preview."""
+        form = self._form(
+            breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
 
     def test_the_channelized_combination_stays_valid(self):
         """The combination the feature exists for must still preview."""
@@ -799,20 +868,29 @@ class RuleTestFormTopologyTest(TestCase):
 
     def test_the_tester_view_reports_the_rejection_instead_of_previewing(self):
         """A preview of a rule that cannot be saved is worse than no preview."""
-        self.client.force_login(self.superuser)
-
-        response = self.client.post(
-            reverse("plugins:netbox_interface_name_rules:interfacenamerule_test"),
-            {
-                "name_template": "xe-0/0/{bay_position}:{channel}",
-                "breakout_mode": CHANNELIZED,
-                "channel_count": "0",
-                "channel_start": "0",
-            },
-        )
+        response = self._post(breakout_mode=CHANNELIZED, channel_count="0")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("channel_count", response.context["form"].errors)
+        self.assertIsNone(response.context["preview_results"])
+
+    def test_the_tester_page_says_why_a_channelized_rule_without_channels_is_refused(self):
+        """An error the page keeps to itself leaves the operator with a blank result and no reason."""
+        response = self._post(breakout_mode=CHANNELIZED, channel_count="0")
+
+        self.assertContains(response, "A channelized rule must define at least one channel.")
+
+    def test_the_tester_page_says_why_an_unknown_mode_is_refused(self):
+        """Same for the mode field itself — a rejected choice has to be visible next to the select."""
+        response = self._post(breakout_mode="native")
+
+        self.assertContains(response, "is not one of the available choices")
+
+    def test_the_tester_page_blames_the_parent_template_rather_than_reporting_a_template_error(self):
+        """A channel reference the check missed reaches the engine and surfaces as a bare 'ValueError'."""
+        response = self._post(breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}:{channel!r}")
+
+        self.assertContains(response, "The parent interface has no channel number")
         self.assertIsNone(response.context["preview_results"])
 
 
@@ -991,6 +1069,24 @@ class BreakoutModeMigrationTest(TestCase):
         """Return the name of the plugin's newest migration."""
         loader = MigrationLoader(connection)
         return sorted(name for app_label, name in loader.graph.leaf_nodes(self.APP))[-1]
+
+    def test_the_migrations_describe_the_models_as_they_are_now(self):
+        """A model change shipped without its migration only fails later, on someone else's upgrade.
+
+        NetBox drops ``choices``, ``help_text`` and ``verbose_name`` from field deconstruction
+        (``utilities.migration.custom_deconstruct``), so this is a schema-level comparison.
+        """
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        autodetector = MigrationAutodetector(
+            loader.project_state(),
+            ProjectState.from_apps(apps),
+            NonInteractiveMigrationQuestioner(specified_apps={self.APP}, dry_run=True),
+        )
+
+        changes = autodetector.changes(graph=loader.graph, trim_to_apps={self.APP}, convert_apps={self.APP})
+
+        pending = [op.describe() for migration in changes.get(self.APP, []) for op in migration.operations]
+        self.assertEqual(pending, [])
 
     def test_rules_created_before_the_migration_become_flat(self):
         """An upgrade must not change what a single existing rule does on the next module install."""

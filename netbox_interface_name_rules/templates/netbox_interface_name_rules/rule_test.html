@@ -54,11 +54,13 @@
             <label class="form-label" for="{{ form.module_type.id_for_label }}">{{ form.module_type.label }}</label>
             {{ form.module_type }}
             <div class="form-text">{{ form.module_type.help_text }}</div>
+            {% if form.module_type.errors %}<div class="invalid-feedback d-block">{{ form.module_type.errors }}</div>{% endif %}
           </div>
           <div class="mb-3" id="regex-mt-row" style="display:none">
             <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{{ form.module_type_pattern.label }}</label>
             {{ form.module_type_pattern }}
             <div class="form-text">{{ form.module_type_pattern.help_text }}</div>
+            {% if form.module_type_pattern.errors %}<div class="invalid-feedback d-block">{{ form.module_type_pattern.errors }}</div>{% endif %}
           </div>
           <hr class="my-2">
           <p class="text-muted small mb-2">Optional scoping — leave blank to match any:</p>
@@ -66,22 +68,26 @@
             <label class="form-label" for="{{ form.parent_module_type.id_for_label }}">{{ form.parent_module_type.label }}</label>
             {{ form.parent_module_type }}
             <div class="form-text">{{ form.parent_module_type.help_text }}</div>
+            {% if form.parent_module_type.errors %}<div class="invalid-feedback d-block">{{ form.parent_module_type.errors }}</div>{% endif %}
           </div>
           <div class="mb-3">
             <label class="form-label" for="{{ form.device_type.id_for_label }}">{{ form.device_type.label }}</label>
             {{ form.device_type }}
             <div class="form-text">{{ form.device_type.help_text }}</div>
+            {% if form.device_type.errors %}<div class="invalid-feedback d-block">{{ form.device_type.errors }}</div>{% endif %}
           </div>
           <div class="mb-3">
             <label class="form-label" for="{{ form.platform.id_for_label }}">{{ form.platform.label }}</label>
             {{ form.platform }}
             <div class="form-text">{{ form.platform.help_text }}</div>
+            {% if form.platform.errors %}<div class="invalid-feedback d-block">{{ form.platform.errors }}</div>{% endif %}
           </div>
           <hr class="my-2">
           <div class="mb-3">
             <label class="form-label" for="{{ form.breakout_mode.id_for_label }}">{{ form.breakout_mode.label }}</label>
             {{ form.breakout_mode }}
             <div class="form-text">{{ form.breakout_mode.help_text }}</div>
+            {% if form.breakout_mode.errors %}<div class="invalid-feedback d-block">{{ form.breakout_mode.errors }}</div>{% endif %}
           </div>
           <div class="mb-3">
             <label class="form-label" for="{{ form.parent_name_template.id_for_label }}">{{ form.parent_name_template.label }}</label>
@@ -94,11 +100,13 @@
               <label class="form-label" for="{{ form.channel_count.id_for_label }}">{{ form.channel_count.label }}</label>
               {{ form.channel_count }}
               <div class="form-text">{{ form.channel_count.help_text }}</div>
+              {% if form.channel_count.errors %}<div class="invalid-feedback d-block">{{ form.channel_count.errors }}</div>{% endif %}
             </div>
             <div class="col-6">
               <label class="form-label" for="{{ form.channel_start.id_for_label }}">{{ form.channel_start.label }}</label>
               {{ form.channel_start }}
               <div class="form-text">{{ form.channel_start.help_text }}</div>
+              {% if form.channel_start.errors %}<div class="invalid-feedback d-block">{{ form.channel_start.errors }}</div>{% endif %}
             </div>
           </div>
         </div>

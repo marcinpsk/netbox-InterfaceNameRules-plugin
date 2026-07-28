@@ -12,6 +12,21 @@ from taggit.managers import TaggableManager
 from .choices import BreakoutModeChoices
 
 _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
+_TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
+
+
+def _references_channel(template):
+    """Return True when *template* names ``{channel}`` in any spelling the engine can be handed.
+
+    Covers the plain form, the conversion and format-spec forms (``{channel!r}``, ``{channel:>2}``)
+    and the nested-arithmetic one (``{{channel} + 1}``).  ``string.Formatter().parse()`` is not used
+    here: it rejects the plugin's own arithmetic templates as malformed field names.
+    """
+    for field in _TEMPLATE_FIELD.findall(template):
+        name = field.split("!", 1)[0].split(":", 1)[0].strip()
+        if name == "channel" or name.startswith(("channel.", "channel[")):
+            return True
+    return False
 
 
 def _validate_module_type_pattern(pattern):
@@ -50,7 +65,7 @@ def _validate_breakout_topology(breakout_mode, channel_count, parent_name_templa
             raise ValidationError(
                 {"parent_name_template": "Parent name template requires the channelized breakout mode."}
             )
-        if "{channel}" in parent_name_template:
+        if _references_channel(parent_name_template):
             raise ValidationError(
                 {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
             )
