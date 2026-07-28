@@ -578,6 +578,15 @@ class RuleApplyDetailViewConvertPostTest(ViewTestBase2):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(any(level == "success" and "Converted 0" in text for level, text in self._messages(response)))
 
+    def test_a_selection_over_the_batch_limit_converts_nothing(self):
+        """The cap on the synchronous batch is wired on every release, like the apply cap beside it."""
+        with patch("netbox_interface_name_rules.views.APPLY_BATCH_LIMIT", 1):
+            response = self.client.post(self._url(), {"action": "convert", "convert_ids": ["1", "2"]})
+
+        self.assertEqual(response.status_code, 302)
+        warnings = [text for level, text in self._messages(response) if level == "warning"]
+        self.assertTrue(any("Background Job" in text for text in warnings), warnings)
+
     def test_convert_failure_is_reported_rather_than_raised(self):
         """A conversion that blows up must land on the page, not in a 500."""
         from django.contrib.messages import ERROR, get_messages

@@ -198,6 +198,13 @@ The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
 **parent**. Automation, saved filters or external systems keyed on that ID will
 address the physical port afterwards, not the channel that inherited its name.
 
+Producing a verdict means performing the whole conversion and rolling it back, so
+the page pays that cost per family it lists. It therefore lists at most
+`apply_batch_limit` families (50 by default, the same cap the apply preview uses)
+and says so when more are waiting, and it refuses a confirmation naming more than
+that many rather than converting part of it. **Convert as Background Job** runs
+every convertible family of the rule and is not capped.
+
 On NetBox 4.6 and older no family is offered and no conversion section is shown.
 
 ### Partial breakout repair

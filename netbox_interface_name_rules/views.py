@@ -436,15 +436,16 @@ class RuleApplyDetailView(generic.ObjectView):
         rule = self.get_object(**kwargs)
         try:
             preview, total_checked = find_interfaces_for_rule(rule, limit=APPLY_BATCH_LIMIT)
-            conversions = find_convertible_families(rule)
+            # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
+            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
             logger.exception("Failed to compute preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {exc}")
-            preview, total_checked, conversions = [], 0, []
+            preview, total_checked, conversions, conversions_have_more = [], 0, [], False
         except Exception as exc:
             logger.exception("Unexpected error computing preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {type(exc).__name__}")
-            preview, total_checked, conversions = [], 0, []
+            preview, total_checked, conversions, conversions_have_more = [], 0, [], False
         return render(
             request,
             self.template_name,
@@ -452,6 +453,7 @@ class RuleApplyDetailView(generic.ObjectView):
                 "rule": rule,
                 "preview": preview,
                 "conversions": conversions,
+                "conversions_have_more": conversions_have_more,
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
@@ -485,6 +487,15 @@ class RuleApplyDetailView(generic.ObjectView):
         convert_ids = [int(i) for i in request.POST.getlist("convert_ids") if i.isdigit()]
         if not convert_ids:
             messages.warning(request, "No families selected; nothing was converted.")
+            return
+        # Converting the first APPLY_BATCH_LIMIT of them would rewrite a set the operator never chose.
+        if len(convert_ids) > APPLY_BATCH_LIMIT:
+            messages.warning(
+                request,
+                f"{len(convert_ids)} families selected; synchronous conversion is limited to "
+                f"{APPLY_BATCH_LIMIT} family(ies) per run, so nothing was converted. "
+                f"Use Convert as Background Job to convert all of them.",
+            )
             return
         conflicts = []
         try:

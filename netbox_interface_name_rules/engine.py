@@ -2184,20 +2184,31 @@ def _conversion_verdict(family, reason):  # pragma: no cover - requires channeli
     }
 
 
-def find_convertible_families(rule) -> list:
-    """Return one verdict per flat family *rule* could convert, convertible or not.
+def find_convertible_families(rule, limit=None) -> tuple:
+    """Return ``(verdicts, has_more)`` for the flat families *rule* could convert, convertible or not.
 
     Nothing is written: every family is converted inside a savepoint that is rolled back again, so
     each verdict carries the reason NetBox itself would refuse the family rather than a guess at its
     rules.  Each verdict names the ch-0 row the confirm form submits, the family's current names,
     the names it would carry, and where the ch-0 row's configuration lands.
+
+    That dry run is what the scan costs, and a blocked family costs it too, so *limit* caps the
+    families examined — one verdict each — rather than the convertible ones among them.  A family
+    beyond the limit is never dry-run; *has_more* reports that one was left unexamined.
     """
     if not (_conversion_offered(rule) and supports_channelization()):
-        return []
-    return [  # pragma: no cover - requires channelization support
-        _conversion_verdict(family, _convert_family(rule, family, commit=False))
-        for family in _conversion_families(rule)
-    ]
+        return [], False
+    return _find_convertible_families(rule, limit)  # pragma: no cover - requires channelization support
+
+
+def _find_convertible_families(rule, limit):  # pragma: no cover - requires channelization support
+    """Dry-run at most *limit* of *rule*'s flat families; see ``find_convertible_families``."""
+    verdicts = []
+    for family in _conversion_families(rule):
+        if limit is not None and len(verdicts) >= limit:
+            return verdicts, True
+        verdicts.append(_conversion_verdict(family, _convert_family(rule, family, commit=False)))
+    return verdicts, False
 
 
 def convert_flat_families(rule, base_pks=None, conflicts=None) -> int:

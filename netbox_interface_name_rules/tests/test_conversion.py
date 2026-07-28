@@ -17,6 +17,7 @@ cannot become a valid channelized family is reported as blocked instead of half 
 
 import uuid
 from unittest import skipIf, skipUnless
+from unittest.mock import patch
 
 from core.models import Job, ObjectType
 from dcim.choices import InterfaceModeChoices
@@ -58,9 +59,6 @@ User = get_user_model()
 
 REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
 
-# The upstream validation a sibling that is itself channelized fails as a prospective channel.
-CHANNELIZED_CHANNEL_ERROR = "cannot be both channelized and bound to a channel"
-
 
 class ConversionTestCase(ChannelizationTestCase):
     """Installs flat families with a flat rule, then points that rule at the channelized topology."""
@@ -92,6 +90,11 @@ class ConversionTestCase(ChannelizationTestCase):
     def _iface(self, name):
         """Return the device interface called *name*."""
         return Interface.objects.get(device=self.device, name=name)
+
+    def _verdicts(self, limit=None):
+        """Return just the scan's verdicts; the 'more families' flag is asserted where it is the point."""
+        verdicts, _ = find_convertible_families(self.rule, limit=limit)
+        return verdicts
 
     @staticmethod
     def _flat_names(position):
@@ -127,7 +130,7 @@ class ConversionVerdictTest(ConversionTestCase):
 
     def test_the_flat_family_is_offered_for_conversion(self):
         """A family an earlier flat apply installed is exactly what this feature exists to convert."""
-        verdicts = find_convertible_families(self.rule)
+        verdicts = self._verdicts()
 
         self.assertEqual(len(verdicts), 1)
         self.assertTrue(verdicts[0]["convertible"])
@@ -135,7 +138,7 @@ class ConversionVerdictTest(ConversionTestCase):
 
     def test_the_verdict_is_keyed_on_the_ch0_row(self):
         """The ch-0 interface is the physical row and the pk the confirm form submits."""
-        verdict = find_convertible_families(self.rule)[0]
+        verdict = self._verdicts()[0]
 
         self.assertEqual(verdict["interface"].pk, self._iface("xe-0/0/3:0").pk)
         self.assertEqual(verdict["current_name"], "xe-0/0/3:0")
@@ -143,14 +146,14 @@ class ConversionVerdictTest(ConversionTestCase):
 
     def test_the_verdict_names_the_family_as_it_is_and_as_it_would_be(self):
         """An operator confirms a rewrite of named rows, so both name sets have to be on the page."""
-        verdict = find_convertible_families(self.rule)[0]
+        verdict = self._verdicts()[0]
 
         self.assertEqual(verdict["current_names"], self._flat_names("3"))
         self.assertEqual(verdict["new_names"], ["et-0/0/3", *self._flat_names("3")])
 
     def test_the_verdict_describes_the_parent_and_its_channels(self):
         """The page must show which row becomes the parent and which channel each name binds to."""
-        verdict = find_convertible_families(self.rule)[0]
+        verdict = self._verdicts()[0]
 
         self.assertEqual(
             [(detail["role"], detail["channel_id"]) for detail in verdict["name_details"]],
@@ -159,13 +162,13 @@ class ConversionVerdictTest(ConversionTestCase):
 
     def test_the_verdict_says_where_the_ch0_configuration_lands(self):
         """The ch-0 row keeps its pk but loses its addresses — the operator has to be told which row gets them."""
-        verdict = find_convertible_families(self.rule)[0]
+        verdict = self._verdicts()[0]
 
         self.assertIn("xe-0/0/3:0", verdict["metadata_note"])
 
     def test_the_verdict_warns_that_the_ch0_interface_id_becomes_the_parent(self):
         """Automation keyed on the ch-0 interface id will address the parent afterwards, silently."""
-        verdict = find_convertible_families(self.rule)[0]
+        verdict = self._verdicts()[0]
 
         self.assertRegex(verdict["metadata_note"], r"(?i)\bid\b")
 
@@ -173,7 +176,7 @@ class ConversionVerdictTest(ConversionTestCase):
         """The preflight really performs the conversion to validate it, so the rollback is the feature."""
         pks = dict(Interface.objects.filter(module=self.module).values_list("name", "pk"))
 
-        find_convertible_families(self.rule)
+        self._verdicts()
 
         self._assert_still_flat(self.module, "3")
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), pks)
@@ -182,7 +185,7 @@ class ConversionVerdictTest(ConversionTestCase):
         """In a flat family the ch-0 row is the base: without a parent name there is nowhere to put it."""
         self._switch_to_channelized(parent_name_template="")
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_a_flat_rule_offers_no_conversion(self):
         """The rule still describes the flat topology, so its families are not the wrong shape."""
@@ -190,14 +193,14 @@ class ConversionVerdictTest(ConversionTestCase):
         self.rule.parent_name_template = ""
         self.rule.save()
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_a_rule_without_channels_offers_no_conversion(self):
         """No channel count means no family to identify — there is nothing to convert against."""
         self.rule.channel_count = 0
         self.rule.save()
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_a_port_the_rule_never_touched_is_not_a_conversion_candidate(self):
         """A raw port is an ordinary apply, not a conversion: no flat family exists on it yet."""
@@ -205,21 +208,21 @@ class ConversionVerdictTest(ConversionTestCase):
             iface.delete()
         Interface.objects.filter(pk=self._iface("xe-0/0/3:0").pk).update(name="3")
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_a_disabled_rule_offers_no_conversion(self):
         """A disabled rule renames nothing; offering it the most invasive rewrite of all would be worse."""
         self.rule.enabled = False
         self.rule.save()
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_a_converted_family_is_not_offered_again(self):
         """It is a native family now; offering it again would invite a second, duplicate conversion."""
         base = self._iface("xe-0/0/3:0")
         convert_flat_families(self.rule, [base.pk])
 
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -471,7 +474,7 @@ class ConversionPreflightTest(ConversionTestCase):
 
     def _blocked_verdict(self):
         """Return the verdict for the family in bay 3, asserting it is blocked."""
-        verdicts = {verdict["current_name"]: verdict for verdict in find_convertible_families(self.rule)}
+        verdicts = {verdict["current_name"]: verdict for verdict in self._verdicts()}
         verdict = verdicts["xe-0/0/3:0"]
         self.assertFalse(verdict["convertible"], verdict)
         return verdict
@@ -542,14 +545,19 @@ class ConversionPreflightTest(ConversionTestCase):
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_a_sibling_that_cannot_be_a_channel_blocks_the_family(self):
-        """The dry-run full_clean() is what inherits upstream's rules, including ones added later."""
+        """The dry-run full_clean() is what inherits upstream's rules, including ones added later.
+
+        No preflight of this plugin's own refuses this family, so the block is upstream's verdict by
+        construction; its wording is upstream's to change, and only the row it names is the contract.
+        """
         sibling = self._iface("xe-0/0/3:1")
         sibling.channels = 2
         sibling.save()
 
         verdict = self._blocked_verdict()
 
-        self.assertIn(CHANNELIZED_CHANNEL_ERROR, verdict["reason"])
+        self.assertIn("xe-0/0/3:1", verdict["reason"])
+        self.assertIn("channel", verdict["reason"].lower())
 
     def test_a_sibling_that_cannot_be_a_channel_is_not_partially_converted(self):
         """The dry run happens inside a rolled-back transaction, so a late failure still writes nothing."""
@@ -747,6 +755,106 @@ class ConversionApplyViewTest(ConversionTestCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ConversionBatchLimitViewTest(ConversionTestCase):
+    """The conversion section obeys the batch limit the apply section beside it already obeys.
+
+    The limit is patched down to two so three installed families straddle it; the page has to scan
+    at most two of them and say so, and a confirmation naming more than two has to be refused
+    outright rather than converted in part.
+    """
+
+    BATCH_LIMIT = 2
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="convlimit", password=TEST_PASSWORD, email="convlimit@example.com"
+        )
+        manufacturer, cls.device = _build_device("ConvLimitView", ["3", "4", "5"])
+        cls.module_type = _plain_module_type(manufacturer, "ConvLimitView-QSFP")
+        cls.rule = cls._flat_rule(cls.module_type)
+
+    def setUp(self):
+        """Install three flat families, switch the rule and log in for the interactive flow."""
+        self.modules = {position: self._install(self.module_type, position)[0] for position in ("3", "4", "5")}
+        self._switch_to_channelized()
+        self.client.force_login(self.superuser)
+
+    def _url(self):
+        """Return the Apply detail URL for the rule under test."""
+        return reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk}
+        )
+
+    def _capped(self, method, *args, **kwargs):
+        """Run *method* against the view with the batch limit patched down to BATCH_LIMIT."""
+        with patch("netbox_interface_name_rules.views.APPLY_BATCH_LIMIT", self.BATCH_LIMIT):
+            return method(*args, **kwargs)
+
+    @staticmethod
+    def _messages(response):
+        """Return (level_tag, text) for every message the request produced."""
+        return [(message.level_tag, str(message)) for message in get_messages(response.wsgi_request)]
+
+    def _base_pks(self):
+        """Return the ch-0 interface pk of every installed family."""
+        return [str(self._iface(f"xe-0/0/{position}:0").pk) for position in self.modules]
+
+    def test_the_page_offers_at_most_a_batch_of_families(self):
+        """The scan dry-runs a conversion per family, so an unbounded one is a fleet-sized GET."""
+        response = self._capped(self.client.get, self._url())
+
+        self.assertEqual(len(response.context["conversions"]), self.BATCH_LIMIT)
+        self.assertTrue(response.context["conversions_have_more"])
+
+    def test_the_page_says_more_families_are_waiting(self):
+        """A silent truncation reads as 'these are all of them', which is the wrong thing to act on."""
+        content = self._capped(self.client.get, self._url()).content.decode()
+
+        self.assertIn(f"of {self.BATCH_LIMIT}+ flat family(ies)", content)
+        self.assertIn(f"at most {self.BATCH_LIMIT} per run", content)
+        self.assertIn("Convert as Background Job", content)
+
+    def test_a_page_that_shows_every_family_flags_nothing(self):
+        """The hint has to mean something, so it cannot be on when the batch really is the whole fleet."""
+        response = self.client.get(self._url())
+
+        self.assertEqual(len(response.context["conversions"]), 3)
+        self.assertFalse(response.context["conversions_have_more"])
+        self.assertNotIn("+ flat family(ies)", response.content.decode())
+
+    def test_a_confirmation_over_the_limit_converts_nothing(self):
+        """Converting the first two of three rows submitted would rewrite a set nobody chose."""
+        response = self._capped(self.client.post, self._url(), {"action": "convert", "convert_ids": self._base_pks()})
+
+        self.assertEqual(response.status_code, 302)
+        for position, module in self.modules.items():
+            self._assert_still_flat(module, position)
+
+    def test_a_confirmation_over_the_limit_points_at_the_background_job(self):
+        """A refusal without the way forward leaves the operator with no way to convert the fleet."""
+        response = self._capped(self.client.post, self._url(), {"action": "convert", "convert_ids": self._base_pks()})
+
+        warnings = [text for level, text in self._messages(response) if level == "warning"]
+        self.assertTrue(any("Background Job" in text for text in warnings), warnings)
+        self.assertTrue(any(str(self.BATCH_LIMIT) in text for text in warnings), warnings)
+
+    def test_a_confirmation_at_the_limit_still_converts(self):
+        """The cap is a limit, not an off-by-one: a batch of exactly the limit is a legal batch."""
+        response = self._capped(
+            self.client.post,
+            self._url(),
+            {"action": "convert", "convert_ids": self._base_pks()[: self.BATCH_LIMIT]},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        converted = [
+            position for position, module in self.modules.items() if self._names(module) != self._flat_names(position)
+        ]
+        self.assertEqual(len(converted), self.BATCH_LIMIT)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ConversionScanCostTest(ConversionTestCase):
     """The Apply page runs this scan on every GET, so its cost cannot grow with the fleet.
 
@@ -770,7 +878,7 @@ class ConversionScanCostTest(ConversionTestCase):
     def _scan_queries(self):
         """Return the queries one full scan runs."""
         with CaptureQueriesContext(connection) as captured:
-            find_convertible_families(self.rule)
+            self._verdicts()
         return captured.captured_queries
 
     def test_a_second_module_of_the_same_type_costs_the_scan_no_extra_queries(self):
@@ -780,7 +888,7 @@ class ConversionScanCostTest(ConversionTestCase):
         self._install(self.module_type, "4", run_rules=False)
 
         with self.assertNumQueries(one_module):
-            find_convertible_families(self.rule)
+            self._verdicts()
 
     def test_the_scan_reads_the_interface_templates_once_for_the_module_type(self):
         """The names come from the module type, so two modules of one type are one template query."""
@@ -790,6 +898,81 @@ class ConversionScanCostTest(ConversionTestCase):
 
         template_queries = [query for query in queries if "dcim_interfacetemplate" in query["sql"]]
         self.assertEqual(len(template_queries), 1, [query["sql"] for query in queries])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ConversionScanLimitTest(ConversionTestCase):
+    """The scan is capped the way the apply preview beside it is, and the cap bounds the dry runs.
+
+    Every family the scan examines costs a real conversion inside a rolled-back savepoint, blocked
+    ones included, so the limit counts families examined — one verdict each.  Truncating the verdict
+    list after the fact would leave the Apply page's GET paying for the whole fleet.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ConvLimit", ["3", "4", "5"])
+        cls.module_type = _plain_module_type(manufacturer, "ConvLimit-QSFP")
+        cls.rule = cls._flat_rule(cls.module_type)
+
+    def setUp(self):
+        """Install three flat families, so a limit of two leaves exactly one family behind."""
+        self.modules = {position: self._install(self.module_type, position)[0] for position in ("3", "4", "5")}
+        self._switch_to_channelized()
+
+    @staticmethod
+    def _dry_runs(captured):
+        """Return the interface INSERTs a scan issued — the channel-1 row, one per family dry-run."""
+        return [query for query in captured.captured_queries if 'INSERT INTO "dcim_interface"' in query["sql"]]
+
+    def test_an_unlimited_scan_examines_every_family(self):
+        """The background job's batch is unbounded by design, and so is a scan without a limit."""
+        verdicts, has_more = find_convertible_families(self.rule)
+
+        self.assertEqual(len(verdicts), 3)
+        self.assertFalse(has_more)
+
+    def test_the_scan_stops_at_the_limit_and_says_more_are_waiting(self):
+        """The page has to distinguish 'that is all of them' from 'that is as far as this run went'."""
+        verdicts, has_more = find_convertible_families(self.rule, limit=2)
+
+        self.assertEqual(len(verdicts), 2)
+        self.assertTrue(has_more)
+
+    def test_a_limit_the_families_never_reach_reports_nothing_waiting(self):
+        """A limit above the fleet is not a reason to tell the operator families were left out."""
+        verdicts, has_more = find_convertible_families(self.rule, limit=5)
+
+        self.assertEqual(len(verdicts), 3)
+        self.assertFalse(has_more)
+
+    def test_the_families_past_the_limit_are_never_dry_run(self):
+        """The dry run is the scan's whole cost: capping the verdict list alone would buy nothing."""
+        with CaptureQueriesContext(connection) as capped:
+            find_convertible_families(self.rule, limit=2)
+        with CaptureQueriesContext(connection) as uncapped:
+            find_convertible_families(self.rule)
+
+        self.assertEqual(len(self._dry_runs(capped)), 2, [query["sql"] for query in capped.captured_queries])
+        self.assertEqual(len(self._dry_runs(uncapped)), 3)
+
+    def test_a_blocked_family_counts_against_the_limit(self):
+        """It costs the same dry run as a convertible one, so it has to bound the scan the same way."""
+        for position in ("3", "4", "5"):
+            self._iface(f"xe-0/0/{position}:2").delete()
+
+        verdicts, has_more = find_convertible_families(self.rule, limit=2)
+
+        self.assertEqual(len(verdicts), 2)
+        self.assertFalse(any(verdict["convertible"] for verdict in verdicts), verdicts)
+        self.assertTrue(has_more)
+
+    def test_the_scan_converts_nothing_whatever_the_limit(self):
+        """A capped scan is still a preview; stopping early must not leave a half-converted fleet."""
+        find_convertible_families(self.rule, limit=2)
+
+        for position, module in self.modules.items():
+            self._assert_still_flat(module, position)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -885,7 +1068,7 @@ class FlatToChannelizedJuniperE2ETest(ConversionTestCase):
         """Switching the rule alone changes nothing — the page is where the conversion is offered."""
         self._switch_to_channelized()
 
-        verdicts = find_convertible_families(self.rule)
+        verdicts = self._verdicts()
 
         self.assertEqual(len(verdicts), 1)
         self.assertTrue(verdicts[0]["convertible"], verdicts[0]["reason"])
@@ -962,7 +1145,7 @@ class ConversionWithoutSupportTest(ConversionTestCase):
 
     def test_no_family_is_offered_for_conversion(self):
         """There is no channelized topology on this release, so no family can be converted into one."""
-        self.assertEqual(find_convertible_families(self.rule), [])
+        self.assertEqual(self._verdicts(), [])
 
     def test_converting_refuses_gracefully_and_says_so(self):
         """A refusal has to be visible: a silent zero looks exactly like 'nothing needed converting'."""
