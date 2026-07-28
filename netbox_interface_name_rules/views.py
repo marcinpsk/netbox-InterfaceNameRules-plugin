@@ -16,6 +16,7 @@ from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
 
+from .choices import BreakoutModeChoices
 from .filters import InterfaceNameRuleFilterSet
 from .forms import (
     InterfaceNameRuleBulkEditForm,
@@ -49,6 +50,8 @@ class RulePreview:
     name_template: str
     channel_count: int
     channel_start: int
+    parent_name_template: str = ""
+    breakout_mode: str = BreakoutModeChoices.FLAT
 
 
 try:
@@ -188,6 +191,8 @@ class RuleTestView(BaseMultiObjectView):
                 )
                 initial = {
                     "name_template": loaded_rule.name_template,
+                    "parent_name_template": loaded_rule.parent_name_template,
+                    "breakout_mode": loaded_rule.breakout_mode,
                     "module_type_is_regex": loaded_rule.module_type_is_regex,
                     "module_type": loaded_rule.module_type,
                     "module_type_pattern": loaded_rule.module_type_pattern,
@@ -273,6 +278,8 @@ class RuleTestView(BaseMultiObjectView):
 
         params = {
             "name_template": name_template,
+            "parent_name_template": cd.get("parent_name_template", ""),
+            "breakout_mode": cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             "module_type_is_regex": "on" if module_type_is_regex else "",
             "channel_count": channel_count,
             "channel_start": channel_start,
@@ -289,7 +296,11 @@ class RuleTestView(BaseMultiObjectView):
         return redirect(f"{add_url}?{urlencode(params)}")
 
     def _evaluate_template_preview(self, cd):
-        """Evaluate name_template against form variables; return (preview_results, error)."""
+        """Evaluate the rule's templates against form variables; return (preview_results, error).
+
+        Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
+        so a channelized rule shows the parent it creates alongside the channels under it.
+        """
         from .engine import evaluate_name_template
 
         name_template = cd["name_template"]
@@ -303,27 +314,29 @@ class RuleTestView(BaseMultiObjectView):
             "sfp_slot": cd.get("var_sfp_slot") or "1",
             "base": cd.get("var_base") or "Ethernet1",
         }
+
+        def row(result, role, channel=None):
+            """Describe one previewed name."""
+            return {"source": variables["base"], "channel": channel, "result": result, "role": role}
+
         try:
             if channel_count > 0:
                 preview_results = []
+                if cd.get("breakout_mode") == BreakoutModeChoices.CHANNELIZED:
+                    parent_template = cd.get("parent_name_template") or ""
+                    parent_name = (
+                        evaluate_name_template(parent_template, variables) if parent_template else variables["base"]
+                    )
+                    preview_results.append(row(parent_name, "parent"))
                 for ch in range(channel_count):
-                    vars_copy = dict(variables)
-                    vars_copy["channel"] = str(channel_start + ch)
+                    channel = str(channel_start + ch)
                     preview_results.append(
-                        {
-                            "source": variables["base"],
-                            "channel": str(channel_start + ch),
-                            "result": evaluate_name_template(name_template, vars_copy),
-                        }
+                        row(
+                            evaluate_name_template(name_template, {**variables, "channel": channel}), "channel", channel
+                        )
                     )
             else:
-                preview_results = [
-                    {
-                        "source": variables["base"],
-                        "channel": None,
-                        "result": evaluate_name_template(name_template, variables),
-                    }
-                ]
+                preview_results = [row(evaluate_name_template(name_template, variables), "interface")]
             return preview_results, None
         except Exception as exc:
             logger.exception("Template evaluation error: %s", exc)
@@ -351,6 +364,8 @@ class RuleTestView(BaseMultiObjectView):
             device_type=cd.get("device_type"),
             platform=cd.get("platform"),
             name_template=name_template,
+            parent_name_template=cd.get("parent_name_template", ""),
+            breakout_mode=cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             channel_count=channel_count,
             channel_start=channel_start,
         )
@@ -483,7 +498,7 @@ class RuleApplyDetailView(generic.ObjectView):
                     if conflicts:
                         messages.warning(
                             request,
-                            f"{len(conflicts)} interface(s) skipped — target name already in use on the device.",
+                            f"{len(conflicts)} interface(s) skipped — the plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

@@ -160,6 +160,8 @@ class InterfaceNameRuleViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             "device_type": device_type.pk,
             "platform": platform.pk,
             "name_template": "GigabitEthernet{slot}/{channel}",
+            "parent_name_template": "GigabitEthernet{slot}",
+            "breakout_mode": "channelized",
             "channel_count": 4,
             "channel_start": 1,
             "description": "Created by the standard view test",
@@ -169,10 +171,11 @@ class InterfaceNameRuleViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 
         # module_type is matched by model name (to_field_name="model") on import.
         cls.csv_data = (
-            "module_type,module_type_pattern,module_type_is_regex,name_template,channel_count,channel_start,enabled",
-            f"{module_types[4].model},,false,Ethernet{{slot}}/10,0,0,true",
-            f"{module_types[5].model},,false,Ethernet{{slot}}/11,0,0,true",
-            ",QSFP-DD-400G-.*,true,Ethernet{slot}/12,4,1,true",
+            "module_type,module_type_pattern,module_type_is_regex,name_template,parent_name_template,"
+            "breakout_mode,channel_count,channel_start,enabled",
+            f"{module_types[4].model},,false,Ethernet{{slot}}/10,,flat,0,0,true",
+            f"{module_types[5].model},,false,Ethernet{{slot}}/11,,flat,0,0,true",
+            ",QSFP-DD-400G-.*,true,Ethernet{slot}/12,Ethernet{slot},channelized,4,1,true",
         )
 
         cls.csv_update_data = (
@@ -180,9 +183,12 @@ class InterfaceNameRuleViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             f"{InterfaceNameRule.objects.first().pk},Ethernet{{slot}}/99,Updated via CSV import",
         )
 
+        # breakout_mode stays flat here: bulk edit runs full_clean(), and the channelized topology
+        # is only valid for a rule that also defines channels.
         cls.bulk_edit_data = {
             "description": "Bulk edited",
             "enabled": False,
+            "breakout_mode": "flat",
         }
 
 

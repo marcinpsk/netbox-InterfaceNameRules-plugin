@@ -627,7 +627,7 @@ class ChannelizedPredictionTest(ChannelizationTestCase):
         self.assertEqual(self._names(module), raw_names)
 
     def test_prediction_still_touches_no_interfaces(self):
-        """Prediction reads templates only — the family it describes is left exactly as it was."""
+        """Prediction only reads — the family it describes is left exactly as it was."""
         module, bay = self._install(self.breakout_type, "3", run_rules=False)
 
         predict_rule_output(module, bay, self._names(module))

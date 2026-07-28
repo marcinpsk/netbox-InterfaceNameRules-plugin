@@ -5,6 +5,7 @@ from dcim.models import DeviceType, ModuleType, Platform
 from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
+from .choices import BreakoutModeChoices
 from .models import InterfaceNameRule
 
 
@@ -22,6 +23,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
     enabled = django_filters.BooleanFilter(label="Enabled")
     applies_to_device_interfaces = django_filters.BooleanFilter(label="Device Interface Rules")
     module_type_pattern = django_filters.CharFilter(lookup_expr="icontains", label="Pattern")
+    breakout_mode = django_filters.MultipleChoiceFilter(choices=BreakoutModeChoices, label="Breakout Mode")
     parent_module_type_id = django_filters.ModelChoiceFilter(
         queryset=ModuleType.objects.all(),
         field_name="parent_module_type",
@@ -45,6 +47,7 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
             "module_type_is_regex",
             "applies_to_device_interfaces",
             "module_type_pattern",
+            "breakout_mode",
             "parent_module_type_id",
             "device_type_id",
             "platform_id",
@@ -52,10 +55,11 @@ class InterfaceNameRuleFilterSet(NetBoxModelFilterSet):
         ]
 
     def search(self, queryset, name, value):
-        """Filter by pattern, template, description, or module type model name."""
+        """Filter by pattern, either name template, description, or module type model name."""
         return queryset.select_related("module_type").filter(
             Q(module_type_pattern__icontains=value)
             | Q(name_template__icontains=value)
+            | Q(parent_name_template__icontains=value)
             | Q(description__icontains=value)
             | Q(module_type__model__icontains=value)
         )

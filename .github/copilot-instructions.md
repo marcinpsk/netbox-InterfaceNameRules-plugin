@@ -88,7 +88,7 @@ The `reuse-lint` pre-commit hook validates compliance on every commit.
 
 ## Key conventions
 
-- All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents.
+- All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents. Non-model forms are the exception: NetBox 4.x dropped `BootstrapMixin` and styles every form through its own widget templates (`FORM_RENDERER = TemplatesSetting`), so a plain form subclasses `django.forms.Form`, exactly as NetBox's own `ConfirmationForm`/`BulkRenameForm` do.
 - Template variables use Python `str.format()` syntax: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`, `{module_path}` (gated via `utils.supports_module_path()` using import-based feature detection).
 - Arithmetic inside braces is evaluated via `ast.parse` with a strict allowlist of AST node types — never use `eval()` directly on user input.
 - The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.

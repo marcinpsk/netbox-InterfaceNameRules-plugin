@@ -44,6 +44,8 @@ else:  # pragma: no cover — field declarations; behaviour is covered by the Gr
         device_type_id: strawberry.ID | None = strawberry_django.filter_field()
         platform_id: strawberry.ID | None = strawberry_django.filter_field()
         name_template: StrFilterLookup[str] | None = strawberry_django.filter_field()
+        parent_name_template: StrFilterLookup[str] | None = strawberry_django.filter_field()
+        breakout_mode: StrFilterLookup[str] | None = strawberry_django.filter_field()
         channel_count: BaseFilterLookup[int] | None = strawberry_django.filter_field()
         channel_start: BaseFilterLookup[int] | None = strawberry_django.filter_field()
         description: StrFilterLookup[str] | None = strawberry_django.filter_field()

@@ -111,6 +111,33 @@ the template's name and each channel keeps its own suffix (`et-0/0/3` → `et-0/
 whose name shares no prefix with its parent is left alone and logged — the engine does not guess
 at free-form names.
 
+### Channelized Breakout
+
+`breakout_mode` selects the topology a breakout rule produces: `flat` (the default, and what every
+rule did before the field existed) creates sibling interfaces, while `channelized` turns the base
+into a parent with `channels` set and creates one channel subinterface per channel.
+
+```yaml
+name_template: "xe-0/0/{bay_position}:{channel}"
+parent_name_template: "et-0/0/{bay_position}"
+breakout_mode: channelized
+channel_count: 4
+channel_start: 0
+# Bay position 5 → et-0/0/5 (parent, 4 channels) + xe-0/0/5:0 … xe-0/0/5:3
+```
+
+`parent_name_template` names the parent interface. It takes the same variables as `name_template`
+minus `{channel}` — the parent is the one interface in the family without a channel number, and a
+`{channel}` in it is rejected in every spelling, including inside an expression (`{channel + 1}`).
+Braces must balance, so a stray `{` is refused on save instead of ending up in an interface name.
+Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for
+the parent and for every channel alike.
+
+The complete family is checked before anything is written: one occupied name — the parent's or any
+channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
+(4.6 and older) a `channelized` rule is skipped and logged; it is never applied as a flat breakout
+instead.
+
 ### Converter Offset
 
 ```yaml

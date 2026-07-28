@@ -95,6 +95,8 @@ class InterfaceNameRuleTable(NetBoxTable):
     platform = tables.Column(verbose_name="Platform", linkify=True)
     applies_to_device_interfaces = columns.BooleanColumn(verbose_name="Device Ifaces")
     name_template = tables.Column(verbose_name="Name Template")
+    parent_name_template = tables.Column(verbose_name="Parent Name Template")
+    breakout_mode = columns.ChoiceFieldColumn(verbose_name="Breakout Mode")
     channel_count = tables.Column(verbose_name="Channels")
     channel_start = tables.Column(verbose_name="Channel Start")
     description = tables.Column(verbose_name="Description", linkify=False)
@@ -125,6 +127,8 @@ class InterfaceNameRuleTable(NetBoxTable):
             "platform",
             "applies_to_device_interfaces",
             "name_template",
+            "parent_name_template",
+            "breakout_mode",
             "channel_count",
             "channel_start",
             "description",
@@ -143,6 +147,7 @@ class InterfaceNameRuleTable(NetBoxTable):
             "platform",
             "applies_to_device_interfaces",
             "name_template",
+            "breakout_mode",
             "channel_count",
             "description",
             "actions",

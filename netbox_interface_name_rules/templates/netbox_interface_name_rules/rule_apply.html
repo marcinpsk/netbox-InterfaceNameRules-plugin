@@ -41,6 +41,7 @@
             <th>Platform</th>
             <th>Name Template</th>
             <th>Ch.</th>
+            <th title="Topology a breakout rule produces: flat sibling interfaces, or a channelized parent with channel subinterfaces">Mode</th>
             <th title="Click 'Check' to scan installed interfaces and see if any would be renamed by this rule. This scan runs on demand because it may be slow for rules matching many modules.">Can rename</th>
             <th></th>
           </tr>
@@ -88,6 +89,13 @@
               </td>
               <td><code>{{ rule.name_template }}</code></td>
               <td>{% if rule.channel_count %}{{ rule.channel_count }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+              <td>
+                {% if rule.channel_count %}
+                  <span class="badge text-bg-{{ rule.get_breakout_mode_color }}">{{ rule.get_breakout_mode_display }}</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
               <td class="applicable-cell" data-pk="{{ rule.pk }}"
                   data-url="{% url 'plugins:netbox_interface_name_rules:interfacenamerule_applicable' rule.pk %}">
                 <button class="btn btn-sm btn-outline-secondary scan-btn py-0 px-2"
