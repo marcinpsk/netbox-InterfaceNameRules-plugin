@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+#
+# Juniper Interface Name Rules — channelized breakout (NetBox 4.7+)
+#
+# The same Juniper breakout families as contrib/juniper.yaml, modelled the way NetBox 4.7 models
+# them: one physical parent interface carrying `channels`, plus one channel subinterface per
+# channel, instead of N flat sibling interfaces.
+#
+# Import this INSTEAD OF the matching breakout rules in contrib/juniper.yaml — a rule is unique per
+# (module type pattern, device type), so the flat and channelized variants cannot both be loaded.
+# On NetBox 4.6 and older these rules are skipped with a warning rather than applied as flat
+# breakouts; a flat family an earlier apply already installed is converted only from
+# Apply Rules > Preview & Apply, per family, never by applying the rule.
+#
+# Bulk import via: Interface Name Rules > Import
+
+# =============================================================================
+# Juniper ACX7024
+# Bay format: "Transceiver X" with position=X (numeric, 0-27)
+# =============================================================================
+
+# QSFP+ 4x10G breakout (regex) → et-0/0/X parent + xe-0/0/X:0 … :3 channels
+- module_type_pattern: "QSFP-4X10G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  parent_name_template: "et-0/0/{bay_position}"
+  breakout_mode: channelized
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G channelized breakout (all variants)"
+
+# QSFP28-DD 2x100G breakout (regex) → et-0/0/X parent + et-0/0/X:0 … :1 channels
+- module_type_pattern: "QSFP28-DD-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "et-0/0/{bay_position}:{channel}"
+  parent_name_template: "et-0/0/{bay_position}"
+  breakout_mode: channelized
+  channel_count: 2
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP28-DD 2x100G channelized breakout (all variants)"
