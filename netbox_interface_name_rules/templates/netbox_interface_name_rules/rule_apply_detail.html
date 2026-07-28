@@ -56,6 +56,14 @@
       {% if rule.channel_count %}
         <dt class="col-sm-3">Channels</dt>
         <dd class="col-sm-9">{{ rule.channel_count }} starting at {{ rule.channel_start }}</dd>
+        <dt class="col-sm-3">Breakout Mode</dt>
+        <dd class="col-sm-9">
+          <span class="badge text-bg-{{ rule.get_breakout_mode_color }}">{{ rule.get_breakout_mode_display }}</span>
+        </dd>
+      {% endif %}
+      {% if rule.parent_name_template %}
+        <dt class="col-sm-3">Parent Name Template</dt>
+        <dd class="col-sm-9"><code>{{ rule.parent_name_template }}</code></dd>
       {% endif %}
     </dl>
   </div>

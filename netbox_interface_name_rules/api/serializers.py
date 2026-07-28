@@ -22,6 +22,8 @@ class InterfaceNameRuleSerializer(NetBoxModelSerializer):
             "device_type",
             "platform",
             "name_template",
+            "parent_name_template",
+            "breakout_mode",
             "channel_count",
             "channel_start",
             "description",

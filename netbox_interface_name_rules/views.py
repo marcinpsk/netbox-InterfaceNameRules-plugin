@@ -16,6 +16,7 @@ from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
 
+from .choices import BreakoutModeChoices
 from .filters import InterfaceNameRuleFilterSet
 from .forms import (
     InterfaceNameRuleBulkEditForm,
@@ -49,6 +50,8 @@ class RulePreview:
     name_template: str
     channel_count: int
     channel_start: int
+    parent_name_template: str = ""
+    breakout_mode: str = BreakoutModeChoices.FLAT
 
 
 try:
@@ -188,6 +191,8 @@ class RuleTestView(BaseMultiObjectView):
                 )
                 initial = {
                     "name_template": loaded_rule.name_template,
+                    "parent_name_template": loaded_rule.parent_name_template,
+                    "breakout_mode": loaded_rule.breakout_mode,
                     "module_type_is_regex": loaded_rule.module_type_is_regex,
                     "module_type": loaded_rule.module_type,
                     "module_type_pattern": loaded_rule.module_type_pattern,
@@ -273,6 +278,8 @@ class RuleTestView(BaseMultiObjectView):
 
         params = {
             "name_template": name_template,
+            "parent_name_template": cd.get("parent_name_template", ""),
+            "breakout_mode": cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             "module_type_is_regex": "on" if module_type_is_regex else "",
             "channel_count": channel_count,
             "channel_start": channel_start,
@@ -351,6 +358,8 @@ class RuleTestView(BaseMultiObjectView):
             device_type=cd.get("device_type"),
             platform=cd.get("platform"),
             name_template=name_template,
+            parent_name_template=cd.get("parent_name_template", ""),
+            breakout_mode=cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             channel_count=channel_count,
             channel_start=channel_start,
         )

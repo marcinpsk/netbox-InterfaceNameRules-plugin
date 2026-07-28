@@ -807,6 +807,8 @@ class BulkImportCSVTest(ViewTestBase):
                 "",  # device_type
                 "",  # platform
                 "et-0/0/{bay_position}",  # name_template
+                "",  # parent_name_template
+                "flat",  # breakout_mode
                 0,  # channel_count
                 0,  # channel_start
                 "round-trip test",  # description

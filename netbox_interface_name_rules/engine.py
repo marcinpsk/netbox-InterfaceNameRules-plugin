@@ -18,6 +18,8 @@ from django.db import IntegrityError, transaction
 from django.db.models import Aggregate, F, TextField, Value
 from django.db.models.functions import Cast, Coalesce, Concat, Length
 
+from .choices import BreakoutModeChoices
+
 logger = logging.getLogger(__name__)
 
 # In-process cache of the enabled InterfaceNameRule set, keyed by a cheap fingerprint
@@ -124,6 +126,8 @@ _VERSION_COLUMNS = (
     "device_type_id",
     "platform_id",
     "name_template",
+    "parent_name_template",
+    "breakout_mode",
     "channel_count",
     "channel_start",
     "applies_to_device_interfaces",
@@ -442,7 +446,11 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
                 iface.pk,
             )
             continue
-        renamed += count or 0  # None = family skipped for a structural reason
+        if count is None:
+            # A structural skip (unsupported topology, channel-count mismatch) says nothing about the rule.
+            families_seen = True
+            continue
+        renamed += count
 
     if unrenamed and renamed == 0 and not conflicts and not families_seen:
         # All interfaces already have the names the rule would produce — flag as
@@ -1185,13 +1193,28 @@ def _apply_simple_rule_to_family(rule, parent, children, variables, module, conf
     return result.count + _rename_channel_children(parent, parent_before, children, module, conflicts)
 
 
+def _rename_family_parent(rule, parent, variables, module, conflicts):  # pragma: no cover - see above
+    """Rename an existing family's parent per the rule's parent template; return its rename outcome.
+
+    Only a channelized rule that names its parent touches it — a flat rule, or a blank parent
+    template, leaves the parent the name it already has.
+    """
+    if not (_is_channelized_rule(rule) and rule.parent_name_template):
+        return _RenameResult(parent.name, _UNCHANGED, 0)
+    target = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
+    return _rename_for_family(parent, target, module.device, conflicts)
+
+
 def _apply_breakout_rule_to_family(rule, parent, children, variables, module, conflicts):  # pragma: no cover
-    """Rename the channels of an already-channelized family; return the count, or None when skipped.
+    """Rename an already-channelized family; return the count renamed, or None when skipped.
 
     Nothing is ever created here: the channels the rule describes are rows NetBox already models,
-    so a breakout rule renames them in place and the parent keeps its own name.  A rule whose
-    channel count disagrees with the hardware is a modelling mismatch — the family is skipped
-    whole rather than renamed into a shape it does not have.
+    so a breakout rule renames them in place.  The parent is renamed only when the rule builds
+    channelized families and names their parent; the channels' ``{base}`` stays the parent's name
+    as it was before that rename.  A rule whose channel count disagrees with the hardware is a
+    modelling mismatch — the family is skipped whole rather than renamed into a shape it does not
+    have, and a parent that could not take its name stops the family the same way a simple rule's
+    does.
 
     Every child's name is computed before the first save, so a template that only fails on a later
     channel (channel-dependent arithmetic) aborts the family untouched instead of half renaming it.
@@ -1205,20 +1228,125 @@ def _apply_breakout_rule_to_family(rule, parent, children, variables, module, co
             rule.channel_count,
         )
         return None
+    base_name = parent.name
     targets = [
         (
             child,
             evaluate_name_template(
                 rule.name_template,
-                {**variables, "base": parent.name, "channel": str(rule.channel_start + child.channel_id - 1)},
+                {**variables, "base": base_name, "channel": str(rule.channel_start + child.channel_id - 1)},
             ),
         )
         for child in children
     ]
-    count = 0
+    result = _rename_family_parent(rule, parent, variables, module, conflicts)
+    if result.outcome in (_COLLISION, _ERROR):
+        logger.debug(
+            "Family of %r left unchanged: the parent could not be renamed to %r.", base_name, result.target_name
+        )
+        return result.count
+    count = result.count
     for child, new_name in targets:
         count += _rename_for_family(child, new_name, module.device, conflicts).count
     return count
+
+
+def _is_channelized_rule(rule):
+    """Return True when *rule* asks for the channelized topology instead of flat sibling interfaces."""
+    return rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
+
+
+def _channelized_family_names(rule, base, variables):  # pragma: no cover - requires channelization support
+    """Return ``(parent_name, [(channel_id, name), ...])`` for the family *rule* builds on *base*.
+
+    ``{base}`` is the base interface's current name for the parent and every channel; ``{channel}``
+    is ``channel_start + channel_id - 1``.  A blank parent template leaves the base's name alone.
+    """
+    family_vars = {**variables, "base": base.name}
+    parent_name = base.name
+    if rule.parent_name_template:
+        parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
+    channels = [
+        (
+            channel_id,
+            evaluate_name_template(
+                rule.name_template, {**family_vars, "channel": str(rule.channel_start + channel_id - 1)}
+            ),
+        )
+        for channel_id in range(1, rule.channel_count + 1)
+    ]
+    return parent_name, channels
+
+
+def _first_taken_name(device, names, exclude_pk):  # pragma: no cover - requires channelization support
+    """Return the first of *names* already used by another interface on *device*, or None."""
+    for name in names:
+        if _name_exists_on_device(device, name, exclude_pk=exclude_pk):
+            return name
+    return None
+
+
+def _build_channelized_family(rule, base, variables, module, conflicts):  # pragma: no cover - see above
+    """Turn a plain base interface into a channelized family; return how many rows it changed.
+
+    The whole family is preflighted before anything is written, so a single occupied name — the
+    parent's or any channel's — leaves the base exactly as it was instead of half converting it.
+    """
+    from dcim.choices import InterfaceTypeChoices
+    from dcim.models import Interface
+
+    device = module.device
+    parent_name, channels = _channelized_family_names(rule, base, variables)
+    blocker = _first_taken_name(device, [parent_name, *(name for _, name in channels)], base.pk)
+    if blocker is not None:
+        logger.warning(
+            "Cannot build the channelized family for interface %r on device %s: %r is already taken; skipping.",
+            base.name,
+            device,
+            blocker,
+        )
+        _record_conflict(conflicts, device, base.name, blocker, base.pk)
+        return 0
+
+    count = 0
+    with transaction.atomic():
+        base.channels = rule.channel_count
+        if parent_name != base.name:
+            base.name = parent_name
+            count += 1
+        base.full_clean()
+        base.save()
+        for channel_id, name in channels:
+            channel = Interface(
+                device=device,
+                module=module,
+                name=name,
+                type=InterfaceTypeChoices.TYPE_CHANNEL,
+                parent=base,
+                channel_id=channel_id,
+                enabled=base.enabled,
+            )
+            channel.full_clean()
+            channel.save()
+            count += 1
+    return count
+
+
+def _apply_channelized_rule(rule, base, variables, module, conflicts):
+    """Build the channelized family *rule* describes on a plain base interface.
+
+    Returns None where NetBox cannot model channels: the rule describes a topology this release has
+    no rows for, and building a flat family instead would silently give the operator another one.
+    """
+    if not supports_channelization():
+        logger.warning(
+            "Rule '%s' builds a channelized family, which this NetBox release cannot model; "
+            "leaving interface %r unchanged.",
+            rule,
+            base.name,
+        )
+        return None
+    return _build_channelized_family(rule, base, variables, module, conflicts)  # pragma: no cover - see above
 
 
 def _apply_rule_with_family(rule, iface, children, variables, module, conflicts):
@@ -1231,6 +1359,8 @@ def _apply_rule_with_family(rule, iface, children, variables, module, conflicts)
         return _apply_breakout_rule_to_family(rule, iface, children, variables, module, conflicts)
     if children:  # pragma: no cover - requires channelization support
         return _apply_simple_rule_to_family(rule, iface, children, variables, module, conflicts)
+    if rule.channel_count > 0 and _is_channelized_rule(rule):
+        return _apply_channelized_rule(rule, iface, variables, module, conflicts)
     return _apply_rule_to_interface(rule, iface, {**variables, "base": iface.name}, module, conflicts=conflicts)
 
 
@@ -1432,12 +1562,19 @@ def _lockstep_details(new_name, parent, children, module) -> list:  # pragma: no
 def _channelized_family_entry(rule, module, parent, children, variables) -> dict | None:  # pragma: no cover
     """Preview a breakout rule against an already-channelized family.
 
-    Only the existing channels are renamed — nothing is created and the parent keeps its own name —
-    so a family whose channel count disagrees with the rule previews as no change at all.
+    Nothing is created — only the existing channels are renamed, plus the parent when the rule
+    names one — so a family whose channel count disagrees with the rule previews as no change at
+    all.
     """
     if getattr(parent, "channels", None) != rule.channel_count:
         return None
-    details = [_name_detail(parent.name, "parent")]
+    parent_name = parent.name
+    if _is_channelized_rule(rule) and rule.parent_name_template:
+        try:
+            parent_name = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
+        except ValueError as exc:
+            parent_name = f"<error: {exc}>"
+    details = [_name_detail(parent_name, "parent")]
     for child in children:
         channel = str(rule.channel_start + child.channel_id - 1)
         try:
@@ -1450,11 +1587,36 @@ def _channelized_family_entry(rule, module, parent, children, variables) -> dict
     return _family_entry(module, parent, details, children)
 
 
+def _channelized_family_preview(rule, module, base, variables) -> dict | None:  # pragma: no cover - see below
+    """Describe the channelized family a rule would build on a plain base interface."""
+    try:
+        parent_name, channels = _channelized_family_names(rule, base, variables)
+    except ValueError as exc:
+        return _family_entry(module, base, [_name_detail(f"<error: {exc}>", "parent")], ())
+    details = [_name_detail(parent_name, "parent")]
+    details.extend(_name_detail(name, "channel", channel_id) for channel_id, name in channels)
+    return _family_entry(module, base, details, ())
+
+
+def _channelized_creation_entry(rule, module, bases, variables) -> dict | None:
+    """Return the preview entry for the family a channelized rule would build, or None for none.
+
+    A release that cannot model channels previews nothing, because the apply path builds nothing
+    there either.
+    """
+    if not supports_channelization():
+        return None
+    return _channelized_family_preview(  # pragma: no cover - requires channelization support
+        rule, module, _find_channel_base(rule, bases, variables), variables
+    )
+
+
 def _channel_rule_entries(rule, module, bases, children_by_parent, variables) -> list:
     """Return the preview entries a channel rule produces for one module.
 
-    A module whose base is already channelized previews per family (renames only); anything else
-    keeps the flat breakout preview of one entry per module.
+    A module whose base is already channelized previews per family (renames only); a channelized
+    rule on a plain base previews the family it would build; anything else keeps the flat breakout
+    preview of one entry per module.
     """
     families = [base for base in bases if _is_channelized_parent(base)]
     if families:  # pragma: no cover - requires a NetBox that models channelization
@@ -1463,6 +1625,9 @@ def _channel_rule_entries(rule, module, bases, children_by_parent, variables) ->
             for parent in families
         ]
         return [entry for entry in entries if entry]
+    if _is_channelized_rule(rule):
+        entry = _channelized_creation_entry(rule, module, bases, variables)
+        return [entry] if entry else []
     entry = _channel_rule_entry(rule, module, bases, variables)
     return [entry] if entry else []
 
@@ -1615,6 +1780,8 @@ def _apply_channel_rule_to_module(rule, module, ifaces, variables, id_set, confl
     vars_copy = dict(variables)
     vars_copy["base"] = base_iface.name
     try:
+        if _is_channelized_rule(rule):
+            return _apply_channelized_rule(rule, base_iface, variables, module, conflicts) or 0
         return _apply_rule_to_interface(rule, base_iface, vars_copy, module, conflicts=conflicts)
     except (ValueError, ValidationError, IntegrityError):
         logger.exception(

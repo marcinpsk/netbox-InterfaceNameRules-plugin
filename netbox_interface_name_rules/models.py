@@ -9,6 +9,8 @@ from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
+from .choices import BreakoutModeChoices
+
 _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
 
 
@@ -110,6 +112,27 @@ class InterfaceNameRule(NetBoxModel):
             "'GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}'"
         ),
     )
+    parent_name_template = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name="Parent Name Template",
+        help_text=(
+            "Optional name template for the channelized parent interface, e.g. 'et-0/0/{bay_position}'. "
+            "Same variables as the name template, minus {channel}. Blank leaves the parent's current name."
+        ),
+    )
+    breakout_mode = models.CharField(
+        max_length=20,
+        choices=BreakoutModeChoices,
+        default=BreakoutModeChoices.FLAT,
+        verbose_name="Breakout Mode",
+        help_text=(
+            "Topology a breakout rule produces: 'flat' renames the base to the first channel and creates "
+            "the remaining channels as sibling interfaces; 'channelized' turns the base into a channelized "
+            "parent with one channel subinterface per channel (requires a NetBox that models channels)."
+        ),
+    )
     channel_count = models.PositiveSmallIntegerField(
         default=0,
         help_text="Number of breakout channels (0 = no breakout). Creates this many interfaces per template.",
@@ -164,6 +187,32 @@ class InterfaceNameRule(NetBoxModel):
             self.module_type_pattern = ""
             if not self.module_type:
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
+        self._clean_breakout_mode()
+
+    def _clean_breakout_mode(self):
+        """Keep the breakout mode, the channel count and the parent name template consistent."""
+        channelized = self.breakout_mode == BreakoutModeChoices.CHANNELIZED
+        if self.applies_to_device_interfaces:
+            # The device-level path renames existing interfaces; it never creates a family to name.
+            if channelized:
+                raise ValidationError(
+                    {"breakout_mode": "Device-level interface rules cannot build a channelized family."}
+                )
+            if self.parent_name_template:
+                raise ValidationError(
+                    {"parent_name_template": "Parent name template is not available for device-level interface rules."}
+                )
+        if self.parent_name_template:
+            if not channelized:
+                raise ValidationError(
+                    {"parent_name_template": "Parent name template requires the channelized breakout mode."}
+                )
+            if "{channel}" in self.parent_name_template:
+                raise ValidationError(
+                    {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
+                )
+        if channelized and not self.channel_count:
+            raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
 
     def get_absolute_url(self):
         """Return the detail URL for this rule."""
@@ -177,12 +226,18 @@ class InterfaceNameRule(NetBoxModel):
         "device_type",
         "platform",
         "name_template",
+        "parent_name_template",
+        "breakout_mode",
         "channel_count",
         "channel_start",
         "description",
         "enabled",
         "applies_to_device_interfaces",
     ]
+
+    def get_breakout_mode_color(self):
+        """Return the badge colour NetBox renders the breakout mode with."""
+        return BreakoutModeChoices.colors.get(self.breakout_mode)
 
     @property
     def specificity_score(self) -> int:
@@ -292,6 +347,8 @@ class InterfaceNameRule(NetBoxModel):
         "device_type",
         "platform",
         "name_template",
+        "parent_name_template",
+        "breakout_mode",
         "channel_count",
         "channel_start",
         "description",
@@ -309,6 +366,8 @@ class InterfaceNameRule(NetBoxModel):
             self.device_type.model if self.device_type else "",
             self.platform.name if self.platform else "",
             self.name_template,
+            self.parent_name_template,
+            self.breakout_mode,
             self.channel_count,
             self.channel_start,
             self.description,

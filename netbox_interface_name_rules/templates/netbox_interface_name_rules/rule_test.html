@@ -78,6 +78,17 @@
             <div class="form-text">{{ form.platform.help_text }}</div>
           </div>
           <hr class="my-2">
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.breakout_mode.id_for_label }}">{{ form.breakout_mode.label }}</label>
+            {{ form.breakout_mode }}
+            <div class="form-text">{{ form.breakout_mode.help_text }}</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.parent_name_template.id_for_label }}">{{ form.parent_name_template.label }}</label>
+            {{ form.parent_name_template }}
+            <div class="form-text">{{ form.parent_name_template.help_text }}</div>
+            {% if form.parent_name_template.errors %}<div class="invalid-feedback d-block">{{ form.parent_name_template.errors }}</div>{% endif %}
+          </div>
           <div class="row g-2">
             <div class="col-6">
               <label class="form-label" for="{{ form.channel_count.id_for_label }}">{{ form.channel_count.label }}</label>

@@ -32,6 +32,8 @@ from utilities.testing import APITestCase
 from netbox_interface_name_rules.engine import (
     _VERSION_COLUMNS,
     apply_interface_name_rules,
+    apply_rule_to_existing,
+    find_interfaces_for_rule,
     find_matching_rule,
     supports_channelization,
 )
@@ -678,6 +680,26 @@ class ChannelizedModeWithoutSupportTest(ChannelizationTestCase):
         self.assertEqual(renamed, 0)
         self.assertEqual(self._names(module), ["3"])
         self.assertTrue(any("channelized" in line.lower() for line in logs.output), logs.output)
+
+    def test_the_bulk_apply_path_skips_it_too(self):
+        """Both entry points refuse the rule, so neither can build a flat family behind the other's back."""
+        module, _ = self._install(self.module_type, "3", run_rules=False)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            built = apply_rule_to_existing(self.rule)
+
+        self.assertEqual(built, 0)
+        self.assertEqual(self._names(module), ["3"])
+        self.assertTrue(any("channelized" in line.lower() for line in logs.output), logs.output)
+
+    def test_the_preview_offers_nothing_it_cannot_build(self):
+        """The Apply page must not promise a family this release has no rows for."""
+        self._install(self.module_type, "3", run_rules=False)
+
+        results, total_checked = find_interfaces_for_rule(self.rule)
+
+        self.assertEqual(results, [])
+        self.assertEqual(total_checked, 1)
 
     def test_the_skip_is_not_read_as_an_obsolete_rule(self):
         """The rule is unusable on this release, not redundant — it must not be tagged deprecated."""

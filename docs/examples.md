@@ -117,6 +117,47 @@ save the rule.
   description: "Cisco 8201-SYS QSFP28-DD 2x100G breakout"
 ```
 
+### Channelized breakout (NetBox 4.7+)
+
+A breakout rule produces one of two topologies, chosen by `breakout_mode`:
+
+| Mode | Result |
+|---|---|
+| `flat` (default) | The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces. |
+| `channelized` | The base interface becomes the physical parent (`channels` set, keeping its pk, type, module link and cable) and one channel subinterface is created per channel (`type: channel`, bound to the parent by `channel_id`). |
+
+`parent_name_template` names that parent. It takes the same variables as
+`name_template` minus `{channel}` (the parent is the one interface in the family
+without a channel number); leave it blank to keep the name NetBox gave the port.
+
+```yaml
+# Juniper ACX7024 QSFP+ 4×10G breakout, modelled as a channelized family:
+# et-0/0/5 (parent, 4 channels) + xe-0/0/5:0 … :3 (channel subinterfaces)
+- module_type_pattern: "QSFP-4X10G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  parent_name_template: "et-0/0/{bay_position}"
+  breakout_mode: channelized
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G channelized breakout"
+```
+
+`{channel}` is `channel_start + channel_id - 1`, so NetBox's 1-based `channel_id`
+1…4 render as Juniper's `:0` … `:3`.
+
+The family is built only when every name it needs is free: if the parent's name
+or any channel name is already taken on the device, the whole family is skipped
+and logged rather than half created. Switching an existing rule from `flat` to
+`channelized` does not convert the flat interfaces an earlier apply installed —
+the two topologies are different objects to cabling and automation, so
+conversion is a separate, explicit operation.
+
+On NetBox releases that cannot model channels (4.6 and older) a `channelized`
+rule is skipped with a warning and nothing is created — it is never quietly
+applied as a flat breakout.
+
 ### Partial breakout repair
 
 If a device was provisioned partially (e.g. only 2 of 4 channels were created

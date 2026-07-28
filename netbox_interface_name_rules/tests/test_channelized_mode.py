@@ -366,17 +366,17 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
         )
 
     def test_a_channelized_rule_renames_the_existing_family_without_creating_anything(self):
-        """The family is already the right shape; only its channel names are the rule's business."""
+        """The family is already the right shape; only its names are the rule's business."""
         module, _ = self._install(self.channelized_type, "3")
 
-        self.assertEqual(self._names(module), ["3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
+        self.assertEqual(self._names(module), ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
         self.assertEqual(Interface.objects.filter(module=module).count(), 5)
 
-    def test_the_parent_template_does_not_rename_a_template_created_parent(self):
-        """parent_name_template names a parent the rule creates; an existing one keeps the name it has."""
+    def test_the_parent_template_renames_a_template_created_parent(self):
+        """A rule that names its parent names it wherever the family came from — one rule, one result."""
         module, _ = self._install(self.channelized_type, "3")
 
-        self.assertEqual(self._parent(module).name, "3")
+        self.assertEqual(self._parent(module).name, "et-0/0/3")
 
     def test_a_flat_rule_renames_the_existing_family_the_same_way(self):
         """Structure wins over mode: a family that exists is never given flat siblings."""

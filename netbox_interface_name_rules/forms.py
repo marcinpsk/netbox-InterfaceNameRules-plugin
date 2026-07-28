@@ -14,6 +14,7 @@ from utilities.forms.fields import CSVModelChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect
 
+from .choices import BreakoutModeChoices
 from .models import InterfaceNameRule
 
 
@@ -66,6 +67,20 @@ class RuleTestForm(forms.Form):
         label="Name Template",
         help_text="e.g. et-0/0/{bay_position} or {base}:{channel}",
         widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    parent_name_template = forms.CharField(
+        required=False,
+        label="Parent Name Template",
+        help_text="Channelized mode only: name for the parent interface, e.g. et-0/0/{bay_position}",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
+    )
+    breakout_mode = forms.ChoiceField(
+        required=False,
+        choices=BreakoutModeChoices,
+        initial=BreakoutModeChoices.FLAT,
+        label="Breakout Mode",
+        help_text="flat = sibling interfaces; channelized = one parent with channel subinterfaces",
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
     channel_count = forms.IntegerField(
         required=False,
@@ -138,6 +153,10 @@ class RuleTestForm(forms.Form):
 
         return cleaned_data
 
+    def clean_breakout_mode(self):
+        """Return the flat topology when the field is left blank."""
+        return self.cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT
+
     def clean_channel_count(self):
         """Return 0 when the field is blank or None."""
         return self.cleaned_data.get("channel_count") or 0
@@ -166,6 +185,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
             "device_type",
             "platform",
             "name_template",
+            "parent_name_template",
+            "breakout_mode",
             "channel_count",
             "channel_start",
             "description",
@@ -232,6 +253,8 @@ class InterfaceNameRuleImportForm(NetBoxModelImportForm):
             "device_type",
             "platform",
             "name_template",
+            "parent_name_template",
+            "breakout_mode",
             "channel_count",
             "channel_start",
             "description",
@@ -253,17 +276,27 @@ class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
     device_type = DynamicModelChoiceField(queryset=DeviceType.objects.all(), required=False)
     platform = DynamicModelChoiceField(queryset=Platform.objects.all(), required=False)
     name_template = forms.CharField(max_length=255, required=False)
+    parent_name_template = forms.CharField(max_length=255, required=False)
+    breakout_mode = forms.ChoiceField(choices=BreakoutModeChoices, required=False)
     channel_count = forms.IntegerField(min_value=0, required=False)
     channel_start = forms.IntegerField(min_value=0, required=False)
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))
     enabled = forms.NullBooleanField(required=False, widget=BulkEditNullBooleanSelect())
 
     fieldsets = (
-        FieldSet("name_template", "channel_count", "channel_start", "enabled", name="Rule"),
+        FieldSet(
+            "name_template",
+            "parent_name_template",
+            "breakout_mode",
+            "channel_count",
+            "channel_start",
+            "enabled",
+            name="Rule",
+        ),
         FieldSet("parent_module_type", "device_type", "platform", name="Scope"),
         FieldSet("description", name="Description"),
     )
-    nullable_fields = ("parent_module_type", "device_type", "platform", "description")
+    nullable_fields = ("parent_module_type", "device_type", "platform", "parent_name_template", "description")
 
 
 class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):
@@ -279,6 +312,7 @@ class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):
     applies_to_device_interfaces = forms.NullBooleanField(required=False, label="Device Interface Rules")
     enabled = forms.NullBooleanField(required=False, label="Enabled")
     module_type_pattern = forms.CharField(required=False, label="Pattern (contains)")
+    breakout_mode = forms.MultipleChoiceField(choices=BreakoutModeChoices, required=False, label="Breakout Mode")
     parent_module_type_id = forms.ModelChoiceField(
         queryset=ModuleType.objects.all(),
         required=False,
