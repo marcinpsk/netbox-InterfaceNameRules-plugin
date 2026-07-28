@@ -84,6 +84,37 @@ class GraphQLFilterRegistrationTest(SimpleTestCase):
             with self.assertRaises(ImportError):
                 spec.loader.exec_module(probe)
 
+    def test_legacy_alias_is_used_only_for_a_genuinely_absent_symbol(self):
+        """An ImportError while resolving StrFilterLookup must not silently pick FilterLookup.
+
+        Only the symbol being absent means "old strawberry-graphql-django". Anything else is a
+        real failure, and quietly falling back to the legacy alias would hide it.
+        """
+        if not self._netbox_provides_filter_base():
+            self.skipTest("NetBox 4.3 legitimately has no filter base")
+
+        import importlib.util
+        import sys
+        import types
+        from unittest import mock
+
+        import strawberry_django as real_strawberry_django
+
+        from netbox_interface_name_rules.graphql import filters as real_filters
+
+        class _FailsOnStrFilterLookup(types.ModuleType):
+            def __getattr__(self, name):
+                if name == "StrFilterLookup":
+                    raise ImportError("simulated failure inside strawberry_django")
+                return getattr(real_strawberry_django, name)
+
+        spec = importlib.util.spec_from_file_location("_inr_filters_probe_alias", real_filters.__file__)
+        probe = importlib.util.module_from_spec(spec)
+
+        with mock.patch.dict(sys.modules, {"strawberry_django": _FailsOnStrFilterLookup("strawberry_django")}):
+            with self.assertRaises(ImportError):
+                spec.loader.exec_module(probe)
+
     def test_type_declares_the_filter_when_available(self):
         from netbox_interface_name_rules.graphql.filters import InterfaceNameRuleFilter
         from netbox_interface_name_rules.graphql.types import _type_kwargs

@@ -26,11 +26,12 @@ except ModuleNotFoundError as exc:  # pragma: no cover — only taken on NetBox 
 else:  # pragma: no cover — field declarations; behaviour is covered by the GraphQL tests
     from strawberry_django import BaseFilterLookup
 
-    try:
-        from strawberry_django import StrFilterLookup
-    except ImportError:
-        # strawberry-graphql-django < 0.86, which is what NetBox 4.5 pins.
-        from strawberry_django import FilterLookup as StrFilterLookup
+    # strawberry-graphql-django renamed FilterLookup to StrFilterLookup in 0.86; NetBox 4.5
+    # pins 0.75. getattr falls back only when the symbol is absent, so an ImportError raised
+    # while resolving it propagates instead of quietly selecting the legacy alias.
+    StrFilterLookup = getattr(strawberry_django, "StrFilterLookup", None)
+    if StrFilterLookup is None:
+        StrFilterLookup = strawberry_django.FilterLookup
 
     @strawberry_django.filter_type(InterfaceNameRule, lookups=True)
     class InterfaceNameRuleFilter(NetBoxModelFilter):
