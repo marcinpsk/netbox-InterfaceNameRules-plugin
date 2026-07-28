@@ -4,12 +4,14 @@ import re
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django import forms
+from django.core.exceptions import ValidationError
 from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelFilterSetForm,
     NetBoxModelForm,
     NetBoxModelImportForm,
 )
+from utilities.forms import add_blank_choice
 from utilities.forms.fields import CSVModelChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect
@@ -126,8 +128,9 @@ class RuleTestForm(forms.Form):
     )
 
     def clean(self):
-        """Validate mutual exclusivity of regex/exact module-type fields."""
+        """Validate regex/exact module-type exclusivity and the breakout topology."""
         cleaned_data = super().clean()
+        self._clean_breakout_topology(cleaned_data)
         module_type_is_regex = cleaned_data.get("module_type_is_regex", False)
         module_type = cleaned_data.get("module_type")
         module_type_pattern = cleaned_data.get("module_type_pattern", "")
@@ -152,6 +155,20 @@ class RuleTestForm(forms.Form):
                 self.add_error("module_type_pattern", "Module Type Pattern must be empty when regex mode is disabled.")
 
         return cleaned_data
+
+    def _clean_breakout_topology(self, cleaned_data):
+        """Reject mode/channel-count/parent-template combinations the model would refuse on save."""
+        from .models import _validate_breakout_topology
+
+        try:
+            _validate_breakout_topology(
+                cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT,
+                cleaned_data.get("channel_count") or 0,
+                cleaned_data.get("parent_name_template") or "",
+            )
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                self.add_error(field, messages)
 
     def clean_breakout_mode(self):
         """Return the flat topology when the field is left blank."""
@@ -277,7 +294,9 @@ class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
     platform = DynamicModelChoiceField(queryset=Platform.objects.all(), required=False)
     name_template = forms.CharField(max_length=255, required=False)
     parent_name_template = forms.CharField(max_length=255, required=False)
-    breakout_mode = forms.ChoiceField(choices=BreakoutModeChoices, required=False)
+    # Blank first choice: a bulk edit posts every rendered field, so without a "no change" option a
+    # select rewrites the column on every selected rule.
+    breakout_mode = forms.ChoiceField(choices=add_blank_choice(BreakoutModeChoices), required=False, initial="")
     channel_count = forms.IntegerField(min_value=0, required=False)
     channel_start = forms.IntegerField(min_value=0, required=False)
     description = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 3}))

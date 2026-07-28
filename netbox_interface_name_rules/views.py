@@ -296,7 +296,11 @@ class RuleTestView(BaseMultiObjectView):
         return redirect(f"{add_url}?{urlencode(params)}")
 
     def _evaluate_template_preview(self, cd):
-        """Evaluate name_template against form variables; return (preview_results, error)."""
+        """Evaluate the rule's templates against form variables; return (preview_results, error).
+
+        Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
+        so a channelized rule shows the parent it creates alongside the channels under it.
+        """
         from .engine import evaluate_name_template
 
         name_template = cd["name_template"]
@@ -310,27 +314,29 @@ class RuleTestView(BaseMultiObjectView):
             "sfp_slot": cd.get("var_sfp_slot") or "1",
             "base": cd.get("var_base") or "Ethernet1",
         }
+
+        def row(result, role, channel=None):
+            """Describe one previewed name."""
+            return {"source": variables["base"], "channel": channel, "result": result, "role": role}
+
         try:
             if channel_count > 0:
                 preview_results = []
+                if cd.get("breakout_mode") == BreakoutModeChoices.CHANNELIZED:
+                    parent_template = cd.get("parent_name_template") or ""
+                    parent_name = (
+                        evaluate_name_template(parent_template, variables) if parent_template else variables["base"]
+                    )
+                    preview_results.append(row(parent_name, "parent"))
                 for ch in range(channel_count):
-                    vars_copy = dict(variables)
-                    vars_copy["channel"] = str(channel_start + ch)
+                    channel = str(channel_start + ch)
                     preview_results.append(
-                        {
-                            "source": variables["base"],
-                            "channel": str(channel_start + ch),
-                            "result": evaluate_name_template(name_template, vars_copy),
-                        }
+                        row(
+                            evaluate_name_template(name_template, {**variables, "channel": channel}), "channel", channel
+                        )
                     )
             else:
-                preview_results = [
-                    {
-                        "source": variables["base"],
-                        "channel": None,
-                        "result": evaluate_name_template(name_template, variables),
-                    }
-                ]
+                preview_results = [row(evaluate_name_template(name_template, variables), "interface")]
             return preview_results, None
         except Exception as exc:
             logger.exception("Template evaluation error: %s", exc)
@@ -492,7 +498,7 @@ class RuleApplyDetailView(generic.ObjectView):
                     if conflicts:
                         messages.warning(
                             request,
-                            f"{len(conflicts)} interface(s) skipped — target name already in use on the device.",
+                            f"{len(conflicts)} interface(s) skipped — the plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

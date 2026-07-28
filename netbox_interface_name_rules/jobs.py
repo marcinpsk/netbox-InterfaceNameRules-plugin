@@ -36,4 +36,4 @@ class ApplyRuleJob(JobRunner):
 
         self.logger.info("Renamed %d interface(s) using rule '%s'", count, rule)
         if conflicts:
-            self.logger.warning("%d interface(s) skipped — target name already in use on the device.", len(conflicts))
+            self.logger.warning("%d interface(s) skipped — the plugin log names each one.", len(conflicts))

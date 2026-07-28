@@ -23,6 +23,7 @@ from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
     find_interfaces_for_rule,
+    predict_rule_output,
     supports_channelization,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -341,6 +342,72 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
+    """An installed flat family is never converted, not even when the rule's new names clear its way.
+
+    Switching the mode *and* the name template at once frees every name the channelized family
+    would need, so nothing collides: only the module's own structure — more interfaces than its
+    module type describes — still says an earlier apply installed a flat family here.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanReTpl", ["3"])
+        cls.module_type = _plain_module_type(manufacturer, "ChanReTpl-QSFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    FLAT_NAMES = ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+
+    def setUp(self):
+        """Install the flat family, then switch the rule to a channelized one with new names."""
+        self.module, self.bay = self._install(self.module_type, "3")
+        self.rule.breakout_mode = CHANNELIZED
+        self.rule.name_template = "et-0/0/{bay_position}:{channel}"
+        self.rule.parent_name_template = "et-0/0/{bay_position}"
+        self.rule.save()
+
+    def _assert_untouched(self):
+        """Assert the installed flat family is exactly as it was, with nothing added beside it."""
+        self.assertEqual(self._names(self.module), self.FLAT_NAMES)
+        self.assertFalse(Interface.objects.filter(module=self.module, channels__isnull=False).exists())
+        self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
+
+    def test_force_apply_builds_no_family_beside_the_flat_one(self):
+        """A parent built on one sibling would strand the other three — the hybrid the docs rule out."""
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
+
+        self.assertEqual(changed, 0)
+        self._assert_untouched()
+        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+
+    def test_the_bulk_apply_path_refuses_it_too(self):
+        """Both entry points share the refusal, so neither can convert a family behind the other's back."""
+        conflicts: list = []
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            changed = apply_rule_to_existing(self.rule, conflicts=conflicts)
+
+        self.assertEqual(changed, 0)
+        self._assert_untouched()
+        self.assertTrue(conflicts, "the skipped module was not reported to the Apply view")
+        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+
+    def test_the_preview_offers_no_family_it_would_not_build(self):
+        """The Apply page must not promise a family the apply path refuses to create."""
+        results, total_checked = find_interfaces_for_rule(self.rule)
+
+        self.assertEqual(results, [])
+        self.assertEqual(total_checked, len(self.FLAT_NAMES))
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
     """A family NetBox's templates already created is renamed in place, whatever the rule's mode."""
 
@@ -475,6 +542,82 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         db_preview = response.context["db_preview"]
         self.assertEqual([entry["new_names"] for entry in db_preview], [self.FAMILY_NAMES])
         self.assertEqual(self._names(self.module), ["3"])  # still a preview
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModePredictionTest(ChannelizationTestCase):
+    """Prediction names the family a channelized rule builds, so integrations see what apply produces.
+
+    ``predict_rule_output`` is what external tooling asks before it syncs; a prediction that leaves
+    out the parent, or that describes flat siblings the rule never creates, is a wrong answer.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanPredMode", ["3", "4", "5"])
+        cls.named_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP")
+        cls.bare_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP-BARE")
+        cls.family_type = _channelized_module_type(manufacturer, "ChanPredMode-QSFP-FAM")
+        InterfaceNameRule.objects.create(
+            module_type=cls.named_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+        InterfaceNameRule.objects.create(
+            module_type=cls.bare_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+        InterfaceNameRule.objects.create(
+            module_type=cls.family_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def _assert_predicts_what_it_applies(self, module_type, position, expected):
+        """Assert the prediction for a raw module is *expected*, and that applying produces the same set."""
+        module, bay = self._install(module_type, position, run_rules=False)
+        raw_names = self._names(module)
+
+        predicted = predict_rule_output(module, bay, raw_names)
+
+        self.assertEqual(predicted, expected)
+        apply_interface_name_rules(module, bay)
+        self.assertEqual(sorted(predicted), self._names(module))
+
+    def test_prediction_names_the_parent_and_every_channel(self):
+        """The parent is a row the apply path creates, so it belongs in the predicted names."""
+        self._assert_predicts_what_it_applies(
+            self.named_type, "3", ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+        )
+
+    def test_a_blank_parent_template_predicts_the_ports_own_name(self):
+        """Blank keeps the port's name, so the parent is predicted as the raw name it already has."""
+        self._assert_predicts_what_it_applies(
+            self.bare_type, "4", ["4", "xe-0/0/4:0", "xe-0/0/4:1", "xe-0/0/4:2", "xe-0/0/4:3"]
+        )
+
+    def test_prediction_renames_the_parent_of_a_template_created_family(self):
+        """A channelized rule names that family's parent when it applies; prediction must say so."""
+        self._assert_predicts_what_it_applies(
+            self.family_type, "5", ["et-0/0/5", "xe-0/0/5:0", "xe-0/0/5:1", "xe-0/0/5:2", "xe-0/0/5:3"]
+        )
+
+    def test_prediction_still_creates_nothing(self):
+        """Prediction reads templates only — the port it describes a family for is left alone."""
+        module, bay = self._install(self.named_type, "3", run_rules=False)
+
+        predict_rule_output(module, bay, self._names(module))
+
+        self.assertEqual(self._names(module), ["3"])
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

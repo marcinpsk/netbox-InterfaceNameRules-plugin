@@ -30,6 +30,34 @@ def _validate_module_type_pattern(pattern):
         raise ValidationError({"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."})
 
 
+def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):
+    """Check that the mode, the channel count and the parent template describe one topology.
+
+    Raises ``ValidationError`` blaming the field that makes the combination impossible.  Shared by
+    the model's ``clean()`` and by ``RuleTestForm`` so the tester refuses exactly what a save would.
+    """
+    channelized = breakout_mode == BreakoutModeChoices.CHANNELIZED
+    if applies_to_device_interfaces:
+        # The device-level path renames existing interfaces; it never creates a family to name.
+        if channelized:
+            raise ValidationError({"breakout_mode": "Device-level interface rules cannot build a channelized family."})
+        if parent_name_template:
+            raise ValidationError(
+                {"parent_name_template": "Parent name template is not available for device-level interface rules."}
+            )
+    if parent_name_template:
+        if not channelized:
+            raise ValidationError(
+                {"parent_name_template": "Parent name template requires the channelized breakout mode."}
+            )
+        if "{channel}" in parent_name_template:
+            raise ValidationError(
+                {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
+            )
+    if channelized and not channel_count:
+        raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
+
+
 class InterfaceNameRule(NetBoxModel):
     """Post-install interface rename rule for module types.
 
@@ -187,32 +215,12 @@ class InterfaceNameRule(NetBoxModel):
             self.module_type_pattern = ""
             if not self.module_type:
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        self._clean_breakout_mode()
-
-    def _clean_breakout_mode(self):
-        """Keep the breakout mode, the channel count and the parent name template consistent."""
-        channelized = self.breakout_mode == BreakoutModeChoices.CHANNELIZED
-        if self.applies_to_device_interfaces:
-            # The device-level path renames existing interfaces; it never creates a family to name.
-            if channelized:
-                raise ValidationError(
-                    {"breakout_mode": "Device-level interface rules cannot build a channelized family."}
-                )
-            if self.parent_name_template:
-                raise ValidationError(
-                    {"parent_name_template": "Parent name template is not available for device-level interface rules."}
-                )
-        if self.parent_name_template:
-            if not channelized:
-                raise ValidationError(
-                    {"parent_name_template": "Parent name template requires the channelized breakout mode."}
-                )
-            if "{channel}" in self.parent_name_template:
-                raise ValidationError(
-                    {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
-                )
-        if channelized and not self.channel_count:
-            raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
+        _validate_breakout_topology(
+            self.breakout_mode,
+            self.channel_count,
+            self.parent_name_template,
+            self.applies_to_device_interfaces,
+        )
 
     def get_absolute_url(self):
         """Return the detail URL for this rule."""

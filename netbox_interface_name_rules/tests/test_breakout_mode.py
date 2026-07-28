@@ -16,6 +16,7 @@ models channelized interfaces lives in test_channelized_mode.py.
 import csv
 import io
 import json
+import re
 from unittest import skipIf
 
 import yaml
@@ -35,6 +36,7 @@ from netbox_interface_name_rules.engine import (
     apply_rule_to_existing,
     find_interfaces_for_rule,
     find_matching_rule,
+    predict_rule_output,
     supports_channelization,
 )
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
@@ -295,6 +297,92 @@ class BreakoutModeImportTest(TestCase):
         imported = InterfaceNameRule.objects.get(module_type=self.target_type)
         self.assertEqual(imported.breakout_mode, CHANNELIZED)
         self.assertEqual(imported.parent_name_template, "et-0/0/{bay_position}")
+
+
+class BreakoutModeBulkEditTest(TestCase):
+    """Bulk editing one field must leave the topology of every selected rule alone.
+
+    A bulk-edit form is submitted whole: every field the page renders is posted, whether or not the
+    operator touched it.  A field that cannot express "no change" therefore rewrites the column on
+    every selected rule.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="brkbulk", password=TEST_PASSWORD, email="brkbulk@example.com"
+        )
+        manufacturer, cls.device = _build_device("BrkBulk")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=_plain_module_type(manufacturer, "BrkBulk-QSFP"),
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+        )
+
+    def setUp(self):
+        """Log in before posting to the bulk-edit view."""
+        self.client.force_login(self.superuser)
+
+    @staticmethod
+    def _url():
+        """Return the bulk-edit URL."""
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_bulk_edit")
+
+    @staticmethod
+    def _posted_by_an_untouched_browser(html, field_name):
+        """Return the value a browser submits for *field_name* when nobody touches that select."""
+        select = re.search(rf'<select[^>]*\bname="{field_name}"[^>]*>(.*?)</select>', html, re.DOTALL)
+        if select is None:
+            return None
+        options = re.findall(r'<option value="([^"]*)"([^>]*)>', select.group(1))
+        for value, attributes in options:
+            if "selected" in attributes:
+                return value
+        return options[0][0] if options else None
+
+    @staticmethod
+    def _form_errors(response):
+        """Return the bulk-edit form's errors, or None when the view redirected instead of rendering."""
+        return getattr(response.context.get("form"), "errors", None) if response.context else None
+
+    def _open_the_form(self):
+        """POST the selection to the bulk-edit view and return the page it renders."""
+        return self.client.post(self._url(), {"pk": [self.rule.pk], "_edit": ""})
+
+    def test_editing_only_the_description_keeps_the_topology(self):
+        """The operator changed a note, not the shape of the interfaces the rule builds."""
+        page = self._open_the_form()
+        untouched = self._posted_by_an_untouched_browser(page.content.decode(), "breakout_mode")
+        self.assertIsNotNone(untouched, "the bulk-edit page renders no breakout_mode select")
+
+        response = self.client.post(
+            self._url(),
+            {"pk": [self.rule.pk], "_apply": "", "description": "Bulk edited", "breakout_mode": untouched},
+        )
+
+        self.assertEqual(response.status_code, 302, self._form_errors(response))
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.breakout_mode, CHANNELIZED)
+        self.assertEqual(self.rule.description, "Bulk edited")
+
+    def test_the_mode_can_still_be_changed_deliberately(self):
+        """A "no change" option must not cost the operator the ability to switch topology."""
+        response = self.client.post(
+            self._url(),
+            {
+                "pk": [self.rule.pk],
+                "_apply": "",
+                "breakout_mode": FLAT,
+                "_nullify": "parent_name_template",  # a flat rule has no parent to name
+            },
+        )
+
+        self.assertEqual(response.status_code, 302, self._form_errors(response))
+        self.rule.refresh_from_db()
+        self.assertEqual(self.rule.breakout_mode, FLAT)
+        self.assertEqual(self.rule.parent_name_template, "")
 
 
 class BreakoutModeDetailViewTest(TestCase):
@@ -566,6 +654,168 @@ class BreakoutModeRuleTestFormTest(TestCase):
         self.assertEqual(form.cleaned_data["parent_name_template"], "et-0/0/{bay_position}")
 
 
+class BreakoutModeManualPreviewTest(TestCase):
+    """The manual (variable-only) preview shows every name the rule would produce.
+
+    It is the only preview an operator gets before any hardware exists, so a channelized rule has to
+    show its parent there — otherwise the page describes a flat breakout under a channelized rule.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="brkprev", password=TEST_PASSWORD, email="brkprev@example.com"
+        )
+
+    def setUp(self):
+        """Log in before posting to the rule test view."""
+        self.client.force_login(self.superuser)
+
+    def _preview(self, **fields):
+        """POST the tester form with *fields* over the breakout defaults; return the preview rows."""
+        data = {
+            "name_template": "xe-0/0/{bay_position}:{channel}",
+            "breakout_mode": FLAT,
+            "channel_count": "4",
+            "channel_start": "0",
+            "var_bay_position": "3",
+        }
+        data.update(fields)
+        response = self.client.post(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_test"), data, follow=False
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["form"].errors, {})
+        self.assertIsNone(response.context["error"])
+        self.response = response
+        return response.context["preview_results"]
+
+    def test_a_channelized_preview_leads_with_the_parent(self):
+        """The parent is the row the rule creates first; the channels hang off it."""
+        results = self._preview(breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}")
+
+        self.assertEqual(
+            [entry["result"] for entry in results],
+            ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"],
+        )
+        self.assertEqual([entry["role"] for entry in results], ["parent", "channel", "channel", "channel", "channel"])
+        self.assertContains(self.response, "et-0/0/3")
+
+    def test_a_blank_parent_template_previews_the_ports_own_name(self):
+        """Blank keeps the port's name, so the parent row shows the base it was given."""
+        results = self._preview(breakout_mode=CHANNELIZED, var_base="Ethernet1")
+
+        self.assertEqual(results[0]["result"], "Ethernet1")
+        self.assertEqual(results[0]["role"], "parent")
+
+    def test_a_flat_breakout_previews_only_its_channels(self):
+        """A flat rule builds no parent, so nothing is added to what the page always showed."""
+        results = self._preview()
+
+        self.assertEqual(
+            [entry["result"] for entry in results],
+            ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"],
+        )
+        self.assertEqual({entry["role"] for entry in results}, {"channel"})
+
+    def test_a_simple_rename_previews_one_interface(self):
+        """A rule with no channels at all is a plain rename, and previews as one row."""
+        results = self._preview(name_template="et-0/0/{bay_position}", channel_count="0")
+
+        self.assertEqual([(entry["result"], entry["role"]) for entry in results], [("et-0/0/3", "interface")])
+
+
+class RuleTestFormTopologyTest(TestCase):
+    """The tester form refuses the combinations a save would refuse.
+
+    The form's whole purpose is to answer "what will this rule do?" before it is saved, so a
+    combination the model rejects has to fail here rather than after a preview that describes a rule
+    the operator can never store.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="brktopo", password=TEST_PASSWORD, email="brktopo@example.com"
+        )
+
+    @staticmethod
+    def _form(**overrides):
+        """Return a bound tester form with *overrides* applied over a valid breakout rule."""
+        data = {
+            "name_template": "xe-0/0/{bay_position}:{channel}",
+            "breakout_mode": FLAT,
+            "channel_count": "4",
+            "channel_start": "0",
+        }
+        data.update(overrides)
+        return RuleTestForm(data=data)
+
+    def _assert_rejected(self, form, field):
+        """Assert *form* is invalid and blames *field*."""
+        self.assertFalse(form.is_valid())
+        self.assertIn(field, form.errors)
+
+    def test_the_channelized_mode_needs_a_channel_count(self):
+        """Channelizing means 'create N channels'; N=0 describes no family the preview could show."""
+        self._assert_rejected(self._form(breakout_mode=CHANNELIZED, channel_count="0"), "channel_count")
+
+    def test_a_parent_template_needs_the_channelized_mode(self):
+        """A flat family has no parent row, so a parent name there is a name nothing ever takes."""
+        self._assert_rejected(
+            self._form(breakout_mode=FLAT, parent_name_template="et-0/0/{bay_position}"), "parent_name_template"
+        )
+
+    def test_a_parent_template_must_not_reference_the_channel(self):
+        """The parent is the one interface in the family without a channel number."""
+        self._assert_rejected(
+            self._form(breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}:{channel}"),
+            "parent_name_template",
+        )
+
+    def test_the_channelized_combination_stays_valid(self):
+        """The combination the feature exists for must still preview."""
+        form = self._form(breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}")
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_a_channelized_rule_without_a_parent_template_stays_valid(self):
+        """Blank is the documented 'keep the port's name' case."""
+        form = self._form(breakout_mode=CHANNELIZED)
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_a_flat_breakout_stays_valid(self):
+        """Every rule that previewed before the mode existed must still preview."""
+        form = self._form()
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_a_simple_rename_stays_valid(self):
+        """No channels, no mode question — the plainest rule of all."""
+        form = self._form(name_template="et-0/0/{bay_position}", channel_count="0", channel_start="0")
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_the_tester_view_reports_the_rejection_instead_of_previewing(self):
+        """A preview of a rule that cannot be saved is worse than no preview."""
+        self.client.force_login(self.superuser)
+
+        response = self.client.post(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_test"),
+            {
+                "name_template": "xe-0/0/{bay_position}:{channel}",
+                "breakout_mode": CHANNELIZED,
+                "channel_count": "0",
+                "channel_start": "0",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("channel_count", response.context["form"].errors)
+        self.assertIsNone(response.context["preview_results"])
+
+
 class BreakoutModeFingerprintTest(TestCase):
     """Both columns change what a rule produces, so both must invalidate the rule cache."""
 
@@ -700,6 +950,17 @@ class ChannelizedModeWithoutSupportTest(ChannelizationTestCase):
 
         self.assertEqual(results, [])
         self.assertEqual(total_checked, 1)
+
+    def test_prediction_leaves_the_names_alone(self):
+        """Nothing is built here, so an integration must not be handed channel names that never appear."""
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        raw_names = self._names(module)
+
+        predicted = predict_rule_output(module, bay, raw_names)
+
+        self.assertEqual(predicted, raw_names)
+        apply_interface_name_rules(module, bay)
+        self.assertEqual(self._names(module), raw_names)
 
     def test_the_skip_is_not_read_as_an_obsolete_rule(self):
         """The rule is unusable on this release, not redundant — it must not be tagged deprecated."""

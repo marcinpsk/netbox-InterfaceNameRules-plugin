@@ -172,7 +172,7 @@
         <thead>
           <tr>
             <th>#</th>
-            {% if preview_results.0.channel is not None %}<th>Channel</th>{% endif %}
+            {% if preview_results.0.channel is not None or preview_results.0.role == "parent" %}<th>Channel</th>{% endif %}
             <th>Source (base name)</th>
             <th></th>
             <th>Result</th>
@@ -182,7 +182,8 @@
           {% for entry in preview_results %}
             <tr>
               <td class="text-muted">{{ forloop.counter }}</td>
-              {% if entry.channel is not None %}<td><code>{{ entry.channel }}</code></td>{% endif %}
+              {% if entry.channel is not None %}<td><code>{{ entry.channel }}</code></td>
+              {% elif entry.role == "parent" %}<td><span class="badge text-bg-secondary">parent</span></td>{% endif %}
               <td><code class="text-muted">{{ entry.source }}</code></td>
               <td><i class="mdi mdi-arrow-right text-muted"></i></td>
               <td><code class="text-success">{{ entry.result }}</code></td>
