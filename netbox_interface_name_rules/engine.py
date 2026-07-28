@@ -409,11 +409,22 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     if not unrenamed:
         return 0  # Already renamed (idempotent guard)
 
+    # A breakout rule on a module that has channelized families processes only those families —
+    # the same rule the preview and bulk-apply paths follow.
+    families_only = rule.channel_count > 0 and any(_is_channelized_parent(base) for base in bases)
+
     renamed = 0
-    families_seen = False
+    families_seen = families_only
     conflicts: list = []
     for iface in unrenamed:
         children = children_by_parent.get(iface.pk, ())
+        if families_only and not _is_channelized_parent(iface):  # pragma: no cover - see families_only above
+            logger.debug(
+                "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
+                iface.name,
+                rule,
+            )
+            continue
         families_seen = families_seen or bool(children) or _is_channelized_parent(iface)
         try:
             count = _apply_rule_with_family(rule, iface, children, variables, module, conflicts)
@@ -445,6 +456,42 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed
 
 
+def _predicted_channel_name(rule, raw_name, variables, parents, children):  # pragma: no cover - channelized only
+    """Return the name the channel template named *raw_name* takes under *rule*."""
+    parent_name, channel_id = children[raw_name]
+    if rule.channel_count > 0:
+        if parents.get(parent_name) != rule.channel_count:
+            return raw_name  # channel-count mismatch: the apply path skips the whole family
+        channel = str(rule.channel_start + channel_id - 1)
+        return evaluate_name_template(rule.name_template, {**variables, "base": parent_name, "channel": channel})
+    # Simple rule: the channel follows its parent, keeping the suffix it adds to the parent's name.
+    parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent_name})
+    suffix = _child_name_suffix(raw_name, parent_name)
+    return raw_name if suffix is None else parent_target + suffix
+
+
+def _predicted_names(rule, raw_name, variables, parents, children):
+    """Return the names *raw_name* predicts to under *rule*.
+
+    A name the module type's templates describe as a channelized parent or channel follows its
+    family; anything else keeps the per-name prediction, expanding once per channel for a breakout
+    rule and once for a simple one.
+    """
+    if raw_name in parents:  # pragma: no cover - requires a NetBox that models channelization
+        if rule.channel_count > 0:
+            return [raw_name]  # the rule renames the channels; the parent keeps its own name
+        return [evaluate_name_template(rule.name_template, {**variables, "base": raw_name})]
+    if raw_name in children:  # pragma: no cover - requires a NetBox that models channelization
+        return [_predicted_channel_name(rule, raw_name, variables, parents, children)]
+    vars_copy = {**variables, "base": raw_name}
+    if rule.channel_count > 0:
+        return [
+            evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
+            for ch in range(rule.channel_count)
+        ]
+    return [evaluate_name_template(rule.name_template, vars_copy)]
+
+
 def predict_rule_output(module, module_bay, raw_names):
     """Predict the names apply_interface_name_rules would produce for raw_names.
 
@@ -456,10 +503,11 @@ def predict_rule_output(module, module_bay, raw_names):
     channel_count predicted names. For simple renames, one name in → one name
     out. Returns raw_names unchanged when no rule matches or evaluation fails.
 
-    The contract is names only, so this cannot see channelized families: on NetBox 4.7+ the apply
-    path renames a family's existing channels instead of expanding its base, which a caller
-    passing raw names cannot be told apart here.  Predicting that needs a structured contract,
-    agreed with the calling plugin.
+    A name the module type's interface templates describe as part of a channelized family is
+    predicted as the apply path treats it instead: the family's channels are renamed in place, so a
+    breakout rule leaves the parent's name alone and maps each channel through its ``channel_id``
+    rather than expanding one name into a flat set.  Names no template claims keep the per-name
+    prediction, so a module type without channelized templates is unaffected.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
@@ -468,20 +516,12 @@ def predict_rule_output(module, module_bay, raw_names):
         return list(raw_names)
 
     variables = build_variables(module_bay, device=module.device)
+    parents, children = _template_families(module)
 
     output = []
     for raw_name in raw_names:
-        vars_copy = dict(variables)
-        vars_copy["base"] = raw_name
         try:
-            if rule.channel_count > 0:
-                temp = []
-                for ch in range(rule.channel_count):
-                    vars_copy["channel"] = str(rule.channel_start + ch)
-                    temp.append(evaluate_name_template(rule.name_template, vars_copy))
-                output.extend(temp)
-            else:
-                output.append(evaluate_name_template(rule.name_template, vars_copy))
+            output.extend(_predicted_names(rule, raw_name, variables, parents, children))
         except (ValueError, TypeError, re.error):
             # Template eval failed; apply path would also fail and leave the
             # interface alone, so the predicted name is the raw name.
@@ -691,29 +731,80 @@ def _get_raw_interface_names(module):
     return {tmpl.resolve_name(module_fresh) for tmpl in templates}
 
 
-def _template_channel_suffixes(module):  # pragma: no cover - requires a NetBox that models channelization
-    """Map ``channel_id`` → the name suffix *module*'s interface templates give that channel.
+def _template_families(module):
+    """Return ``(parents, children)`` describing *module*'s channelized interface templates.
 
-    The suffix comes from the template family itself — each channel template's resolved name minus
-    its parent template's resolved name — so a child that lost its parent's prefix in an earlier
-    partial rename can still be repaired.  Pairing through ``InterfaceTemplate.parent`` (rather than
-    matching against the flat set of raw names) keeps ambiguous prefixes like ``xe``/``xe-0`` apart.
+    *parents* maps a channelized parent template's resolved name to its channel count; *children*
+    maps each channel template's resolved name to ``(parent_name, channel_id)``.  Both are empty
+    where nothing can be channelized, so callers keep their pre-channelization behaviour without
+    paying for a template scan.
+    """
+    if not supports_channelization():
+        return {}, {}
+    return _resolve_template_families(module)  # pragma: no cover - requires channelization support
+
+
+def _resolve_template_families(module):  # pragma: no cover - requires a NetBox that models channelization
+    """Resolve *module*'s interface templates into the channelized families they describe.
+
+    Pairing through ``InterfaceTemplate.parent`` (rather than matching against the flat set of raw
+    names) keeps ambiguous prefixes like ``xe``/``xe-0`` apart, and a channel template whose parent
+    declares no channel count is not a family at all.
     """
     from dcim.models import InterfaceTemplate
 
     module_fresh = _module_with_bay_chain(module)
     templates = list(InterfaceTemplate.objects.filter(module_type=module_fresh.module_type))
     resolved = {tmpl.pk: tmpl.resolve_name(module_fresh) for tmpl in templates}
-    suffixes = {}
+    parents_by_pk = {
+        tmpl.pk: (resolved[tmpl.pk], tmpl.channels) for tmpl in templates if getattr(tmpl, "channels", None) is not None
+    }
+    children = {}
     for tmpl in templates:
         channel_id = getattr(tmpl, "channel_id", None)
-        parent_name = resolved.get(getattr(tmpl, "parent_id", None))
-        if channel_id is None or parent_name is None:
+        parent = parents_by_pk.get(getattr(tmpl, "parent_id", None))
+        if channel_id is None or parent is None:
             continue
-        suffix = _child_name_suffix(resolved[tmpl.pk], parent_name)
+        parent_name, _channels = parent
+        children[resolved[tmpl.pk]] = (parent_name, channel_id)
+    return dict(parents_by_pk.values()), children
+
+
+def _template_channel_suffixes(module):  # pragma: no cover - requires a NetBox that models channelization
+    """Map ``channel_id`` → the set of name suffixes *module*'s interface templates give that channel.
+
+    The suffix comes from the template family itself — each channel template's resolved name minus
+    its parent template's resolved name — so a child that lost its parent's prefix in an earlier
+    partial rename can still be repaired.  A module type with several families may spell the same
+    channel differently in each (``et0:2`` vs ``sw0.2``), so the suffixes are collected per channel
+    rather than overwritten: the recovery only uses one when every family agrees on it.
+    """
+    suffixes = defaultdict(set)
+    for child_name, (parent_name, channel_id) in _template_families(module)[1].items():
+        suffix = _child_name_suffix(child_name, parent_name)
         if suffix is not None:
-            suffixes[channel_id] = suffix
+            suffixes[channel_id].add(suffix)
     return suffixes
+
+
+def _recovered_suffix(child, suffixes):  # pragma: no cover - requires channelization support
+    """Return the template suffix for *child*'s channel, or None when it is not unambiguous.
+
+    Once a parent has been renamed there is no reliable way back from a stranded child to the family
+    it belongs to, so a channel spelled differently by two families is left alone rather than guessed.
+    """
+    candidates = suffixes.get(child.channel_id) or set()
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if candidates:
+        logger.warning(
+            "Channel %s is spelled %s by different families of this module type; "
+            "cannot recover a name for interface %r.",
+            child.channel_id,
+            sorted(candidates),
+            child.name,
+        )
+    return None
 
 
 def _child_target_names(children, parent_before, parent_after, module):
@@ -721,9 +812,9 @@ def _child_target_names(children, parent_before, parent_after, module):
 
     The suffix is read from the child's own name against *parent_before* (the parent's name before
     this run's rename); when the child no longer carries that prefix the suffix is recovered from
-    the module's template family instead.  A child that neither shares the prefix nor has a
-    template pairing is returned with a None target — the engine leaves it alone rather than
-    guessing at a free-form name.
+    the module's template family instead.  A child that neither shares the prefix nor has an
+    unambiguous template pairing is returned with a None target — the engine leaves it alone rather
+    than guessing at a free-form name.
     """
     suffixes = None
     targets = []
@@ -732,7 +823,7 @@ def _child_target_names(children, parent_before, parent_after, module):
         if suffix is None and module is not None:
             if suffixes is None:
                 suffixes = _template_channel_suffixes(module)
-            suffix = suffixes.get(child.channel_id)
+            suffix = _recovered_suffix(child, suffixes)
         targets.append((child, None if suffix is None else parent_after + suffix))
     return targets
 
@@ -1101,6 +1192,9 @@ def _apply_breakout_rule_to_family(rule, parent, children, variables, module, co
     so a breakout rule renames them in place and the parent keeps its own name.  A rule whose
     channel count disagrees with the hardware is a modelling mismatch — the family is skipped
     whole rather than renamed into a shape it does not have.
+
+    Every child's name is computed before the first save, so a template that only fails on a later
+    channel (channel-dependent arithmetic) aborts the family untouched instead of half renaming it.
     """
     if getattr(parent, "channels", None) != rule.channel_count:
         logger.warning(
@@ -1111,10 +1205,18 @@ def _apply_breakout_rule_to_family(rule, parent, children, variables, module, co
             rule.channel_count,
         )
         return None
+    targets = [
+        (
+            child,
+            evaluate_name_template(
+                rule.name_template,
+                {**variables, "base": parent.name, "channel": str(rule.channel_start + child.channel_id - 1)},
+            ),
+        )
+        for child in children
+    ]
     count = 0
-    for child in children:
-        channel = str(rule.channel_start + child.channel_id - 1)
-        new_name = evaluate_name_template(rule.name_template, {**variables, "base": parent.name, "channel": channel})
+    for child, new_name in targets:
         count += _rename_for_family(child, new_name, module.device, conflicts).count
     return count
 
@@ -1653,7 +1755,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
                 ):
                     raise ValueError(f"Unsafe AST node in expression: {type(child).__name__}")
             return str(int(eval(compile(node, "<template>", "eval"))))  # noqa: S307
-        except (SyntaxError, TypeError) as e:
+        except (SyntaxError, TypeError, ZeroDivisionError) as e:
             raise ValueError(f"Invalid arithmetic expression '{expr}': {e}") from e
 
     return re.sub(r"\{([^}]+)\}", _eval_expr, result)

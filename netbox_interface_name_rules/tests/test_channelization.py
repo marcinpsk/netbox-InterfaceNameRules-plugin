@@ -37,6 +37,7 @@ from netbox_interface_name_rules.engine import (
     apply_rule_to_existing,
     find_interfaces_for_rule,
     has_applicable_interfaces,
+    predict_rule_output,
     supports_channelization,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -63,6 +64,25 @@ def _build_device(prefix, bay_positions=(), **device_kwargs):
     return manufacturer, device
 
 
+def _channelized_family(module_type, parent_name, child_names, channels=4):
+    """Add one channelized parent template plus its channel templates to *module_type*.
+
+    *child_names* maps a channel_id to the template name that channel takes.
+    """
+    parent = InterfaceTemplate.objects.create(
+        module_type=module_type, name=parent_name, type=PARENT_TYPE, channels=channels
+    )
+    for channel_id, name in child_names.items():
+        InterfaceTemplate.objects.create(
+            module_type=module_type,
+            name=name,
+            type=CHANNEL_TYPE,
+            parent=parent,
+            channel_id=channel_id,
+        )
+    return parent
+
+
 def _channelized_module_type(manufacturer, model, channels=4, child_channel_ids=(1, 2, 3, 4), child_names=None):
     """Create a ModuleType whose interface templates form a channelized family.
 
@@ -71,18 +91,10 @@ def _channelized_module_type(manufacturer, model, channels=4, child_channel_ids=
     to the upstream ``<parent>:<channel_id>`` convention.
     """
     module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
-    parent = InterfaceTemplate.objects.create(
-        module_type=module_type, name="{module}", type=PARENT_TYPE, channels=channels
-    )
     names = child_names or {channel_id: f"{{module}}:{channel_id}" for channel_id in child_channel_ids}
-    for channel_id in child_channel_ids:
-        InterfaceTemplate.objects.create(
-            module_type=module_type,
-            name=names[channel_id],
-            type=CHANNEL_TYPE,
-            parent=parent,
-            channel_id=channel_id,
-        )
+    _channelized_family(
+        module_type, "{module}", {channel_id: names[channel_id] for channel_id in child_channel_ids}, channels=channels
+    )
     return module_type
 
 
@@ -505,6 +517,215 @@ class ChannelizedDeviceRuleTest(TestCase):
 
         self.assertEqual(renamed, 5)
         self.assertEqual(self._names(), ["eth1", "eth1:1", "eth1:2", "eth1:3", "eth1:4"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedBreakoutStandaloneTest(ChannelizationTestCase):
+    """A breakout rule on a channelized module leaves the module's standalone interfaces alone."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanMixed", ["7"])
+        cls.module_type = _channelized_module_type(manufacturer, "ChanMixed-QSFP")
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="{module}-mgmt", type=PLAIN_TYPE)
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="{base}-ch{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_standalone_base_is_not_broken_out_beside_a_family(self):
+        """Preview and bulk apply process only the families here — the install path must agree."""
+        module, bay = self._install(self.module_type, "7", run_rules=False)
+
+        renamed = apply_interface_name_rules(module, bay)
+
+        self.assertEqual(renamed, 4)  # the four channels; the standalone was neither renamed nor expanded
+        self.assertEqual(self._names(module), ["7", "7-ch0", "7-ch1", "7-ch2", "7-ch3", "7-mgmt"])
+
+    def test_skipped_standalone_base_is_logged(self):
+        """The skip is a structural decision, so it is traceable in the log."""
+        module, bay = self._install(self.module_type, "7", run_rules=False)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="DEBUG") as logs:
+            apply_interface_name_rules(module, bay)
+
+        self.assertTrue(any("7-mgmt" in line for line in logs.output), logs.output)
+
+    def test_apply_and_preview_agree_on_the_module(self):
+        """The retroactive paths already skip the standalone; the automatic one produces the same names."""
+        module, bay = self._install(self.module_type, "7", run_rules=False)
+        results, _ = find_interfaces_for_rule(self.rule)
+
+        apply_interface_name_rules(module, bay)
+
+        self.assertEqual([entry["current_name"] for entry in results], ["7"])
+        self.assertEqual(sorted(results[0]["new_names"]), ["7", "7-ch0", "7-ch1", "7-ch2", "7-ch3"])
+        self.assertEqual(self._names(module), ["7", "7-ch0", "7-ch1", "7-ch2", "7-ch3", "7-mgmt"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedPredictionTest(ChannelizationTestCase):
+    """predict_rule_output must name what the apply path actually produces on a channelized module type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanPred", ["3", "5", "8"])
+        cls.breakout_type = _channelized_module_type(manufacturer, "ChanPred-QSFP-BRK")
+        cls.simple_type = _channelized_module_type(
+            manufacturer,
+            "ChanPred-QSFP-SMP",
+            child_names={1: "{module}:1", 2: "{module}:2", 3: "{module}:3", 4: "mgmt-chan"},
+        )
+        cls.mismatch_type = _channelized_module_type(manufacturer, "ChanPred-QSFP-MM", channels=8)
+        InterfaceNameRule.objects.create(
+            module_type=cls.breakout_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+        InterfaceNameRule.objects.create(module_type=cls.simple_type, name_template="et-0/0/{bay_position}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.mismatch_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_breakout_prediction_matches_the_applied_names(self):
+        """The parent keeps its name and each channel is predicted from its channel_id, as apply does."""
+        module, bay = self._install(self.breakout_type, "3", run_rules=False)
+        raw_names = self._names(module)
+
+        predicted = predict_rule_output(module, bay, raw_names)
+
+        self.assertEqual(predicted, ["3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
+        apply_interface_name_rules(module, bay)
+        self.assertEqual(sorted(predicted), self._names(module))
+
+    def test_simple_prediction_follows_the_parent_and_keeps_child_suffixes(self):
+        """A channel follows its parent's predicted name; one that shares no prefix is predicted unchanged."""
+        module, bay = self._install(self.simple_type, "5", run_rules=False)
+        raw_names = self._names(module)
+
+        predicted = predict_rule_output(module, bay, raw_names)
+
+        self.assertEqual(predicted, ["et-0/0/5", "et-0/0/5:1", "et-0/0/5:2", "et-0/0/5:3", "mgmt-chan"])
+        apply_interface_name_rules(module, bay)
+        self.assertEqual(sorted(predicted), self._names(module))
+
+    def test_prediction_reports_no_change_on_a_channel_count_mismatch(self):
+        """apply skips a family whose channel count disagrees with the rule, so prediction must too."""
+        module, bay = self._install(self.mismatch_type, "8", run_rules=False)
+        raw_names = self._names(module)
+
+        predicted = predict_rule_output(module, bay, raw_names)
+
+        self.assertEqual(predicted, raw_names)
+        apply_interface_name_rules(module, bay)
+        self.assertEqual(self._names(module), raw_names)
+
+    def test_prediction_still_touches_no_interfaces(self):
+        """Prediction reads templates only — the family it describes is left exactly as it was."""
+        module, bay = self._install(self.breakout_type, "3", run_rules=False)
+
+        predict_rule_output(module, bay, self._names(module))
+
+        self.assertEqual(self._names(module), ["3", "3:1", "3:2", "3:3", "3:4"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
+    """A template that fails on a later channel must not leave the family half renamed."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanErr", ["4"])
+        cls.module_type = _channelized_module_type(manufacturer, "ChanErr-QSFP")
+        # Valid for channel 0, divides by zero from channel 1 on.
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-{4 // (1 - {channel})}",
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_template_failing_on_a_later_channel_renames_no_child(self):
+        """Every child name is computed before the first save, so one bad channel aborts the family."""
+        module, bay = self._install(self.module_type, "4", run_rules=False)
+
+        renamed = apply_interface_name_rules(module, bay)
+
+        self.assertEqual(renamed, 0)
+        self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedSuffixRecoveryTest(ChannelizationTestCase):
+    """Recovering a stranded child's suffix from the templates must not borrow another family's convention."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanRec", ["1", "2"])
+        # Two families on one module type, each with its own suffix convention for the same channel_id.
+        cls.two_family_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="ChanRec-QSFP-2F", part_number="ChanRec-QSFP-2F"
+        )
+        _channelized_family(
+            cls.two_family_type, "{module}a", {channel_id: f"{{module}}a:{channel_id}" for channel_id in range(1, 5)}
+        )
+        _channelized_family(
+            cls.two_family_type, "{module}b", {channel_id: f"{{module}}b.{channel_id}" for channel_id in range(1, 5)}
+        )
+        cls.single_family_type = _channelized_module_type(manufacturer, "ChanRec-QSFP-1F")
+        for module_type in (cls.two_family_type, cls.single_family_type):
+            InterfaceNameRule.objects.create(module_type=module_type, name_template="{base}-x")
+
+    def _strand_child(self, module_type, position, blocked_name, stranded_name):
+        """Install *module_type*, let one child collide with *blocked_name*, then free the name again."""
+        occupant = Interface.objects.create(device=self.device, name=blocked_name, type=PLAIN_TYPE, module=None)
+        module, bay = self._install(module_type, position, run_rules=False)
+        apply_interface_name_rules(module, bay)
+        stranded = Interface.objects.get(module=module, name=stranded_name)
+        occupant.delete()
+        return module, bay, stranded
+
+    def test_ambiguous_template_suffix_is_not_borrowed_from_the_other_family(self):
+        """Channel 2 means ``:2`` in one family and ``.2`` in the other — so neither may be applied."""
+        module, bay, stranded = self._strand_child(self.two_family_type, "1", "1a-x:2", "1a:2")
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            apply_interface_name_rules(module, bay, force_reapply=True)
+
+        stranded.refresh_from_db()
+        self.assertEqual(stranded.name, "1a:2")  # left stale rather than renamed into the wrong family's shape
+        self.assertTrue(any("1a:2" in line for line in logs.output), logs.output)
+        self.assertEqual(
+            self._names(module),
+            [
+                "1a-x-x",
+                "1a-x-x:1",
+                "1a-x-x:3",
+                "1a-x-x:4",
+                "1a:2",
+                "1b-x-x",
+                "1b-x-x.1",
+                "1b-x-x.2",
+                "1b-x-x.3",
+                "1b-x-x.4",
+            ],
+        )
+
+    def test_single_family_recovery_still_heals_a_stranded_child(self):
+        """With one family the suffix for a channel is unambiguous, so the stale child is repaired."""
+        module, bay, stranded = self._strand_child(self.single_family_type, "2", "2-x:2", "2:2")
+
+        apply_interface_name_rules(module, bay, force_reapply=True)
+
+        stranded.refresh_from_db()
+        self.assertEqual(stranded.name, "2-x-x:2")
+        self.assertEqual(self._names(module), ["2-x-x", "2-x-x:1", "2-x-x:2", "2-x-x:3", "2-x-x:4"])
 
 
 class ChannelizationFeatureDetectionTest(TestCase):
