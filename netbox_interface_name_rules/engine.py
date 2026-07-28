@@ -1946,6 +1946,273 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None)
     return count
 
 
+# ---------------------------------------------------------------------------
+# Assisted flat → channelized conversion
+# ---------------------------------------------------------------------------
+# An earlier flat apply leaves N sibling interfaces where NetBox 4.7+ models a channelized parent
+# with N channel subinterfaces.  Converting one rewrites rows an operator owns — cables, addresses,
+# tags — so it is never a side effect of applying a rule: the operator confirms it per family.
+
+# The ch-0 row, the names its family carries now, and the names it would carry once converted.
+_ConversionFamily = namedtuple("_ConversionFamily", ("module", "base", "current_names", "parent_name", "channel_names"))
+
+
+def _conversion_offered(rule):
+    """Return True when *rule* describes a topology an installed flat family could be converted into.
+
+    A flat family has no parent row — its ch-0 interface *is* the base — so without a parent name
+    there is nowhere for that base to go, and the conversion is not offered at all.
+    """
+    return _is_channelized_rule(rule) and rule.channel_count > 0 and bool(rule.parent_name_template)
+
+
+def _conversion_family(rule, module, interfaces, variables):  # pragma: no cover - channelization support only
+    """Return the flat family *rule* would convert on *module*, or None when it carries none.
+
+    Identification is by name: ``name_template`` is evaluated over the rule's channel range against
+    each raw template name, and the ch-0 name has to still be a plain interface — a family that was
+    already converted (its ch-0 name now belongs to a channel row) is therefore never offered twice.
+    """
+    by_name = {iface.name: iface for iface in interfaces}
+    for raw_name in sorted(_get_raw_interface_names(module)):
+        family_vars = {**variables, "base": raw_name}
+        parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
+        channel_names = [
+            evaluate_name_template(rule.name_template, {**family_vars, "channel": str(rule.channel_start + offset)})
+            for offset in range(rule.channel_count)
+        ]
+        base = by_name.get(channel_names[0])
+        if base is None or _is_channel_child(base) or _is_channelized_parent(base):
+            continue
+        return _ConversionFamily(
+            module=module,
+            base=base,
+            current_names=[name for name in channel_names if name in by_name],
+            parent_name=parent_name,
+            channel_names=channel_names,
+        )
+    return None
+
+
+def _conversion_families(rule):  # pragma: no cover - requires channelization support
+    """Yield the flat family each module in *rule*'s scope still carries.
+
+    A flat breakout is applied once per module (see ``_apply_channel_rule_to_module``), so a module
+    carries at most one such family and the conversion mirrors that.
+    """
+    from dcim.models import Interface
+
+    module_qs = _build_module_qs(rule).select_related("module_bay", "module_bay__parent", "module_type", "device")
+    ifaces_by_module = defaultdict(list)
+    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
+        ifaces_by_module[iface.module_id].append(iface)
+    for module in module_qs:
+        variables = build_variables(module.module_bay, device=module.device)
+        family = _conversion_family(rule, module, ifaces_by_module.get(module.pk, []), variables)
+        if family is not None:
+            yield family
+
+
+def _validate_or_block(iface, role):  # pragma: no cover - requires channelization support
+    """Run NetBox's own validation on *iface*, restating a rejection as this family's blocking reason."""
+    try:
+        iface.full_clean()
+    except ValidationError as exc:
+        raise ValidationError(f"{role} {iface.name!r}: {' '.join(exc.messages)}") from exc
+
+
+def _split_ch0_row(rule, family, base):  # pragma: no cover - requires channelization support
+    """Make *base* the family's parent and move its logical identity onto a new channel-1 child.
+
+    Everything an operator configured on the ch-0 row described a channel, not the cage carrying it,
+    so addresses, VLANs, MTU, description and tags move; custom fields can mean either thing and are
+    copied.  The physical row keeps its pk, cable, type, module link and mark_connected.
+    """
+    from dcim.choices import InterfaceTypeChoices
+    from dcim.models import Interface
+
+    carried = {
+        "description": base.description,
+        "mtu": base.mtu,
+        "mode": base.mode,
+        "untagged_vlan_id": base.untagged_vlan_id,
+    }
+    tagged_vlans = list(base.tagged_vlans.all())
+    tags = list(base.tags.all())
+
+    base.name = family.parent_name
+    base.channels = rule.channel_count
+    base.description = ""
+    base.mtu = None
+    base.mode = ""
+    base.untagged_vlan = None
+    _validate_or_block(base, "parent")
+    base.save()  # BaseInterface.save() drops the tagged VLANs of an interface that no longer tags
+    base.tags.clear()
+
+    channel = Interface(
+        device=family.module.device,
+        module=family.module,
+        name=family.channel_names[0],
+        type=InterfaceTypeChoices.TYPE_CHANNEL,
+        parent=base,
+        channel_id=1,
+        enabled=base.enabled,
+        custom_field_data=dict(base.custom_field_data or {}),
+        **carried,
+    )
+    _validate_or_block(channel, "channel")
+    channel.save()
+    channel.tagged_vlans.set(tagged_vlans)
+    channel.tags.set(tags)
+    base.ip_addresses.all().update(assigned_object_id=channel.pk)
+    base.fhrp_group_assignments.all().update(interface_id=channel.pk)
+
+
+def _rewrite_family(rule, family):  # pragma: no cover - requires channelization support
+    """Convert *family* in place, raising ValidationError with the reason when it cannot be converted.
+
+    Only what upstream cannot decide for us is checked here: the parent's name has to be free, every
+    sibling has to be present, and a cabled sibling cannot become a channel — TYPE_CHANNEL is
+    nonconnectable but not virtual, so ``Interface.clean()`` accepts a cable on one.  Everything else
+    is left to ``full_clean()`` on each prospective row, which inherits upstream's rules as they grow.
+    """
+    from dcim.choices import InterfaceTypeChoices
+    from dcim.models import Interface
+
+    device = family.module.device
+    by_name = {iface.name: iface for iface in Interface.objects.filter(module=family.module)}
+    base = by_name[family.channel_names[0]]
+
+    if _name_exists_on_device(device, family.parent_name, exclude_pk=base.pk):
+        raise ValidationError(f"the parent name {family.parent_name!r} is already taken on {device}")
+
+    siblings = []
+    for channel_id, name in enumerate(family.channel_names[1:], start=2):
+        sibling = by_name.get(name)
+        if sibling is None or sibling.pk == base.pk:
+            raise ValidationError(f"{name!r} is missing: this module carries no complete flat family")
+        if sibling.cable_id:
+            raise ValidationError(f"{name!r} has a cable attached; a channel takes its cable from the parent")
+        siblings.append((channel_id, sibling))
+
+    _split_ch0_row(rule, family, base)
+    for channel_id, sibling in siblings:
+        sibling.type = InterfaceTypeChoices.TYPE_CHANNEL
+        sibling.parent = base
+        sibling.channel_id = channel_id
+        _validate_or_block(sibling, "channel")
+        sibling.save()
+
+
+def _convert_family(rule, family, commit):  # pragma: no cover - requires channelization support
+    """Convert *family*; return an empty string on success, or the reason it was refused.
+
+    The whole conversion runs inside one savepoint, so a dry run (*commit* False) and a family that
+    turns out to be unconvertible both leave every row exactly as it was — the rows are re-read here
+    too, so a rolled-back dry run cannot hand mutated objects back to the caller.
+    """
+    try:
+        with transaction.atomic():
+            _rewrite_family(rule, family)
+            if not commit:
+                transaction.set_rollback(True)
+    except (ValidationError, IntegrityError, ValueError) as exc:
+        return "; ".join(getattr(exc, "messages", [str(exc)]))
+    return ""
+
+
+def _conversion_metadata_note(family):  # pragma: no cover - requires channelization support
+    """Return the sentence the Apply page shows about where the ch-0 row's configuration ends up."""
+    return (
+        f"The addresses, VLANs, MTU, description and tags on {family.base.name} move to the new "
+        f"channel 1 interface that takes over that name; custom field values are copied. The physical "
+        f"row keeps its ID and becomes the parent {family.parent_name}, so automation keyed on that "
+        f"interface ID will address the parent afterwards."
+    )
+
+
+def _conversion_verdict(family, reason):  # pragma: no cover - requires channelization support
+    """Describe what converting *family* would do, and why it cannot be done when it cannot."""
+    details = [_name_detail(family.parent_name, "parent")]
+    details.extend(
+        _name_detail(name, "channel", channel_id) for channel_id, name in enumerate(family.channel_names, start=1)
+    )
+    return {
+        "module": family.module,
+        "interface": family.base,
+        "current_name": family.base.name,
+        "current_names": family.current_names,
+        "new_names": [family.parent_name, *family.channel_names],
+        "name_details": details,
+        "convertible": not reason,
+        "reason": reason,
+        "metadata_note": _conversion_metadata_note(family),
+    }
+
+
+def find_convertible_families(rule) -> list:
+    """Return one verdict per flat family *rule* could convert, convertible or not.
+
+    Nothing is written: every family is converted inside a savepoint that is rolled back again, so
+    each verdict carries the reason NetBox itself would refuse the family rather than a guess at its
+    rules.  Each verdict names the ch-0 row the confirm form submits, the family's current names,
+    the names it would carry, and where the ch-0 row's configuration lands.
+    """
+    if not (_conversion_offered(rule) and supports_channelization()):
+        return []
+    return [  # pragma: no cover - requires channelization support
+        _conversion_verdict(family, _convert_family(rule, family, commit=False))
+        for family in _conversion_families(rule)
+    ]
+
+
+def convert_flat_families(rule, base_pks=None, conflicts=None) -> int:
+    """Convert *rule*'s installed flat families to the channelized topology; return how many.
+
+    *base_pks* is the set of ch-0 interface pks the operator confirmed: ``None`` converts every
+    convertible family (the batch the background job runs), an empty collection converts none.  A
+    family that cannot be converted is logged, appended to *conflicts* in the usual skipped-rename
+    shape and passed over — it is never half converted, and never costs the rest of the batch.
+    """
+    if not supports_channelization():
+        logger.warning(
+            "Rule '%s' converts flat families into the channelized topology, which this NetBox release "
+            "cannot model; nothing was converted.",
+            rule,
+        )
+        return 0
+    return _convert_flat_families(rule, base_pks, conflicts)  # pragma: no cover - see above
+
+
+def _convert_flat_families(rule, base_pks, conflicts):  # pragma: no cover - requires channelization support
+    """Convert the confirmed flat families of *rule*; see ``convert_flat_families``."""
+    if not _conversion_offered(rule):
+        return 0
+    selected = None if base_pks is None else frozenset(base_pks)
+    if selected is not None and not selected:
+        return 0
+
+    converted = 0
+    for family in _conversion_families(rule):
+        if selected is not None and family.base.pk not in selected:
+            continue
+        current_name = family.base.name
+        reason = _convert_family(rule, family, commit=True)
+        if reason:
+            logger.warning(
+                "Cannot convert the flat family of interface %r on %s into the channelized parent %r: %s. Skipping.",
+                current_name,
+                family.module,
+                family.parent_name,
+                reason,
+            )
+            _record_skip(conflicts, family.module.device, current_name, family.parent_name, family.base.pk)
+            continue
+        converted += 1
+    return converted
+
+
 def evaluate_name_template(template: str, variables: dict) -> str:
     """Evaluate a name template with variable substitution and safe arithmetic.
 

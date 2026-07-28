@@ -9,6 +9,7 @@ These YAML files can be imported directly into NetBox via **Interface Name Rules
 |------|-------------|
 | `cisco.yaml` | Cisco IOS-XR platforms (8201-SYS, etc.) |
 | `juniper.yaml` | Juniper Junos platforms (ACX7024, ACX7100-32C, etc.) — ge/xe/et naming with breakout |
+| `juniper-channelized.yaml` | The Juniper breakout families of `juniper.yaml` in `channelized` mode (NetBox 4.7+) — import instead of, not alongside |
 | `ufispace.yaml` | UfiSpace SONiC platforms (platform-scoped, requires "SONiC" Platform object) |
 | `ufispace-device-type.yaml` | UfiSpace SONiC platforms (device-type-scoped, no Platform required) |
 | `linux.yaml` | Linux servers — traditional eth0/eth1, systemd predictable ens{slot}f{N}, Mellanox breakout |
@@ -27,7 +28,12 @@ These YAML files can be imported directly into NetBox via **Interface Name Rules
 4. For breakout/channel interfaces, set `channel_count` (integer) to enable `{channel}` indexing:
    - `channel_count` — number of breakout channels; enables `{channel}` in `name_template` (e.g., `channel_count: 4`)
    - `channel_start` — starting channel index (default: 0)
-5. Run `yamllint` on your file before submitting
+5. On NetBox 4.7+ a breakout rule can build the channelized topology instead of flat siblings:
+   - `breakout_mode: channelized` — the base becomes a physical parent with `channels` set and one
+     channel subinterface is created per channel (default: `flat`, the sibling-interface behaviour)
+   - `parent_name_template` — name for that parent; same variables as `name_template` minus
+     `{channel}`. Blank keeps the port's current name. See `contrib/juniper-channelized.yaml`.
+6. Run `yamllint` on your file before submitting
 
 ### Examples
 
