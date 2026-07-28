@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+import ast
 import re
 
 from dcim.models import DeviceType, ModuleType, Platform
@@ -15,18 +16,52 @@ _REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
+def _expression_names_channel(field):
+    """Return True when the brace group *field* parses as an expression naming ``channel``.
+
+    Mirrors how ``evaluate_name_template`` reads a brace group — ``ast.parse`` plus a walk — so
+    ``{channel + 1}`` is caught here instead of failing at evaluation time.  A group that is not an
+    expression at all is left to the plain-name check.
+    """
+    try:
+        tree = ast.parse(field.strip(), mode="eval")
+    except (SyntaxError, ValueError):
+        return False
+    return any(isinstance(node, ast.Name) and node.id == "channel" for node in ast.walk(tree))
+
+
 def _references_channel(template):
     """Return True when *template* names ``{channel}`` in any spelling the engine can be handed.
 
-    Covers the plain form, the conversion and format-spec forms (``{channel!r}``, ``{channel:>2}``)
-    and the nested-arithmetic one (``{{channel} + 1}``).  ``string.Formatter().parse()`` is not used
-    here: it rejects the plugin's own arithmetic templates as malformed field names.
+    Covers the plain form, the conversion and format-spec forms (``{channel!r}``, ``{channel:>2}``),
+    the nested-arithmetic one (``{{channel} + 1}``) and the identifier inside an arithmetic
+    expression (``{channel + 1}``).  ``string.Formatter().parse()`` is not used here: it rejects the
+    plugin's own arithmetic templates as malformed field names.
     """
     for field in _TEMPLATE_FIELD.findall(template):
         name = field.split("!", 1)[0].split(":", 1)[0].strip()
         if name == "channel" or name.startswith(("channel.", "channel[")):
             return True
+        if _expression_names_channel(field):
+            return True
     return False
+
+
+def _has_unbalanced_braces(template):
+    """Return True when *template*'s braces do not pair up.
+
+    Nested groups are the plugin's arithmetic form (``{8 + ({x} - 1) * 2}``), so depth is counted
+    rather than matched pairwise.
+    """
+    depth = 0
+    for char in template:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                return True
+    return depth != 0
 
 
 def _validate_module_type_pattern(pattern):
@@ -64,6 +99,11 @@ def _validate_breakout_topology(breakout_mode, channel_count, parent_name_templa
         if not channelized:
             raise ValidationError(
                 {"parent_name_template": "Parent name template requires the channelized breakout mode."}
+            )
+        if _has_unbalanced_braces(parent_name_template):
+            # Parent template only: stray braces in name_template predate this and are already stored.
+            raise ValidationError(
+                {"parent_name_template": "Unbalanced braces — every '{' in the template needs a '}'."}
             )
         if _references_channel(parent_name_template):
             raise ValidationError(

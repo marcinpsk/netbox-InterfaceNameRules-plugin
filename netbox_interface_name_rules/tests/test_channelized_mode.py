@@ -564,10 +564,18 @@ class ChannelizedModePredictionTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanPredMode", ["3", "4", "5"])
+        manufacturer, cls.device = _build_device("ChanPredMode", ["3", "4", "5", "6"])
         cls.named_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP")
         cls.bare_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP-BARE")
         cls.family_type = _channelized_module_type(manufacturer, "ChanPredMode-QSFP-FAM")
+        cls.installed_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP-FLAT")
+        cls.installed_rule = InterfaceNameRule.objects.create(
+            module_type=cls.installed_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=4,
+            channel_start=0,
+        )
         InterfaceNameRule.objects.create(
             module_type=cls.named_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -621,8 +629,27 @@ class ChannelizedModePredictionTest(ChannelizationTestCase):
             self.family_type, "5", ["et-0/0/5", "xe-0/0/5:0", "xe-0/0/5:1", "xe-0/0/5:2", "xe-0/0/5:3"]
         )
 
+    def test_a_module_carrying_a_flat_family_is_predicted_unchanged(self):
+        """Apply refuses to convert an installed flat family, so prediction must not promise one.
+
+        Switching a rule to channelized after its flat family is installed is the realistic way to
+        reach this: the names an integration syncs have to stay the ones the module keeps.
+        """
+        module, bay = self._install(self.installed_type, "6")
+        flat_names = self._names(module)
+        self.assertEqual(flat_names, ["xe-0/0/6:0", "xe-0/0/6:1", "xe-0/0/6:2", "xe-0/0/6:3"])
+        self.installed_rule.breakout_mode = CHANNELIZED
+        self.installed_rule.parent_name_template = "et-0/0/{bay_position}"
+        self.installed_rule.save()
+
+        predicted = predict_rule_output(module, bay, flat_names)
+
+        self.assertEqual(predicted, flat_names)
+        apply_rule_to_existing(self.installed_rule)
+        self.assertEqual(self._names(module), flat_names)
+
     def test_prediction_still_creates_nothing(self):
-        """Prediction reads templates only — the port it describes a family for is left alone."""
+        """Prediction only reads — the port it describes a family for is left alone."""
         module, bay = self._install(self.named_type, "3", run_rules=False)
 
         predict_rule_output(module, bay, self._names(module))

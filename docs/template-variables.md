@@ -128,8 +128,10 @@ channel_start: 0
 
 `parent_name_template` names the parent interface. It takes the same variables as `name_template`
 minus `{channel}` — the parent is the one interface in the family without a channel number, and a
-`{channel}` in it is rejected. Blank leaves the parent the name NetBox gave it. `{base}` is the
-base interface's current name, for the parent and for every channel alike.
+`{channel}` in it is rejected in every spelling, including inside an expression (`{channel + 1}`).
+Braces must balance, so a stray `{` is refused on save instead of ending up in an interface name.
+Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for
+the parent and for every channel alike.
 
 The complete family is checked before anything is written: one occupied name — the parent's or any
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels

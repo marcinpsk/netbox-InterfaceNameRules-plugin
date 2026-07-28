@@ -491,13 +491,13 @@ def _predicted_family_parent_name(rule, raw_name, variables, parents):  # pragma
     return evaluate_name_template(rule.parent_name_template, {**variables, "base": raw_name})
 
 
-def _predicted_names(rule, raw_name, variables, parents, children):
+def _predicted_names(rule, raw_name, variables, parents, children, family_blocked=False):
     """Return the names *raw_name* predicts to under *rule*.
 
     A name the module type's templates describe as a channelized parent or channel follows its
-    family; a channelized rule on a plain name predicts the family it would build there; anything
-    else keeps the per-name prediction, expanding once per channel for a breakout rule and once for
-    a simple one.
+    family; a channelized rule on a plain name predicts the family it would build there, unless
+    *family_blocked* says the apply path refuses to build it; anything else keeps the per-name
+    prediction, expanding once per channel for a breakout rule and once for a simple one.
     """
     if raw_name in parents:  # pragma: no cover - requires a NetBox that models channelization
         if rule.channel_count > 0:
@@ -507,8 +507,8 @@ def _predicted_names(rule, raw_name, variables, parents, children):
     if raw_name in children:  # pragma: no cover - requires a NetBox that models channelization
         return [_predicted_channel_name(rule, raw_name, variables, parents, children)]
     if rule.channel_count > 0 and _is_channelized_rule(rule):
-        if not supports_channelization():
-            return [raw_name]  # the apply path skips the rule entirely on this release
+        if family_blocked or not supports_channelization():
+            return [raw_name]  # the apply path builds nothing here
         parent_name, channels = _channelized_family_names(rule, raw_name, variables)  # pragma: no cover - see above
         return [parent_name, *(name for _, name in channels)]  # pragma: no cover - see above
     vars_copy = {**variables, "base": raw_name}
@@ -523,9 +523,10 @@ def _predicted_names(rule, raw_name, variables, parents, children):
 def predict_rule_output(module, module_bay, raw_names):
     """Predict the names apply_interface_name_rules would produce for raw_names.
 
-    Pure function — does not save, mutate, or query the Interface table. Used
-    by external integrations (e.g., netbox-librenms-plugin) that need to know
-    the post-rename names without actually applying any rule.
+    Read-only — saves and mutates nothing.  A channelized rule additionally counts the module's
+    interfaces, because the apply path refuses to convert a module that already carries a flat
+    breakout family and the prediction has to say the same.  Used by external integrations (e.g.,
+    netbox-librenms-plugin) that need to know the post-rename names without applying any rule.
 
     For breakout rules (channel_count > 0), each raw name expands to
     channel_count predicted names. For simple renames, one name in → one name
@@ -545,11 +546,18 @@ def predict_rule_output(module, module_bay, raw_names):
 
     variables = build_variables(module_bay, device=module.device)
     parents, children = _template_families(module)
+    # Costs one count pair, and only where a channelized rule could otherwise predict a family.
+    family_blocked = (
+        rule.channel_count > 0
+        and _is_channelized_rule(rule)
+        and supports_channelization()
+        and _has_flat_expansion(module)
+    )
 
     output = []
     for raw_name in raw_names:
         try:
-            output.extend(_predicted_names(rule, raw_name, variables, parents, children))
+            output.extend(_predicted_names(rule, raw_name, variables, parents, children, family_blocked))
         except (ValueError, TypeError, re.error):
             # Template eval failed; apply path would also fail and leave the
             # interface alone, so the predicted name is the raw name.

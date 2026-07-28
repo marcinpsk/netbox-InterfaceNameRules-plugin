@@ -13,7 +13,6 @@ Everything here runs on every NetBox the plugin supports; behaviour that only ex
 models channelized interfaces lives in test_channelized_mode.py.
 """
 
-import contextlib
 import csv
 import io
 import json
@@ -46,7 +45,7 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
-from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.models import InterfaceNameRule, _references_channel
 from netbox_interface_name_rules.tests.test_channelization import (
     PARENT_TYPE,
     PLUGIN_LOGGER,
@@ -175,11 +174,22 @@ class BreakoutModeValidationTest(TestCase):
             "et-0/0/{bay_position}:{channel:>2}",
             "et-0/0/{bay_position}:{ channel }",
             "et-0/0/{{channel} + 1}",
+            "et-0/0/{channel + 1}",
+            "et-0/0/{ channel*2 }",
         ):
             with self.subTest(parent_name_template=template):
                 rule = self._rule(breakout_mode=CHANNELIZED, channel_count=4, parent_name_template=template)
 
                 self._assert_rejected(rule, "parent_name_template")
+
+    def test_the_channel_guard_answers_only_the_channel_question(self):
+        """A brace group the AST cannot read is not a channel reference, whatever else is wrong with it.
+
+        The expression pass exists to catch ``{channel + 1}``; turning every group it fails to parse
+        into a channel error would blame the wrong thing.
+        """
+        self.assertFalse(_references_channel("et-0/0/{bay_position!r}"))
+        self.assertTrue(_references_channel("et-0/0/{channel!r}"))
 
     def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
         """The rule is 'no channel', not 'no expressions' — arithmetic parent names must still save."""
@@ -192,12 +202,15 @@ class BreakoutModeValidationTest(TestCase):
         rule.full_clean()
 
     def test_a_malformed_parent_template_is_answered_with_validation_not_a_traceback(self):
-        """Stray braces are user input; the operator must get an error page, not a 500."""
+        """Stray braces are user input; the operator must get an error page, not an interface named '{'."""
         for template in ("et-0/0/{channel", "et-0/0/}{", "et-0/0/{bay_position"):
-            with self.subTest(parent_name_template=template), contextlib.suppress(ValidationError):
+            with self.subTest(parent_name_template=template):
                 rule = self._rule(breakout_mode=CHANNELIZED, channel_count=4, parent_name_template=template)
 
-                rule.full_clean()
+                with self.assertRaises(ValidationError) as ctx:
+                    rule.full_clean()
+
+                self.assertIn("parent_name_template", ctx.exception.message_dict)
 
     def test_device_interface_rules_cannot_be_channelized(self):
         """The device-level path renames existing interfaces; it never creates a family."""
@@ -667,6 +680,30 @@ class BreakoutModeRuleTestFormTest(TestCase):
         self.assertEqual(preview.breakout_mode, CHANNELIZED)
         self.assertEqual(preview.parent_name_template, "et-0/0/{bay_position}")
 
+    def test_the_tester_controls_render_with_netboxs_form_classes(self):
+        """The tester is a plain Django form, so NetBox's widget templates are what style it.
+
+        NetBox 4.x removed ``BootstrapMixin`` and styles every form — model or not — by overriding
+        Django's widget templates (``FORM_RENDERER = TemplatesSetting``).  Pinning the rendered
+        classes catches a control that ends up unstyled, whatever supplies them.
+        """
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_test"))
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        for field, css_class in (
+            ("name_template", "form-control"),
+            ("parent_name_template", "form-control"),
+            ("channel_count", "form-control"),
+            ("breakout_mode", "form-select"),
+            ("module_type", "form-select"),
+            ("module_type_is_regex", "form-check-input"),
+        ):
+            with self.subTest(field=field):
+                tag = re.search(rf'<[^>]*\bid="id_{field}"[^>]*>', html)
+                self.assertIsNotNone(tag, f"{field} is not rendered on the tester page")
+                self.assertIn(css_class, tag.group(0))
+
     def test_the_rule_test_view_accepts_a_channelized_rule(self):
         """The form is reached through the view; a field the view drops is a field the preview ignores."""
         response = self.client.post(
@@ -828,7 +865,17 @@ class RuleTestFormTopologyTest(TestCase):
             "et-0/0/{bay_position}:{channel:>2}",
             "et-0/0/{bay_position}:{ channel }",
             "et-0/0/{{channel} + 1}",
+            "et-0/0/{channel + 1}",
+            "et-0/0/{ channel*2 }",
         ):
+            with self.subTest(parent_name_template=template):
+                self._assert_rejected(
+                    self._form(breakout_mode=CHANNELIZED, parent_name_template=template), "parent_name_template"
+                )
+
+    def test_a_malformed_parent_template_is_refused_by_the_tester_too(self):
+        """A template the model refuses to store must not preview as if it were savable."""
+        for template in ("et-0/0/{channel", "et-0/0/}{", "et-0/0/{bay_position"):
             with self.subTest(parent_name_template=template):
                 self._assert_rejected(
                     self._form(breakout_mode=CHANNELIZED, parent_name_template=template), "parent_name_template"
