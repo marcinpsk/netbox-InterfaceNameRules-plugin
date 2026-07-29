@@ -436,16 +436,26 @@ class RuleApplyDetailView(generic.ObjectView):
         rule = self.get_object(**kwargs)
         try:
             preview, total_checked = find_interfaces_for_rule(rule, limit=APPLY_BATCH_LIMIT)
-            # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
-            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
             logger.exception("Failed to compute preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {exc}")
-            preview, total_checked, conversions, conversions_have_more = [], 0, [], False
+            preview, total_checked = [], 0
         except Exception as exc:
             logger.exception("Unexpected error computing preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {type(exc).__name__}")
-            preview, total_checked, conversions, conversions_have_more = [], 0, [], False
+            preview, total_checked = [], 0
+        # A conversion-scan failure must not blank the unrelated apply preview above.
+        try:
+            # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
+            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+        except (re.error, ValueError) as exc:
+            logger.exception("Failed to compute the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {exc}")
+            conversions, conversions_have_more = [], False
+        except Exception as exc:
+            logger.exception("Unexpected error computing the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {type(exc).__name__}")
+            conversions, conversions_have_more = [], False
         return render(
             request,
             self.template_name,

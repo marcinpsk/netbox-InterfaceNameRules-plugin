@@ -183,6 +183,33 @@ class RuleApplyDetailViewTest(ViewTestBase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_a_conversion_scan_failure_keeps_the_apply_preview(self):
+        """A bug in the conversion scan must not blank the unrelated apply preview."""
+        from django.contrib.messages import get_messages
+
+        role = DeviceRole.objects.create(name="SplitRole", slug="splitrole")
+        site = Site.objects.create(name="SplitSite", slug="splitsite")
+        device = Device.objects.create(name="split-dev-01", device_type=self.device_type, role=role, site=site)
+        bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
+        module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
+        Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
+
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
+            kwargs={"pk": self.rule.pk},
+        )
+        with patch(
+            "netbox_interface_name_rules.engine.find_convertible_families",
+            side_effect=RuntimeError("conversion boom"),
+        ):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["preview"]), 1)  # apply preview survives
+        self.assertEqual(response.context["conversions"], [])
+        msgs = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("conversion" in m.lower() for m in msgs), msgs)
+
     def test_apply_detail_counts_unit_matches_capability(self):
         """The preview counts label says families only where NetBox models channelization."""
         from netbox_interface_name_rules.engine import supports_channelization
