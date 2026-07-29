@@ -361,25 +361,20 @@ def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires 
     return suffix
 
 
-def _matches_raw_name(name, raw_names, matchers):
-    """Return True when *name* is a raw template name now, or one a token template once produced."""
-    return name in raw_names or any(matcher.pattern.fullmatch(name) for matcher in matchers)
+def _unambiguous_claims(candidates, matchers, module):
+    """Return the labels of *candidates* that exactly one drifted ``{vc_position}`` template claims.
 
-
-def _drifted_candidates(interfaces, matchers, module):
-    """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
-
-    Both sides of the claim have to be unique: a template matching two interfaces, or an interface
-    matched by two templates, disqualifies everything involved with a warning rather than renaming a
-    guess.  *interfaces* and *matchers* are what the exact pass left unclaimed.
+    *candidates* pairs a label with the name forms it is compared under.  Both sides of the claim
+    have to be unique: a template matching two labels, or a label matched by two templates,
+    disqualifies everything involved with a warning rather than renaming a guess.
     """
     claims = defaultdict(list)
     claimants = defaultdict(list)
     for index, matcher in enumerate(matchers):
-        for iface in interfaces:
-            if matcher.pattern.fullmatch(iface.name):
-                claims[index].append(iface)
-                claimants[iface.name].append(index)
+        for label, forms in candidates:
+            if any(matcher.pattern.fullmatch(form) for form in forms):
+                claims[index].append(label)
+                claimants[label].append(index)
 
     ambiguous = {index for index, claimed in claims.items() if len(claimed) > 1}
     for index in sorted(ambiguous):
@@ -388,19 +383,61 @@ def _drifted_candidates(interfaces, matchers, module):
             "position changed; skipping them all rather than renaming a guess.",
             matchers[index].template_name,
             module,
-            sorted(iface.name for iface in claims[index]),
+            sorted(claims[index]),
         )
-    for name, indexes in claimants.items():
+    for label, indexes in claimants.items():
         if len(indexes) > 1:
             logger.warning(
                 "Interface %r on %s could be the drifted name of any of the templates %s; "
                 "skipping it rather than renaming a guess.",
-                name,
+                label,
                 module,
                 sorted(matchers[index].template_name for index in indexes),
             )
             ambiguous.update(indexes)
     return [claims[index][0] for index in sorted(claims) if index not in ambiguous]
+
+
+def _drifted_candidates(interfaces, matchers, module):
+    """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
+
+    *interfaces* and *matchers* are what the exact pass left unclaimed.
+    """
+    by_name = {iface.name: iface for iface in interfaces}
+    claimed = _unambiguous_claims([(iface.name, (iface.name,)) for iface in interfaces], matchers, module)
+    return [by_name[label] for label in claimed]
+
+
+def _forced_channel_bases(interfaces, raw_names, matchers, module):
+    """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
+
+    A base is claimed exactly when either comparison form — the full base or its last path segment,
+    the latter covering already-renamed bases — is a raw name now; otherwise a token template's
+    matcher may claim it, under the same one-to-one policy ``_drifted_candidates`` applies.  Two
+    bases with distinct rule outputs never collide downstream, so an ambiguous claim has to be
+    stopped here or it is not stopped at all.
+    """
+    seen_bases: dict = {}
+    forms_by_base: dict = {}
+    for i in interfaces:
+        # A channelized parent is its own base: its channels are separate rows, so the name needs no
+        # ":"-splitting to find them.
+        base = i.name if _is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        forms = (base, base.rsplit("/", 1)[-1])
+        if not any(form in raw_names for form in forms) and not any(
+            matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
+        ):
+            continue
+        forms_by_base[base] = forms
+        if base not in seen_bases or i.name.endswith(":0"):
+            seen_bases[base] = i
+
+    exact_forms = {form for forms in forms_by_base.values() for form in forms if form in raw_names}
+    drifted = {base: forms for base, forms in forms_by_base.items() if not exact_forms & set(forms)}
+    if not drifted:
+        return list(seen_bases.values())
+    kept = set(_unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module))
+    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]
 
 
 def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), module=None):
@@ -412,9 +449,8 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
 
     force_reapply, non-channel: all interfaces (e.g. vc_position changed).
 
-    force_reapply, channel rule: one interface per base name, matching when the
-    full base OR its last path segment is a raw name — now or historically;
-    prefers the ":0" channel to avoid duplicate-name errors on re-apply.
+    force_reapply, channel rule: one interface per base name (see
+    ``_forced_channel_bases``).
     """
     if not force_reapply:
         exact = [i for i in interfaces if i.name in raw_names]
@@ -428,25 +464,7 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
         )
     if rule.channel_count == 0:
         return interfaces
-    # Breakout + force_reapply: deduplicate by base, prefer ":0"
-    seen_bases: dict = {}
-    for i in interfaces:
-        if _is_channelized_parent(i):  # pragma: no cover - requires a NetBox that models channelization
-            # A channelized parent is its own base: its channels are separate rows, so the name
-            # needs no ":"-splitting to find them.
-            if _matches_raw_name(i.name, raw_names, matchers) or _matches_raw_name(
-                i.name.rsplit("/", 1)[-1], raw_names, matchers
-            ):
-                seen_bases[i.name] = i
-            continue
-        base = i.name.rsplit(":", 1)[0]
-        # Also match when the last path segment equals a raw name (already-renamed bases).
-        if _matches_raw_name(base, raw_names, matchers) or _matches_raw_name(
-            base.rsplit("/", 1)[-1], raw_names, matchers
-        ):
-            if base not in seen_bases or i.name.endswith(":0"):
-                seen_bases[base] = i
-    return list(seen_bases.values())
+    return _forced_channel_bases(interfaces, raw_names, matchers, module)
 
 
 def apply_interface_name_rules(module, module_bay, force_reapply=False):

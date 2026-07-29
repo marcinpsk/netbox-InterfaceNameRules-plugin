@@ -15,6 +15,10 @@ real ``VirtualChassis`` rows and real NetBox module instantiation.  The only sim
 ≤ 4.5 (see ``VcPositionLegacyNetboxTest``), where the constant that carries the token has to be
 hidden from the engine's feature check.
 
+A fixture whose interface names come out of the token needs a release that resolves it, so every
+such class is gated on ``supports_vc_position_token()``; the two control classes are not, and their
+assertions are written to hold on a release that never resolves the token as well.
+
 Two engine names are pinned here as the fix's public surface:
 
 * ``engine.supports_vc_position_token()`` — the feature check, probed lazily from
@@ -48,6 +52,7 @@ from netbox_interface_name_rules.engine import (
     find_convertible_families,
     predict_rule_output,
     supports_channelization,
+    supports_vc_position_token,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import _apply_rules_deferred
@@ -63,6 +68,10 @@ from netbox_interface_name_rules.tests.test_channelization import (
 
 FLAT = BreakoutModeChoices.FLAT
 CHANNELIZED = BreakoutModeChoices.CHANNELIZED
+
+# Every fixture spelling a name NetBox resolved from the token needs the release that resolves it:
+# on 4.5 and older the token stays literal in the interface name and the drift cannot even occur.
+REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"
 
 
 def _token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TYPE):
@@ -133,6 +142,7 @@ class VcDriftTestCase(ChannelizationTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionJoinDriftTest(VcDriftTestCase):
     """Interfaces instantiated outside a VC keep the fallback name after the device joins one."""
 
@@ -177,6 +187,7 @@ class VcPositionJoinDriftTest(VcDriftTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionRenumberDriftTest(VcDriftTestCase):
     """A historical position is neither the current one nor the fallback — enumerating values misses it."""
 
@@ -218,6 +229,7 @@ class VcPositionRenumberDriftTest(VcDriftTestCase):
             self.assertTrue(patterns[0].fullmatch(name), f"{patterns[0].pattern} does not cover {name}")
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionForceBaseMatchingTest(VcDriftTestCase):
     """Force-mode channel bases are compared in two forms; drift-awareness applies to both, and no more."""
 
@@ -235,7 +247,7 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
         )
 
     def test_an_already_renamed_base_matches_on_its_last_path_segment(self):
-        """``xe-.../{raw}`` keeps the raw name as the last segment — the form engine.py:368 compares."""
+        """``xe-.../{raw}`` keeps the raw name as the last segment — the second form the force path compares."""
         self._breakout_rule("et-0/0/{vc_position}-{bay_position}:{channel}")
         module, _ = self._install_on(self.device, self.module_type, "5")
         self.assertEqual(self._names(module), ["et-0/0/1-5:0"])
@@ -260,6 +272,7 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionLeaveDriftTest(VcDriftTestCase):
     """Leaving a VC is an operator decision — nothing is scheduled, but a re-apply must still match."""
 
@@ -303,6 +316,7 @@ class VcPositionLeaveDriftTest(VcDriftTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionAmbiguityTest(VcDriftTestCase):
     """A claim that is not globally unique renames nothing and says why — it is never guessed."""
 
@@ -337,6 +351,28 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["xe-0/0/3", "xe-1/0/3"])
         output = "\n".join(logs.output)
         self.assertIn("xe-{vc_position:0}/0/{module}", output)  # which template made the ambiguous claim
+        self.assertIn(str(module), output)
+        for candidate in ("xe-0/0/3", "xe-1/0/3"):
+            self.assertIn(candidate, output)
+
+    def test_a_forced_re_apply_does_not_break_out_an_ambiguous_pair(self):
+        """The same claim reached through the force path, where distinct targets hide the collision.
+
+        A breakout rule that carries ``{base}`` gives each claimed base a name of its own, so nothing
+        downstream refuses the second one: the guard has to be the thing that stops it.
+        """
+        module, _ = self._install_on(self.device, self.decoy_type, "3")
+        Interface.objects.filter(module=module, name="mgmt-3").update(name="xe-0/0/3")
+        InterfaceNameRule.objects.create(
+            module_type=self.decoy_type, name_template="et-{base}:{channel}", channel_count=2, channel_start=0
+        )
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            self._renumber(2)
+
+        self.assertEqual(self._names(module), ["xe-0/0/3", "xe-1/0/3"])
+        output = "\n".join(logs.output)
+        self.assertIn("xe-{vc_position:0}/0/{module}", output)
         self.assertIn(str(module), output)
         for candidate in ("xe-0/0/3", "xe-1/0/3"):
             self.assertIn(candidate, output)
@@ -380,8 +416,9 @@ class VcPositionNoTokenControlTest(VcDriftTestCase):
         manufacturer, cls.device = _build_device("VcNoTok", ["3", "4"])
         cls.module_type = _token_module_type(manufacturer, "VcNoTok-QSFP", "{module}")
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_tokenless_module_type_builds_no_matchers(self):
-        """The pattern machinery is not engaged at all — on a release that does support the token."""
+        """The pattern machinery is not engaged at all — the check's positive half lives here."""
         module, _ = self._install_on(self.device, self.module_type, "3")
 
         self.assertTrue(engine.supports_vc_position_token())
@@ -404,7 +441,12 @@ class VcPositionNoTokenControlTest(VcDriftTestCase):
 
 
 class VcPositionLegacyNetboxTest(VcDriftTestCase):
-    """NetBox ≤ 4.5 has no native token, so the engine must take the original exact-only code path."""
+    """NetBox ≤ 4.5 has no native token, so the engine must take the original exact-only code path.
+
+    Deliberately ungated: on a release that never resolves the token the simulated state and the real
+    one coincide, so every assertion here has to hold as written on 4.5 and older too.  Nothing below
+    therefore spells a name NetBox resolved from the token, or asserts that support is present.
+    """
 
     @classmethod
     def setUpTestData(cls):
@@ -413,10 +455,8 @@ class VcPositionLegacyNetboxTest(VcDriftTestCase):
         )
         cls.module_type = _token_module_type(manufacturer, "VcLegacy-SFP", "xe-{vc_position:0}/0/{module}")
 
-    def test_the_feature_check_follows_the_constant(self):
+    def test_the_feature_check_is_false_without_the_constant(self):
         """Probed from ``dcim.constants``, lazily — an upstream removal must flip the check, not crash."""
-        self.assertTrue(engine.supports_vc_position_token())
-
         with _without_vc_position_re():
             self.assertFalse(engine.supports_vc_position_token())
 
@@ -427,8 +467,10 @@ class VcPositionLegacyNetboxTest(VcDriftTestCase):
             self.assertEqual(_raw_name_patterns(module), [])
 
     def test_matching_takes_the_exact_only_path_without_the_constant(self):
-        """Byte-identical pre-4.6 behaviour: the drifted interface is simply not a candidate."""
+        """Byte-identical pre-4.6 behaviour: a name only a matcher could claim is not a candidate."""
         module, bay = self._install_on(self.device, self.module_type, "3")
+        # Named explicitly, so the interface sits on a position variant whatever the release resolved.
+        Interface.objects.filter(module=module).update(name="xe-1/0/3")
         self._renumber(2)
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 
@@ -444,6 +486,7 @@ class VcPositionLegacyNetboxTest(VcDriftTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionNestedBayTest(VcDriftTestCase):
     """A matcher is built by resolving ``{module}`` through NetBox's own code on a copy of the template."""
 
@@ -499,6 +542,7 @@ class VcPositionNestedBayTest(VcDriftTestCase):
 # ---------------------------------------------------------------------------
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionPredictionTest(VcDriftTestCase):
     """``predict_rule_output`` is handed names by its caller; nothing about the fix changes that."""
 
@@ -530,6 +574,7 @@ class VcPositionPredictionTest(VcDriftTestCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionAsymmetricFamilyTest(VcDriftTestCase):
     """Only symmetric token use keeps a family in step; an asymmetric one degrades, it never guesses."""
 
@@ -572,6 +617,7 @@ class VcPositionAsymmetricFamilyTest(VcDriftTestCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionConversionRecoveryTest(VcDriftTestCase):
     """Flat→channelized identification reads rule-output names, so it recovers the historical base."""
 
