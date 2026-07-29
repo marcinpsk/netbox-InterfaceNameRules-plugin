@@ -497,6 +497,19 @@ class ConversionPreflightTest(ConversionTestCase):
         child.save()
         return parent
 
+    def test_a_base_renamed_between_scan_and_convert_refuses_cleanly(self):
+        """The ch-0 lookup mirrors the sibling checks: a row that vanished mid-race refuses, never crashes."""
+        from netbox_interface_name_rules import engine
+
+        family = next(f for f in engine._conversion_families(self.rule) if f.base.pk == self.base.pk)
+        self.base.name = "renamed-by-a-concurrent-request"
+        self.base.save()
+
+        reason = engine._convert_family(self.rule, family, commit=True)
+
+        self.assertIn("xe-0/0/3:0", reason)
+        self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
+
     def test_a_cabled_sibling_blocks_the_family(self):
         """A channel derives its cable from the parent, so a cabled sibling cannot become one."""
         self._cable_up(self._iface("xe-0/0/3:2"))
