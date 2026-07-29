@@ -179,6 +179,127 @@
 {% endif %}
 </form>
 
+{# ── Flat → channelized conversion ────────────────────────────────────────────── #}
+{% if conversions %}
+<form id="convert-form" method="post">
+{% csrf_token %}
+<div class="card mt-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="card-title mb-0"><i class="mdi mdi-call-split me-2"></i>Convert flat families</h5>
+    <span class="badge text-bg-info fs-6 fw-normal">
+      {% if conversions_have_more %}
+        Showing {{ conversions|length }} of {{ conversions|length }}+ flat family(ies) found
+        <span class="ms-1 badge text-bg-warning">(batch limit: {{ batch_limit }})</span>
+      {% else %}
+        {{ conversions|length }} flat family(ies) found
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body pb-0">
+    <div class="alert alert-warning">
+      <div>
+        These modules carry a flat breakout family an earlier apply installed. Converting one rewrites
+        existing rows: the ch-0 interface keeps its ID, its cable and its type and becomes the channelized
+        parent, while a new channel 1 interface takes over its name and its configuration. Applying a rule
+        never does this — confirm it here, per family.
+      </div>
+    </div>
+    {% if conversions_have_more %}
+      <div class="alert alert-warning">
+        <i class="mdi mdi-alert me-1"></i>
+        More families are waiting. Each one is checked by performing the conversion and rolling it back, so
+        this page checks and converts at most {{ batch_limit }} per run. Use
+        <strong>Convert as Background Job</strong> to convert all of them.
+      </div>
+    {% endif %}
+  </div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0 align-middle">
+      <thead>
+        <tr>
+          <th style="width:2rem"></th>
+          <th>Device</th>
+          <th>Current Family</th>
+          <th style="width:2rem">→</th>
+          <th>New Family</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for verdict in conversions %}
+          <tr class="border-bottom-0">
+            <td>
+              {% if verdict.convertible %}
+                <input type="checkbox" name="convert_ids" value="{{ verdict.interface.pk }}"
+                       class="convert-check" aria-label="Select {{ verdict.current_name }}">
+              {% endif %}
+            </td>
+            <td>
+              {% if verdict.module.device %}
+                <a href="{{ verdict.module.device.get_absolute_url }}">{{ verdict.module.device }}</a>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td>
+              {% for name in verdict.current_names %}
+                <div><code class="text-danger">{{ name }}</code></div>
+              {% endfor %}
+            </td>
+            <td class="text-muted">→</td>
+            <td>
+              {% for detail in verdict.name_details %}
+                <div>
+                  <code class="text-success">{{ detail.name }}</code>
+                  {% if detail.channel_id %}
+                    <span class="badge text-bg-secondary" title="Channel {{ detail.channel_id }} of the parent">ch {{ detail.channel_id }}</span>
+                  {% else %}
+                    <span class="badge text-bg-primary">parent</span>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </td>
+            <td>
+              {% if verdict.convertible %}
+                <span class="badge text-bg-success">Convertible</span>
+              {% else %}
+                <span class="badge text-bg-danger">Blocked</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td></td>
+            <td colspan="5" class="small text-muted pt-0">
+              {% if verdict.convertible %}
+                {{ verdict.metadata_note }}
+              {% else %}
+                <span class="text-danger">{{ verdict.reason }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if can_apply %}
+    <div class="card-footer">
+      <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
+              onclick="return confirm('Convert the selected flat families to the channelized topology?')">
+        <i class="mdi mdi-call-split me-1"></i>Convert Selected
+      </button>
+      <button type="submit" name="action" value="convert_background" class="btn btn-outline-warning"
+              onclick="return confirm('Enqueue a background job to convert ALL convertible families of this rule?')">
+        <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
+      </button>
+    </div>
+  {% else %}
+    <div class="card-footer text-muted">
+      <i class="mdi mdi-lock me-1"></i>You do not have permission to apply interface changes.
+      <span class="text-muted small">(requires <code>dcim.change_interface</code>)</span>
+    </div>
+  {% endif %}
+</div>
+</form>
+{% endif %}
+
 <script>
 (function () {
   const selectAll = document.getElementById('select-all');

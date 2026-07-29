@@ -161,6 +161,52 @@ On NetBox releases that cannot model channels (4.6 and older) a `channelized`
 rule is skipped with a warning and nothing is created — it is never quietly
 applied as a flat breakout.
 
+`contrib/juniper-channelized.yaml` carries the Juniper breakout families of
+`contrib/juniper.yaml` in this mode.
+
+### Converting a flat family (NetBox 4.7+)
+
+Devices provisioned before the channelized mode existed carry flat families:
+four sibling interfaces where NetBox now models a parent and four channels.
+**Apply Rules → Preview & Apply** offers to convert them, per family, once the
+rule is enabled and set to `breakout_mode: channelized` with a
+`parent_name_template` — the flat family has no parent row, so without a parent
+name there is nowhere for the ch-0 interface to go and nothing is offered. A
+disabled rule converts nothing, on this page or in the background job.
+
+Conversion is only ever performed from that page, by an operator who confirmed
+it: **Apply** renames, it never rewrites a family. Each family gets its own
+verdict before anything is written, produced by performing the whole conversion
+inside a transaction that is rolled back again — so a family that NetBox would
+reject is reported with NetBox's own reason (a cabled sibling, an occupied
+parent name, a missing sibling, a sibling already channelized, a sibling that is
+already a channel of another parent) instead of being half converted. Selecting
+a blocked family converts the others and skips that one.
+
+What the conversion does to the ch-0 row, per family:
+
+| Stays on the physical row (same interface ID) | Moves to the new channel 1 interface |
+|---|---|
+| cable, interface type, module link, `mark_connected` | IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
+
+Custom field values are copied to the channel rather than moved, because they
+can describe either the port or the link. The remaining siblings are retyped in
+place, so their own addresses, descriptions and tags — and their interface IDs —
+survive.
+
+The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
+**parent**. Automation, saved filters or external systems keyed on that ID will
+address the physical port afterwards, not the channel that inherited its name.
+
+Producing a verdict means performing the whole conversion and rolling it back, so
+the page pays that cost per family it lists. It therefore lists at most
+`apply_batch_limit` families (50 by default, the same cap the apply preview uses)
+and says so when more are waiting, and it refuses a confirmation naming more than
+that many rather than converting part of it. **Convert as Background Job** runs
+every convertible family of the rule and is not capped.
+
+On NetBox 4.6 and older no family is offered and no conversion section is shown.
+
 ### Partial breakout repair
 
 If a device was provisioned partially (e.g. only 2 of 4 channels were created

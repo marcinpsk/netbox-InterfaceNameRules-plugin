@@ -138,6 +138,27 @@ channel's — skips the whole family with a warning. On NetBox releases that can
 (4.6 and older) a `channelized` rule is skipped and logged; it is never applied as a flat breakout
 instead.
 
+### Converting an installed flat family
+
+Applying a rule never converts the flat family an earlier apply installed. A `channelized` rule with
+a `parent_name_template` set instead offers each such family for conversion on **Apply Rules →
+Preview & Apply**, where the operator confirms it per family; a blank parent template offers
+nothing, because a flat family's ch-0 interface is the base and has nowhere else to go.
+
+Every family is preflighted by performing the conversion inside a transaction that is rolled back,
+so the verdict carries NetBox's own reason for refusing it — a cabled sibling, an occupied parent
+name, a missing sibling — and a refused family is never half converted.
+
+Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
+link and `mark_connected`, and becomes the parent. Its IP addresses, FHRP group assignments,
+untagged/tagged VLANs, 802.1Q mode, MTU, description and tags move to a newly created channel 1
+interface that takes over its name; custom field values are copied to it. The remaining siblings are
+retyped in place, keeping their own interface IDs. Automation keyed on the ch-0 interface ID
+addresses the parent afterwards, not the channel that carries its name.
+
+On NetBox 4.6 and older no family is offered and conversion reports that this release cannot model
+channels.
+
 ### Converter Offset
 
 ```yaml

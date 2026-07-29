@@ -183,6 +183,33 @@ class RuleApplyDetailViewTest(ViewTestBase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
+    def test_a_conversion_scan_failure_keeps_the_apply_preview(self):
+        """A bug in the conversion scan must not blank the unrelated apply preview."""
+        from django.contrib.messages import get_messages
+
+        role = DeviceRole.objects.create(name="SplitRole", slug="splitrole")
+        site = Site.objects.create(name="SplitSite", slug="splitsite")
+        device = Device.objects.create(name="split-dev-01", device_type=self.device_type, role=role, site=site)
+        bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
+        module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
+        Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
+
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
+            kwargs={"pk": self.rule.pk},
+        )
+        with patch(
+            "netbox_interface_name_rules.engine.find_convertible_families",
+            side_effect=RuntimeError("conversion boom"),
+        ):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["preview"]), 1)  # apply preview survives
+        self.assertEqual(response.context["conversions"], [])
+        msgs = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("conversion" in m.lower() for m in msgs), msgs)
+
     def test_apply_detail_counts_unit_matches_capability(self):
         """The preview counts label says families only where NetBox models channelization."""
         from netbox_interface_name_rules.engine import supports_channelization
@@ -543,6 +570,71 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         url = self._url(self.rule.pk)
         response = self.client.post(url, {"action": "apply"})
         self.assertEqual(response.status_code, 403)
+
+
+class RuleApplyDetailViewConvertPostTest(ViewTestBase2):
+    """The convert action is wired on every NetBox release; what it can do there differs.
+
+    ``cls.rule`` is a plain rename rule with no flat family behind it, so the conversion is a no-op
+    on any release — which is exactly what makes these assertions about the view, not the engine.
+    """
+
+    def _url(self):
+        return reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
+            kwargs={"pk": self.rule.pk},
+        )
+
+    @staticmethod
+    def _messages(response):
+        from django.contrib.messages import get_messages
+
+        return [(m.level_tag, str(m)) for m in get_messages(response.wsgi_request)]
+
+    def test_convert_without_a_selection_warns(self):
+        """An empty confirmation must not be read as 'convert everything'."""
+        response = self.client.post(self._url(), {"action": "convert"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any(level == "warning" and "No families" in text for level, text in self._messages(response)))
+
+    def test_convert_with_a_selection_reports_the_count(self):
+        """The operator gets the number of families back, even when it is zero."""
+        response = self.client.post(self._url(), {"action": "convert", "convert_ids": ["1"]})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any(level == "success" and "Converted 0" in text for level, text in self._messages(response)))
+
+    def test_a_selection_over_the_batch_limit_converts_nothing(self):
+        """The cap on the synchronous batch is wired on every release, like the apply cap beside it."""
+        with patch("netbox_interface_name_rules.views.APPLY_BATCH_LIMIT", 1):
+            response = self.client.post(self._url(), {"action": "convert", "convert_ids": ["1", "2"]})
+
+        self.assertEqual(response.status_code, 302)
+        warnings = [text for level, text in self._messages(response) if level == "warning"]
+        self.assertTrue(any("Background Job" in text for text in warnings), warnings)
+
+    def test_convert_failure_is_reported_rather_than_raised(self):
+        """A conversion that blows up must land on the page, not in a 500."""
+        from django.contrib.messages import ERROR, get_messages
+
+        with patch("netbox_interface_name_rules.engine.convert_flat_families", side_effect=RuntimeError("boom")):
+            response = self.client.post(self._url(), {"action": "convert", "convert_ids": ["1"]})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any(m.level == ERROR for m in get_messages(response.wsgi_request)))
+
+    def test_convert_background_enqueues_the_conversion_job(self):
+        """The batch runs on the worker, the same way a large apply does."""
+        mock_job = MagicMock()
+        mock_job.pk = 43
+        with patch(
+            "netbox_interface_name_rules.jobs.ConvertFlatFamiliesJob.enqueue", return_value=mock_job
+        ) as mock_enqueue:
+            response = self.client.post(self._url(), {"action": "convert_background"})
+
+        self.assertEqual(response.status_code, 302)
+        mock_enqueue.assert_called_once_with(name=ANY, user=self.superuser, rule_id=self.rule.pk)
 
 
 class RuleToggleNoPermissionNonAjaxTest(ViewTestBase2):

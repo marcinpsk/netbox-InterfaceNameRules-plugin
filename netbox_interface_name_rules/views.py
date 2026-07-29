@@ -431,7 +431,7 @@ class RuleApplyDetailView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         """Render a preview of all interfaces that would be renamed by this rule."""
-        from .engine import find_interfaces_for_rule, supports_channelization
+        from .engine import find_convertible_families, find_interfaces_for_rule, supports_channelization
 
         rule = self.get_object(**kwargs)
         try:
@@ -444,12 +444,26 @@ class RuleApplyDetailView(generic.ObjectView):
             logger.exception("Unexpected error computing preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {type(exc).__name__}")
             preview, total_checked = [], 0
+        # A conversion-scan failure must not blank the unrelated apply preview above.
+        try:
+            # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
+            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+        except (re.error, ValueError) as exc:
+            logger.exception("Failed to compute the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {exc}")
+            conversions, conversions_have_more = [], False
+        except Exception as exc:
+            logger.exception("Unexpected error computing the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {type(exc).__name__}")
+            conversions, conversions_have_more = [], False
         return render(
             request,
             self.template_name,
             {
                 "rule": rule,
                 "preview": preview,
+                "conversions": conversions,
+                "conversions_have_more": conversions_have_more,
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
@@ -460,29 +474,67 @@ class RuleApplyDetailView(generic.ObjectView):
             },
         )
 
+    def _enqueue(self, request, rule, job_class, name):
+        """Enqueue *job_class* against *rule* and report the outcome to the operator."""
+        try:
+            job = job_class.enqueue(
+                # instance is intentionally omitted: InterfaceNameRule does not
+                # inherit JobsMixin, so passing instance= would fail full_clean().
+                # The job is still named and findable in Core → Jobs.
+                name=name,
+                user=request.user,
+                rule_id=rule.pk,
+            )
+            messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
+        except Exception as e:
+            logger.exception("Failed to enqueue background job for rule %s: %s", rule, e)
+            messages.error(request, f"Failed to enqueue background job: {type(e).__name__}")
+
+    def _convert(self, request, rule):
+        """Convert the flat families the operator confirmed on this page."""
+        from .engine import convert_flat_families
+
+        convert_ids = [int(i) for i in request.POST.getlist("convert_ids") if i.isdigit()]
+        if not convert_ids:
+            messages.warning(request, "No families selected; nothing was converted.")
+            return
+        # Converting the first APPLY_BATCH_LIMIT of them would rewrite a set the operator never chose.
+        if len(convert_ids) > APPLY_BATCH_LIMIT:
+            messages.warning(
+                request,
+                f"{len(convert_ids)} families selected; synchronous conversion is limited to "
+                f"{APPLY_BATCH_LIMIT} family(ies) per run, so nothing was converted. "
+                f"Use Convert as Background Job to convert all of them.",
+            )
+            return
+        conflicts = []
+        try:
+            count = convert_flat_families(rule, convert_ids, conflicts=conflicts)
+        except Exception as e:
+            logger.exception("Failed to convert families for rule %s: %s", rule, e)
+            messages.error(request, f"Failed to convert families: {type(e).__name__}")
+            return
+        messages.success(request, f"Converted {count} interface family(ies) to the channelized topology.")
+        if conflicts:
+            messages.warning(request, f"{len(conflicts)} family(ies) skipped — the plugin log names each one.")
+
     def post(self, request, **kwargs):
-        """Apply the rule (foreground batch or background job) and redirect back."""
+        """Apply or convert (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
         rule = self.get_object(**kwargs)
         action = request.POST.get("action", "apply")
 
-        if action == "background":
+        if action == "convert":
+            self._convert(request, rule)
+        elif action == "convert_background":
+            from .jobs import ConvertFlatFamiliesJob
+
+            self._enqueue(request, rule, ConvertFlatFamiliesJob, f"Convert flat families: {rule}")
+        elif action == "background":
             from .jobs import ApplyRuleJob
 
-            try:
-                job = ApplyRuleJob.enqueue(
-                    # instance is intentionally omitted: InterfaceNameRule does not
-                    # inherit JobsMixin, so passing instance= would fail full_clean().
-                    # The job is still named and findable in Core → Jobs.
-                    name=f"Apply rule: {rule}",
-                    user=request.user,
-                    rule_id=rule.pk,
-                )
-                messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
-            except Exception as e:
-                logger.exception("Failed to enqueue background job for rule %s: %s", rule, e)
-                messages.error(request, f"Failed to enqueue background job: {type(e).__name__}")
+            self._enqueue(request, rule, ApplyRuleJob, f"Apply rule: {rule}")
         else:
             try:
                 raw_ids = request.POST.getlist("interface_ids")
