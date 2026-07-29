@@ -296,7 +296,7 @@ def _vc_position_re():
         from dcim.constants import VC_POSITION_RE
     except ImportError:
         return None
-    return VC_POSITION_RE
+    return VC_POSITION_RE  # pragma: no cover - only reachable on a NetBox that resolves the token
 
 
 def supports_vc_position_token():
@@ -361,7 +361,7 @@ def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires 
     return suffix
 
 
-def _unambiguous_claims(candidates, matchers, module):
+def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
     """Return the labels of *candidates* that exactly one drifted ``{vc_position}`` template claims.
 
     *candidates* pairs a label with the name forms it is compared under.  Both sides of the claim
@@ -398,7 +398,7 @@ def _unambiguous_claims(candidates, matchers, module):
     return [claims[index][0] for index in sorted(claims) if index not in ambiguous]
 
 
-def _drifted_candidates(interfaces, matchers, module):
+def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - requires vc_position token support
     """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
 
     *interfaces* and *matchers* are what the exact pass left unclaimed.
@@ -436,8 +436,10 @@ def _forced_channel_bases(interfaces, raw_names, matchers, module):
     drifted = {base: forms for base, forms in forms_by_base.items() if not exact_forms & set(forms)}
     if not drifted:
         return list(seen_bases.values())
-    kept = set(_unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module))
-    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]
+    kept = set(  # pragma: no cover - requires vc_position token support
+        _unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module)
+    )
+    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]  # pragma: no cover - see above
 
 
 def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), module=None):
@@ -456,8 +458,8 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
         exact = [i for i in interfaces if i.name in raw_names]
         if not matchers:
             return exact
-        claimed = {i.name for i in exact}
-        return exact + _drifted_candidates(
+        claimed = {i.name for i in exact}  # pragma: no cover - requires vc_position token support
+        return exact + _drifted_candidates(  # pragma: no cover - see above
             [i for i in interfaces if i.name not in claimed],
             [m for m in matchers if m.resolved not in claimed],
             module,
@@ -873,7 +875,7 @@ _VC_SENTINEL = "InrVcPositionSentinel{}End"
 _BASE_SENTINEL = "InrBaseSentinelEnd"
 
 
-def _vc_position_alternatives(fallback):
+def _vc_position_alternatives(fallback):  # pragma: no cover - requires vc_position token support
     """Return the regex branch covering every value one ``{vc_position}`` occurrence resolves to.
 
     Any member position and the implicit ``'0'`` are digits; an explicit ``{vc_position:X}`` fallback
@@ -884,7 +886,7 @@ def _vc_position_alternatives(fallback):
     return f"(?:\\d+|{re.escape(fallback)})"
 
 
-def _raw_name_pattern(tmpl, module, token_re):
+def _raw_name_pattern(tmpl, module, token_re):  # pragma: no cover - requires vc_position token support
     """Return the matcher for every name *tmpl* has ever resolved to, or None without the token.
 
     Each token occurrence becomes a sentinel; ``{module}`` is then resolved by NetBox's own code on a
@@ -918,7 +920,7 @@ def _raw_matchers(templates, module):
         names.add(resolved)
         pattern = None if token_re is None else _raw_name_pattern(tmpl, module, token_re)
         if pattern is not None:
-            matchers.append(_RawMatcher(tmpl.name, resolved, pattern))
+            matchers.append(_RawMatcher(tmpl.name, resolved, pattern))  # pragma: no cover - token templates only
     return _RawNames(names, matchers)
 
 
