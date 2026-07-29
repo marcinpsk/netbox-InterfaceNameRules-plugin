@@ -8,6 +8,7 @@ after Django is fully initialised.
 
 import ast
 import contextlib
+import copy
 import logging
 import re
 import threading
@@ -285,6 +286,28 @@ def supports_channelization():
     return True  # pragma: no cover - only reachable on a NetBox that models channelization
 
 
+def _vc_position_re():
+    """Return NetBox's ``{vc_position}`` template-token regex, or None on a release without the token.
+
+    Imported inside the function so the probe reads the module as it stands at call time, matching
+    ``supports_channelization()``'s style.
+    """
+    try:
+        from dcim.constants import VC_POSITION_RE
+    except ImportError:
+        return None
+    return VC_POSITION_RE  # pragma: no cover - only reachable on a NetBox that resolves the token
+
+
+def supports_vc_position_token():
+    """Return True when this NetBox resolves ``{vc_position}`` in component template names (4.6+).
+
+    Probed from the constant that carries the token rather than a version comparison, so a backport
+    or an upstream removal is detected by what NetBox actually provides.
+    """
+    return _vc_position_re() is not None
+
+
 def _is_channel_child(iface):
     """Return True when *iface* is a channel subinterface bound to a parent's channel.
 
@@ -338,37 +361,112 @@ def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires 
     return suffix
 
 
-def _collect_unrenamed(interfaces, rule, raw_names, force_reapply):
+def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
+    """Return the labels of *candidates* that exactly one drifted ``{vc_position}`` template claims.
+
+    *candidates* pairs a label with the name forms it is compared under.  Both sides of the claim
+    have to be unique: a template matching two labels, or a label matched by two templates,
+    disqualifies everything involved with a warning rather than renaming a guess.
+    """
+    claims = defaultdict(list)
+    claimants = defaultdict(list)
+    for index, matcher in enumerate(matchers):
+        for label, forms in candidates:
+            if any(matcher.pattern.fullmatch(form) for form in forms):
+                claims[index].append(label)
+                claimants[label].append(index)
+
+    ambiguous = {index for index, claimed in claims.items() if len(claimed) > 1}
+    for index in sorted(ambiguous):
+        logger.warning(
+            "Interface template %r of %s could name any of %s since this device's virtual-chassis "
+            "position changed; skipping them all rather than renaming a guess.",
+            matchers[index].template_name,
+            module,
+            sorted(claims[index]),
+        )
+    for label, indexes in claimants.items():
+        if len(indexes) > 1:
+            logger.warning(
+                "Interface %r on %s could be the drifted name of any of the templates %s; "
+                "skipping it rather than renaming a guess.",
+                label,
+                module,
+                sorted(matchers[index].template_name for index in indexes),
+            )
+            ambiguous.update(indexes)
+    return [claims[index][0] for index in sorted(claims) if index not in ambiguous]
+
+
+def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - requires vc_position token support
+    """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
+
+    *interfaces* and *matchers* are what the exact pass left unclaimed.
+    """
+    by_name = {iface.name: iface for iface in interfaces}
+    claimed = _unambiguous_claims([(iface.name, (iface.name,)) for iface in interfaces], matchers, module)
+    return [by_name[label] for label in claimed]
+
+
+def _forced_channel_bases(interfaces, raw_names, matchers, module):
+    """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
+
+    A base is claimed exactly when either comparison form — the full base or its last path segment,
+    the latter covering already-renamed bases — is a raw name now; otherwise a token template's
+    matcher may claim it, under the same one-to-one policy ``_drifted_candidates`` applies.  Two
+    bases with distinct rule outputs never collide downstream, so an ambiguous claim has to be
+    stopped here or it is not stopped at all.
+    """
+    seen_bases: dict = {}
+    forms_by_base: dict = {}
+    for i in interfaces:
+        # A channelized parent is its own base: its channels are separate rows, so the name needs no
+        # ":"-splitting to find them.
+        base = i.name if _is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        forms = (base, base.rsplit("/", 1)[-1])
+        if not any(form in raw_names for form in forms) and not any(
+            matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
+        ):
+            continue
+        forms_by_base[base] = forms
+        if base not in seen_bases or i.name.endswith(":0"):
+            seen_bases[base] = i
+
+    exact_forms = {form for forms in forms_by_base.values() for form in forms if form in raw_names}
+    drifted = {base: forms for base, forms in forms_by_base.items() if not exact_forms & set(forms)}
+    if not drifted:
+        return list(seen_bases.values())
+    kept = set(  # pragma: no cover - requires vc_position token support
+        _unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module)
+    )
+    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]  # pragma: no cover - see above
+
+
+def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), module=None):
     """Return the subset of *interfaces* that should be processed by the rule.
 
     Normal (non-force) mode: only interfaces whose current name is still in the
-    raw template names (idempotency guard).
+    raw template names (idempotency guard), plus the ones a *matchers* entry
+    claims as its own drifted name (see ``_drifted_candidates``).
 
     force_reapply, non-channel: all interfaces (e.g. vc_position changed).
 
-    force_reapply, channel rule: one interface per base name, matching when the
-    full base OR its last path segment is in *raw_names*; prefers the ":0"
-    channel to avoid duplicate-name errors on re-apply.
+    force_reapply, channel rule: one interface per base name (see
+    ``_forced_channel_bases``).
     """
     if not force_reapply:
-        return [i for i in interfaces if i.name in raw_names]
+        exact = [i for i in interfaces if i.name in raw_names]
+        if not matchers:
+            return exact
+        claimed = {i.name for i in exact}  # pragma: no cover - requires vc_position token support
+        return exact + _drifted_candidates(  # pragma: no cover - see above
+            [i for i in interfaces if i.name not in claimed],
+            [m for m in matchers if m.resolved not in claimed],
+            module,
+        )
     if rule.channel_count == 0:
         return interfaces
-    # Breakout + force_reapply: deduplicate by base, prefer ":0"
-    seen_bases: dict = {}
-    for i in interfaces:
-        if _is_channelized_parent(i):  # pragma: no cover - requires a NetBox that models channelization
-            # A channelized parent is its own base: its channels are separate rows, so the name
-            # needs no ":"-splitting to find them.
-            if i.name in raw_names or i.name.rsplit("/", 1)[-1] in raw_names:
-                seen_bases[i.name] = i
-            continue
-        base = i.name.rsplit(":", 1)[0]
-        # Also match when the last path segment equals a raw name (already-renamed bases).
-        if base in raw_names or base.rsplit("/", 1)[-1] in raw_names:
-            if base not in seen_bases or i.name.endswith(":0"):
-                seen_bases[base] = i
-    return list(seen_bases.values())
+    return _forced_channel_bases(interfaces, raw_names, matchers, module)
 
 
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
@@ -407,8 +505,9 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     # Only bases are rule candidates; the idempotency guard therefore looks at them alone.
     bases, children_by_parent = _partition_families(interfaces)
     # Determine raw names NetBox assigned from templates; fall back to bay_position.
-    raw_names = _get_raw_interface_names(module) or {variables["bay_position"]}
-    unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply)
+    raw = _raw_name_matchers(module)
+    raw_names = raw.names or {variables["bay_position"]}
+    unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply, raw.matchers, module)
 
     if not unrenamed:
         return 0  # Already renamed (idempotent guard)
@@ -537,6 +636,10 @@ def predict_rule_output(module, module_bay, raw_names):
     breakout rule leaves the parent's name alone and maps each channel through its ``channel_id``
     rather than expanding one name into a flat set.  Names no template claims keep the per-name
     prediction, so a module type without channelized templates is unaffected.
+
+    Precondition: *raw_names* are resolved by the caller at call time.  A name captured before the
+    device's virtual-chassis position changed is predicted from itself, not corrected to the name
+    the templates resolve to now — this function maps the names it is given.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
@@ -762,30 +865,101 @@ def _module_with_bay_chain(module):
     return Module.objects.select_related(*_BAY_CHAIN_RELATIONS).get(pk=module.pk)
 
 
-def _get_raw_interface_names(module):
-    """Return the original interface names NetBox assigned from templates."""
+# NetBox resolves {vc_position} once, at instantiation, so a raw name records the device's VC state
+# at that moment while its template keeps resolving to the current one: hence names *and* matchers.
+_RawMatcher = namedtuple("_RawMatcher", ("template_name", "resolved", "pattern"))
+_RawNames = namedtuple("_RawNames", ("names", "matchers"))
+
+# Brace-free stand-ins, so NetBox's placeholder pass, this plugin's and re.escape() all leave them be.
+_VC_SENTINEL = "InrVcPositionSentinel{}End"
+_BASE_SENTINEL = "InrBaseSentinelEnd"
+
+
+def _vc_position_alternatives(fallback):  # pragma: no cover - requires vc_position token support
+    """Return the regex branch covering every value one ``{vc_position}`` occurrence resolves to.
+
+    Any member position and the implicit ``'0'`` are digits; an explicit ``{vc_position:X}`` fallback
+    adds a branch of its own, since NetBox does not require it to be numeric.
+    """
+    if fallback is None:
+        return r"\d+"
+    return f"(?:\\d+|{re.escape(fallback)})"
+
+
+def _raw_name_pattern(tmpl, module, token_re):  # pragma: no cover - requires vc_position token support
+    """Return the matcher for every name *tmpl* has ever resolved to, or None without the token.
+
+    Each token occurrence becomes a sentinel; ``{module}`` is then resolved by NetBox's own code on a
+    shallow copy carrying that name (its VC pass no-ops on a token-free string), so no placeholder
+    resolution is reimplemented here.
+    """
+    fallbacks = []
+
+    def _mark(match):
+        fallbacks.append(match.group(1))
+        return _VC_SENTINEL.format(len(fallbacks) - 1)
+
+    marked = token_re.sub(_mark, tmpl.name)
+    if not fallbacks:
+        return None
+    stub = copy.copy(tmpl)
+    stub.name = marked
+    pattern = re.escape(stub.resolve_name(module))
+    for index, fallback in enumerate(fallbacks):
+        pattern = pattern.replace(_VC_SENTINEL.format(index), _vc_position_alternatives(fallback))
+    return _compile_pattern(pattern)
+
+
+def _raw_matchers(templates, module):
+    """Resolve *templates* against *module*: their names now, plus a matcher per token template."""
+    token_re = _vc_position_re()
+    names = set()
+    matchers = []
+    for tmpl in templates:
+        resolved = tmpl.resolve_name(module)
+        names.add(resolved)
+        pattern = None if token_re is None else _raw_name_pattern(tmpl, module, token_re)
+        if pattern is not None:
+            matchers.append(_RawMatcher(tmpl.name, resolved, pattern))  # pragma: no cover - token templates only
+    return _RawNames(names, matchers)
+
+
+def _raw_name_matchers(module):
+    """Return *module*'s raw template names and the drift matchers of its token templates."""
     from dcim.models import InterfaceTemplate
 
     module_fresh = _module_with_bay_chain(module)
     templates = InterfaceTemplate.objects.filter(module_type=module_fresh.module_type)
-    return {tmpl.resolve_name(module_fresh) for tmpl in templates}
+    return _raw_matchers(templates, module_fresh)
+
+
+def _get_raw_interface_names(module):
+    """Return the original interface names NetBox assigned from templates."""
+    return _raw_name_matchers(module).names
+
+
+def _raw_name_patterns(module):
+    """Return one compiled matcher per interface template of *module* whose name carries the token.
+
+    Empty for a module type no template of which uses ``{vc_position}``, and on every NetBox release
+    that does not resolve the token at all.
+    """
+    return [matcher.pattern for matcher in _raw_name_matchers(module).matchers]
 
 
 def _raw_names_by_module(modules):  # pragma: no cover - only the conversion scan batches names
-    """Return ``{module pk: raw template names}`` for *modules*, in one template query for all of them.
+    """Return ``{module pk: _RawNames}`` for *modules*, in one template query for all of them.
 
-    Raw names are a property of the module type, but ``_get_raw_interface_names`` costs a module
-    refetch and a template query each — a scan over a fleet would pay that per module.  *modules*
-    must already carry ``_BAY_CHAIN_RELATIONS``, since the names are resolved against them in memory.
+    Raw names are a property of the module type, but ``_raw_name_matchers`` costs a module refetch
+    and a template query each — a scan over a fleet would pay that per module.  *modules* must
+    already carry ``_BAY_CHAIN_RELATIONS``, since the names are resolved against them in memory.
     """
     from dcim.models import InterfaceTemplate
 
     by_module_type = defaultdict(list)
     for tmpl in InterfaceTemplate.objects.filter(module_type__in={module.module_type_id for module in modules}):
         by_module_type[tmpl.module_type_id].append(tmpl)
-    return {
-        module.pk: {tmpl.resolve_name(module) for tmpl in by_module_type[module.module_type_id]} for module in modules
-    }
+    return {module.pk: _raw_matchers(by_module_type[module.module_type_id], module) for module in modules}
 
 
 def _template_families(module):
@@ -1988,32 +2162,94 @@ def _conversion_offered(rule):
     return rule.enabled and _is_channelized_rule(rule) and rule.channel_count > 0 and bool(rule.parent_name_template)
 
 
-def _conversion_family(rule, module, interfaces, variables, raw_names):  # pragma: no cover - channelization only
+def _base_marked_ch0_name(rule, variables):  # pragma: no cover - requires channelization support
+    """Return *rule*'s escaped ch-0 output with ``{base}`` left as a sentinel, or None when it cannot be.
+
+    Evaluated once per rule: the sentinel stands in for ``{base}`` so a raw matcher can be spliced
+    over it afterwards.
+    """
+    try:
+        evaluated = evaluate_name_template(
+            rule.name_template, {**variables, "base": _BASE_SENTINEL, "channel": str(rule.channel_start)}
+        )
+    except (ValueError, TypeError):
+        # A {base} inside an arithmetic expression cannot take a non-numeric stand-in — see the docs.
+        logger.debug(
+            "Rule '%s' evaluates {base} arithmetically, so a base predating a virtual-chassis "
+            "position change cannot be recovered from its output names; not offering its families.",
+            rule,
+        )
+        return None
+    if _BASE_SENTINEL not in evaluated:
+        return None  # the rule's output does not carry the base, so no drift reached it
+    return re.escape(evaluated)
+
+
+def _recovered_bases(rule, interfaces, variables, matchers):  # pragma: no cover - channelization only
+    """Return the historical ``{base}`` values *rule*'s installed families still spell on this module.
+
+    A flat family carries rule-*output* names, so a raw matcher cannot be run against them directly:
+    it is spliced into the rule's own ch-0 output as a capture instead — a repeated ``{base}`` becomes
+    a backreference rather than a second group — and the capture yields the base the family was named
+    with.  Conversion rewrites rows an operator owns, so anything ambiguous (one matcher over two
+    bases, or two templates recovering the same one) yields nothing at all.
+    """
+    marked = _base_marked_ch0_name(rule, variables)
+    if marked is None:
+        return []
+    head, _, tail = marked.partition(_BASE_SENTINEL)
+    tail = tail.replace(_BASE_SENTINEL, "(?P=base)")
+    recovered = defaultdict(int)
+    for matcher in matchers:
+        family_pattern = _compile_pattern(f"{head}(?P<base>{matcher.pattern.pattern}){tail}")
+        if family_pattern is None:
+            continue
+        matches = (family_pattern.fullmatch(iface.name) for iface in interfaces)
+        bases = {match.group("base") for match in matches if match}
+        if len(bases) == 1:
+            recovered[bases.pop()] += 1
+    return [base for base, claims in recovered.items() if claims == 1]
+
+
+def _family_on(rule, module, by_name, variables, base_name):  # pragma: no cover - channelization only
+    """Return the family *rule* describes on *base_name*, or None when this module carries none."""
+    family_vars = {**variables, "base": base_name}
+    parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
+    channel_names = [
+        evaluate_name_template(rule.name_template, {**family_vars, "channel": str(rule.channel_start + offset)})
+        for offset in range(rule.channel_count)
+    ]
+    base = by_name.get(channel_names[0])
+    if base is None or _is_channel_child(base) or _is_channelized_parent(base):
+        return None
+    return _ConversionFamily(
+        module=module,
+        base=base,
+        current_names=[name for name in channel_names if name in by_name],
+        parent_name=parent_name,
+        channel_names=channel_names,
+    )
+
+
+def _conversion_family(rule, module, interfaces, variables, raw):  # pragma: no cover - channelization only
     """Return the flat family *rule* would convert on *module*, or None when it carries none.
 
     Identification is by name: ``name_template`` is evaluated over the rule's channel range against
-    each raw template name in *raw_names*, and the ch-0 name has to still be a plain interface — a
-    family that was already converted (its ch-0 name now belongs to a channel row) is therefore
-    never offered twice.
+    each raw template name, and the ch-0 name has to still be a plain interface — a family that was
+    already converted (its ch-0 name now belongs to a channel row) is therefore never offered twice.
+    A family named before this device's virtual-chassis position changed spells a base no template
+    resolves to any more, so those bases are recovered from the family's own names and then
+    identified exactly the same way.
     """
     by_name = {iface.name: iface for iface in interfaces}
-    for raw_name in sorted(raw_names):
-        family_vars = {**variables, "base": raw_name}
-        parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
-        channel_names = [
-            evaluate_name_template(rule.name_template, {**family_vars, "channel": str(rule.channel_start + offset)})
-            for offset in range(rule.channel_count)
-        ]
-        base = by_name.get(channel_names[0])
-        if base is None or _is_channel_child(base) or _is_channelized_parent(base):
-            continue
-        return _ConversionFamily(
-            module=module,
-            base=base,
-            current_names=[name for name in channel_names if name in by_name],
-            parent_name=parent_name,
-            channel_names=channel_names,
-        )
+    for base_name in sorted(raw.names):
+        family = _family_on(rule, module, by_name, variables, base_name)
+        if family is not None:
+            return family
+    for base_name in _recovered_bases(rule, interfaces, variables, raw.matchers):
+        family = _family_on(rule, module, by_name, variables, base_name)
+        if family is not None:
+            return family
     return None
 
 
@@ -2026,14 +2262,14 @@ def _conversion_families(rule):  # pragma: no cover - requires channelization su
     from dcim.models import Interface
 
     modules = list(_build_module_qs(rule).select_related("module_type", "device", *_BAY_CHAIN_RELATIONS))
-    raw_names = _raw_names_by_module(modules)
+    raw_by_module = _raw_names_by_module(modules)
     ifaces_by_module = defaultdict(list)
     for iface in Interface.objects.filter(module__in=[module.pk for module in modules]).order_by("module_id", "name"):
         ifaces_by_module[iface.module_id].append(iface)
     for module in modules:
         variables = build_variables(module.module_bay, device=module.device)
         ifaces = ifaces_by_module.get(module.pk, [])
-        family = _conversion_family(rule, module, ifaces, variables, raw_names[module.pk])
+        family = _conversion_family(rule, module, ifaces, variables, raw_by_module[module.pk])
         if family is not None:
             yield family
 

@@ -79,6 +79,44 @@ Enable **Applies to Device Interfaces** on the rule and set the **Module Type Pa
 
 **Re-apply on load**: If devices were added to the VC *before* rules were loaded (e.g. during initial provisioning), trigger a manual re-apply by iterating all VC member devices and calling `apply_device_interface_rules(device)` after loading rules.
 
+### Two different `{vc_position}` tokens
+
+NetBox 4.6 added a `{vc_position}` token to **component template** names (`InterfaceTemplate.name` on
+a device type or module type). It is spelled the same as this plugin's rule variable, but it is a
+different thing with different timing:
+
+| | NetBox template token | Plugin rule variable |
+|---|---|---|
+| Where it is written | `InterfaceTemplate.name`, e.g. `xe-{vc_position:0}/0/{module}` | `name_template` / `parent_name_template` on an InterfaceNameRule |
+| When it is resolved | **Once**, when NetBox instantiates the interface — the member's position, else the explicit fallback `X` in `{vc_position:X}`, else `0` | Every time the rule is applied |
+| After the device moves | Never re-resolved: the interface keeps the name it was given | Re-applied on VC join and on a position change |
+
+The two are independent — a module type can use the token without any rule, and a rule can use the
+variable on a module type whose templates do not.
+
+**Why this matters for renaming.** The plugin decides whether an interface still carries its raw
+template name by comparing it against what the templates resolve to *now*. On a module type that
+uses the token, that comparison drifts the moment the device joins a virtual chassis, moves inside
+one, or leaves it: an interface instantiated as `xe-0/0/3` on a standalone device is still named
+`xe-0/0/3` after the device joins at position 2, while the template now resolves to `xe-2/0/3`.
+
+The plugin therefore matches such names **structurally**: each template that uses the token
+contributes a matcher covering every value the token can take (any member position, the `0` default,
+and the explicit `X` of a `{vc_position:X}`), so one matcher recognises the name whatever position
+the interface was named at. Matching stays conservative — if a matcher could claim two interfaces,
+or two templates could claim one interface, nothing is renamed and a warning names the module, the
+templates and the candidates. Module types that do not use the token keep the exact matching they
+always had, and so does every release older than NetBox 4.6.
+
+Note that the drift is only reachable on a **re-apply**: at install time the interfaces are named
+and the rule is applied in the same instant, so the two always agree.
+
+**Leaving a virtual chassis does not rename anything.** The plugin deliberately schedules no
+re-apply when a device is removed from a VC — a rule using `{vc_position}` cannot even be evaluated
+off a chassis, so what the interfaces should be called instead is an operator decision. Re-apply the
+rule manually from **Apply Rules → Preview & Apply** when you want it; the matching above finds the
+interfaces whether they were named at a position or at the fallback.
+
 ## Examples
 
 ### Simple Rename
@@ -158,6 +196,14 @@ addresses the parent afterwards, not the channel that carries its name.
 
 On NetBox 4.6 and older no family is offered and conversion reports that this release cannot model
 channels.
+
+A family installed by a rule that uses `{base}` carries the raw name it was named with, which on a
+module type using the `{vc_position}` template token may predate a chassis position change (see
+above). That base is recovered from the family's own names, so the family is still offered. Two
+cases deliberately are not: a `{base}` used inside an arithmetic expression (`p{1 + {base}}`), which
+cannot be evaluated symbolically, and an ambiguous recovery — one template matching two bases on the
+module, or two templates recovering the same one. Conversion rewrites rows an operator owns, so
+those families are left unoffered rather than converted on a guess.
 
 ### Converter Offset
 
