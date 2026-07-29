@@ -254,6 +254,21 @@ class ConversionTest(ConversionTestCase):
 
         self.assertEqual(self._names(self.module), self._channelized_names("3"))
 
+    def test_the_family_rows_are_read_locked_for_the_rewrite(self):
+        """The preflight checks act on a snapshot; unlocked rows let a concurrent edit be saved over."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as queries:
+            self._convert(self.base)
+
+        self.assertEqual(self._names(self.module), self._channelized_names("3"))
+        locked = [q["sql"] for q in queries.captured_queries if "FOR UPDATE" in q["sql"]]
+        self.assertTrue(
+            any("dcim_interface" in sql for sql in locked),
+            "the module's interface rows were read without FOR UPDATE",
+        )
+
     def test_the_ch0_row_becomes_the_parent(self):
         """A new parent row would drop the cable, the module link and every reference to that pk."""
         self._convert(self.base)
