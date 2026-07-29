@@ -510,6 +510,19 @@ class ConversionPreflightTest(ConversionTestCase):
         self.assertIn("xe-0/0/3:0", reason)
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
+    def test_a_base_replaced_between_scan_and_convert_refuses_cleanly(self):
+        """A same-named replacement is not the scanned row: conversion refuses it instead of rewriting a stranger."""
+        from netbox_interface_name_rules import engine
+
+        family = next(f for f in engine._conversion_families(self.rule) if f.base.pk == self.base.pk)
+        self.base.delete()
+        Interface.objects.create(device=self.device, module=self.module, name="xe-0/0/3:0", type=PLAIN_TYPE)
+
+        reason = engine._convert_family(self.rule, family, commit=True)
+
+        self.assertIn("xe-0/0/3:0", reason)
+        self._assert_still_flat(self.module, "3")
+
     def test_a_cabled_sibling_blocks_the_family(self):
         """A channel derives its cable from the parent, so a cabled sibling cannot become one."""
         self._cable_up(self._iface("xe-0/0/3:2"))

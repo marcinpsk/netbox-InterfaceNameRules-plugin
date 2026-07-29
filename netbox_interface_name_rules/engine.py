@@ -2345,8 +2345,10 @@ def _rewrite_family(rule, family):  # pragma: no cover - requires channelization
     device = family.module.device
     by_name = {iface.name: iface for iface in Interface.objects.filter(module=family.module)}
     base = by_name.get(family.channel_names[0])
-    if base is None:
-        raise ValidationError(f"{family.channel_names[0]!r} is gone: the family changed since it was scanned")
+    if base is None or base.pk != family.base.pk:
+        raise ValidationError(
+            f"{family.channel_names[0]!r} is gone or replaced: the family changed since it was scanned"
+        )
 
     if _name_exists_on_device(device, family.parent_name, exclude_pk=base.pk):
         raise ValidationError(f"the parent name {family.parent_name!r} is already taken on {device}")
