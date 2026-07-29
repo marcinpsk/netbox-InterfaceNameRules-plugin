@@ -2343,7 +2343,8 @@ def _rewrite_family(rule, family):  # pragma: no cover - requires channelization
     from dcim.models import Interface
 
     device = family.module.device
-    by_name = {iface.name: iface for iface in Interface.objects.filter(module=family.module)}
+    # Locked for the transaction: the checks below act on this snapshot, and the saves write it back.
+    by_name = {iface.name: iface for iface in Interface.objects.select_for_update().filter(module=family.module)}
     base = by_name.get(family.channel_names[0])
     if base is None or base.pk != family.base.pk:
         raise ValidationError(
