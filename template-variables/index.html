@@ -482,6 +482,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#two-different-vc_position-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two different {vc_position} tokens
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -515,6 +526,28 @@
     <span class="md-ellipsis">
       
         Breakout Channels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channelized-breakout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channelized Breakout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converting-an-installed-flat-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting an installed flat family
       
     </span>
   </a>
@@ -747,6 +780,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#two-different-vc_position-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two different {vc_position} tokens
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -780,6 +824,28 @@
     <span class="md-ellipsis">
       
         Breakout Channels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channelized-breakout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channelized Breakout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converting-an-installed-flat-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting an installed flat family
       
     </span>
   </a>
@@ -951,6 +1017,57 @@
 <a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet{vc_position}/{port}&quot;</span>
 </code></pre></div>
 <p><strong>Re-apply on load</strong>: If devices were added to the VC <em>before</em> rules were loaded (e.g. during initial provisioning), trigger a manual re-apply by iterating all VC member devices and calling <code>apply_device_interface_rules(device)</code> after loading rules.</p>
+<h3 id="two-different-vc_position-tokens">Two different <code>{vc_position}</code> tokens</h3>
+<p>NetBox 4.6 added a <code>{vc_position}</code> token to <strong>component template</strong> names (<code>InterfaceTemplate.name</code> on
+a device type or module type). It is spelled the same as this plugin's rule variable, but it is a
+different thing with different timing:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>NetBox template token</th>
+<th>Plugin rule variable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Where it is written</td>
+<td><code>InterfaceTemplate.name</code>, e.g. <code>xe-{vc_position:0}/0/{module}</code></td>
+<td><code>name_template</code> / <code>parent_name_template</code> on an InterfaceNameRule</td>
+</tr>
+<tr>
+<td>When it is resolved</td>
+<td><strong>Once</strong>, when NetBox instantiates the interface — the member's position, else the explicit fallback <code>X</code> in <code>{vc_position:X}</code>, else <code>0</code></td>
+<td>Every time the rule is applied</td>
+</tr>
+<tr>
+<td>After the device moves</td>
+<td>Never re-resolved: the interface keeps the name it was given</td>
+<td>Re-applied on VC join and on a position change</td>
+</tr>
+</tbody>
+</table>
+<p>The two are independent — a module type can use the token without any rule, and a rule can use the
+variable on a module type whose templates do not.</p>
+<p><strong>Why this matters for renaming.</strong> The plugin decides whether an interface still carries its raw
+template name by comparing it against what the templates resolve to <em>now</em>. On a module type that
+uses the token, that comparison drifts the moment the device joins a virtual chassis, moves inside
+one, or leaves it: an interface instantiated as <code>xe-0/0/3</code> on a standalone device is still named
+<code>xe-0/0/3</code> after the device joins at position 2, while the template now resolves to <code>xe-2/0/3</code>.</p>
+<p>The plugin therefore matches such names <strong>structurally</strong>: each template that uses the token
+contributes a matcher covering every value the token can take (any member position, the <code>0</code> default,
+and the explicit <code>X</code> of a <code>{vc_position:X}</code>), so one matcher recognises the name whatever position
+the interface was named at. Matching stays conservative — if a matcher could claim two interfaces,
+or two templates could claim one interface, nothing is renamed and a warning names the module, the
+templates and the candidates. Module types that do not use the token keep the exact matching they
+always had, and so does every release older than NetBox 4.6.</p>
+<p>Note that the drift is only reachable on a <strong>re-apply</strong>: at install time the interfaces are named
+and the rule is applied in the same instant, so the two always agree.</p>
+<p><strong>Leaving a virtual chassis does not rename anything.</strong> The plugin deliberately schedules no
+re-apply when a device is removed from a VC — a rule using <code>{vc_position}</code> cannot even be evaluated
+off a chassis, so what the interfaces should be called instead is an operator decision. Re-apply the
+rule manually from <strong>Apply Rules → Preview &amp; Apply</strong> when you want it; the matching above finds the
+interfaces whether they were named at a position or at the fallback.</p>
 <h2 id="examples">Examples</h2>
 <h3 id="simple-rename">Simple Rename</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;et-0/0/{bay_position}&quot;</span>
@@ -962,13 +1079,70 @@
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Bay position 2 → xe-0/0/2:0, xe-0/0/2:1, xe-0/0/2:2, xe-0/0/2:3</span>
 </code></pre></div>
+<p>On NetBox releases that model channelized interfaces (4.7+), a module whose templates already
+create a channelized family — a physical parent with <code>channels</code> set plus its channel
+subinterfaces — is renamed rather than expanded: the existing channels take the names the
+template produces, <code>{channel}</code> is <code>channel_start + channel_id - 1</code>, no interfaces are created,
+and the parent keeps its own name unless the rule names it explicitly through
+<code>parent_name_template</code>. A breakout rule (non-zero <code>channel_count</code>) whose count
+disagrees with the parent's <code>channels</code> skips that family and logs a warning instead of renaming
+it into a shape it does not have. On older releases nothing changes: the base is renamed to the
+first channel and the remaining channels are created as flat sibling interfaces.</p>
+<p>For a simple rule (<code>channel_count: 0</code>, the default), a channelized family is renamed in lockstep: the parent gets
+the template's name and each channel keeps its own suffix (<code>et-0/0/3</code> → <code>et-0/0/3:1</code>). A channel
+whose name shares no prefix with its parent is left alone and logged — the engine does not guess
+at free-form names.</p>
+<h3 id="channelized-breakout">Channelized Breakout</h3>
+<p><code>breakout_mode</code> selects the topology a breakout rule produces: <code>flat</code> (the default, and what every
+rule did before the field existed) creates sibling interfaces, while <code>channelized</code> turns the base
+into a parent with <code>channels</code> set and creates one channel subinterface per channel.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-0/0/{bay_position}:{channel}&quot;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">parent_name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;et-0/0/{bay_position}&quot;</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nt">breakout_mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">channelized</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nt">channel_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Bay position 5 → et-0/0/5 (parent, 4 channels) + xe-0/0/5:0 … xe-0/0/5:3</span>
+</code></pre></div>
+<p><code>parent_name_template</code> names the parent interface. It takes the same variables as <code>name_template</code>
+minus <code>{channel}</code> — the parent is the one interface in the family without a channel number, and a
+<code>{channel}</code> in it is rejected in every spelling, including inside an expression (<code>{channel + 1}</code>).
+Braces must balance, so a stray <code>{</code> is refused on save instead of ending up in an interface name.
+Blank leaves the parent the name NetBox gave it. <code>{base}</code> is the base interface's current name, for
+the parent and for every channel alike.</p>
+<p>The complete family is checked before anything is written: one occupied name — the parent's or any
+channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
+(4.6 and older) a <code>channelized</code> rule is skipped and logged; it is never applied as a flat breakout
+instead.</p>
+<h3 id="converting-an-installed-flat-family">Converting an installed flat family</h3>
+<p>Applying a rule never converts the flat family an earlier apply installed. A <code>channelized</code> rule with
+a <code>parent_name_template</code> set instead offers each such family for conversion on <strong>Apply Rules →
+Preview &amp; Apply</strong>, where the operator confirms it per family; a blank parent template offers
+nothing, because a flat family's ch-0 interface is the base and has nowhere else to go.</p>
+<p>Every family is preflighted by performing the conversion inside a transaction that is rolled back,
+so the verdict carries NetBox's own reason for refusing it — a cabled sibling, an occupied parent
+name, a missing sibling — and a refused family is never half converted.</p>
+<p>Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
+link and <code>mark_connected</code>, and becomes the parent. Its IP addresses, FHRP group assignments,
+untagged/tagged VLANs, 802.1Q mode, MTU, description and tags move to a newly created channel 1
+interface that takes over its name; custom field values are copied to it. The remaining siblings are
+retyped in place, keeping their own interface IDs. Automation keyed on the ch-0 interface ID
+addresses the parent afterwards, not the channel that carries its name.</p>
+<p>On NetBox 4.6 and older no family is offered and conversion reports that this release cannot model
+channels.</p>
+<p>A family installed by a rule that uses <code>{base}</code> carries the raw name it was named with, which on a
+module type using the <code>{vc_position}</code> template token may predate a chassis position change (see
+above). That base is recovered from the family's own names, so the family is still offered. Two
+cases deliberately are not: a <code>{base}</code> used inside an arithmetic expression (<code>p{1 + {base}}</code>), which
+cannot be evaluated symbolically, and an ambiguous recovery — one template matching two bases on the
+module, or two templates recovering the same one. Conversion rewrites rows an operator owns, so
+those families are left unoffered rather than converted on a guess.</p>
 <h3 id="converter-offset">Converter Offset</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{slot}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}&quot;</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{slot}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}&quot;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
 </code></pre></div>
 <h3 id="ufispace-sonic">UfiSpace SONiC</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swp{bay_position_num}&quot;</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># Bay position swp5 → swp5</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;swp{bay_position_num}&quot;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Bay position swp5 → swp5</span>
 </code></pre></div>
 
 

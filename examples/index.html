@@ -510,6 +510,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#channelized-breakout-netbox-47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channelized breakout (NetBox 4.7+)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converting-a-flat-family-netbox-47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting a flat family (NetBox 4.7+)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#partial-breakout-repair" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -870,6 +892,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#channelized-breakout-netbox-47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channelized breakout (NetBox 4.7+)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#converting-a-flat-family-netbox-47" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting a flat family (NetBox 4.7+)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#partial-breakout-repair" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1218,6 +1262,102 @@ save the rule.</p>
 <a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="w">  </span><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
 <a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Cisco</span><span class="nv"> </span><span class="s">8201-SYS</span><span class="nv"> </span><span class="s">QSFP28-DD</span><span class="nv"> </span><span class="s">2x100G</span><span class="nv"> </span><span class="s">breakout&quot;</span>
 </code></pre></div>
+<h3 id="channelized-breakout-netbox-47">Channelized breakout (NetBox 4.7+)</h3>
+<p>A breakout rule produces one of two topologies, chosen by <code>breakout_mode</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flat</code> (default)</td>
+<td>The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces.</td>
+</tr>
+<tr>
+<td><code>channelized</code></td>
+<td>The base interface becomes the physical parent (<code>channels</code> set, keeping its pk, type, module link and cable) and one channel subinterface is created per channel (<code>type: channel</code>, bound to the parent by <code>channel_id</code>).</td>
+</tr>
+</tbody>
+</table>
+<p><code>parent_name_template</code> names that parent. It takes the same variables as
+<code>name_template</code> minus <code>{channel}</code> (the parent is the one interface in the family
+without a channel number); leave it blank to keep the name NetBox gave the port.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Juniper ACX7024 QSFP+ 4×10G breakout, modelled as a channelized family:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># et-0/0/5 (parent, 4 channels) + xe-0/0/5:0 … :3 (channel subinterfaces)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;QSFP-4X10G-.*&quot;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ACX7024</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-0/0/{bay_position}:{channel}&quot;</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">parent_name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;et-0/0/{bay_position}&quot;</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">breakout_mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">channelized</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">channel_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Juniper</span><span class="nv"> </span><span class="s">ACX7024</span><span class="nv"> </span><span class="s">QSFP+</span><span class="nv"> </span><span class="s">4x10G</span><span class="nv"> </span><span class="s">channelized</span><span class="nv"> </span><span class="s">breakout&quot;</span>
+</code></pre></div>
+<p><code>{channel}</code> is <code>channel_start + channel_id - 1</code>, so NetBox's 1-based <code>channel_id</code>
+1…4 render as Juniper's <code>:0</code> … <code>:3</code>.</p>
+<p>The family is built only when every name it needs is free: if the parent's name
+or any channel name is already taken on the device, the whole family is skipped
+and logged rather than half created. Switching an existing rule from <code>flat</code> to
+<code>channelized</code> does not convert the flat interfaces an earlier apply installed —
+the two topologies are different objects to cabling and automation, so
+conversion is a separate, explicit operation. A module carrying more interfaces
+than its module type's templates describe is read as holding such a family: the
+rule refuses it with a warning naming the module, whatever names the new
+templates would take.</p>
+<p>On NetBox releases that cannot model channels (4.6 and older) a <code>channelized</code>
+rule is skipped with a warning and nothing is created — it is never quietly
+applied as a flat breakout.</p>
+<p><code>contrib/juniper-channelized.yaml</code> carries the Juniper breakout families of
+<code>contrib/juniper.yaml</code> in this mode.</p>
+<h3 id="converting-a-flat-family-netbox-47">Converting a flat family (NetBox 4.7+)</h3>
+<p>Devices provisioned before the channelized mode existed carry flat families:
+four sibling interfaces where NetBox now models a parent and four channels.
+<strong>Apply Rules → Preview &amp; Apply</strong> offers to convert them, per family, once the
+rule is enabled and set to <code>breakout_mode: channelized</code> with a
+<code>parent_name_template</code> — the flat family has no parent row, so without a parent
+name there is nowhere for the ch-0 interface to go and nothing is offered. A
+disabled rule converts nothing, on this page or in the background job.</p>
+<p>Conversion is only ever performed from that page, by an operator who confirmed
+it: <strong>Apply</strong> renames, it never rewrites a family. Each family gets its own
+verdict before anything is written, produced by performing the whole conversion
+inside a transaction that is rolled back again — so a family that NetBox would
+reject is reported with NetBox's own reason (a cabled sibling, an occupied
+parent name, a missing sibling, a sibling already channelized, a sibling that is
+already a channel of another parent) instead of being half converted. Selecting
+a blocked family converts the others and skips that one.</p>
+<p>What the conversion does to the ch-0 row, per family:</p>
+<table>
+<thead>
+<tr>
+<th>Stays on the physical row (same interface ID)</th>
+<th>Moves to the new channel 1 interface</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cable, interface type, module link, <code>mark_connected</code></td>
+<td>IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags</td>
+</tr>
+</tbody>
+</table>
+<p>Custom field values are copied to the channel rather than moved, because they
+can describe either the port or the link. The remaining siblings are retyped in
+place, so their own addresses, descriptions and tags — and their interface IDs —
+survive.</p>
+<p>The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
+<strong>parent</strong>. Automation, saved filters or external systems keyed on that ID will
+address the physical port afterwards, not the channel that inherited its name.</p>
+<p>Producing a verdict means performing the whole conversion and rolling it back, so
+the page pays that cost per family it lists. It therefore lists at most
+<code>apply_batch_limit</code> families (50 by default, the same cap the apply preview uses)
+and says so when more are waiting, and it refuses a confirmation naming more than
+that many rather than converting part of it. <strong>Convert as Background Job</strong> runs
+every convertible family of the rule and is not capped.</p>
+<p>On NetBox 4.6 and older no family is offered and no conversion section is shown.</p>
 <h3 id="partial-breakout-repair">Partial breakout repair</h3>
 <p>If a device was provisioned partially (e.g. only 2 of 4 channels were created
 manually), run <strong>Apply Rules → Preview &amp; Apply</strong> for the matching rule. The
@@ -1281,27 +1421,27 @@ determined by the host's naming scheme, not the transceiver type.</p>
 <h3 id="build-rule-linux-traditional-naming-ethbay_position_num">Build Rule — Linux traditional naming (<code>eth{bay_position_num}</code>)</h3>
 <p><img alt="Build Rule tester showing SFP28-25G-.* → eth{bay_position_num} producing eth0" src="../screenshots/09-build-rule-linux-eth-result.png" /></p>
 <h3 id="yaml-from-contriblinuxyaml">YAML (from <code>contrib/linux.yaml</code>)</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Traditional naming: eth0, eth1, ...  (VMs, containers, legacy bare-metal)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP28-25G-.*&quot;</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;eth{bay_position_num}&quot;</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">traditional</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(eth0,</span><span class="nv"> </span><span class="s">eth1,</span><span class="nv"> </span><span class="s">...)&quot;</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># systemd predictable: ens{slot}f{port}  (bare-metal with udev slot names)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># {slot} = top-level module bay position (NIC card slot number)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># {bay_position_num} = port index within the NIC</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP28-25G-.*&quot;</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ens{slot}f{bay_position_num}&quot;</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">systemd</span><span class="nv"> </span><span class="s">predictable</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(ens1f0,</span><span class="nv"> </span><span class="s">ens1f1,</span><span class="nv"> </span><span class="s">...)&quot;</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="c1"># Mellanox QSFP28 hardware breakout → 4×25G sub-ports (eth0d1 .. eth0d4)</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;QSFP-100G-.*&quot;</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;eth{bay_position_num}d{channel}&quot;</span>
-<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="nt">channel_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
-<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">  </span><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">QSFP28</span><span class="nv"> </span><span class="s">4×25G</span><span class="nv"> </span><span class="s">breakout,</span><span class="nv"> </span><span class="s">Mellanox-style</span><span class="nv"> </span><span class="s">(eth0d1..eth0d4)&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Traditional naming: eth0, eth1, ...  (VMs, containers, legacy bare-metal)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP28-25G-.*&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;eth{bay_position_num}&quot;</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">traditional</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(eth0,</span><span class="nv"> </span><span class="s">eth1,</span><span class="nv"> </span><span class="s">...)&quot;</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># systemd predictable: ens{slot}f{port}  (bare-metal with udev slot names)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># {slot} = top-level module bay position (NIC card slot number)</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># {bay_position_num} = port index within the NIC</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP28-25G-.*&quot;</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ens{slot}f{bay_position_num}&quot;</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">systemd</span><span class="nv"> </span><span class="s">predictable</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(ens1f0,</span><span class="nv"> </span><span class="s">ens1f1,</span><span class="nv"> </span><span class="s">...)&quot;</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="c1"># Mellanox QSFP28 hardware breakout → 4×25G sub-ports (eth0d1 .. eth0d4)</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;QSFP-100G-.*&quot;</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;eth{bay_position_num}d{channel}&quot;</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="w">  </span><span class="nt">channel_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">  </span><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">QSFP28</span><span class="nv"> </span><span class="s">4×25G</span><span class="nv"> </span><span class="s">breakout,</span><span class="nv"> </span><span class="s">Mellanox-style</span><span class="nv"> </span><span class="s">(eth0d1..eth0d4)&quot;</span>
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Scope your rules</p>
@@ -1314,12 +1454,12 @@ don't collide. See <code>contrib/linux.yaml</code> for annotated options.</p>
 <p>A media converter (X2-to-SFP adapter) installs an SFP module <em>inside</em> an X2
 port. The resulting Cisco IOS port number uses an arithmetic offset based on
 the parent bay position.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># SFP-1G-T in CVR-X2-SFP → GigabitEthernetSLOT/OFFSET</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">SFP-1G-T</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">parent_module_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CVR-X2-SFP</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{slot}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}&quot;</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP-1G-T</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">CVR-X2-SFP:</span><span class="nv"> </span><span class="s">offset</span><span class="nv"> </span><span class="s">port</span><span class="nv"> </span><span class="s">numbering&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># SFP-1G-T in CVR-X2-SFP → GigabitEthernetSLOT/OFFSET</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">SFP-1G-T</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">parent_module_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CVR-X2-SFP</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{slot}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SFP-1G-T</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">CVR-X2-SFP:</span><span class="nv"> </span><span class="s">offset</span><span class="nv"> </span><span class="s">port</span><span class="nv"> </span><span class="s">numbering&quot;</span>
 </code></pre></div>
 <p>The arithmetic expression <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code>
 is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</code>).</p>
@@ -1362,48 +1502,48 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 </tr>
 </tbody>
 </table>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Juniper EX — 1G access ports</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-\\d+/\\d+/\\d+&quot;</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-{vc_position}/0/{port}&quot;</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Juniper EX — 10G uplinks</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-\\d+/\\d+/\\d+&quot;</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-{vc_position}/1/{port}&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Juniper EX — 1G access ports</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ge-{vc_position}/0/{port}&quot;</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Juniper EX — 10G uplinks</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;JNP-EX-VC&quot;</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;xe-{vc_position}/1/{port}&quot;</span>
 </code></pre></div>
 <p><strong>jnp-vc-2</strong> at VC position 1 — interfaces renamed <code>ge-0/0/N</code> → <code>ge-1/0/N</code>, <code>xe-0/1/N</code> → <code>xe-1/1/N</code>:</p>
 <p><img alt="jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming" src="../screenshots/vc-juniper-interfaces.png" /></p>
 <hr />
 <h3 id="cisco-catalyst-9000-stack">Cisco Catalyst 9000 Stack</h3>
 <p>Cisco stacks use <strong>1-based</strong> member IDs. Templates create <code>GigabitEthernet1/0/N</code>; on joining the stack at position 2, ports become <code>GigabitEthernet2/0/N</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CISCO-C9K&quot;</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet\\d+/\\d+/\\d+&quot;</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{vc_position}/0/{port}&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CISCO-C9K&quot;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet\\d+/\\d+/\\d+&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;GigabitEthernet{vc_position}/0/{port}&quot;</span>
 </code></pre></div>
 <p><strong>cisco-sw-2</strong> at VC position 2 — interfaces renamed <code>GigabitEthernet1/0/N</code> → <code>GigabitEthernet2/0/N</code>:</p>
 <p><img alt="cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4" src="../screenshots/vc-cisco-interfaces.png" /></p>
 <hr />
 <h3 id="arista-eos">Arista EOS</h3>
 <p>Arista modular/multi-chassis naming uses <code>Ethernet{slot}/{port}</code>. The device type creates templates <code>Ethernet1/1</code> … <code>Ethernet1/N</code>; at VC position 2 they become <code>Ethernet2/1</code> … <code>Ethernet2/N</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ARISTA-EOS&quot;</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet\\d+/\\d+&quot;</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet{vc_position}/{port}&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ARISTA-EOS&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet\\d+/\\d+&quot;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Ethernet{vc_position}/{port}&quot;</span>
 </code></pre></div>
 <p><strong>arista-sw-2</strong> at VC position 2 — interfaces renamed <code>Ethernet1/N</code> → <code>Ethernet2/N</code>:</p>
 <p><img alt="arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4" src="../screenshots/vc-arista-interfaces.png" /></p>
 <div class="admonition tip">
 <p class="admonition-title">Re-apply after initial load</p>
 <p>If devices were added to the VC <em>before</em> rules were loaded (e.g. during bulk provisioning), the signal fires before the rules exist. Force a re-apply with:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dcim.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Device</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">netbox_interface_name_rules.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">apply_device_interface_rules</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="n">Device</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">virtual_chassis__isnull</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">apply_device_interface_rules</span><span class="p">(</span><span class="n">dev</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dcim.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">Device</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">netbox_interface_name_rules.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">apply_device_interface_rules</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="n">Device</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">virtual_chassis__isnull</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">apply_device_interface_rules</span><span class="p">(</span><span class="n">dev</span><span class="p">)</span>
 </code></pre></div></p>
 </div>
 <hr />
