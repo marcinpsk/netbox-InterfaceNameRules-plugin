@@ -16,6 +16,7 @@ from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import register_model_view
 
+from .choices import BreakoutModeChoices
 from .filters import InterfaceNameRuleFilterSet
 from .forms import (
     InterfaceNameRuleBulkEditForm,
@@ -49,6 +50,8 @@ class RulePreview:
     name_template: str
     channel_count: int
     channel_start: int
+    parent_name_template: str = ""
+    breakout_mode: str = BreakoutModeChoices.FLAT
 
 
 try:
@@ -188,6 +191,8 @@ class RuleTestView(BaseMultiObjectView):
                 )
                 initial = {
                     "name_template": loaded_rule.name_template,
+                    "parent_name_template": loaded_rule.parent_name_template,
+                    "breakout_mode": loaded_rule.breakout_mode,
                     "module_type_is_regex": loaded_rule.module_type_is_regex,
                     "module_type": loaded_rule.module_type,
                     "module_type_pattern": loaded_rule.module_type_pattern,
@@ -273,6 +278,8 @@ class RuleTestView(BaseMultiObjectView):
 
         params = {
             "name_template": name_template,
+            "parent_name_template": cd.get("parent_name_template", ""),
+            "breakout_mode": cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             "module_type_is_regex": "on" if module_type_is_regex else "",
             "channel_count": channel_count,
             "channel_start": channel_start,
@@ -289,7 +296,11 @@ class RuleTestView(BaseMultiObjectView):
         return redirect(f"{add_url}?{urlencode(params)}")
 
     def _evaluate_template_preview(self, cd):
-        """Evaluate name_template against form variables; return (preview_results, error)."""
+        """Evaluate the rule's templates against form variables; return (preview_results, error).
+
+        Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
+        so a channelized rule shows the parent it creates alongside the channels under it.
+        """
         from .engine import evaluate_name_template
 
         name_template = cd["name_template"]
@@ -303,27 +314,29 @@ class RuleTestView(BaseMultiObjectView):
             "sfp_slot": cd.get("var_sfp_slot") or "1",
             "base": cd.get("var_base") or "Ethernet1",
         }
+
+        def row(result, role, channel=None):
+            """Describe one previewed name."""
+            return {"source": variables["base"], "channel": channel, "result": result, "role": role}
+
         try:
             if channel_count > 0:
                 preview_results = []
+                if cd.get("breakout_mode") == BreakoutModeChoices.CHANNELIZED:
+                    parent_template = cd.get("parent_name_template") or ""
+                    parent_name = (
+                        evaluate_name_template(parent_template, variables) if parent_template else variables["base"]
+                    )
+                    preview_results.append(row(parent_name, "parent"))
                 for ch in range(channel_count):
-                    vars_copy = dict(variables)
-                    vars_copy["channel"] = str(channel_start + ch)
+                    channel = str(channel_start + ch)
                     preview_results.append(
-                        {
-                            "source": variables["base"],
-                            "channel": str(channel_start + ch),
-                            "result": evaluate_name_template(name_template, vars_copy),
-                        }
+                        row(
+                            evaluate_name_template(name_template, {**variables, "channel": channel}), "channel", channel
+                        )
                     )
             else:
-                preview_results = [
-                    {
-                        "source": variables["base"],
-                        "channel": None,
-                        "result": evaluate_name_template(name_template, variables),
-                    }
-                ]
+                preview_results = [row(evaluate_name_template(name_template, variables), "interface")]
             return preview_results, None
         except Exception as exc:
             logger.exception("Template evaluation error: %s", exc)
@@ -351,6 +364,8 @@ class RuleTestView(BaseMultiObjectView):
             device_type=cd.get("device_type"),
             platform=cd.get("platform"),
             name_template=name_template,
+            parent_name_template=cd.get("parent_name_template", ""),
+            breakout_mode=cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             channel_count=channel_count,
             channel_start=channel_start,
         )
@@ -416,7 +431,7 @@ class RuleApplyDetailView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         """Render a preview of all interfaces that would be renamed by this rule."""
-        from .engine import find_interfaces_for_rule
+        from .engine import find_convertible_families, find_interfaces_for_rule, supports_channelization
 
         rule = self.get_object(**kwargs)
         try:
@@ -429,42 +444,97 @@ class RuleApplyDetailView(generic.ObjectView):
             logger.exception("Unexpected error computing preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute preview: {type(exc).__name__}")
             preview, total_checked = [], 0
+        # A conversion-scan failure must not blank the unrelated apply preview above.
+        try:
+            # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
+            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+        except (re.error, ValueError) as exc:
+            logger.exception("Failed to compute the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {exc}")
+            conversions, conversions_have_more = [], False
+        except Exception as exc:
+            logger.exception("Unexpected error computing the conversion preview for rule %s: %s", rule, exc)
+            messages.error(request, f"Failed to compute the conversion preview: {type(exc).__name__}")
+            conversions, conversions_have_more = [], False
         return render(
             request,
             self.template_name,
             {
                 "rule": rule,
                 "preview": preview,
+                "conversions": conversions,
+                "conversions_have_more": conversions_have_more,
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
                 "can_apply": request.user.has_perm("dcim.change_interface"),
+                # Families exist only where NetBox models channelization; older releases count plain interfaces.
+                "families_supported": supports_channelization(),
+                "checked_unit": "families" if supports_channelization() else "interfaces",
             },
         )
 
+    def _enqueue(self, request, rule, job_class, name):
+        """Enqueue *job_class* against *rule* and report the outcome to the operator."""
+        try:
+            job = job_class.enqueue(
+                # instance is intentionally omitted: InterfaceNameRule does not
+                # inherit JobsMixin, so passing instance= would fail full_clean().
+                # The job is still named and findable in Core → Jobs.
+                name=name,
+                user=request.user,
+                rule_id=rule.pk,
+            )
+            messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
+        except Exception as e:
+            logger.exception("Failed to enqueue background job for rule %s: %s", rule, e)
+            messages.error(request, f"Failed to enqueue background job: {type(e).__name__}")
+
+    def _convert(self, request, rule):
+        """Convert the flat families the operator confirmed on this page."""
+        from .engine import convert_flat_families
+
+        convert_ids = [int(i) for i in request.POST.getlist("convert_ids") if i.isdigit()]
+        if not convert_ids:
+            messages.warning(request, "No families selected; nothing was converted.")
+            return
+        # Converting the first APPLY_BATCH_LIMIT of them would rewrite a set the operator never chose.
+        if len(convert_ids) > APPLY_BATCH_LIMIT:
+            messages.warning(
+                request,
+                f"{len(convert_ids)} families selected; synchronous conversion is limited to "
+                f"{APPLY_BATCH_LIMIT} family(ies) per run, so nothing was converted. "
+                f"Use Convert as Background Job to convert all of them.",
+            )
+            return
+        conflicts = []
+        try:
+            count = convert_flat_families(rule, convert_ids, conflicts=conflicts)
+        except Exception as e:
+            logger.exception("Failed to convert families for rule %s: %s", rule, e)
+            messages.error(request, f"Failed to convert families: {type(e).__name__}")
+            return
+        messages.success(request, f"Converted {count} interface family(ies) to the channelized topology.")
+        if conflicts:
+            messages.warning(request, f"{len(conflicts)} family(ies) skipped — the plugin log names each one.")
+
     def post(self, request, **kwargs):
-        """Apply the rule (foreground batch or background job) and redirect back."""
+        """Apply or convert (foreground batch or background job) and redirect back."""
         from .engine import apply_rule_to_existing
 
         rule = self.get_object(**kwargs)
         action = request.POST.get("action", "apply")
 
-        if action == "background":
+        if action == "convert":
+            self._convert(request, rule)
+        elif action == "convert_background":
+            from .jobs import ConvertFlatFamiliesJob
+
+            self._enqueue(request, rule, ConvertFlatFamiliesJob, f"Convert flat families: {rule}")
+        elif action == "background":
             from .jobs import ApplyRuleJob
 
-            try:
-                job = ApplyRuleJob.enqueue(
-                    # instance is intentionally omitted: InterfaceNameRule does not
-                    # inherit JobsMixin, so passing instance= would fail full_clean().
-                    # The job is still named and findable in Core → Jobs.
-                    name=f"Apply rule: {rule}",
-                    user=request.user,
-                    rule_id=rule.pk,
-                )
-                messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
-            except Exception as e:
-                logger.exception("Failed to enqueue background job for rule %s: %s", rule, e)
-                messages.error(request, f"Failed to enqueue background job: {type(e).__name__}")
+            self._enqueue(request, rule, ApplyRuleJob, f"Apply rule: {rule}")
         else:
             try:
                 raw_ids = request.POST.getlist("interface_ids")
@@ -480,7 +550,7 @@ class RuleApplyDetailView(generic.ObjectView):
                     if conflicts:
                         messages.warning(
                             request,
-                            f"{len(conflicts)} interface(s) skipped — target name already in use on the device.",
+                            f"{len(conflicts)} interface(s) skipped — the plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

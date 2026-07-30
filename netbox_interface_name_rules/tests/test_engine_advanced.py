@@ -10,6 +10,7 @@ from dcim.models import (
     DeviceRole,
     DeviceType,
     Interface,
+    InterfaceTemplate,
     Manufacturer,
     Module,
     ModuleBay,
@@ -1730,6 +1731,39 @@ class PredictRuleOutputTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = predict_rule_output(module, self.bay0, ["fallback-me"])
         self.assertEqual(result, ["fallback-me"])
+
+
+class PredictRuleOutputPlainTemplateTest(EngineAdvancedFixtures):
+    """A module type whose templates are not channelized keeps the flat per-name prediction."""
+
+    def test_breakout_expands_a_plain_template_name(self):
+        """No template declares a channel count, so every raw name expands to channel_count names."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceTemplate.objects.create(module_type=self.module_type, name="{module}", type="10gbase-x-sfpp")
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            channel_count=4,
+            channel_start=0,
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+
+        result = predict_rule_output(module, self.bay0, ["0"])
+
+        self.assertEqual(result, ["0:0", "0:1", "0:2", "0:3"])
+
+    def test_simple_rename_of_a_plain_template_name(self):
+        """The same holds for a channel-less rule: one name in, one name out."""
+        from netbox_interface_name_rules.engine import predict_rule_output
+
+        InterfaceTemplate.objects.create(module_type=self.module_type, name="{module}", type="10gbase-x-sfpp")
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{base}")
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+
+        result = predict_rule_output(module, self.bay0, ["0"])
+
+        self.assertEqual(result, ["et-0/0/0"])
 
 
 # ---------------------------------------------------------------------------

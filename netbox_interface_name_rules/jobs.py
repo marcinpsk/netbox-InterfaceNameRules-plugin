@@ -36,4 +36,38 @@ class ApplyRuleJob(JobRunner):
 
         self.logger.info("Renamed %d interface(s) using rule '%s'", count, rule)
         if conflicts:
-            self.logger.warning("%d interface(s) skipped — target name already in use on the device.", len(conflicts))
+            self.logger.warning("%d interface(s) skipped — the plugin log names each one.", len(conflicts))
+
+
+class ConvertFlatFamiliesJob(JobRunner):
+    """Convert the flat breakout families a rule's modules still carry to the channelized topology."""
+
+    class Meta:
+        name = "Convert Flat Interface Families"
+
+    def run(self, *args, **kwargs):
+        """Convert every convertible flat family of the rule identified by rule_id in kwargs."""
+        from .engine import convert_flat_families
+        from .models import InterfaceNameRule
+
+        rule_id = kwargs.get("rule_id")
+        if not rule_id:
+            self.logger.warning("ConvertFlatFamiliesJob called without rule_id; skipping.")
+            return
+
+        try:
+            rule = InterfaceNameRule.objects.get(pk=rule_id)
+        except InterfaceNameRule.DoesNotExist:
+            self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
+            return
+
+        conflicts = []
+        try:
+            count = convert_flat_families(rule, conflicts=conflicts)
+        except Exception as exc:
+            self.logger.exception("Failed to convert families for rule '%s': %s", rule_id, exc)
+            raise
+
+        self.logger.info("Converted %d interface family(ies) using rule '%s'", count, rule)
+        if conflicts:
+            self.logger.warning("%d family(ies) skipped — the plugin log names each one.", len(conflicts))

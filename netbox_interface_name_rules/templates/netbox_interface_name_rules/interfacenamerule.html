@@ -55,7 +55,8 @@
 
 <div class="row mb-3">
   <div class="col col-md-12">
-    <div class="card">
+    {# The row is wide enough to overflow a narrow viewport, so it scrolls inside the card. #}
+    <div class="card table-responsive">
       <table class="table table-hover attr-table">
         <thead>
           <tr>
@@ -64,6 +65,8 @@
             <th>Device Type</th>
             <th>Platform</th>
             <th>Name Template</th>
+            <th>Parent Name Template</th>
+            <th>Breakout Mode</th>
             <th>Channels</th>
             <th>Channel Start</th>
             <th>Description</th>
@@ -103,6 +106,16 @@
               {% endif %}
             </td>
             <td><code>{{ object.name_template }}</code></td>
+            <td>
+              {% if object.parent_name_template %}
+                <code>{{ object.parent_name_template }}</code>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <span class="badge text-bg-{{ object.get_breakout_mode_color }}">{{ object.get_breakout_mode_display }}</span>
+            </td>
             <td>{{ object.channel_count|default:"—" }}</td>
             <td>{{ object.channel_start }}</td>
             <td>{{ object.description|default:"—" }}</td>

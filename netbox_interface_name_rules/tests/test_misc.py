@@ -726,6 +726,68 @@ class JobRunSuccessAndExceptionTest(TestCase):
         job.logger.exception.assert_called_once()
 
 
+class ConvertFlatFamiliesJobTest(TestCase):
+    """ConvertFlatFamiliesJob.run() on every NetBox release — a worker must survive all of them."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="ConvJobMfg", slug="convjobmfg")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="CONVJOB-QSFP", part_number="CONVJOB-QSFP"
+        )
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            channel_count=4,
+        )
+
+    def _make_job(self):
+        from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
+
+        job = ConvertFlatFamiliesJob.__new__(ConvertFlatFamiliesJob)
+        job.logger = MagicMock()
+        return job
+
+    def test_job_meta_name_names_the_conversion(self):
+        """The name is what an operator looks for in Core → Jobs."""
+        from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
+
+        self.assertIn("Convert", ConvertFlatFamiliesJob.Meta.name)
+
+    def test_job_run_without_a_rule_id_is_logged(self):
+        """An enqueue that lost its argument must not fail the worker."""
+        job = self._make_job()
+
+        job.run()
+
+        job.logger.warning.assert_called_once()
+
+    def test_job_run_with_a_deleted_rule_is_logged(self):
+        """A rule deleted between enqueue and execution is a warning, not a traceback."""
+        job = self._make_job()
+
+        job.run(rule_id=999999)
+
+        job.logger.warning.assert_called_once()
+
+    def test_job_run_reports_the_family_count(self):
+        """The count is the job's whole output, so it is always logged."""
+        job = self._make_job()
+
+        job.run(rule_id=self.rule.pk)
+
+        job.logger.info.assert_called_once()
+
+    def test_job_run_reraises_an_unexpected_failure(self):
+        """A failed conversion has to fail the job, or the operator reads it as done."""
+        job = self._make_job()
+        with patch("netbox_interface_name_rules.engine.convert_flat_families", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                job.run(rule_id=self.rule.pk)
+
+        job.logger.exception.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Model csv_headers / to_csv() — regression: KeyError 'Ch' on CSV import
 # ---------------------------------------------------------------------------

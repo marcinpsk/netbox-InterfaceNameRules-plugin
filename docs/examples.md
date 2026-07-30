@@ -117,6 +117,96 @@ save the rule.
   description: "Cisco 8201-SYS QSFP28-DD 2x100G breakout"
 ```
 
+### Channelized breakout (NetBox 4.7+)
+
+A breakout rule produces one of two topologies, chosen by `breakout_mode`:
+
+| Mode | Result |
+|---|---|
+| `flat` (default) | The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces. |
+| `channelized` | The base interface becomes the physical parent (`channels` set, keeping its pk, type, module link and cable) and one channel subinterface is created per channel (`type: channel`, bound to the parent by `channel_id`). |
+
+`parent_name_template` names that parent. It takes the same variables as
+`name_template` minus `{channel}` (the parent is the one interface in the family
+without a channel number); leave it blank to keep the name NetBox gave the port.
+
+```yaml
+# Juniper ACX7024 QSFP+ 4×10G breakout, modelled as a channelized family:
+# et-0/0/5 (parent, 4 channels) + xe-0/0/5:0 … :3 (channel subinterfaces)
+- module_type_pattern: "QSFP-4X10G-.*"
+  module_type_is_regex: true
+  device_type: ACX7024
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  parent_name_template: "et-0/0/{bay_position}"
+  breakout_mode: channelized
+  channel_count: 4
+  channel_start: 0
+  description: "Juniper ACX7024 QSFP+ 4x10G channelized breakout"
+```
+
+`{channel}` is `channel_start + channel_id - 1`, so NetBox's 1-based `channel_id`
+1…4 render as Juniper's `:0` … `:3`.
+
+The family is built only when every name it needs is free: if the parent's name
+or any channel name is already taken on the device, the whole family is skipped
+and logged rather than half created. Switching an existing rule from `flat` to
+`channelized` does not convert the flat interfaces an earlier apply installed —
+the two topologies are different objects to cabling and automation, so
+conversion is a separate, explicit operation. A module carrying more interfaces
+than its module type's templates describe is read as holding such a family: the
+rule refuses it with a warning naming the module, whatever names the new
+templates would take.
+
+On NetBox releases that cannot model channels (4.6 and older) a `channelized`
+rule is skipped with a warning and nothing is created — it is never quietly
+applied as a flat breakout.
+
+`contrib/juniper-channelized.yaml` carries the Juniper breakout families of
+`contrib/juniper.yaml` in this mode.
+
+### Converting a flat family (NetBox 4.7+)
+
+Devices provisioned before the channelized mode existed carry flat families:
+four sibling interfaces where NetBox now models a parent and four channels.
+**Apply Rules → Preview & Apply** offers to convert them, per family, once the
+rule is enabled and set to `breakout_mode: channelized` with a
+`parent_name_template` — the flat family has no parent row, so without a parent
+name there is nowhere for the ch-0 interface to go and nothing is offered. A
+disabled rule converts nothing, on this page or in the background job.
+
+Conversion is only ever performed from that page, by an operator who confirmed
+it: **Apply** renames, it never rewrites a family. Each family gets its own
+verdict before anything is written, produced by performing the whole conversion
+inside a transaction that is rolled back again — so a family that NetBox would
+reject is reported with NetBox's own reason (a cabled sibling, an occupied
+parent name, a missing sibling, a sibling already channelized, a sibling that is
+already a channel of another parent) instead of being half converted. Selecting
+a blocked family converts the others and skips that one.
+
+What the conversion does to the ch-0 row, per family:
+
+| Stays on the physical row (same interface ID) | Moves to the new channel 1 interface |
+|---|---|
+| cable, interface type, module link, `mark_connected` | IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
+
+Custom field values are copied to the channel rather than moved, because they
+can describe either the port or the link. The remaining siblings are retyped in
+place, so their own addresses, descriptions and tags — and their interface IDs —
+survive.
+
+The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
+**parent**. Automation, saved filters or external systems keyed on that ID will
+address the physical port afterwards, not the channel that inherited its name.
+
+Producing a verdict means performing the whole conversion and rolling it back, so
+the page pays that cost per family it lists. It therefore lists at most
+`apply_batch_limit` families (50 by default, the same cap the apply preview uses)
+and says so when more are waiting, and it refuses a confirmation naming more than
+that many rather than converting part of it. **Convert as Background Job** runs
+every convertible family of the rule and is not capped.
+
+On NetBox 4.6 and older no family is offered and no conversion section is shown.
+
 ### Partial breakout repair
 
 If a device was provisioned partially (e.g. only 2 of 4 channels were created
