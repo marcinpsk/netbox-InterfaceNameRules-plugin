@@ -6,6 +6,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.0 (2026-07-30)
+
+### Chores
+
+- Add CODEOWNERS to auto-request @marcinpsk on PRs
+  ([`7c732f8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7c732f89f569cba2f1f2be2eacb347eb94bbb972))
+
+- Cover .github/CODEOWNERS in REUSE.toml
+  ([#53](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/53),
+  [`ca82928`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ca82928289dc1f12367d5a2fed465c66bb3aeeef))
+
+- **deps**: Bump the github-actions group across 1 directory with 2 updates
+  ([#48](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/48),
+  [`1626af2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1626af2e30e7b1f99820ee2a9372c42a612e2acc))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#51](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/51),
+  [`2ea4715`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2ea4715d22982e83b30d7f5a9c94b272a65e41ac))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#52](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/52),
+  [`741b8a0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/741b8a09c4abf37067a96a036ff7b85fc56959c2))
+
+- **deps**: Bump the github-actions group with 6 updates
+  ([#54](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/54),
+  [`ba2e926`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ba2e926f2614dc05d27aa2a84c551194586c289b))
+
+- **devcontainer**: Durable debug-toolbar boot patches for Python 3.14
+  ([#56](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/56),
+  [`b028a66`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b028a66cc1158a1064ed2645f126e375647d195d))
+
+### Continuous Integration
+
+- Test NetBox 4.6.5 and main; adopt NetBox test mixins and fix what they found
+  ([#57](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/57),
+  [`b314fbd`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b314fbd03421e2e468f17758a513582a2c4935c2))
+
+### Features
+
+- Support NetBox 4.7 channelized interfaces (#55)
+  ([#64](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/64),
+  [`0968f33`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0968f337d5734bfe60626bb593c968c382b60485))
+
+
 ## v1.4.3 (2026-06-29)
 
 ### Bug Fixes

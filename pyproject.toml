@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-interface-name-rules"
-version = "1.4.3"
+version = "1.5.0"
 description = "NetBox plugin for automatic interface renaming when modules are installed"
 readme = "README.md"
 requires-python = ">=3.12.0"
