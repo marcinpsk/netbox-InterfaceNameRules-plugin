@@ -45,7 +45,11 @@ services:
 
   postgres:
     image: postgres:18
-    command: postgres -c max_connections=200
+    # 64MB default /dev/shm leaks DSM segments under parallel test runs and
+    # then fails every test-DB build; 512m gives parallel workers headroom.
+    shm_size: 512m
+    # 200 was exhausted by concurrent plugin test suites sharing this server.
+    command: postgres -c max_connections=800
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
