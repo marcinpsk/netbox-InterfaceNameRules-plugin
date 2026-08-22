@@ -53,12 +53,13 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanMode", ["3", "4", "5", "6", "7"])
+        manufacturer, cls.device = _build_device("ChanMode", ["3", "4", "5", "6", "7", "8"])
         cls.named_type = _plain_module_type(manufacturer, "ChanMode-QSFP")
         cls.bare_type = _plain_module_type(manufacturer, "ChanMode-QSFP-BARE")
         cls.offset_type = _plain_module_type(manufacturer, "ChanMode-QSFP-OFF")
         cls.vars_type = _plain_module_type(manufacturer, "ChanMode-QSFP-VARS")
         cls.base_type = _plain_module_type(manufacturer, "ChanMode-QSFP-BASE")
+        cls.conventional_type = _plain_module_type(manufacturer, "ChanMode-QSFP-CONVENTIONAL")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.named_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -97,6 +98,14 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
             breakout_mode=CHANNELIZED,
             channel_count=4,
             channel_start=0,
+        )
+        InterfaceNameRule.objects.create(
+            module_type=cls.conventional_type,
+            name_template="{base}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=1,
         )
 
     def test_install_builds_a_parent_and_its_channels(self):
@@ -164,6 +173,12 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
         module, _ = self._install(self.base_type, "7")
 
         self.assertEqual(self._parent(module).name, "7-parent")
+
+    def test_the_parent_rename_does_not_override_configured_channel_names(self):
+        """NetBox's deferred conventional rename must not replace the rule's final child names."""
+        module, _ = self._install(self.conventional_type, "8")
+
+        self.assertEqual(self._names(module), ["8:1", "8:2", "8:3", "8:4", "et-0/0/8"])
 
     def test_reapply_after_install_changes_nothing(self):
         """The family already exists; a second pass must not rename or duplicate any of it."""
@@ -454,6 +469,17 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
         module, _ = self._install(self.channelized_type, "3")
 
         self.assertEqual(self._parent(module).name, "et-0/0/3")
+
+    def test_a_blocked_channel_keeps_its_old_name_after_the_parent_rename(self):
+        """NetBox's deferred cascade must not move a child whose configured target is occupied."""
+        Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
+
+        module, _ = self._install(self.channelized_type, "3")
+
+        self.assertEqual(
+            self._names(module),
+            ["3:2", "et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:2", "xe-0/0/3:3"],
+        )
 
     def test_a_flat_rule_renames_the_existing_family_the_same_way(self):
         """Structure wins over mode: a family that exists is never given flat siblings."""
