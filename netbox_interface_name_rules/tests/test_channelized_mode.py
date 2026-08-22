@@ -472,7 +472,7 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
 
     def test_a_blocked_channel_keeps_its_old_name_after_the_parent_rename(self):
         """NetBox's deferred cascade must not move a child whose configured target is occupied."""
-        Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
+        blocker = Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
 
         module, _ = self._install(self.channelized_type, "3")
 
@@ -480,6 +480,9 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
             self._names(module),
             ["3:2", "et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:2", "xe-0/0/3:3"],
         )
+        blocker.refresh_from_db()
+        self.assertEqual(blocker.name, "xe-0/0/3:1")
+        self.assertIsNone(blocker.module_id)
 
     def test_a_flat_rule_renames_the_existing_family_the_same_way(self):
         """Structure wins over mode: a family that exists is never given flat siblings."""
