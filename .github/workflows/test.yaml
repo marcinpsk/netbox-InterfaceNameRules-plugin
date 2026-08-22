@@ -34,15 +34,10 @@ jobs:
           - python-version: "3.13"
             netbox-version: "main"
             experimental: true
-          # Pin the published beta so channelization compatibility has a reproducible signal.
-          - python-version: "3.13"
-            netbox-version: "v4.7.0-beta1"
-            channelization: true
-            experimental: true
-          # Keep testing the next 4.7 changes after the published beta. Non-blocking, same reason.
+          # Channelized interfaces (NetBox 4.7) live on the feature branch until they merge into
+          # main, at which point this cell is redundant and goes away. Non-blocking, same reason.
           - python-version: "3.13"
             netbox-version: "feature"
-            channelization: true
             experimental: true
 
     continue-on-error: ${{ matrix.experimental || false }}
@@ -124,7 +119,7 @@ jobs:
           COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
-          EXPECT_NETBOX_CHANNELIZATION: ${{ matrix.channelization && '1' || '' }}
+          EXPECT_NETBOX_CHANNELIZATION: ${{ matrix.netbox-version == 'feature' && '1' || '' }}
           # Moving branches can change query plans upstream. Record their counts in this disposable
           # checkout so these cells report plugin compatibility failures instead of baseline drift.
           UPDATE_QUERY_COUNTS: ${{ matrix.experimental && '1' || '' }}

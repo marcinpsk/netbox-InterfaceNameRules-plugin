@@ -1394,6 +1394,63 @@ def _rename_for_family(iface, new_name, device, conflicts):  # pragma: no cover 
     return _RenameResult(new_name, _RENAMED, 1) if renamed else _RenameResult(new_name, _COLLISION, 0)
 
 
+def _restore_deferred_channel_names(reconciliations, db_alias):  # pragma: no cover - channelization only
+    """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
+    from dcim.models import Interface
+
+    child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
+    with transaction.atomic(using=db_alias):
+        children = Interface.objects.using(db_alias).select_for_update().select_related("device").in_bulk(child_pks)
+        for child_pk, final_name, cascade_name in reconciliations:
+            child = children.get(child_pk)
+            if child is None or child.name == final_name:
+                continue
+            if child.name != cascade_name:
+                logger.warning(
+                    "Channel interface %s changed to unexpected name %r before deferred reconciliation; "
+                    "leaving it unchanged.",
+                    child_pk,
+                    child.name,
+                )
+                continue
+            previous_name = child.name
+            try:
+                with transaction.atomic(using=db_alias):
+                    child.name = final_name
+                    child.full_clean()
+                    child.save(using=db_alias)
+            except (ValueError, ValidationError, IntegrityError):
+                child.name = previous_name
+                logger.exception(
+                    "Failed to restore channel interface %s from NetBox's deferred name %r to %r; skipping.",
+                    child_pk,
+                    cascade_name,
+                    final_name,
+                )
+
+
+def _preserve_names_across_parent_cascade(parent, parent_before, final_names):  # pragma: no cover
+    """Run after NetBox's deferred cascade when a rule intentionally keeps old-parent child names."""
+    if parent.name == parent_before:
+        return
+
+    reconciliations = []
+    for child, final_name in final_names:
+        old_conventional_name = f"{parent_before}:{child.channel_id}"
+        cascade_name = f"{parent.name}:{child.channel_id}"
+        if final_name == old_conventional_name and final_name != cascade_name:
+            reconciliations.append((child.pk, final_name, cascade_name))
+    if not reconciliations:
+        return
+
+    reconciliations = tuple(reconciliations)
+    db_alias = parent._state.db
+    transaction.on_commit(
+        lambda: _restore_deferred_channel_names(reconciliations, db_alias),
+        using=db_alias,
+    )
+
+
 def _rename_channel_children(parent, parent_before, children, module, conflicts):  # pragma: no cover - see above
     """Carry the parent's new name onto its channel subinterfaces; return how many were renamed."""
     count = 0
@@ -1478,8 +1535,14 @@ def _apply_breakout_rule_to_family(rule, parent, children, variables, module, co
         )
         return result.count
     count = result.count
+    final_names = []
     for child, new_name in targets:
-        count += _rename_for_family(child, new_name, module.device, conflicts).count
+        previous_name = child.name
+        child_result = _rename_for_family(child, new_name, module.device, conflicts)
+        count += child_result.count
+        final_name = new_name if child_result.outcome in (_RENAMED, _UNCHANGED) else previous_name
+        final_names.append((child, final_name))
+    _preserve_names_across_parent_cascade(parent, base_name, final_names)
     return count
 
 
@@ -1543,7 +1606,8 @@ def _build_channelized_family(rule, base, variables, module, conflicts):  # prag
     from dcim.models import Interface
 
     device = module.device
-    parent_name, channels = _channelized_family_names(rule, base.name, variables)
+    base_name = base.name
+    parent_name, channels = _channelized_family_names(rule, base_name, variables)
     if _has_flat_expansion(module):
         # Converting one sibling into a parent would strand the others beside the new family.
         logger.warning(
@@ -1570,6 +1634,7 @@ def _build_channelized_family(rule, base, variables, module, conflicts):  # prag
 
     count = 0
     with transaction.atomic():
+        created_channels = []
         base.channels = rule.channel_count
         if parent_name != base.name:
             base.name = parent_name
@@ -1588,7 +1653,9 @@ def _build_channelized_family(rule, base, variables, module, conflicts):  # prag
             )
             channel.full_clean()
             channel.save()
+            created_channels.append((channel, name))
             count += 1
+        _preserve_names_across_parent_cascade(base, base_name, created_channels)
     return count
 
 
