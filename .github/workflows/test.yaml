@@ -120,6 +120,9 @@ jobs:
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
           EXPECT_NETBOX_CHANNELIZATION: ${{ matrix.netbox-version == 'feature' && '1' || '' }}
+          # Moving branches can change query plans upstream. Record their counts in this disposable
+          # checkout so these cells report plugin compatibility failures instead of baseline drift.
+          UPDATE_QUERY_COUNTS: ${{ matrix.experimental && '1' || '' }}
         run: |
           coverage run manage.py test netbox_interface_name_rules --verbosity=2
           coverage report
