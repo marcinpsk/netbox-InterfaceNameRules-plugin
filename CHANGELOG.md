@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.1 (2026-08-22)
+
+### Bug Fixes
+
+- Preserve channel names after NetBox deferred cascade
+  ([#71](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/71),
+  [`0cc795a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0cc795a239aa459b603e77f56407930e139323ef))
+
+### Chores
+
+- **deps**: Bump the github-actions group across 1 directory with 3 updates
+  ([#67](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/67),
+  [`6319fe2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6319fe2637d90b490b64b8293161941b46cfab59))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#69](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/69),
+  [`36a1b03`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/36a1b03ef6bd1a557081f5f795884fd666937bd4))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#68](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/68),
+  [`e33bdaf`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e33bdaf5bcf7e9166a807b54f88b2ee137dcf4bb))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#70](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/70),
+  [`becf341`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/becf3415e8af8cc4c5d56469599208236d4c51ab))
+
+
 ## v1.5.0 (2026-07-30)
 
 ### Chores
