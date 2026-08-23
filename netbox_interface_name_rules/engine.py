@@ -289,12 +289,34 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         return 0
 
     variables = build_variables(module_bay, device=module.device)
+    raw = _raw_name_matchers(module)
+    raw_names = raw.names or {variables["bay_position"]}
     plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=())
     family_outcome = family_ops.InstalledPlanSetOutcome(families=())
     if supports_channelization() or (force_reapply and rule.channel_count > 0):
         discovered = family_ops.plan_installed_families(module, rule, variables)
+        flat_snapshots = [
+            member.snapshot
+            for plan in discovered.plans
+            if plan.topology == family_ops.FamilyTopology.FLAT
+            for member in plan.members
+        ]
+        selected_flat_member_pks = frozenset(
+            interface.pk
+            for interface in _collect_unrenamed(
+                flat_snapshots,
+                rule,
+                raw_names,
+                force_reapply,
+                raw.matchers,
+                module,
+            )
+        )
         plans = tuple(
-            plan for plan in discovered.plans if force_reapply or plan.topology == family_ops.FamilyTopology.CHANNELIZED
+            plan
+            for plan in discovered.plans
+            if plan.topology == family_ops.FamilyTopology.CHANNELIZED
+            or selected_flat_member_pks.intersection(plan.member_pks)
         )
         plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=plans)
         family_outcome = family_ops.execute_installed_plan_set(plan_set)
@@ -306,9 +328,6 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
     # Only bases are rule candidates; the idempotency guard therefore looks at them alone.
     bases, children_by_parent = _partition_families(interfaces)
-    # Determine raw names NetBox assigned from templates; fall back to bay_position.
-    raw = _raw_name_matchers(module)
-    raw_names = raw.names or {variables["bay_position"]}
     unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply, raw.matchers, module)
 
     if not unrenamed:

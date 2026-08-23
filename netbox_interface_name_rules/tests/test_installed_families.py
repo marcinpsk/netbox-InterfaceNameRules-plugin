@@ -40,6 +40,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family import execution as family_execution
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.naming import evaluate_name_template
 
 CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
 PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
@@ -360,7 +361,7 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         )
         return module, plan_set
 
-    def _historical_family_state(self):
+    def _historical_family_state(self, name_template="brk-{base}:{channel}"):
         """Return a flat family installed at VC position 1 after moving to position 2."""
         virtual_chassis = VirtualChassis.objects.create(name="family-plan-vc")
         self.device.virtual_chassis = virtual_chassis
@@ -378,16 +379,16 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         )
         rule = InterfaceNameRule.objects.create(
             module_type=token_type,
-            name_template="brk-{base}:{channel}",
+            name_template=name_template,
             channel_count=2,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=token_type)
         apply_interface_name_rules(module, self.bay)
-        self.assertEqual(
-            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["brk-xe-1/0/7:0", "brk-xe-1/0/7:1"],
-        )
+        expected = [
+            evaluate_name_template(name_template, {"base": "xe-1/0/7", "channel": str(channel)}) for channel in range(2)
+        ]
+        self.assertEqual(sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), expected)
         self.device.vc_position = 2
         self.device.save()
         module = Module.objects.select_related("device", "module_bay").get(pk=module.pk)
@@ -434,7 +435,7 @@ class InstalledFlatFamilyPlanningTest(TestCase):
 
     @skipUnless(supports_vc_position_token(), "requires NetBox virtual-chassis position templates")
     def test_automatic_reapplication_uses_the_installed_family_executor(self):
-        module, _rule = self._historical_family_state()
+        module, _rule = self._historical_family_state("{base}:{channel}")
 
         with CaptureQueriesContext(connection) as queries:
             renamed = apply_interface_name_rules(module, module.module_bay, force_reapply=True)
@@ -442,9 +443,36 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         self.assertEqual(renamed, 2)
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["brk-xe-2/0/7:0", "brk-xe-2/0/7:1"],
+            ["xe-2/0/7:0", "xe-2/0/7:1"],
         )
         self.assertTrue(any("FOR UPDATE" in query["sql"] for query in queries.captured_queries))
+
+    @skipUnless(supports_vc_position_token(), "requires NetBox virtual-chassis position templates")
+    def test_forced_reapplication_preserves_a_wrapped_historical_family(self):
+        module, _rule = self._historical_family_state()
+
+        renamed = apply_interface_name_rules(module, module.module_bay, force_reapply=True)
+
+        self.assertEqual(renamed, 0)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["brk-xe-1/0/7:0", "brk-xe-1/0/7:1"],
+        )
+
+    @skipUnless(
+        supports_channelization() and supports_vc_position_token(),
+        "requires NetBox channelization and virtual-chassis position templates",
+    )
+    def test_normal_reapplication_preserves_a_wrapped_historical_family(self):
+        module, _rule = self._historical_family_state()
+
+        renamed = apply_interface_name_rules(module, module.module_bay)
+
+        self.assertEqual(renamed, 0)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["brk-xe-1/0/7:0", "brk-xe-1/0/7:1"],
+        )
 
     def _two_historical_family_state(self):
         """Return two complete historical flat families and their current rule context."""

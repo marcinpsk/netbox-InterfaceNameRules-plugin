@@ -645,6 +645,11 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
     def setUpTestData(cls):
         manufacturer, cls.device = _build_device("ChanErr", ["4"])
         cls.module_type = _channelized_module_type(manufacturer, "ChanErr-QSFP")
+        InterfaceTemplate.objects.create(
+            module_type=cls.module_type,
+            name="mgmt-{module}",
+            type=PLAIN_TYPE,
+        )
         # Valid for channel 0, divides by zero from channel 1 on.
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -668,7 +673,7 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
             {FamilyStatus.FAILED},
         )
         self.assertEqual(renamed, 0)
-        self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4"])
+        self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4", "mgmt-4"])
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

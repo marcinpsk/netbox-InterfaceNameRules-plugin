@@ -121,6 +121,8 @@ def _flat_candidates(rule, variables, interfaces, templates):
         return []
 
     by_name = {interface.name: interface for interface in interfaces if _is_plain_interface(interface)}
+    if not by_name:
+        return []
     historical_by_template = {
         template.pk: _historical_bases(rule, variables, template, interfaces) for template in templates
     }
@@ -133,7 +135,10 @@ def _flat_candidates(rule, variables, interfaces, templates):
 
     candidates = []
     for template in templates:
-        target_names = _flat_names(rule, variables, template.resolved)
+        try:
+            target_names = _flat_names(rule, variables, template.resolved)
+        except (TypeError, ValueError):
+            continue
         historical_bases = tuple(
             base_name
             for base_name in historical_by_template[template.pk]
@@ -141,7 +146,10 @@ def _flat_candidates(rule, variables, interfaces, templates):
         )
         source_bases = (template.resolved, *historical_bases)
         for source_base in source_bases:
-            source_names = _flat_names(rule, variables, source_base)
+            try:
+                source_names = _flat_names(rule, variables, source_base)
+            except (TypeError, ValueError):
+                continue
             if len(set(source_names)) != len(source_names) or not all(name in by_name for name in source_names):
                 continue
             members = tuple(by_name[name] for name in source_names)
