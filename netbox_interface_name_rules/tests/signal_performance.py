@@ -66,7 +66,10 @@ _PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
 
 _SPACE_RE = re.compile(r"\s+")
 _STRING_LITERAL_RE = re.compile(r"(?i)(?:e|u&)?'(?:''|[^'])*'")
-_DOLLAR_LITERAL_RE = re.compile(r"\$(?P<tag>[A-Za-z_][A-Za-z_0-9]*)?\$.*?\$(?P=tag)\$", re.DOTALL)
+_DOLLAR_LITERAL_RE = re.compile(
+    r"\$\$.*?\$\$|\$(?P<tag>[A-Za-z_][A-Za-z_0-9]*)\$.*?\$(?P=tag)\$",
+    re.DOTALL,
+)
 _NUMBER_RE = re.compile(r"(?<![A-Za-z_0-9$])[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?(?![A-Za-z_0-9$])", re.I)
 _SAVEPOINT_RE = re.compile(r"s\d+_x\d+")
 _DJANGO_CURSOR_RE = re.compile(r"_django_curs_\d+_(sync|async)_\d+")
@@ -898,6 +901,12 @@ class SignalPathPerformanceTest(TransactionTestCase):
         prepared = self._prepare_module("PerfDirectFixture", "plain_rename", direct=True)
 
         self.assertEqual(prepared.fixture["enabled_rules"], 1)
+
+    def test_sql_normalization_scrubs_dollar_quoted_literals(self):
+        """Remove both untagged and tagged PostgreSQL dollar-quoted values."""
+        normalized = _normalize_sql("SELECT $$customer-token$$, $audit$second-token$audit$")
+
+        self.assertEqual(normalized, "SELECT '?', '?'")
 
     def test_profile_closes_the_instrumented_connection(self):
         """Make the later timing pass open a session without auto_explain hooks."""
