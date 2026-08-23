@@ -6,7 +6,6 @@ This module is imported lazily by signals.py so that model imports happen
 after Django is fully initialised.
 """
 
-import ast
 import copy
 import logging
 import re
@@ -15,7 +14,7 @@ from collections import defaultdict, namedtuple
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from . import rule_selection
+from . import naming, rule_selection
 from .choices import BreakoutModeChoices
 from .rule_selection import _compile_pattern
 
@@ -30,6 +29,31 @@ def pinned_rule_cache():
 def find_matching_rule(module_type, parent_module_type, device_type, platform=None):
     """Delegate rule selection while preserving the engine entry point."""
     return rule_selection.find_matching_rule(module_type, parent_module_type, device_type, platform)
+
+
+def _extract_trailing_digits(value: str) -> str:
+    """Delegate trailing-digit extraction while preserving the engine helper."""
+    return naming._extract_trailing_digits(value)
+
+
+def _resolve_bay_position(module_bay):
+    """Delegate bay-position resolution while preserving the engine helper."""
+    return naming._resolve_bay_position(module_bay)
+
+
+def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+    """Delegate slot resolution while preserving the engine helper."""
+    return naming._resolve_slot(module_bay, bay_position_num, parent_bay_position)
+
+
+def build_variables(module_bay, device=None):
+    """Delegate naming-variable construction while preserving the engine entry point."""
+    return naming.build_variables(module_bay, device=device)
+
+
+def evaluate_name_template(template: str, variables: dict) -> str:
+    """Delegate template evaluation while preserving the engine entry point."""
+    return naming.evaluate_name_template(template, variables)
 
 
 def _get_parent_module_type(module_bay):
@@ -860,95 +884,6 @@ def _flag_rule_potentially_deprecated(rule):
         )
     except Exception:
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
-
-
-def _extract_trailing_digits(s: str) -> str:
-    r"""Return the trailing digit run of *s* without regex backtracking.
-
-    Pure O(n) string scan — eliminates the polynomial backtracking risk that
-    arises from using ``re.search(r"(\d+)$", ...)`` on strings ending in a
-    non-digit character (e.g. ``"1" * n + "x"`` would cause O(n²) steps).
-
-    Returns an empty string when *s* has no trailing digits.
-    """
-    i = len(s)
-    while i > 0 and s[i - 1].isdigit():
-        i -= 1
-    return s[i:]
-
-
-def _resolve_bay_position(module_bay):
-    """Return (bay_position, bay_position_num) from a module bay's position field.
-
-    Handles template expressions like ``{module}`` by extracting the trailing
-    digit from the bay name.  Falls back to ``"0"`` if no digit is found.
-    """
-    bay_position = module_bay.position or "0"
-    if bay_position.startswith("{"):
-        digits = _extract_trailing_digits(module_bay.name)
-        bay_position = digits if digits else "0"
-    digits = _extract_trailing_digits(bay_position)
-    bay_position_num = digits if digits else "0"
-    return bay_position, bay_position_num
-
-
-def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
-    """Return the ``slot`` variable from the module bay hierarchy.
-
-    When the bay has a parent bay, slot comes from the parent (or grandparent
-    when two levels of nesting exist).  When the bay belongs to an installed
-    module with its own bay, slot comes from that module's bay position.
-    Falls back to ``bay_position_num``.
-    """
-    if module_bay.parent:
-        parent_bay = module_bay.parent
-        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
-            return parent_bay.parent.position or parent_bay_position
-        return parent_bay_position
-    if hasattr(module_bay, "module") and module_bay.module:
-        owner_module = module_bay.module
-        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
-            return owner_module.module_bay.position or bay_position_num
-    return bay_position_num
-
-
-def build_variables(module_bay, device=None):
-    """Build template variable dict from a module bay's position context.
-
-    Extracts numeric and raw position values from the bay and its parent chain,
-    producing the variables available for name_template substitution.
-
-    Returns a dict with keys: slot, bay_position, bay_position_num,
-    parent_bay_position, sfp_slot, and optionally vc_position.
-
-    ``vc_position`` is only injected when *device* is a Virtual Chassis member
-    (device.virtual_chassis_id is set).  Templates using ``{vc_position}`` on a
-    non-VC device will raise ValueError during evaluation — this is intentional.
-    Note: Juniper VC positions start at 0, so 0 is a valid real-world value and
-    cannot be used as a "not in VC" sentinel.
-    """
-    bay_position, bay_position_num = _resolve_bay_position(module_bay)
-
-    parent_bay_position = "0"
-    if module_bay.parent:
-        parent_bay_position = module_bay.parent.position or "0"
-
-    slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
-
-    result = {
-        "slot": slot,
-        "bay_position": bay_position,
-        "bay_position_num": bay_position_num,
-        "parent_bay_position": parent_bay_position,
-        "sfp_slot": bay_position_num,
-    }
-    if (
-        device is not None
-        and getattr(device, "virtual_chassis_id", None) is not None
-        and device.vc_position is not None
-    ):
-        result["vc_position"] = str(device.vc_position)
-    return result
 
 
 def _name_exists_on_device(device, name, exclude_pk=None):
@@ -2213,52 +2148,3 @@ def _convert_flat_families(rule, base_pks, conflicts):  # pragma: no cover - req
             continue
         converted += 1
     return converted
-
-
-def evaluate_name_template(template: str, variables: dict) -> str:
-    """Evaluate a name template with variable substitution and safe arithmetic.
-
-    Supports templates like:
-        "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
-
-    Variables are substituted first, then any brace-enclosed expression
-    containing arithmetic operators is safely evaluated via AST. True division
-    (/) is not allowed — use floor division (//) instead. Results are cast to
-    int to ensure interface names are always whole numbers.
-    """
-    # First pass: substitute all simple variables
-    result = template
-    for key, value in variables.items():
-        result = result.replace(f"{{{key}}}", str(value))
-
-    # Second pass: evaluate any remaining brace-enclosed arithmetic expressions
-    def _eval_expr(match):
-        expr = match.group(1).strip()
-        # Allow digits, arithmetic operators (excluding lone /), parens, whitespace.
-        # Negative lookahead disallows a single / that is not part of //.
-        if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
-            raise ValueError(f"Unsafe expression in name template: {expr}")
-        try:
-            node = ast.parse(expr, mode="eval")
-            for child in ast.walk(node):
-                if not isinstance(
-                    child,
-                    (
-                        ast.Expression,
-                        ast.BinOp,
-                        ast.UnaryOp,
-                        ast.Constant,
-                        ast.Add,
-                        ast.Sub,
-                        ast.Mult,
-                        ast.FloorDiv,
-                        ast.USub,
-                        ast.UAdd,
-                    ),
-                ):
-                    raise ValueError(f"Unsafe AST node in expression: {type(child).__name__}")
-            return str(int(eval(compile(node, "<template>", "eval"))))  # noqa: S307
-        except (SyntaxError, TypeError, ZeroDivisionError) as e:
-            raise ValueError(f"Invalid arithmetic expression '{expr}': {e}") from e
-
-    return re.sub(r"\{([^}]+)\}", _eval_expr, result)

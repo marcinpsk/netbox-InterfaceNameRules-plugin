@@ -301,7 +301,7 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .engine import evaluate_name_template
+        from .naming import evaluate_name_template
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
