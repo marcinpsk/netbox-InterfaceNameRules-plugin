@@ -155,12 +155,21 @@ def _restore_deferred_channel_names(reconciliations, db_alias):  # pragma: no co
                     child.name = final_name
                     child.full_clean()
                     child.save(using=db_alias)
-            except (ValidationError, IntegrityError):
+            except ValidationError:
                 child.name = previous_name
                 logger.exception(
                     "Failed to restore channel interface %s from NetBox's deferred name %r to %r; skipping.",
                     child_pk,
                     cascade_name,
+                    final_name,
+                )
+            except IntegrityError as error:
+                child.name = previous_name
+                if not _is_name_collision(error):
+                    raise
+                logger.warning(
+                    "Channel interface %s could not reclaim name %r after NetBox's deferred rename; skipping.",
+                    child_pk,
                     final_name,
                 )
 

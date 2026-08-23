@@ -4,6 +4,7 @@
 
 from dataclasses import FrozenInstanceError
 from unittest import skipUnless
+from unittest.mock import patch
 
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import (
@@ -37,6 +38,7 @@ from netbox_interface_name_rules.family import (
     execute_installed_plan_set,
     plan_installed_families,
 )
+from netbox_interface_name_rules.family import execution as family_execution
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
@@ -110,6 +112,41 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         )
         with self.assertRaises(FrozenInstanceError):
             plan.module_id = 0
+
+    def test_automatic_reapplication_propagates_planner_failures(self):
+        module = Module.objects.create(
+            device=self.device,
+            module_bay=self.bay,
+            module_type=self.module_type,
+        )
+
+        with (
+            patch(
+                "netbox_interface_name_rules.engine.family_ops.plan_installed_families",
+                side_effect=TypeError("planner defect"),
+            ),
+            self.assertRaisesMessage(TypeError, "planner defect"),
+        ):
+            apply_interface_name_rules(module, self.bay, force_reapply=True)
+
+    def test_deferred_reconciliation_propagates_unrelated_integrity_failures(self):
+        interface = Interface.objects.create(
+            device=self.device,
+            name="cascade-name",
+            type=PLAIN_TYPE,
+        )
+
+        def reject_interface_update(execute, sql, params, many, context):
+            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+                raise IntegrityError("injected deferred database failure")
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(reject_interface_update):
+            with self.assertRaisesMessage(IntegrityError, "injected deferred database failure"):
+                family_execution._restore_deferred_channel_names(
+                    ((interface.pk, "final-name", "cascade-name"),),
+                    interface._state.db,
+                )
 
     def test_changed_member_makes_the_plan_stale_without_partial_execution(self):
         module = Module.objects.create(

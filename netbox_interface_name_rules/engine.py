@@ -292,12 +292,8 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=())
     family_outcome = family_ops.InstalledPlanSetOutcome(families=())
     if supports_channelization() or (force_reapply and rule.channel_count > 0):
-        try:
-            plan_set = family_ops.plan_installed_families(module, rule, variables)
-        except (TypeError, ValueError, re.error):
-            logger.exception("Failed to plan installed families for module %s; using the legacy plain path.", module)
-        else:
-            family_outcome = family_ops.execute_installed_plan_set(plan_set)
+        plan_set = family_ops.plan_installed_families(module, rule, variables)
+        family_outcome = family_ops.execute_installed_plan_set(plan_set)
 
     interfaces = list(Interface.objects.filter(module=module).exclude(pk__in=plan_set.member_pks))
 
