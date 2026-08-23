@@ -11,11 +11,15 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "github-actions" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:
@@ -25,8 +29,12 @@ updates:
     directory: "/.devcontainer" # Location of devcontainer.json
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "docker-compose" # See documentation for possible values
     directory: "/.devcontainer" # Location of docker-compose.yml
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7

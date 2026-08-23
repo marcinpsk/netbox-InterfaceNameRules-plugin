@@ -140,9 +140,9 @@ apt-get update -qq
 apt-get install -y -qq net-tools git
 # Dev tools used by the agent loop and pre-commit hooks. Keep in sync with
 # the `dev` extras in pyproject.toml — at minimum, anything invoked by:
-#   - test + coverage runs:                  pytest, pytest-django, pytest-cov
+#   - test + coverage runs:                  pytest, pytest-django, pytest-cov, pytest-xdist
 #   - pre-commit hooks (.pre-commit-config.yaml):  ruff, pre-commit, reuse
-$PIP_CMD install pytest pytest-django pytest-cov ruff pre-commit reuse
+$PIP_CMD install pytest pytest-django pytest-cov pytest-xdist ruff pre-commit reuse
 
 # Install GitHub CLI
 if ! command -v gh >/dev/null 2>&1; then

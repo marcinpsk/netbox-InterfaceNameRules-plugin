@@ -18,6 +18,8 @@ concurrency:
 jobs:
   test-netbox:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     strategy:
       fail-fast: false
@@ -66,6 +68,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: netbox-InterfaceNameRules-plugin
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -81,12 +84,13 @@ jobs:
           repository: "netbox-community/netbox"
           path: netbox
           ref: ${{ matrix.netbox-version }}
+          persist-credentials: false
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system pytest pytest-django tblib coverage
+          uv pip install --system pytest pytest-cov pytest-django pytest-xdist tblib
           uv pip install --system -e .
 
       - name: Set up NetBox configuration
@@ -113,10 +117,11 @@ jobs:
           EOF
 
       - name: Run tests with coverage
-        working-directory: netbox/netbox
+        working-directory: netbox-InterfaceNameRules-plugin
         env:
           NETBOX_CONFIGURATION: netbox.configuration
-          COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox
+          COVERAGE_RCFILE: pyproject.toml
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
           EXPECT_NETBOX_CHANNELIZATION: ${{ matrix.netbox-version == 'feature' && '1' || '' }}
@@ -124,19 +129,19 @@ jobs:
           # checkout so these cells report plugin compatibility failures instead of baseline drift.
           UPDATE_QUERY_COUNTS: ${{ matrix.experimental && '1' || '' }}
         run: |
-          coverage run manage.py test netbox_interface_name_rules --verbosity=2
-          coverage report
+          pytest netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
+            -o pythonpath=../netbox/netbox
 
       - name: Generate coverage report
         if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
-        working-directory: netbox/netbox
+        working-directory: netbox-InterfaceNameRules-plugin
         env:
-          COVERAGE_RCFILE: ../../netbox-InterfaceNameRules-plugin/pyproject.toml
+          COVERAGE_RCFILE: pyproject.toml
         run: |
-          mkdir -p ../../coverage-report
-          coverage json -o ../../coverage-report/coverage.json
-          coverage html -d ../../coverage-report/htmlcov
-          coverage xml -o ../../coverage-report/coverage.xml
+          mkdir -p ../coverage-report
+          coverage json -o ../coverage-report/coverage.json
+          coverage html -d ../coverage-report/htmlcov
+          coverage xml -o ../coverage-report/coverage.xml
 
       - name: Upload coverage report
         if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'

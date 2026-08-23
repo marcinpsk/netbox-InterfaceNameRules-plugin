@@ -14,6 +14,8 @@ concurrency:
 jobs:
   test-netbox-main:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     strategy:
       fail-fast: false
@@ -49,6 +51,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: netbox-InterfaceNameRules-plugin
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -64,12 +67,13 @@ jobs:
           repository: "netbox-community/netbox"
           path: netbox
           ref: main
+          persist-credentials: false
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system pytest pytest-django tblib
+          uv pip install --system pytest pytest-django pytest-xdist tblib
           uv pip install --system -e .
 
       - name: Set up NetBox configuration
@@ -96,8 +100,9 @@ jobs:
           EOF
 
       - name: Run tests
-        working-directory: netbox/netbox
+        working-directory: netbox-InterfaceNameRules-plugin
         env:
           NETBOX_CONFIGURATION: netbox.configuration
+          PYTHONPATH: ${{ github.workspace }}/netbox/netbox
         run: |
-          python manage.py test netbox_interface_name_rules --verbosity=2
+          pytest netbox_interface_name_rules -o pythonpath=../netbox/netbox

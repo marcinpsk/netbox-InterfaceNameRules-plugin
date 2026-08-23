@@ -9,9 +9,13 @@ on:
 jobs:
   format-and-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -22,13 +26,17 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: uv pip install --system ruff
+        run: uv pip install --system pre-commit ruff
 
       - name: Run Ruff linting
         run: ruff check .
 
       - name: Run Ruff formatting check
         run: ruff format --check .
+
+      # Runs the pinned hook from .pre-commit-config.yaml, so the version lives in one place.
+      - name: Audit the workflows
+        run: pre-commit run --all-files zizmor
 
       - name: Run devcontainer script tests
         run: bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
