@@ -22,6 +22,7 @@ venv/
 .coverage.*
 htmlcov/
 coverage.xml
+performance/baselines/*.json
 
 # Ruff / linting
 .ruff_cache/

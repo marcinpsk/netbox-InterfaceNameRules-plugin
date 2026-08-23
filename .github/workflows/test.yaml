@@ -90,7 +90,7 @@ jobs:
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system pytest pytest-cov pytest-django pytest-xdist tblib
+          uv pip install --system --only-binary=:all: pytest==9.0.2 pytest-cov==7.0.0 pytest-django==4.12.0 pytest-xdist==3.8.0 tblib==3.2.2
           uv pip install --system -e .
 
       - name: Set up NetBox configuration
@@ -129,7 +129,7 @@ jobs:
           # checkout so these cells report plugin compatibility failures instead of baseline drift.
           UPDATE_QUERY_COUNTS: ${{ matrix.experimental && '1' || '' }}
         run: |
-          pytest netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
+          pytest -n auto netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
             -o pythonpath=../netbox/netbox
 
       - name: Generate coverage report

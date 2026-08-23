@@ -73,7 +73,7 @@ jobs:
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system pytest pytest-django pytest-xdist tblib
+          uv pip install --system --only-binary=:all: pytest==9.0.2 pytest-django==4.12.0 pytest-xdist==3.8.0 tblib==3.2.2
           uv pip install --system -e .
 
       - name: Set up NetBox configuration
@@ -105,4 +105,4 @@ jobs:
           NETBOX_CONFIGURATION: netbox.configuration
           PYTHONPATH: ${{ github.workspace }}/netbox/netbox
         run: |
-          pytest netbox_interface_name_rules -o pythonpath=../netbox/netbox
+          pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox

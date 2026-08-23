@@ -26,10 +26,11 @@ python manage.py test \
   --noinput
 ```
 
-The JSON artifact contains normalized statements, PostgreSQL plans, rows and loops, buffer and WAL
-work, fixture sizes, planner settings, and raw wall and process CPU samples. The generated Markdown
-file contains the main comparison fields. PostgreSQL node timing stays disabled. The runner observes
-the statements issued by the operation and does not replay mutating SQL.
+The temporary JSON artifact contains normalized statements, PostgreSQL plans, rows and loops, buffer
+and WAL work, fixture sizes, planner settings, and raw wall and process CPU samples. Do not retain it
+in Git. Retain only its generated Markdown summary in `performance/baselines/`. PostgreSQL node
+timing stays disabled. The runner observes the statements issued by the operation and does not replay
+mutating SQL.
 
 The complete model-save scenarios include NetBox model creation, plugin signal scheduling, and the
 committed callback. Direct-callback scenarios isolate the deferred callback for diagnosis. Compare

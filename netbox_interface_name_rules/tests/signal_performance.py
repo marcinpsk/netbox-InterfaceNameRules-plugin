@@ -107,6 +107,66 @@ _WORK_COUNTER_KEYS = (
     "WAL FPI",
     "WAL Bytes",
 )
+_PLAN_IDENTITY_KEYS = {
+    "Alias",
+    "Async Capable",
+    "Cache Key",
+    "Cache Mode",
+    "Command",
+    "Conflict Arbiter Indexes",
+    "Conflict Filter",
+    "Conflict Resolution",
+    "CTE Name",
+    "Custom Plan Provider",
+    "Disabled",
+    "Filter",
+    "Function Call",
+    "Function Name",
+    "Group Key",
+    "Group Keys",
+    "Grouping Sets",
+    "Hash Cond",
+    "Hash Key",
+    "Hash Keys",
+    "Index Cond",
+    "Index Name",
+    "Inner Unique",
+    "Join Filter",
+    "Join Type",
+    "Merge Cond",
+    "Node Type",
+    "One-Time Filter",
+    "Operation",
+    "Output",
+    "Parallel Aware",
+    "Parent Relationship",
+    "Partial Mode",
+    "Plan",
+    "Plan Rows",
+    "Plan Width",
+    "Plans",
+    "Presorted Key",
+    "Recheck Cond",
+    "Relation Name",
+    "Relations",
+    "Remote SQL",
+    "Repeatable Seed",
+    "Sampling Method",
+    "Sampling Parameters",
+    "Scan Direction",
+    "Schema",
+    "SetOp Command",
+    "Single Copy",
+    "Sort Key",
+    "Startup Cost",
+    "Strategy",
+    "Subplan Name",
+    "Table Function Call",
+    "Target Tables",
+    "TID Cond",
+    "Total Cost",
+    "Workers Planned",
+}
 _PLANNER_SETTINGS = (
     "block_size",
     "cpu_index_tuple_cost",
@@ -289,6 +349,15 @@ def _plan_nodes(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return nodes
 
 
+def _plan_identity_shape(value: Any) -> Any:
+    """Retain only structural and planner fields that define the chosen plan."""
+    if isinstance(value, dict):
+        return {key: _plan_identity_shape(child) for key, child in value.items() if key in _PLAN_IDENTITY_KEYS}
+    if isinstance(value, list):
+        return [_plan_identity_shape(child) for child in value]
+    return value
+
+
 def _root_work(plan: dict[str, Any]) -> dict[str, float | int]:
     """Extract additive work measures from the root plan node."""
     root = plan.get("Plan", {})
@@ -319,7 +388,7 @@ def _group_plans(notices: list[str]) -> list[dict[str, Any]]:
         if parsed is None:
             continue
         normalized_sql, plan = parsed
-        serialized = json.dumps(plan, sort_keys=True, separators=(",", ":"))
+        serialized = json.dumps(_plan_identity_shape(plan), sort_keys=True, separators=(",", ":"))
         identity = _fingerprint(f"{normalized_sql}\0{serialized}")
         entry = grouped.setdefault(
             identity,
@@ -794,6 +863,36 @@ class SignalPathPerformanceTest(TestCase):
         with self.assertRaisesRegex(DatabaseError, "division by zero"), transaction.atomic():
             with _auto_explain_notices(), connection.cursor() as cursor:
                 cursor.execute("SELECT 1 / 0")
+
+    def test_plan_grouping_ignores_runtime_counters(self):
+        """Group one SQL plan shape even when its runtime work changes."""
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE TEMPORARY TABLE profile_grouping_left (value integer) ON COMMIT DROP")
+            cursor.execute("CREATE TEMPORARY TABLE profile_grouping_right (value integer) ON COMMIT DROP")
+            cursor.execute("INSERT INTO profile_grouping_left VALUES (1)")
+            cursor.execute("INSERT INTO profile_grouping_right VALUES (1)")
+            cursor.execute("SET LOCAL enable_hashjoin = off")
+            cursor.execute("SET LOCAL enable_mergejoin = off")
+
+        with _auto_explain_notices() as notices, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT left_side.value FROM profile_grouping_left AS left_side "
+                "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
+            )
+            cursor.execute("INSERT INTO profile_grouping_left VALUES (2)")
+            cursor.execute(
+                "SELECT left_side.value FROM profile_grouping_left AS left_side "
+                "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
+            )
+
+        select_plans = [
+            plan
+            for plan in _group_plans(notices)
+            if plan["normalized_sql"].startswith("SELECT left_side.value FROM profile_grouping_left")
+        ]
+        self.assertEqual(len(select_plans), 1, select_plans)
+        self.assertEqual(select_plans[0]["calls"], 2)
+        self.assertEqual(select_plans[0]["aggregate"]["actual_rows_times_loops"], 2)
 
     @staticmethod
     def _analyze_tables() -> None:
