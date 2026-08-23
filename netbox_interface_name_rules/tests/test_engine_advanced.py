@@ -709,7 +709,7 @@ class EngineEvaluateTemplateUnsafeASTTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _find_regex_match re.error path (lines 355-356)
+# rule_selection.py, invalid regex path
 # ---------------------------------------------------------------------------
 
 
@@ -741,7 +741,7 @@ class EngineFindRegexMatchErrorTest(TestCase):
         so an invalid pattern just moves on to the next candidate instead of
         propagating the exception to the caller (lines 355-356).
         """
-        from netbox_interface_name_rules.engine import _find_regex_match
+        from netbox_interface_name_rules.rule_selection import _find_regex_match
 
         candidates = [(None, None, None)]
         result = _find_regex_match("RegX-GOOD", candidates)
