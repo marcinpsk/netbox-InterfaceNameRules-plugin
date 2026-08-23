@@ -20,7 +20,7 @@ import subprocess
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -41,9 +41,10 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
+from django.apps import apps
 from django.conf import settings
 from django.db import DatabaseError, connection, transaction
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from netbox_interface_name_rules import __version__ as plugin_version
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -206,6 +207,7 @@ class _PreparedScenario:
 
     operation: Callable[[], None]
     verify: Callable[[], dict[str, Any]]
+    cleanup: Callable[[], None]
     fixture: dict[str, int]
     work_units: int
 
@@ -612,9 +614,10 @@ def _markdown_summary(artifact: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-class SignalPathPerformanceTest(TestCase):
+class SignalPathPerformanceTest(TransactionTestCase):
     """Generate retained evidence for the existing automatic naming implementation."""
 
+    available_apps = tuple(app_config.name for app_config in apps.get_app_configs())
     maxDiff = None
 
     def _build_device(self, prefix: str, bay_positions=(), **device_kwargs):
@@ -678,7 +681,19 @@ class SignalPathPerformanceTest(TestCase):
             "enabled_rules": InterfaceNameRule.objects.filter(enabled=True).count(),
         }
 
-    def _module_operation(self, device, module_type, direct, expected_names) -> _PreparedScenario:
+    @staticmethod
+    def _cleanup_fixture(prefix: str) -> None:
+        """Delete one committed scenario fixture without changing shared reference data."""
+        manufacturer_name = f"{prefix}Mfg"
+        Device.objects.filter(name=f"{prefix.lower()}-device").delete()
+        ModuleType.objects.filter(manufacturer__name=manufacturer_name).delete()
+        DeviceType.objects.filter(manufacturer__name=manufacturer_name).delete()
+        Manufacturer.objects.filter(name=manufacturer_name).delete()
+        DeviceRole.objects.filter(name=f"{prefix}Role").delete()
+        Site.objects.filter(name=f"{prefix}Site").delete()
+        VirtualChassis.objects.filter(name=f"{prefix}-VC").delete()
+
+    def _module_operation(self, prefix, device, module_type, direct, expected_names) -> _PreparedScenario:
         """Prepare either a complete install path or its deferred callback only."""
         bay = ModuleBay.objects.get(device=device, position="3")
         holder: dict[str, Module] = {}
@@ -686,13 +701,12 @@ class SignalPathPerformanceTest(TestCase):
             holder["module"] = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
 
             def operation():
-                with self.captureOnCommitCallbacks(execute=True):
-                    _apply_rules_deferred(holder["module"].pk, bay.pk)
+                _apply_rules_deferred(holder["module"].pk, bay.pk)
 
         else:
 
             def operation():
-                with self.captureOnCommitCallbacks(execute=True):
+                with transaction.atomic():
                     holder["module"] = Module.objects.create(
                         device=device,
                         module_bay=bay,
@@ -707,6 +721,7 @@ class SignalPathPerformanceTest(TestCase):
         return _PreparedScenario(
             operation=operation,
             verify=verify,
+            cleanup=lambda: self._cleanup_fixture(prefix),
             fixture=self._fixture(module_type, device),
             work_units=len(expected_names),
         )
@@ -719,43 +734,49 @@ class SignalPathPerformanceTest(TestCase):
         else:
             module_type = self._plain_module_type(manufacturer, f"{prefix}-Module")
 
+        rule_options: dict[str, Any]
         if kind == "no_matching_rule":
             other_type = ModuleType.objects.create(
                 manufacturer=manufacturer,
                 model=f"{prefix}-Other",
                 part_number=f"{prefix}-Other",
             )
-            InterfaceNameRule.objects.create(module_type=other_type, name_template="unused-{bay_position}")
+            rule_module_type = other_type
+            rule_options = {"name_template": "unused-{bay_position}"}
             expected = ["3"]
         elif kind == "plain_rename":
-            InterfaceNameRule.objects.create(module_type=module_type, name_template="et-0/0/{bay_position}")
+            rule_module_type = module_type
+            rule_options = {"name_template": "et-0/0/{bay_position}"}
             expected = ["et-0/0/3"]
         elif kind == "structural_creation":
-            InterfaceNameRule.objects.create(
-                module_type=module_type,
-                name_template="xe-0/0/{bay_position}:{channel}",
-                parent_name_template="et-0/0/{bay_position}",
-                breakout_mode=BreakoutModeChoices.CHANNELIZED,
-                channel_count=4,
-                channel_start=0,
-            )
+            rule_module_type = module_type
+            rule_options = {
+                "name_template": "xe-0/0/{bay_position}:{channel}",
+                "parent_name_template": "et-0/0/{bay_position}",
+                "breakout_mode": BreakoutModeChoices.CHANNELIZED,
+                "channel_count": 4,
+                "channel_start": 0,
+            }
             expected = ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
         elif kind == "existing_family":
-            InterfaceNameRule.objects.create(module_type=module_type, name_template="et-0/0/{bay_position}")
+            rule_module_type = module_type
+            rule_options = {"name_template": "et-0/0/{bay_position}"}
             expected = ["et-0/0/3", "et-0/0/3:1", "et-0/0/3:2", "et-0/0/3:3", "et-0/0/3:4"]
         elif kind == "reconciliation":
-            InterfaceNameRule.objects.create(
-                module_type=module_type,
-                name_template="{base}:{channel}",
-                parent_name_template="et-0/0/{bay_position}",
-                breakout_mode=BreakoutModeChoices.CHANNELIZED,
-                channel_count=4,
-                channel_start=1,
-            )
+            rule_module_type = module_type
+            rule_options = {
+                "name_template": "{base}:{channel}",
+                "parent_name_template": "et-0/0/{bay_position}",
+                "breakout_mode": BreakoutModeChoices.CHANNELIZED,
+                "channel_count": 4,
+                "channel_start": 1,
+            }
             expected = ["3:1", "3:2", "3:3", "3:4", "et-0/0/3"]
         else:
             raise AssertionError(f"Unknown module scenario {kind!r}.")
-        return self._module_operation(device, module_type, direct, expected)
+        prepared = self._module_operation(prefix, device, module_type, direct, expected)
+        InterfaceNameRule.objects.create(module_type=rule_module_type, **rule_options)
+        return replace(prepared, fixture=self._fixture(module_type, device))
 
     def _prepare_vc(self, prefix: str, module_count: int, direct: bool) -> _PreparedScenario:
         """Build a VC reapply scenario with one or eight installed modules."""
@@ -771,10 +792,9 @@ class SignalPathPerformanceTest(TestCase):
             f"{prefix}-Module",
             name="xe-{vc_position:0}/0/{module}",
         )
-        with self.captureOnCommitCallbacks(execute=True):
-            for position in range(1, module_count + 1):
-                bay = ModuleBay.objects.get(device=device, position=str(position))
-                Module.objects.create(device=device, module_bay=bay, module_type=module_type)
+        for position in range(1, module_count + 1):
+            bay = ModuleBay.objects.get(device=device, position=str(position))
+            Module.objects.create(device=device, module_bay=bay, module_type=module_type)
         InterfaceNameRule.objects.create(
             module_type=module_type,
             name_template="et-{vc_position}/0/{bay_position}",
@@ -784,14 +804,13 @@ class SignalPathPerformanceTest(TestCase):
             Device.objects.filter(pk=device.pk).update(vc_position=2)
 
             def operation():
-                with self.captureOnCommitCallbacks(execute=True):
-                    _apply_rules_for_device_deferred(device.pk)
+                _apply_rules_for_device_deferred(device.pk)
 
         else:
 
             def operation():
                 device.vc_position = 2
-                with self.captureOnCommitCallbacks(execute=True):
+                with transaction.atomic():
                     device.save()
 
         expected = [f"et-2/0/{position}" for position in range(1, module_count + 1)]
@@ -804,6 +823,7 @@ class SignalPathPerformanceTest(TestCase):
         return _PreparedScenario(
             operation=operation,
             verify=verify,
+            cleanup=lambda: self._cleanup_fixture(prefix),
             fixture=self._fixture(module_type, device),
             work_units=module_count,
         )
@@ -858,6 +878,35 @@ class SignalPathPerformanceTest(TestCase):
         device = Device.objects.get(name=f"{prefix.lower()}-device")
         self.assertEqual(device.vc_position, 2)
 
+    def test_complete_model_save_callback_runs_after_commit(self):
+        """Measure the deferred callback outside the model-save transaction."""
+        prepared = self._prepare_module("PerfCommittedCallback", "plain_rename", direct=False)
+        atomic_states = []
+
+        def record_atomic_state(execute, sql, params, many, context):
+            result = execute(sql, params, many, context)
+            atomic_states.append(connection.in_atomic_block)
+            return result
+
+        with connection.execute_wrapper(record_atomic_state):
+            prepared.operation()
+
+        self.assertIn(False, atomic_states)
+
+    def test_direct_module_fixture_includes_the_measured_rule(self):
+        """Record fixture counts after direct-callback setup is complete."""
+        prepared = self._prepare_module("PerfDirectFixture", "plain_rename", direct=True)
+
+        self.assertEqual(prepared.fixture["enabled_rules"], 1)
+
+    def test_profile_closes_the_instrumented_connection(self):
+        """Make the later timing pass open a session without auto_explain hooks."""
+        scenario = self._scenarios()[0]
+
+        self._profile_scenario(scenario)
+
+        self.assertIsNone(connection.connection)
+
     def test_auto_explain_teardown_preserves_database_error(self):
         """Keep the original database diagnosis when profiling aborts."""
         with self.assertRaisesRegex(DatabaseError, "division by zero"), transaction.atomic():
@@ -866,24 +915,25 @@ class SignalPathPerformanceTest(TestCase):
 
     def test_plan_grouping_ignores_runtime_counters(self):
         """Group one SQL plan shape even when its runtime work changes."""
-        with connection.cursor() as cursor:
-            cursor.execute("CREATE TEMPORARY TABLE profile_grouping_left (value integer) ON COMMIT DROP")
-            cursor.execute("CREATE TEMPORARY TABLE profile_grouping_right (value integer) ON COMMIT DROP")
-            cursor.execute("INSERT INTO profile_grouping_left VALUES (1)")
-            cursor.execute("INSERT INTO profile_grouping_right VALUES (1)")
-            cursor.execute("SET LOCAL enable_hashjoin = off")
-            cursor.execute("SET LOCAL enable_mergejoin = off")
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("CREATE TEMPORARY TABLE profile_grouping_left (value integer) ON COMMIT DROP")
+                cursor.execute("CREATE TEMPORARY TABLE profile_grouping_right (value integer) ON COMMIT DROP")
+                cursor.execute("INSERT INTO profile_grouping_left VALUES (1)")
+                cursor.execute("INSERT INTO profile_grouping_right VALUES (1)")
+                cursor.execute("SET LOCAL enable_hashjoin = off")
+                cursor.execute("SET LOCAL enable_mergejoin = off")
 
-        with _auto_explain_notices() as notices, connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT left_side.value FROM profile_grouping_left AS left_side "
-                "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
-            )
-            cursor.execute("INSERT INTO profile_grouping_left VALUES (2)")
-            cursor.execute(
-                "SELECT left_side.value FROM profile_grouping_left AS left_side "
-                "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
-            )
+            with _auto_explain_notices() as notices, connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT left_side.value FROM profile_grouping_left AS left_side "
+                    "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
+                )
+                cursor.execute("INSERT INTO profile_grouping_left VALUES (2)")
+                cursor.execute(
+                    "SELECT left_side.value FROM profile_grouping_left AS left_side "
+                    "JOIN profile_grouping_right AS right_side ON left_side.value = right_side.value"
+                )
 
         select_plans = [
             plan
@@ -904,7 +954,7 @@ class SignalPathPerformanceTest(TestCase):
 
     def _profile_scenario(self, scenario: _Scenario) -> dict[str, Any]:
         """Record SQL statements and PostgreSQL work for one operation."""
-        savepoint = transaction.savepoint()
+        prepared = None
         try:
             prepared = scenario.prepare()
             self._analyze_tables()
@@ -928,16 +978,22 @@ class SignalPathPerformanceTest(TestCase):
                 },
             }
         finally:
-            transaction.savepoint_rollback(savepoint)
+            if prepared is not None:
+                prepared.cleanup()
+            connection.close()
 
     def _time_scenario(self, scenario: _Scenario, samples: int, warmups: int) -> dict[str, Any]:
         """Measure the uninstrumented operation with fresh fixtures for every sample."""
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT current_setting('auto_explain.log_min_duration', true)")
+            if cursor.fetchone()[0] is not None:
+                self.fail("The timing session has loaded auto_explain instrumentation.")
         warmup_wall_samples = []
         warmup_cpu_samples = []
         wall_samples = []
         cpu_samples = []
         for sample_index in range(warmups + samples):
-            savepoint = transaction.savepoint()
+            prepared = None
             try:
                 prepared = scenario.prepare()
                 self._analyze_tables()
@@ -961,7 +1017,8 @@ class SignalPathPerformanceTest(TestCase):
                     wall_samples.append(wall_elapsed)
                     cpu_samples.append(cpu_elapsed)
             finally:
-                transaction.savepoint_rollback(savepoint)
+                if prepared is not None:
+                    prepared.cleanup()
         return {
             "warmup": {
                 "wall": _optional_summary(warmup_wall_samples),
