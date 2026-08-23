@@ -201,6 +201,27 @@ class InstalledFlatFamilyPlanningTest(TestCase):
             ["xe-0/0/7:0", "xe-0/0/7:1"],
         )
 
+    def test_failed_precondition_returns_member_facts_without_changes(self):
+        module, plan_set = self._current_family_plan()
+        plan = replace(
+            plan_set.plans[0],
+            precondition_status=FamilyStatus.FAILED,
+            precondition_reason="failed to evaluate family targets",
+        )
+
+        result = execute_installed_plan_set(replace(plan_set, plans=(plan,)))
+
+        self.assertEqual(result.families[0].status, FamilyStatus.FAILED)
+        self.assertEqual(
+            {member.status for member in result.families[0].members},
+            {FamilyStatus.FAILED},
+        )
+        self.assertEqual(result.changed_count, 0)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["xe-0/0/7:0", "xe-0/0/7:1"],
+        )
+
     def test_incomplete_current_flat_family_is_not_planned(self):
         module, plan_set = self._current_family_plan()
         Interface.objects.filter(pk=plan_set.plans[0].members[1].snapshot.pk).delete()

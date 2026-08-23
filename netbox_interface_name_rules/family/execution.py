@@ -230,13 +230,6 @@ def _execute_channelized_members(plan, live_by_pk):  # pragma: no cover - requir
 
 def _execute_members(plan, live_by_pk):
     """Execute members while enforcing parent-first family semantics."""
-    if plan.blocked_reason:  # pragma: no cover - channelized mismatch only
-        logger.warning(
-            "Installed family of interface %r is blocked: %s.",
-            plan.members[0].snapshot.name,
-            plan.blocked_reason,
-        )
-        return tuple(_blocked_member(member, plan.blocked_reason) for member in plan.members)
     if plan.parent_pk is None:
         return tuple(_rename_member(member, live_by_pk[member.snapshot.pk], plan.db_alias) for member in plan.members)
     return _execute_channelized_members(plan, live_by_pk)  # pragma: no cover - channelization only
@@ -259,6 +252,23 @@ def _execute_plan(plan: InstalledFamilyPlan) -> FamilyOutcome:
         interfaces = _lock_family(plan)
         if _is_stale(plan, interfaces):
             return _stale_outcome(plan)
+        if plan.precondition_status is not None:
+            logger.warning(
+                "Installed family of interface %r is %s: %s.",
+                plan.members[0].snapshot.name,
+                plan.precondition_status,
+                plan.precondition_reason,
+            )
+            return FamilyOutcome(
+                family_id=plan.family_id,
+                topology=plan.topology,
+                status=plan.precondition_status,
+                members=tuple(
+                    _member_outcome(member, plan.precondition_status, plan.precondition_reason)
+                    for member in plan.members
+                ),
+                reason=plan.precondition_reason,
+            )
         live_by_pk = {interface.pk: interface for interface in interfaces}
         member_outcomes = _execute_members(plan, live_by_pk)
         _preserve_names_across_parent_cascade(plan, member_outcomes)
@@ -267,7 +277,6 @@ def _execute_plan(plan: InstalledFamilyPlan) -> FamilyOutcome:
             topology=plan.topology,
             status=_family_status(member_outcomes),
             members=member_outcomes,
-            reason=plan.blocked_reason,
         )
 
 

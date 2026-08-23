@@ -11,6 +11,7 @@ from django.db import DEFAULT_DB_ALIAS
 from ..choices import BreakoutModeChoices
 from ..naming import evaluate_name_template
 from .domain import (
+    FamilyStatus,
     FamilyTopology,
     InstalledFamilyPlan,
     InstalledFamilyPlanSet,
@@ -177,38 +178,52 @@ def _flat_plan(module, db_alias, base_name, target_names, interfaces):
 
 def _channelized_plan(module, rule, variables, db_alias, parent, children, suffixes):  # pragma: no cover
     """Build one plan for an existing channelized family."""
-    blocked_reason = ""
+    precondition_status = None
+    precondition_reason = ""
     parent_target = parent.name
     child_targets = []
     if rule.channel_count > 0:
         if parent.channels != rule.channel_count:
-            blocked_reason = (
+            precondition_status = FamilyStatus.BLOCKED
+            precondition_reason = (
                 f"installed parent declares {parent.channels} channels but the rule defines {rule.channel_count}"
             )
-            child_targets = [(child.name, blocked_reason) for child in children]
+            child_targets = [(child.name, precondition_reason) for child in children]
         else:
-            if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
-                parent_target = evaluate_name_template(
-                    rule.parent_name_template,
-                    {**variables, "base": parent.name},
-                )
-            child_targets = [
-                (
-                    evaluate_name_template(
-                        rule.name_template,
-                        {
-                            **variables,
-                            "base": parent.name,
-                            "channel": str(rule.channel_start + child.channel_id - 1),
-                        },
-                    ),
-                    "",
-                )
-                for child in children
-            ]
+            try:
+                if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
+                    parent_target = evaluate_name_template(
+                        rule.parent_name_template,
+                        {**variables, "base": parent.name},
+                    )
+                child_targets = [
+                    (
+                        evaluate_name_template(
+                            rule.name_template,
+                            {
+                                **variables,
+                                "base": parent.name,
+                                "channel": str(rule.channel_start + child.channel_id - 1),
+                            },
+                        ),
+                        "",
+                    )
+                    for child in children
+                ]
+            except (TypeError, ValueError) as error:
+                precondition_status = FamilyStatus.FAILED
+                precondition_reason = f"failed to evaluate family targets: {error}"
+                parent_target = parent.name
+                child_targets = [(child.name, precondition_reason) for child in children]
     else:
-        parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent.name})
-        child_targets = [_simple_child_target(child, parent.name, parent_target, suffixes) for child in children]
+        try:
+            parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent.name})
+            child_targets = [_simple_child_target(child, parent.name, parent_target, suffixes) for child in children]
+        except (TypeError, ValueError) as error:
+            precondition_status = FamilyStatus.FAILED
+            precondition_reason = f"failed to evaluate family targets: {error}"
+            parent_target = parent.name
+            child_targets = [(child.name, precondition_reason) for child in children]
 
     members = [
         PlannedMember(
@@ -234,7 +249,8 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
         db_alias=db_alias,
         members=tuple(members),
         parent_pk=parent.pk,
-        blocked_reason=blocked_reason,
+        precondition_status=precondition_status,
+        precondition_reason=precondition_reason,
     )
 
 

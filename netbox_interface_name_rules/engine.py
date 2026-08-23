@@ -292,7 +292,11 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=())
     family_outcome = family_ops.InstalledPlanSetOutcome(families=())
     if supports_channelization() or (force_reapply and rule.channel_count > 0):
-        plan_set = family_ops.plan_installed_families(module, rule, variables)
+        discovered = family_ops.plan_installed_families(module, rule, variables)
+        plans = tuple(
+            plan for plan in discovered.plans if force_reapply or plan.topology == family_ops.FamilyTopology.CHANNELIZED
+        )
+        plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=plans)
         family_outcome = family_ops.execute_installed_plan_set(plan_set)
 
     interfaces = list(Interface.objects.filter(module=module).exclude(pk__in=plan_set.member_pks))

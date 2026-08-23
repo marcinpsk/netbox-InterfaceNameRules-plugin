@@ -35,11 +35,13 @@ from netbox_interface_name_rules.engine import (
     apply_device_interface_rules,
     apply_interface_name_rules,
     apply_rule_to_existing,
+    build_variables,
     find_interfaces_for_rule,
     has_applicable_interfaces,
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan_set, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 # Resolved defensively so this module still imports on NetBox releases without channelization.
@@ -655,8 +657,16 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
         """Every child name is computed before the first save, so one bad channel aborts the family."""
         module, bay = self._install(self.module_type, "4", run_rules=False)
 
+        plan_set = plan_installed_families(module, self.rule, build_variables(bay, device=self.device))
+        outcome = execute_installed_plan_set(plan_set)
+
         renamed = apply_interface_name_rules(module, bay)
 
+        self.assertEqual(outcome.families[0].status, FamilyStatus.FAILED)
+        self.assertEqual(
+            {member.status for member in outcome.families[0].members},
+            {FamilyStatus.FAILED},
+        )
         self.assertEqual(renamed, 0)
         self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4"])
 

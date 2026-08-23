@@ -79,7 +79,8 @@ class InstalledFamilyPlan:
     db_alias: str
     members: tuple[PlannedMember, ...]
     parent_pk: int | None = None
-    blocked_reason: str = ""
+    precondition_status: FamilyStatus | None = None
+    precondition_reason: str = ""
 
     @property
     def member_pks(self) -> tuple[int, ...]:
