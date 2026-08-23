@@ -712,9 +712,9 @@ class SignalPathPerformanceTest(TestCase):
         )
 
         if direct:
+            Device.objects.filter(pk=device.pk).update(vc_position=2)
 
             def operation():
-                Device.objects.filter(pk=device.pk).update(vc_position=2)
                 with self.captureOnCommitCallbacks(execute=True):
                     _apply_rules_for_device_deferred(device.pk)
 
@@ -780,6 +780,14 @@ class SignalPathPerformanceTest(TestCase):
                     )
                 )
         return scenarios
+
+    def test_direct_vc_fixture_has_target_position(self):
+        """Keep direct callback setup outside the measured operation."""
+        prefix = "PerfDirectVcFixture"
+        self._prepare_vc(prefix, module_count=1, direct=True)
+
+        device = Device.objects.get(name=f"{prefix.lower()}-device")
+        self.assertEqual(device.vc_position, 2)
 
     @staticmethod
     def _analyze_tables() -> None:

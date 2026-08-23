@@ -5,20 +5,20 @@ Machine-time values are evidence for a same-hardware before/after comparison. Th
 
 | Scenario | Layer | SQL calls | Planner cost | Shared hits | Wall median (ms) | Wall p95 (ms) | CPU median (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `module.complete_model_save.no_matching_rule` | complete_model_save | 60 | 837.360 | 173 | 138.678 | 157.046 | 96.561 |
-| `module.direct_callback.no_matching_rule` | direct_callback | 7 | 15.440 | 15 | 18.348 | 20.589 | 14.661 |
-| `module.complete_model_save.plain_rename` | complete_model_save | 96 | 1272.830 | 463 | 238.025 | 254.298 | 170.799 |
-| `module.direct_callback.plain_rename` | direct_callback | 40 | 324.540 | 182 | 116.843 | 128.495 | 87.404 |
-| `module.complete_model_save.structural_creation` | complete_model_save | 172 | 2404.020 | 849 | 372.509 | 391.993 | 270.402 |
-| `module.direct_callback.structural_creation` | direct_callback | 119 | 1360.260 | 555 | 251.240 | 289.205 | 185.684 |
-| `module.complete_model_save.existing_family` | complete_model_save | 333 | 3993.180 | 1895 | 766.828 | 804.635 | 579.244 |
-| `module.direct_callback.existing_family` | direct_callback | 180 | 1766.330 | 706 | 460.578 | 492.982 | 355.068 |
-| `module.complete_model_save.reconciliation` | complete_model_save | 432 | 5782.180 | 2155 | 1060.547 | 1100.317 | 803.236 |
-| `module.direct_callback.reconciliation` | direct_callback | 279 | 3582.480 | 1203 | 807.278 | 838.632 | 611.082 |
-| `vc.complete_model_save.reapply_1` | complete_model_save | 59 | 614.790 | 375 | 155.170 | 177.472 | 117.909 |
-| `vc.direct_callback.reapply_1` | direct_callback | 42 | 484.690 | 240 | 125.716 | 141.237 | 93.752 |
-| `vc.complete_model_save.reapply_8` | complete_model_save | 303 | 3405.900 | 1448 | 867.964 | 930.101 | 654.271 |
-| `vc.direct_callback.reapply_8` | direct_callback | 287 | 3400.270 | 1492 | 814.479 | 845.680 | 615.049 |
+| `module.complete_model_save.no_matching_rule` | complete_model_save | 60 | 912.140 | 172 | 130.838 | 134.836 | 95.205 |
+| `module.direct_callback.no_matching_rule` | direct_callback | 7 | 12.440 | 12 | 16.839 | 22.193 | 13.427 |
+| `module.complete_model_save.plain_rename` | complete_model_save | 94 | 1318.710 | 420 | 225.878 | 243.823 | 166.734 |
+| `module.direct_callback.plain_rename` | direct_callback | 40 | 344.010 | 172 | 110.545 | 122.771 | 84.187 |
+| `module.complete_model_save.structural_creation` | complete_model_save | 172 | 2478.220 | 752 | 356.120 | 375.380 | 263.614 |
+| `module.direct_callback.structural_creation` | direct_callback | 119 | 1430.530 | 560 | 239.876 | 271.187 | 178.600 |
+| `module.complete_model_save.existing_family` | complete_model_save | 333 | 4186.010 | 1720 | 763.761 | 780.531 | 572.303 |
+| `module.direct_callback.existing_family` | direct_callback | 180 | 2001.680 | 769 | 469.170 | 512.322 | 368.633 |
+| `module.complete_model_save.reconciliation` | complete_model_save | 432 | 6015.690 | 1914 | 1057.152 | 1122.912 | 800.107 |
+| `module.direct_callback.reconciliation` | direct_callback | 279 | 3884.150 | 1164 | 793.478 | 850.496 | 604.292 |
+| `vc.complete_model_save.reapply_1` | complete_model_save | 59 | 637.310 | 356 | 148.062 | 158.043 | 110.496 |
+| `vc.direct_callback.reapply_1` | direct_callback | 41 | 496.020 | 205 | 126.861 | 134.683 | 94.074 |
+| `vc.complete_model_save.reapply_8` | complete_model_save | 303 | 3625.180 | 1453 | 870.672 | 913.070 | 647.909 |
+| `vc.direct_callback.reapply_8` | direct_callback | 286 | 3624.890 | 1427 | 822.679 | 852.623 | 619.159 |
 
 Plugin revision: `ccadd0bb5b2852ff81f2747769d61746254173e1`
 
