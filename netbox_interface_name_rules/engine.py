@@ -6,7 +6,6 @@ This module is imported lazily by signals.py so that model imports happen
 after Django is fully initialised.
 """
 
-import copy
 import logging
 import re
 from collections import defaultdict, namedtuple
@@ -14,8 +13,10 @@ from collections import defaultdict, namedtuple
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
+from . import family as family_ops
 from . import naming, rule_selection
 from .choices import BreakoutModeChoices
+from .family import template_names as family_template_names
 from .rule_selection import _compile_pattern
 
 logger = logging.getLogger(__name__)
@@ -86,16 +87,8 @@ def supports_channelization():
 
 
 def _vc_position_re():
-    """Return NetBox's ``{vc_position}`` template-token regex, or None on a release without the token.
-
-    Imported inside the function so the probe reads the module as it stands at call time, matching
-    ``supports_channelization()``'s style.
-    """
-    try:
-        from dcim.constants import VC_POSITION_RE
-    except ImportError:
-        return None
-    return VC_POSITION_RE  # pragma: no cover - only reachable on a NetBox that resolves the token
+    """Delegate virtual-chassis token detection to template-name resolution."""
+    return family_template_names.vc_position_re()
 
 
 def supports_vc_position_token():
@@ -296,10 +289,20 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         return 0
 
     variables = build_variables(module_bay, device=module.device)
-    interfaces = list(Interface.objects.filter(module=module))
+    plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=())
+    family_outcome = family_ops.InstalledPlanSetOutcome(families=())
+    if supports_channelization() or (force_reapply and rule.channel_count > 0):
+        try:
+            plan_set = family_ops.plan_installed_families(module, rule, variables)
+        except (TypeError, ValueError, re.error):
+            logger.exception("Failed to plan installed families for module %s; using the legacy plain path.", module)
+        else:
+            family_outcome = family_ops.execute_installed_plan_set(plan_set)
+
+    interfaces = list(Interface.objects.filter(module=module).exclude(pk__in=plan_set.member_pks))
 
     if not interfaces:
-        return 0
+        return family_outcome.changed_count
 
     # Only bases are rule candidates; the idempotency guard therefore looks at them alone.
     bases, children_by_parent = _partition_families(interfaces)
@@ -309,15 +312,23 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply, raw.matchers, module)
 
     if not unrenamed:
-        return 0  # Already renamed (idempotent guard)
+        return family_outcome.changed_count  # Already renamed (idempotent guard)
 
     # A breakout rule on a module that has channelized families processes only those families —
     # the same rule the preview and bulk-apply paths follow.
-    families_only = rule.channel_count > 0 and any(_is_channelized_parent(base) for base in bases)
+    installed_channelized = any(plan.topology == family_ops.FamilyTopology.CHANNELIZED for plan in plan_set.plans)
+    families_only = rule.channel_count > 0 and (
+        installed_channelized or any(_is_channelized_parent(base) for base in bases)
+    )
 
-    renamed = 0
-    families_seen = families_only
-    conflicts: list = []
+    renamed = family_outcome.changed_count
+    families_seen = bool(plan_set.plans) or families_only
+    conflicts: list = [
+        member
+        for result in family_outcome.families
+        for member in result.members
+        if member.status == family_ops.FamilyStatus.BLOCKED
+    ]
     for iface in unrenamed:
         children = children_by_parent.get(iface.pk, ())
         if families_only and not _is_channelized_parent(iface):  # pragma: no cover - see families_only above
@@ -644,92 +655,27 @@ def apply_device_interface_rules(device):
 
 
 # The bay chain InterfaceTemplate.resolve_name() dereferences while resolving {module}.
-_BAY_CHAIN_RELATIONS = (
-    "module_bay",
-    "module_bay__parent",
-    "module_bay__module",
-    "module_bay__module__module_bay",
-    "module_bay__module__module_bay__parent",
-    "module_bay__module__module_bay__module",
-)
+_BAY_CHAIN_RELATIONS = family_template_names.BAY_CHAIN_RELATIONS
+_RawMatcher = family_template_names.RawMatcher
+_RawNames = family_template_names.RawNames
 
-
-def _module_with_bay_chain(module):
-    """Re-fetch *module* with the bay chain InterfaceTemplate.resolve_name() dereferences.
-
-    Prefetches the module relationships to avoid a per-template query when resolving names.
-    """
-    from dcim.models import Module
-
-    return Module.objects.select_related(*_BAY_CHAIN_RELATIONS).get(pk=module.pk)
-
-
-# NetBox resolves {vc_position} once, at instantiation, so a raw name records the device's VC state
-# at that moment while its template keeps resolving to the current one: hence names *and* matchers.
-_RawMatcher = namedtuple("_RawMatcher", ("template_name", "resolved", "pattern"))
-_RawNames = namedtuple("_RawNames", ("names", "matchers"))
-
-# Brace-free stand-ins, so NetBox's placeholder pass, this plugin's and re.escape() all leave them be.
-_VC_SENTINEL = "InrVcPositionSentinel{}End"
+# Brace-free stand-in used to recover a flat family's historical base from rule-output names.
 _BASE_SENTINEL = "InrBaseSentinelEnd"
 
 
-def _vc_position_alternatives(fallback):  # pragma: no cover - requires vc_position token support
-    """Return the regex branch covering every value one ``{vc_position}`` occurrence resolves to.
-
-    Any member position and the implicit ``'0'`` are digits; an explicit ``{vc_position:X}`` fallback
-    adds a branch of its own, since NetBox does not require it to be numeric.
-    """
-    if fallback is None:
-        return r"\d+"
-    return f"(?:\\d+|{re.escape(fallback)})"
-
-
-def _raw_name_pattern(tmpl, module, token_re):  # pragma: no cover - requires vc_position token support
-    """Return the matcher for every name *tmpl* has ever resolved to, or None without the token.
-
-    Each token occurrence becomes a sentinel; ``{module}`` is then resolved by NetBox's own code on a
-    shallow copy carrying that name (its VC pass no-ops on a token-free string), so no placeholder
-    resolution is reimplemented here.
-    """
-    fallbacks = []
-
-    def _mark(match):
-        fallbacks.append(match.group(1))
-        return _VC_SENTINEL.format(len(fallbacks) - 1)
-
-    marked = token_re.sub(_mark, tmpl.name)
-    if not fallbacks:
-        return None
-    stub = copy.copy(tmpl)
-    stub.name = marked
-    pattern = re.escape(stub.resolve_name(module))
-    for index, fallback in enumerate(fallbacks):
-        pattern = pattern.replace(_VC_SENTINEL.format(index), _vc_position_alternatives(fallback))
-    return _compile_pattern(pattern)
+def _module_with_bay_chain(module):
+    """Delegate template-resolution loading while preserving the engine helper."""
+    return family_template_names.module_with_bay_chain(module)
 
 
 def _raw_matchers(templates, module):
-    """Resolve *templates* against *module*: their names now, plus a matcher per token template."""
-    token_re = _vc_position_re()
-    names = set()
-    matchers = []
-    for tmpl in templates:
-        resolved = tmpl.resolve_name(module)
-        names.add(resolved)
-        pattern = None if token_re is None else _raw_name_pattern(tmpl, module, token_re)
-        if pattern is not None:
-            matchers.append(_RawMatcher(tmpl.name, resolved, pattern))  # pragma: no cover - token templates only
-    return _RawNames(names, matchers)
+    """Delegate raw template resolution while preserving the engine helper."""
+    return family_template_names.raw_matchers(templates, module)
 
 
 def _raw_name_matchers(module):
-    """Return *module*'s raw template names and the drift matchers of its token templates."""
-    from dcim.models import InterfaceTemplate
-
-    module_fresh = _module_with_bay_chain(module)
-    templates = InterfaceTemplate.objects.filter(module_type=module_fresh.module_type)
-    return _raw_matchers(templates, module_fresh)
+    """Delegate current and historical raw name resolution."""
+    return family_template_names.raw_name_matchers(module)
 
 
 def _get_raw_interface_names(module):
@@ -738,27 +684,13 @@ def _get_raw_interface_names(module):
 
 
 def _raw_name_patterns(module):
-    """Return one compiled matcher per interface template of *module* whose name carries the token.
-
-    Empty for a module type no template of which uses ``{vc_position}``, and on every NetBox release
-    that does not resolve the token at all.
-    """
-    return [matcher.pattern for matcher in _raw_name_matchers(module).matchers]
+    """Delegate historical raw-name pattern construction."""
+    return family_template_names.raw_name_patterns(module)
 
 
 def _raw_names_by_module(modules):  # pragma: no cover - only the conversion scan batches names
-    """Return ``{module pk: _RawNames}`` for *modules*, in one template query for all of them.
-
-    Raw names are a property of the module type, but ``_raw_name_matchers`` costs a module refetch
-    and a template query each — a scan over a fleet would pay that per module.  *modules* must
-    already carry ``_BAY_CHAIN_RELATIONS``, since the names are resolved against them in memory.
-    """
-    from dcim.models import InterfaceTemplate
-
-    by_module_type = defaultdict(list)
-    for tmpl in InterfaceTemplate.objects.filter(module_type__in={module.module_type_id for module in modules}):
-        by_module_type[tmpl.module_type_id].append(tmpl)
-    return {module.pk: _raw_matchers(by_module_type[module.module_type_id], module) for module in modules}
+    """Delegate batched raw-name resolution."""
+    return family_template_names.raw_names_by_module(modules)
 
 
 def _template_families(module):
