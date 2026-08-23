@@ -421,7 +421,7 @@ def _auto_explain_notices():
         yield notices
     finally:
         if configured:
-            with connection.cursor() as cursor:
+            with contextlib.suppress(DatabaseError), connection.cursor() as cursor:
                 cursor.execute("SET auto_explain.log_min_duration = -1")
         raw_connection.remove_notice_handler(handle_notice)
 
@@ -788,6 +788,12 @@ class SignalPathPerformanceTest(TestCase):
 
         device = Device.objects.get(name=f"{prefix.lower()}-device")
         self.assertEqual(device.vc_position, 2)
+
+    def test_auto_explain_teardown_preserves_database_error(self):
+        """Keep the original database diagnosis when profiling aborts."""
+        with self.assertRaisesRegex(DatabaseError, "division by zero"), transaction.atomic():
+            with _auto_explain_notices(), connection.cursor() as cursor:
+                cursor.execute("SELECT 1 / 0")
 
     @staticmethod
     def _analyze_tables() -> None:
