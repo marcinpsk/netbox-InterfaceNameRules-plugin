@@ -91,7 +91,7 @@ def _flat_names(rule, variables, base_name):
     )
 
 
-def _historical_bases(rule, variables, template, interfaces):
+def _historical_bases(rule, variables, template, interfaces):  # pragma: no cover - requires VC token support
     """Return every historical base claimed by *template*."""
     if template.historical_pattern is None:
         return ()
@@ -126,7 +126,7 @@ def _flat_candidates(rule, variables, interfaces, templates):
     ambiguous_bases = {base_name for bases in historical_by_template.values() if len(bases) > 1 for base_name in bases}
     single_claims: dict[str, int] = {}
     for bases in historical_by_template.values():
-        if len(bases) == 1:
+        if len(bases) == 1:  # pragma: no cover - historical matchers require VC token support
             single_claims[bases[0]] = single_claims.get(bases[0], 0) + 1
     ambiguous_bases.update(base_name for base_name, count in single_claims.items() if count > 1)
 
@@ -145,7 +145,7 @@ def _flat_candidates(rule, variables, interfaces, templates):
                 continue
             members = tuple(by_name[name] for name in source_names)
             candidate = (template.resolved, target_names, members)
-            if candidate not in candidates:
+            if candidate not in candidates:  # pragma: no branch - duplicates require historical matchers
                 candidates.append(candidate)
 
     claims: dict[int, int] = {}

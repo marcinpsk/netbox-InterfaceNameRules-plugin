@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Integration tests for installed interface-family plans."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from unittest import skipUnless
 from unittest.mock import patch
 
@@ -112,6 +112,122 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         )
         with self.assertRaises(FrozenInstanceError):
             plan.module_id = 0
+
+    def _current_family_plan(self):
+        """Install and plan one complete flat family without version-specific tokens."""
+        module = Module.objects.create(
+            device=self.device,
+            module_bay=self.bay,
+            module_type=self.module_type,
+        )
+        self.assertEqual(apply_interface_name_rules(module, self.bay), 2)
+        plan_set = plan_installed_families(
+            module,
+            self.rule,
+            build_variables(self.bay, device=self.device),
+        )
+        return module, plan_set
+
+    @staticmethod
+    def _retarget(plan_set, prefix):
+        """Return *plan_set* with deterministic new member targets."""
+        plans = tuple(
+            replace(
+                plan,
+                members=tuple(
+                    replace(member, target_name=f"{prefix}-{plan_index}-{member_index}")
+                    for member_index, member in enumerate(plan.members)
+                ),
+            )
+            for plan_index, plan in enumerate(plan_set.plans)
+        )
+        return replace(plan_set, plans=plans)
+
+    def test_current_flat_family_execution_locks_and_renames_every_member(self):
+        module, plan_set = self._current_family_plan()
+        plan_set = self._retarget(plan_set, "renamed")
+
+        with CaptureQueriesContext(connection) as queries:
+            result = execute_installed_plan_set(plan_set)
+
+        self.assertEqual(result.families[0].status, FamilyStatus.CHANGED)
+        self.assertEqual(result.changed_count, 2)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["renamed-0-0", "renamed-0-1"],
+        )
+        lock_queries = [query["sql"] for query in queries.captured_queries if "FOR UPDATE" in query["sql"]]
+        self.assertTrue(lock_queries)
+        self.assertTrue(all("ORDER BY" in query for query in lock_queries))
+
+    def test_current_flat_family_execution_propagates_unrelated_integrity_failure(self):
+        module, plan_set = self._current_family_plan()
+        plan_set = self._retarget(plan_set, "renamed")
+
+        def reject_interface_update(execute, sql, params, many, context):
+            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+                raise IntegrityError("injected current-family database failure")
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(reject_interface_update):
+            with self.assertRaisesMessage(IntegrityError, "injected current-family database failure"):
+                execute_installed_plan_set(plan_set)
+
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["xe-0/0/7:0", "xe-0/0/7:1"],
+        )
+
+    def test_current_flat_family_collision_blocks_each_occupied_target(self):
+        module, plan_set = self._current_family_plan()
+        plan_set = self._retarget(plan_set, "occupied")
+        for member in plan_set.plans[0].members:
+            Interface.objects.create(
+                device=self.device,
+                name=member.target_name,
+                type=PLAIN_TYPE,
+            )
+
+        result = execute_installed_plan_set(plan_set)
+
+        self.assertEqual(result.families[0].status, FamilyStatus.BLOCKED)
+        self.assertEqual(
+            {member.status for member in result.families[0].members},
+            {FamilyStatus.BLOCKED},
+        )
+        self.assertEqual(result.changed_count, 0)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["xe-0/0/7:0", "xe-0/0/7:1"],
+        )
+
+    def test_incomplete_current_flat_family_is_not_planned(self):
+        module, plan_set = self._current_family_plan()
+        Interface.objects.filter(pk=plan_set.plans[0].members[1].snapshot.pk).delete()
+
+        replanned = plan_installed_families(
+            module,
+            self.rule,
+            build_variables(self.bay, device=self.device),
+        )
+
+        self.assertEqual(replanned.plans, ())
+
+    def test_simple_rule_has_no_flat_family_plan(self):
+        module = Module.objects.create(
+            device=self.device,
+            module_bay=self.bay,
+            module_type=self.module_type,
+        )
+        self.rule.channel_count = 0
+
+        plan_set = plan_installed_families(
+            module,
+            self.rule,
+            build_variables(self.bay, device=self.device),
+        )
+
+        self.assertEqual(plan_set.plans, ())
 
     def test_automatic_reapplication_propagates_planner_failures(self):
         module = Module.objects.create(

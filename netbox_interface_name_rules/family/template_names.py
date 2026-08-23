@@ -48,7 +48,7 @@ def vc_position_re():
         from dcim.constants import VC_POSITION_RE
     except ImportError:
         return None
-    return VC_POSITION_RE
+    return VC_POSITION_RE  # pragma: no cover - only available on NetBox releases with the token
 
 
 def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-chassis token support
@@ -58,7 +58,7 @@ def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-
     return f"(?:\\d+|{re.escape(fallback)})"
 
 
-def _historical_pattern(template, module, token_re):
+def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
     """Return a matcher for every historical resolution of *template*."""
     fallbacks = []
 
@@ -92,7 +92,7 @@ def raw_matchers(templates, module):
         names.add(resolved)
         pattern = None if token_re is None else _historical_pattern(template, module, token_re)
         if pattern is not None:
-            matchers.append(RawMatcher(template.name, resolved, pattern))
+            matchers.append(RawMatcher(template.name, resolved, pattern))  # pragma: no cover - token templates only
     return RawNames(names, matchers)
 
 
@@ -108,7 +108,7 @@ def raw_name_patterns(module):
     return [matcher.pattern for matcher in raw_name_matchers(module).matchers]
 
 
-def raw_names_by_module(modules):
+def raw_names_by_module(modules):  # pragma: no cover - only the channel conversion scan batches names
     """Resolve raw names for a prefetched module batch with one template query."""
     by_module_type = {}
     for template in InterfaceTemplate.objects.filter(module_type_id__in={module.module_type_id for module in modules}):
