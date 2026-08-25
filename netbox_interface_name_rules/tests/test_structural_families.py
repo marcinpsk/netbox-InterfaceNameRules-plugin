@@ -291,6 +291,18 @@ class StructuralFamilyPlanTest(StructuralFamilyTestCase):
         self.assertEqual(self._names(module), ["renamed-by-someone-else"])
         self.assertTrue(any("changed after planning" in line for line in logs.output), logs.output)
 
+    def test_a_sibling_added_after_planning_is_stale(self):
+        """A row added after planning would be stranded beside the family, so the plan is refused."""
+        module, _bay, plan = self._plan()
+        Interface.objects.create(device=self.device, module=module, name="added-after-planning", type=PLAIN_TYPE)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(outcome.status, FamilyStatus.STALE)
+        self.assertEqual(self._names(module), ["3", "added-after-planning"])
+        self.assertTrue(any("module's interfaces changed" in line for line in logs.output), logs.output)
+
     def test_a_base_deleted_after_planning_is_stale(self):
         module, _bay, plan = self._plan()
         Interface.objects.filter(pk=plan.base.pk).delete()

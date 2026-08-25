@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 UNSUPPORTED_REASON = "this NetBox release cannot model channelized interfaces"
 STALE_REASON = "the base interface changed after planning"
+MODULE_CHANGED_REASON = "the module's interfaces changed after planning"
 
 
 def channelized_family_names(rule, base_name, variables):  # pragma: no cover - channelization only
@@ -52,6 +53,12 @@ def channelized_family_names(rule, base_name, variables):  # pragma: no cover - 
     return parent_name, channels
 
 
+def _flat_expansion(module_type_id, module_id, db_alias) -> bool:  # pragma: no cover - channelization only
+    """Return whether the module carries more interfaces than its module type's templates describe."""
+    templates = InterfaceTemplate.objects.using(db_alias).filter(module_type_id=module_type_id).count()
+    return Interface.objects.using(db_alias).filter(module_id=module_id).count() > templates
+
+
 def has_flat_expansion(module) -> bool:  # pragma: no cover - requires channelization support
     """Return whether *module* carries more interfaces than its module type's templates describe.
 
@@ -59,9 +66,7 @@ def has_flat_expansion(module) -> bool:  # pragma: no cover - requires channeliz
     family an earlier apply installed.  Counting templates rather than their resolved names keeps
     two templates that resolve to the same string from reading as one.
     """
-    db_alias = module_db_alias(module)
-    templates = InterfaceTemplate.objects.using(db_alias).filter(module_type_id=module.module_type_id).count()
-    return Interface.objects.using(db_alias).filter(module_id=module.pk).count() > templates
+    return _flat_expansion(module.module_type_id, module.pk, module_db_alias(module))
 
 
 def _plan(module, db_alias, base, parent_target_name, channels, status=None, reason=""):
@@ -70,6 +75,7 @@ def _plan(module, db_alias, base, parent_target_name, channels, status=None, rea
         family_id=f"structural:{base.pk}",
         device_id=module.device_id,
         module_id=module.pk,
+        module_type_id=module.module_type_id,
         db_alias=db_alias,
         base=InterfaceSnapshot.from_interface(base),
         parent_target_name=parent_target_name,
@@ -204,6 +210,9 @@ def _install_family(plan):  # pragma: no cover - requires channelization support
             base = _locked_base(plan)
             if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON, plan.parent_target_name)
+            # A sibling added since planning would be stranded beside the family this plan builds.
+            if _flat_expansion(plan.module_type_id, plan.module_id, plan.db_alias):
+                return _refused(plan, FamilyStatus.STALE, MODULE_CHANGED_REASON, plan.parent_target_name)
             taken = _first_taken_name(plan)
             if taken is not None:
                 return _refused(plan, FamilyStatus.BLOCKED, f"{COLLISION_REASON}: {taken}", taken)

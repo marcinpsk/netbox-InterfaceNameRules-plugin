@@ -116,6 +116,7 @@ class StructuralFamilyPlan:
     family_id: str
     device_id: int
     module_id: int
+    module_type_id: int
     db_alias: str
     base: InterfaceSnapshot
     parent_target_name: str
