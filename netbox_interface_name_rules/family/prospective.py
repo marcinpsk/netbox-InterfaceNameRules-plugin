@@ -58,8 +58,9 @@ def describe_interfaces(interfaces) -> tuple[ProspectiveInterface, ...]:
 def describe_template_interfaces(templates, names=()) -> tuple[ProspectiveInterface, ...]:
     """Describe the interfaces a module type's templates produce, plus any extra *names*.
 
-    The templates carry the family structure, so a channel keeps its parent and channel identifier
-    even where no row exists yet.  A name no template resolves to is described as a plain interface.
+    A channel is paired with its parent only where that parent declares a channel count, because a
+    template family is what the parent's capacity defines.  A name no template resolves to is
+    described as a plain interface.
     """
     parents = {template.pk: template for template in templates if template.channels is not None}
     described = {}
@@ -91,19 +92,32 @@ def describe_module_interfaces(module, names=()) -> tuple[ProspectiveInterface, 
 
 
 def _partition(interfaces):
-    """Split described interfaces into ``(parents, children_by_parent, plain)``."""
-    parents = {interface.name: interface for interface in interfaces if interface.channels is not None}
-    children: dict[str, list] = {name: [] for name in parents}
-    plain = []
+    """Split described interfaces into ``(roots, children_by_parent_name)``.
+
+    A channel is never an independent candidate: it belongs to the interface it names as its
+    parent, and one whose parent is not described here is planned by nothing at all.
+    """
+    described = {interface.name for interface in interfaces}
+    roots = []
+    children: dict[str, list] = {}
     for interface in interfaces:
-        if interface.name in parents:
-            continue  # pragma: no cover - requires channelization support
-        family = children.get(interface.parent_name) if interface.channel_id is not None else None
-        if family is None:
-            plain.append(interface)
-        else:
-            family.append(interface)  # pragma: no cover - requires channelization support
-    return parents, children, plain
+        if interface.channel_id is None:
+            roots.append(interface)
+        elif interface.parent_name in described:  # pragma: no cover - requires channelization support
+            children.setdefault(interface.parent_name, []).append(interface)
+    return roots, children
+
+
+def _is_family_root(rule, interface, children):
+    """Return whether *interface* owns a family the rule renames as a unit.
+
+    A breakout rule renames only a family NetBox models with a channel count; on anything else it
+    builds a new family from the interface itself.  Any other rule carries whatever channels the
+    interface has along with it.
+    """
+    if rule.channel_count > 0:
+        return interface.channels is not None
+    return bool(children)
 
 
 def _rename_plan(rule, variables, parent, children, suffixes):  # pragma: no cover - channelization only
@@ -267,11 +281,18 @@ def _creation_context(module, rule, interfaces, plain):
     )
 
 
-def _channel_suffixes(module, rule, children):
-    """Return the template channel suffixes, reading the templates only where a plan needs them."""
-    if rule.channel_count > 0 or not any(children.values()):
-        return {}
-    return template_channel_suffixes(resolved_template_names(module))  # pragma: no cover - channelization only
+class _TemplateSuffixes:
+    """The module type's per-channel name suffixes, read only if a channel name needs recovering."""
+
+    def __init__(self, module):
+        self._module = module
+        self._suffixes = None
+
+    def get(self, channel_id, default=None):  # pragma: no cover - requires channelization support
+        """Return the suffixes the templates give *channel_id*, reading them on first use."""
+        if self._suffixes is None:
+            self._suffixes = template_channel_suffixes(resolved_template_names(self._module))
+        return self._suffixes.get(channel_id, default)
 
 
 def plan_prospective_families(module, rule, variables, interfaces) -> ProspectiveFamilyPlanSet:
@@ -281,9 +302,16 @@ def plan_prospective_families(module, rule, variables, interfaces) -> Prospectiv
     planned exactly like one it has and no row is written.  Collision checking covers the names
     described here, because a prospective plan knows only the interfaces it was given.
     """
-    parents, children, plain = _partition(interfaces)
-    suffixes = _channel_suffixes(module, rule, children)
-    context = _creation_context(module, rule, interfaces, plain)
-    plans = [_rename_plan(rule, variables, parent, children[name], suffixes) for name, parent in parents.items()]
-    plans.extend(_plain_plan(rule, variables, interface.name, context) for interface in plain)
-    return ProspectiveFamilyPlanSet(module_id=module.pk, plans=tuple(plans))
+    roots, children = _partition(interfaces)
+    families = [(root, children.get(root.name, ())) for root in roots]
+    context = _creation_context(
+        module, rule, interfaces, [root for root, family in families if not _is_family_root(rule, root, family)]
+    )
+    suffixes = _TemplateSuffixes(module)
+    plans = tuple(
+        _rename_plan(rule, variables, root, family, suffixes)
+        if _is_family_root(rule, root, family)
+        else _plain_plan(rule, variables, root.name, context)
+        for root, family in families
+    )
+    return ProspectiveFamilyPlanSet(module_id=module.pk, plans=plans)

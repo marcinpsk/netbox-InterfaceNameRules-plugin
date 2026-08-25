@@ -32,6 +32,7 @@ from netbox_interface_name_rules.family import (
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
 from netbox_interface_name_rules.tests.test_channelization import (
+    CHANNEL_TYPE,
     PLAIN_TYPE,
     REQUIRES_CHANNELIZATION,
     ChannelizationTestCase,
@@ -517,3 +518,78 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
         find_interfaces_for_rule(self.rule)
 
         self.assertEqual(list(Interface.objects.filter(module=module).values_list("pk", "name")), before)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class PreviewFollowsTheApplyClassificationTest(ChannelizationTestCase):
+    """A channel row is never an independent candidate, however its parent is modelled."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ProspClass", ["3"])
+        cls.module_type = _plain_module_type(manufacturer, "ProspClass-QSFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+
+    def _family(self):
+        """Install a module and bind a channel to a parent that declares no channel count."""
+        module, _bay = self._install(self.module_type, "3", run_rules=False)
+        parent = Interface.objects.get(module=module)
+        child = Interface.objects.create(
+            device=self.device, module=module, name="3:1", type=CHANNEL_TYPE, parent=parent, channel_id=1
+        )
+        return module, parent, child
+
+    def test_such_a_channel_is_previewed_with_its_parent_and_never_on_its_own(self):
+        """The apply path carries such a child along with its parent, so the preview must too."""
+        from netbox_interface_name_rules.engine import find_interfaces_for_rule
+
+        _module, parent, _child = self._family()
+
+        preview, checked = find_interfaces_for_rule(self.rule)
+
+        self.assertEqual(checked, 1)
+        self.assertEqual([entry["interface"].pk for entry in preview], [parent.pk])
+        self.assertEqual(preview[0]["new_names"], ["et-0/0/3", "et-0/0/3:1"])
+
+    def test_applying_to_the_channel_alone_changes_nothing(self):
+        """A previewed name always belongs to a parent, so selecting the channel is not a candidate."""
+        from netbox_interface_name_rules.engine import apply_rule_to_existing
+
+        module, _parent, child = self._family()
+
+        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[child.pk]), 0)
+        self.assertEqual(self._names(module), ["3", "3:1"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class PreviewReadsNoTemplatesForDerivableSuffixesTest(ChannelizationTestCase):
+    """A channel whose own name carries its parent's prefix needs no template lookup."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ProspQuery", ["3"])
+        cls.module_type = _channelized_module_type(manufacturer, "ProspQuery-QSFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+
+    def test_previewing_a_channelized_family_reads_no_interface_templates(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from netbox_interface_name_rules.engine import find_interfaces_for_rule
+
+        self._install(self.module_type, "3", run_rules=False)
+
+        with CaptureQueriesContext(connection) as queries:
+            preview, _checked = find_interfaces_for_rule(self.rule)
+
+        self.assertEqual(len(preview), 1)
+        template_reads = [
+            query["sql"] for query in queries.captured_queries if "dcim_interfacetemplate" in query["sql"]
+        ]
+        self.assertEqual(template_reads, [])
