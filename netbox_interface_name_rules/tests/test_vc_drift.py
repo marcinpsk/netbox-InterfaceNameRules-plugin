@@ -307,7 +307,7 @@ class VcPositionLeaveDriftTest(VcDriftTestCase):
         self._leave()
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 
-        self.assertEqual(apply_rule_to_existing(rule), 1)
+        self.assertEqual(apply_rule_to_existing(rule).changed_count, 1)
         self.assertEqual(self._names(module), ["et-0/0/5"])
 
 

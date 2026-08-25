@@ -27,16 +27,17 @@ class ApplyRuleJob(JobRunner):
             self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
             return
 
-        conflicts = []
         try:
-            count = apply_rule_to_existing(rule, conflicts=conflicts)
+            outcome = apply_rule_to_existing(rule)
         except Exception as exc:
             self.logger.exception("Failed to apply rule '%s': %s", rule_id, exc)
             raise
 
-        self.logger.info("Renamed %d interface(s) using rule '%s'", count, rule)
-        if conflicts:
-            self.logger.warning("%d interface(s) skipped — the plugin log names each one.", len(conflicts))
+        self.logger.info("Renamed %d interface(s) using rule '%s'", outcome.changed_count, rule)
+        if outcome.skipped_members:
+            self.logger.warning(
+                "%d interface(s) skipped — the plugin log names each one.", len(outcome.skipped_members)
+            )
 
 
 class ConvertFlatFamiliesJob(JobRunner):

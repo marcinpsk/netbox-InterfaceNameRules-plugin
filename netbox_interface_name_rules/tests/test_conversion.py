@@ -364,7 +364,7 @@ class ConversionTest(ConversionTestCase):
         """The family is native now, so ordinary apply is back to renaming it in place — a no-op here."""
         self._convert(self.base)
 
-        self.assertEqual(apply_rule_to_existing(self.rule), 0)
+        self.assertEqual(apply_rule_to_existing(self.rule).changed_count, 0)
         self.assertEqual(self._names(self.module), self._channelized_names("3"))
 
     def test_force_reapply_afterwards_changes_nothing(self):

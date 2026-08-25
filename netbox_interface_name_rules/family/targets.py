@@ -60,6 +60,27 @@ def template_channel_suffixes(templates):  # pragma: no cover - requires channel
     return suffixes
 
 
+def builds_channelized_family(rule) -> bool:
+    """Return whether *rule* builds a channelized family instead of flat sibling interfaces."""
+    return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
+
+
+def one_family_per_name_set(candidates):
+    """Return the index of one candidate base per family, in candidate order.
+
+    *candidates* pairs each base name with the names the rule intends for the family built on it.
+    Two bases that intend the same names describe one family an earlier apply already started, so
+    only one of them may build it; the base the family already names is preferred, because renaming
+    it onto itself is the no-op the other base cannot manage.
+    """
+    kept: dict[tuple[str, ...], int] = {}
+    for index, (base_name, target_names) in enumerate(candidates):
+        current = kept.get(target_names)
+        if current is None or (base_name == target_names[0] and candidates[current][0] != target_names[0]):
+            kept[target_names] = index
+    return tuple(sorted(kept.values()))
+
+
 def flat_family_names(rule, variables, base_name):
     """Return the names of the flat sibling family that *rule* defines on *base_name*."""
     family_variables = {**variables, "base": base_name}
@@ -93,6 +114,21 @@ def channelized_family_names(rule, base_name, variables):  # pragma: no cover - 
         for channel_id in range(1, rule.channel_count + 1)
     )
     return parent_name, channels
+
+
+def intended_family_names(rule, variables, base_name):
+    """Return every name *rule* intends for the family it builds on *base_name*.
+
+    A base whose names cannot be evaluated is its own family: it names nothing else, so nothing
+    else can be grouped with it.
+    """
+    try:
+        if builds_channelized_family(rule):
+            parent_name, channels = channelized_family_names(rule, base_name, variables)
+            return (parent_name, *(name for _channel_id, name in channels))
+        return flat_family_names(rule, variables, base_name)
+    except (TypeError, ValueError):
+        return (base_name,)
 
 
 def _simple_child_target(child_name, channel_id, parent_name, parent_target, suffixes):  # pragma: no cover

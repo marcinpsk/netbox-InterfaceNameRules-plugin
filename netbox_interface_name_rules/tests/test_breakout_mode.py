@@ -1063,7 +1063,7 @@ class ChannelizedModeWithoutSupportTest(ChannelizationTestCase):
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 0)
+        self.assertEqual(built.changed_count, 0)
         self.assertEqual(self._names(module), ["3"])
         self.assertTrue(any("channelized" in line.lower() for line in logs.output), logs.output)
 

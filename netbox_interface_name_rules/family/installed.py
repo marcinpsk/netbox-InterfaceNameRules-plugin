@@ -11,6 +11,7 @@ from django.db import DEFAULT_DB_ALIAS
 from ..choices import BreakoutModeChoices
 from ..naming import evaluate_name_template
 from .domain import (
+    FamilyStatus,
     FamilyTopology,
     InstalledFamilyPlan,
     InstalledFamilyPlanSet,
@@ -119,7 +120,7 @@ def _singly_claimed(candidates):
     return [candidate for candidate in candidates if all(claims[member.pk] == 1 for member in candidate[2])]
 
 
-def _flat_candidates(rule, variables, interfaces, templates):
+def _flat_candidates(rule, variables, interfaces, catalog):
     """Return complete, unambiguous flat-family candidates for *module*."""
     if rule.channel_count <= 0 or rule.breakout_mode != BreakoutModeChoices.FLAT:
         return []
@@ -127,6 +128,7 @@ def _flat_candidates(rule, variables, interfaces, templates):
     by_name = {interface.name: interface for interface in interfaces if _is_plain_interface(interface)}
     if not by_name:
         return []
+    templates = catalog.get()
     historical_by_template = {
         template.pk: _historical_bases(rule, variables, template, interfaces) for template in templates
     }
@@ -200,14 +202,16 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
     )
 
 
-def _channelized_plans(module, rule, variables, db_alias, interfaces, templates):  # pragma: no cover
+def _channelized_plans(module, rule, variables, db_alias, interfaces, catalog):  # pragma: no cover
     """Return one plan for every structurally discovered channelized family."""
     parents = [interface for interface in interfaces if _is_channelized_parent(interface)]
+    if not parents:
+        return []
     children_by_parent: dict[int, list] = {}
     for interface in interfaces:
         if _is_channel(interface) and interface.parent_id is not None:
             children_by_parent.setdefault(interface.parent_id, []).append(interface)
-    suffixes = template_channel_suffixes(templates)
+    suffixes = template_channel_suffixes(catalog.get())
     plans = []
     for parent in parents:
         children = children_by_parent.get(parent.pk, [])
@@ -216,15 +220,59 @@ def _channelized_plans(module, rule, variables, db_alias, interfaces, templates)
     return plans
 
 
-def plan_installed_families(module, rule, variables) -> InstalledFamilyPlanSet:
-    """Return immutable plans for the installed families owned by *module*."""
+class _TemplateNames:
+    """The module type's resolved template names, read only where a plan needs them."""
+
+    def __init__(self, module):
+        self._module = module
+        self._templates = None
+
+    def get(self):
+        """Return every resolved template name for the module, loading them once."""
+        if self._templates is None:
+            self._templates = resolved_template_names(self._module)
+        return self._templates
+
+
+def plan_interface_rename(module, rule, variables, interface) -> InstalledFamilyPlan:
+    """Return the plan that renames one interface which belongs to no family."""
+    status, reason, target_name = None, "", interface.name
+    try:
+        target_name = evaluate_name_template(rule.name_template, {**variables, "base": interface.name})
+    except (TypeError, ValueError) as error:
+        status, reason = FamilyStatus.FAILED, f"failed to evaluate the interface name: {error}"
+    return InstalledFamilyPlan(
+        family_id=f"flat:{interface.pk}",
+        topology=FamilyTopology.FLAT,
+        device_id=module.device_id,
+        module_id=module.pk,
+        db_alias=module_db_alias(module),
+        members=(
+            PlannedMember(
+                snapshot=InterfaceSnapshot.from_interface(interface),
+                target_name=target_name,
+                role=MemberRole.FLAT_MEMBER,
+            ),
+        ),
+        precondition_status=status,
+        precondition_reason=reason,
+    )
+
+
+def plan_installed_families(module, rule, variables, interfaces=None) -> InstalledFamilyPlanSet:
+    """Return immutable plans for the installed families owned by *module*.
+
+    A batch that already holds the module's interface rows passes them in, so planning a fleet
+    reads them once rather than once per module.
+    """
     db_alias = module_db_alias(module)
-    interfaces = list(Interface.objects.using(db_alias).filter(module_id=module.pk).order_by("pk"))
-    templates = resolved_template_names(module)
-    plans = _channelized_plans(module, rule, variables, db_alias, interfaces, templates)
+    if interfaces is None:
+        interfaces = list(Interface.objects.using(db_alias).filter(module_id=module.pk).order_by("pk"))
+    catalog = _TemplateNames(module)
+    plans = _channelized_plans(module, rule, variables, db_alias, interfaces, catalog)
     plans.extend(
         _flat_plan(module, db_alias, target_names, members)
-        for _base_name, target_names, members in _flat_candidates(rule, variables, interfaces, templates)
+        for _base_name, target_names, members in _flat_candidates(rule, variables, interfaces, catalog)
     )
     plans.sort(key=lambda plan: plan.member_pks[0])
     return InstalledFamilyPlanSet(module_id=module.pk, plans=tuple(plans))

@@ -429,7 +429,7 @@ class ProspectivePreviewIsNotAppliedTest(ChannelizationTestCase):
         interface.name = "renamed-by-someone-else"
         interface.save()
 
-        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[interface.pk]), 1)
+        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[interface.pk]).changed_count, 1)
         interface.refresh_from_db()
         self.assertEqual(interface.name, "et-0/0/3")
 
@@ -442,7 +442,7 @@ class ProspectivePreviewIsNotAppliedTest(ChannelizationTestCase):
 
         Interface.objects.filter(pk=previewed_pk).delete()
 
-        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[previewed_pk]), 0)
+        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[previewed_pk]).changed_count, 0)
         self.assertEqual(Interface.objects.filter(module=module).count(), 0)
 
 
@@ -560,7 +560,7 @@ class PreviewFollowsTheApplyClassificationTest(ChannelizationTestCase):
 
         module, _parent, child = self._family()
 
-        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[child.pk]), 0)
+        self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[child.pk]).changed_count, 0)
         self.assertEqual(self._names(module), ["3", "3:1"])
 
 

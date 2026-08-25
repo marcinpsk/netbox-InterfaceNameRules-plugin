@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Plan and execute the creation of channelized interface families."""
+"""Plan and execute the creation of interface families."""
 
 import logging
 
@@ -14,6 +14,7 @@ from .domain import (
     FamilyOutcome,
     FamilyStatus,
     FamilyTopology,
+    FlatCreationPlan,
     InterfaceSnapshot,
     MemberOutcome,
     PlannedChannel,
@@ -21,7 +22,7 @@ from .domain import (
 )
 from .installed import module_db_alias
 from .names import COLLISION_REASON, is_name_collision, name_is_taken, reconcile_after_parent_cascade
-from .targets import channelized_family_names
+from .targets import channelized_family_names, flat_family_names
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def _refused(plan, status, reason, target_name):
     return _outcome(plan, status, (member,), reason)
 
 
-def _locked_base(plan):  # pragma: no cover - requires channelization support
+def _locked_base(plan):
     """Lock and return the live base row, or None when it is gone."""
     return (
         Interface.objects.using(plan.db_alias)
@@ -219,3 +220,160 @@ def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
 def install_channelized_family(module, rule, variables, base) -> FamilyOutcome:
     """Build the channelized family *rule* describes on plain interface *base*."""
     return execute_structural_family(plan_structural_family(module, rule, variables, base))
+
+
+# ---------------------------------------------------------------------------
+# Flat breakout families
+# ---------------------------------------------------------------------------
+# A flat family is N sibling interfaces on one module: the base takes the first name and the rest
+# are new rows.  Unlike a channelized family there is no parent to cascade from, so a sibling whose
+# name is taken is skipped on its own while the family keeps the names it could take.
+
+
+def _flat_creation_plan(module, db_alias, base, target_names, status=None, reason=""):
+    """Build one immutable flat-creation plan for *base*."""
+    return FlatCreationPlan(
+        family_id=f"flat:{base.pk}",
+        device_id=module.device_id,
+        module_id=module.pk,
+        db_alias=db_alias,
+        base=InterfaceSnapshot.from_interface(base),
+        target_names=target_names,
+        precondition_status=status,
+        precondition_reason=reason,
+    )
+
+
+def plan_flat_family(module, rule, variables, base) -> FlatCreationPlan:
+    """Return the immutable plan for the flat breakout family *rule* builds on plain interface *base*."""
+    db_alias = module_db_alias(module)
+    try:
+        target_names = flat_family_names(rule, variables, base.name)
+    except (TypeError, ValueError) as error:
+        reason = f"failed to evaluate the family names: {error}"
+        return _flat_creation_plan(module, db_alias, base, (base.name,), FamilyStatus.FAILED, reason)
+    return _flat_creation_plan(module, db_alias, base, target_names)
+
+
+def _flat_outcome(plan, status, members, reason=""):
+    """Build the immutable outcome of one flat family operation."""
+    return FamilyOutcome(
+        family_id=plan.family_id,
+        topology=FamilyTopology.FLAT,
+        status=status,
+        members=members,
+        reason=reason,
+    )
+
+
+def _flat_refused(plan, status, reason):
+    """Log why the family was not built and return an outcome that touched no row."""
+    logger.warning("Cannot build a flat family on interface %r: %s.", plan.base.name, reason)
+    member = MemberOutcome(
+        interface_pk=plan.base.pk,
+        current_name=plan.base.name,
+        target_name=plan.target_names[0],
+        status=status,
+        reason=reason,
+    )
+    return _flat_outcome(plan, status, (member,), reason)
+
+
+def _rename_flat_base(plan, base):
+    """Give the base the family's first name, or report why it keeps the one it has."""
+    target_name = plan.target_names[0]
+    if target_name == base.name:
+        return MemberOutcome(base.pk, base.name, target_name, FamilyStatus.UNCHANGED)
+    if name_is_taken(plan.device_id, target_name, plan.db_alias, exclude_pk=base.pk):
+        logger.warning(
+            "Interface name %r already exists on device %s; skipping rename of %r to %r.",
+            target_name,
+            plan.device_id,
+            base.name,
+            target_name,
+        )
+        return MemberOutcome(base.pk, base.name, target_name, FamilyStatus.BLOCKED, COLLISION_REASON)
+    previous_name = base.name
+    base.name = target_name
+    base.full_clean()
+    base.save(using=plan.db_alias)
+    return MemberOutcome(base.pk, previous_name, target_name, FamilyStatus.CHANGED)
+
+
+def _module_rows(plan):
+    """Return the family names this module already carries, so a re-apply creates nothing twice."""
+    return dict(
+        Interface.objects.using(plan.db_alias)
+        .filter(module_id=plan.module_id, name__in=plan.target_names)
+        .values_list("name", "pk")
+    )
+
+
+def _create_sibling(plan, base, name):
+    """Create one sibling interface beside *base*, or report the name it could not take."""
+    if name_is_taken(plan.device_id, name, plan.db_alias, exclude_pk=base.pk):
+        logger.warning(
+            "Interface name %r already exists on device %s; skipping the sibling of %r.",
+            name,
+            plan.device_id,
+            base.name,
+        )
+        return MemberOutcome(plan.base.pk, plan.base.name, name, FamilyStatus.BLOCKED, COLLISION_REASON)
+    row = Interface(
+        device=base.device,
+        module=base.module,
+        name=name,
+        type=base.type,
+        enabled=base.enabled,
+    )
+    row.full_clean()
+    row.save(using=plan.db_alias)
+    return MemberOutcome(row.pk, name, name, FamilyStatus.CHANGED)
+
+
+def _build_flat_family(plan, base):
+    """Name the base and create every sibling the module still lacks."""
+    members = [_rename_flat_base(plan, base)]
+    installed = _module_rows(plan)
+    for name in plan.target_names[1:]:
+        if name in installed:
+            members.append(MemberOutcome(installed[name], name, name, FamilyStatus.UNCHANGED))
+            continue
+        members.append(_create_sibling(plan, base, name))
+    return tuple(members)
+
+
+def _install_flat_family(plan):
+    """Build the whole family in one transaction, or write nothing at all."""
+    try:
+        with transaction.atomic(using=plan.db_alias):
+            base = _locked_base(plan)
+            if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
+                return _flat_refused(plan, FamilyStatus.STALE, STALE_REASON)
+            members = _build_flat_family(plan, base)
+    except ValidationError as error:
+        return _flat_refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
+    except IntegrityError as error:
+        if not is_name_collision(error):
+            raise
+        return _flat_refused(plan, FamilyStatus.BLOCKED, COLLISION_REASON)
+    return _flat_outcome(plan, _flat_status(members), members)
+
+
+def _flat_status(members):
+    """Summarize member outcomes without hiding partial success."""
+    statuses = {member.status for member in members}
+    if FamilyStatus.CHANGED in statuses:
+        return FamilyStatus.CHANGED
+    if FamilyStatus.BLOCKED in statuses:
+        return FamilyStatus.BLOCKED
+    return FamilyStatus.UNCHANGED
+
+
+def execute_flat_family(plan: FlatCreationPlan) -> FamilyOutcome:
+    """Build the planned flat breakout family, or leave every row exactly as it was."""
+    if not isinstance(plan, FlatCreationPlan):
+        raise TypeError(f"{type(plan).__name__} is not an executable family plan")
+    if plan.precondition_status is not None:
+        return _flat_refused(plan, plan.precondition_status, plan.precondition_reason)
+    return _install_flat_family(plan)

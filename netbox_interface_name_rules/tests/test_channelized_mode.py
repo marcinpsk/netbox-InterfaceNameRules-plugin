@@ -275,12 +275,11 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
         """The Apply view counts what it skipped, so the collision is reported, not just logged."""
         self._occupy("et-0/0/5")
         self._install(self.module_type, "5", run_rules=False)
-        conflicts: list = []
 
-        built = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 0)
-        self.assertEqual([conflict["attempted_name"] for conflict in conflicts], ["et-0/0/5"])
+        self.assertEqual(built.changed_count, 0)
+        self.assertEqual([member.target_name for member in built.skipped_members], ["et-0/0/5"])
 
     def test_the_family_is_built_once_the_blocker_is_gone(self):
         """The skip is a state of the device, not a decision about the rule."""
@@ -357,13 +356,12 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the preflight, so neither can convert a family behind the other's back."""
         self._switch_to_channelized()
-        conflicts: list = []
 
-        changed = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        changed = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(changed, 0)
+        self.assertEqual(changed.changed_count, 0)
         self._assert_still_flat()
-        self.assertTrue(conflicts, "the skipped family was not reported to the Apply view")
+        self.assertTrue(changed.skipped_members, "the skipped family was not reported to the Apply view")
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -414,14 +412,12 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""
-        conflicts: list = []
-
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            changed = apply_rule_to_existing(self.rule, conflicts=conflicts)
+            changed = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(changed, 0)
+        self.assertEqual(changed.changed_count, 0)
         self._assert_untouched()
-        self.assertTrue(conflicts, "the skipped module was not reported to the Apply view")
+        self.assertTrue(changed.skipped_members, "the skipped module was not reported to the Apply view")
         self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
 
     def test_the_preview_offers_no_family_it_would_not_build(self):
@@ -550,7 +546,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         """Applying a rule to already-installed hardware creates the family the preview promised."""
         built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 5)
+        self.assertEqual(built.changed_count, 5)
         self.assertEqual(self._names(self.module), self.FAMILY_NAMES)
         self.assertEqual(self._parent(self.module).channels, 4)
 
@@ -560,7 +556,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
 
         built = apply_rule_to_existing(self.rule, interface_ids=[base.pk])
 
-        self.assertEqual(built, 5)
+        self.assertEqual(built.changed_count, 5)
         self.assertEqual(self._names(self.module), self.FAMILY_NAMES)
 
     def test_the_rule_test_view_previews_the_family(self):

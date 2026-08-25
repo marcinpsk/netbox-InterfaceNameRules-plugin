@@ -137,6 +137,20 @@ class StructuralFamilyPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class FlatCreationPlan:
+    """An executable plan that expands one plain interface into a flat breakout family."""
+
+    family_id: str
+    device_id: int
+    module_id: int
+    db_alias: str
+    base: InterfaceSnapshot
+    target_names: tuple[str, ...]
+    precondition_status: FamilyStatus | None = None
+    precondition_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProspectiveMember:
     """One member of a family planned from names alone."""
 

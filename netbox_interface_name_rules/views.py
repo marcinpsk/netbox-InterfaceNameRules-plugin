@@ -542,15 +542,12 @@ class RuleApplyDetailView(generic.ObjectView):
                 if not interface_ids:
                     messages.warning(request, "No interfaces selected; nothing was applied.")
                 else:
-                    conflicts = []
-                    count = apply_rule_to_existing(
-                        rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids, conflicts=conflicts
-                    )
-                    messages.success(request, f"Applied rule: {count} interface(s) renamed.")
-                    if conflicts:
+                    outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
+                    messages.success(request, f"Applied rule: {outcome.changed_count} interface(s) renamed.")
+                    if outcome.skipped_members:
                         messages.warning(
                             request,
-                            f"{len(conflicts)} interface(s) skipped — the plugin log names each one.",
+                            f"{len(outcome.skipped_members)} interface(s) skipped — the plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

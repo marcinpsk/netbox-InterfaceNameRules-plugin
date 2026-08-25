@@ -426,12 +426,11 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
     def test_apply_rule_to_existing_renames_family_without_conflicts(self):
         """A retroactive apply renames the family through its parent, so no child fights another for a name."""
         module, _ = self._install(self.module_type, "3", run_rules=False)
-        conflicts: list = []
 
-        count = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        outcome = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(count, 6)
-        self.assertEqual(conflicts, [])
+        self.assertEqual(outcome.changed_count, 6)
+        self.assertEqual(outcome.skipped_members, ())
         self.assertEqual(self._names(module), ["et-3", "et-3-mgmt", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
         # The rename went through the family, so the structure it hangs on is still intact.
         parent = self._parent(module)
@@ -443,9 +442,9 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         module, _ = self._install(self.module_type, "3", run_rules=False)
         parent = self._parent(module)
 
-        count = apply_rule_to_existing(self.rule, interface_ids=[parent.pk])
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[parent.pk])
 
-        self.assertEqual(count, 5)
+        self.assertEqual(outcome.changed_count, 5)
         self.assertEqual(self._names(module), ["3-mgmt", "et-3", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
 
     def test_apply_rule_to_existing_ignores_a_child_only_selection(self):
@@ -453,9 +452,9 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         module, _ = self._install(self.module_type, "3", run_rules=False)
         child = self._child(module, 1)
 
-        count = apply_rule_to_existing(self.rule, interface_ids=[child.pk])
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[child.pk])
 
-        self.assertEqual(count, 0)
+        self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(self._names(module), ["3", "3-mgmt", "3:1", "3:2", "3:3", "3:4"])
 
 
