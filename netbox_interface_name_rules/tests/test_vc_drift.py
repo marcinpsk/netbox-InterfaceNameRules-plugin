@@ -403,6 +403,55 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["et-xe-1/5/4", "et-xe-5/0/4"])
 
 
+class VcPositionAdjacentTokenTest(VcDriftTestCase):
+    """Tokens with nothing between them cannot be told apart, so the template builds no matcher.
+
+    Back-to-back tokens expand to back-to-back numeric alternatives, which backtrack for an
+    unbounded time on a name that does not match. Every remaining token matches only as many
+    digits as ``vc_position`` can hold.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "VcAdj", ["3", "4"], virtual_chassis=VirtualChassis.objects.create(name="vcadj-vc"), vc_position=1
+        )
+        cls.adjacent_type = _token_module_type(manufacturer, "VcAdj-QSFP", "xe-{vc_position}{vc_position}/0/{module}")
+        cls.separated_type = _token_module_type(manufacturer, "VcAdj-SFP", "xe-{vc_position}/{vc_position}/{module}")
+        # A template name may legally spell the marker the matcher builder inserts for itself.
+        cls.sentinel_type = _token_module_type(
+            manufacturer, "VcAdj-QSFP28", "xe-InrVcPositionSentinel1End-{vc_position}/{module}"
+        )
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_adjacent_tokens_build_no_matcher_at_all(self):
+        module, _ = self._install_on(self.device, self.adjacent_type, "3")
+
+        self.assertEqual(self._names(module), ["xe-11/0/3"])
+        self.assertEqual(_raw_name_patterns(module), [])
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_separated_token_matches_only_a_storable_position(self):
+        module, _ = self._install_on(self.device, self.separated_type, "4")
+        self.assertEqual(self._names(module), ["xe-1/1/4"])
+
+        patterns = _raw_name_patterns(module)
+
+        self.assertEqual(len(patterns), 1)
+        self.assertNotIn(r"\d+", patterns[0].pattern)
+        self.assertTrue(patterns[0].fullmatch("xe-1/1/4"))
+        self.assertTrue(patterns[0].fullmatch("xe-2147483647/0/4"))  # the largest position NetBox stores
+        self.assertIsNone(patterns[0].fullmatch("xe-12345678901/0/4"))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_sentinel_shaped_literal_builds_no_matcher_instead_of_raising(self):
+        module, bay = self._install_on(self.device, self.sentinel_type, "3")
+
+        self.assertEqual(self._names(module), ["xe-InrVcPositionSentinel1End-1/3"])
+        self.assertEqual(_raw_name_patterns(module), [])
+        self.assertEqual(apply_interface_name_rules(module, bay), 0)
+
+
 # ---------------------------------------------------------------------------
 # Controls: no token, and no token support
 # ---------------------------------------------------------------------------

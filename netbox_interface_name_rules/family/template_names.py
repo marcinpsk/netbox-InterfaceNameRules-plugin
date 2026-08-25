@@ -24,6 +24,9 @@ BAY_CHAIN_RELATIONS = (
 )
 
 _VC_SENTINEL = "InrVcPositionSentinel{}End"
+_VC_SENTINEL_RE = re.compile(r"InrVcPositionSentinel(\d+)End")
+# NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
+_VC_POSITION_DIGITS = r"\d{1,10}"
 
 RawMatcher = namedtuple("RawMatcher", ("template_name", "resolved", "pattern"))
 RawNames = namedtuple("RawNames", ("names", "matchers"))
@@ -54,8 +57,8 @@ def vc_position_re():
 def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-chassis token support
     """Return every value represented by one virtual-chassis position token."""
     if fallback is None:
-        return r"\d+"
-    return f"(?:\\d+|{re.escape(fallback)})"
+        return _VC_POSITION_DIGITS
+    return f"(?:{_VC_POSITION_DIGITS}|{re.escape(fallback)})"
 
 
 def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
@@ -71,9 +74,18 @@ def _historical_pattern(template, module, token_re):  # pragma: no cover - requi
         return None
     stub = copy.copy(template)
     stub.name = marked
-    pattern = re.escape(stub.resolve_name(module))
-    for index, fallback in enumerate(fallbacks):
-        pattern = pattern.replace(_VC_SENTINEL.format(index), _vc_position_alternatives(fallback))
+    parts = _VC_SENTINEL_RE.split(re.escape(stub.resolve_name(module)))
+    literals = parts[0::2]
+    indexes = parts[1::2]
+    # A sentinel-shaped literal in the template name would shift these indexes; refuse to guess.
+    if indexes != [str(index) for index in range(len(fallbacks))]:
+        return None
+    # Adjacent tokens cannot be told apart, and their alternatives would backtrack without bound.
+    if any(not literal for literal in literals[1:-1]):
+        return None
+    pattern = literals[0]
+    for index, literal in zip(indexes, literals[1:], strict=True):
+        pattern += _vc_position_alternatives(fallbacks[int(index)]) + literal
     return _compile_pattern(pattern)
 
 
