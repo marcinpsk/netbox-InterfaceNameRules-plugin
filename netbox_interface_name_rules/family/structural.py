@@ -9,7 +9,6 @@ from dcim.models import Interface, InterfaceTemplate
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from ..naming import evaluate_name_template
 from .capabilities import supports_channelization
 from .domain import (
     FamilyOutcome,
@@ -22,35 +21,13 @@ from .domain import (
 )
 from .installed import module_db_alias
 from .names import COLLISION_REASON, is_name_collision, name_is_taken, reconcile_after_parent_cascade
+from .targets import channelized_family_names
 
 logger = logging.getLogger(__name__)
 
 UNSUPPORTED_REASON = "this NetBox release cannot model channelized interfaces"
 STALE_REASON = "the base interface changed after planning"
 MODULE_CHANGED_REASON = "the module's interfaces changed after planning"
-
-
-def channelized_family_names(rule, base_name, variables):  # pragma: no cover - channelization only
-    """Return ``(parent_name, ((channel_id, name), ...))`` for the family *rule* builds on *base_name*.
-
-    ``{base}`` is the base interface's current name for the parent and every channel; ``{channel}``
-    is ``channel_start + channel_id - 1``.  A blank parent template leaves the base's name alone.
-    Takes the name rather than the interface so prediction can reuse it without a row to point at.
-    """
-    family_variables = {**variables, "base": base_name}
-    parent_name = base_name
-    if rule.parent_name_template:
-        parent_name = evaluate_name_template(rule.parent_name_template, family_variables)
-    channels = tuple(
-        (
-            channel_id,
-            evaluate_name_template(
-                rule.name_template, {**family_variables, "channel": str(rule.channel_start + channel_id - 1)}
-            ),
-        )
-        for channel_id in range(1, rule.channel_count + 1)
-    )
-    return parent_name, channels
 
 
 def _flat_expansion(module_type_id, module_id, db_alias) -> bool:  # pragma: no cover - channelization only
@@ -227,7 +204,13 @@ def _install_family(plan):  # pragma: no cover - requires channelization support
 
 
 def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
-    """Create the planned channelized family, or leave every row exactly as it was."""
+    """Create the planned channelized family, or leave every row exactly as it was.
+
+    Only a structural plan names the base row to rewrite, so anything else (a prospective plan
+    above all) is refused before a single row is locked.
+    """
+    if not isinstance(plan, StructuralFamilyPlan):
+        raise TypeError(f"{type(plan).__name__} is not an executable family plan")
     if plan.precondition_status is not None:
         return _refused(plan, plan.precondition_status, plan.precondition_reason, plan.parent_target_name)
     return _install_family(plan)  # pragma: no cover - requires channelization support

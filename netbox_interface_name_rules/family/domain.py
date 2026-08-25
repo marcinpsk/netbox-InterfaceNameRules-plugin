@@ -137,6 +137,61 @@ class StructuralFamilyPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ProspectiveMember:
+    """One member of a family planned from names alone."""
+
+    source_name: str | None
+    target_name: str
+    role: MemberRole
+    channel_id: int | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectiveFamilyPlan:
+    """What a rule intends for one family of named interfaces.
+
+    A plan whose *base_name* is set describes a family the rule builds out of that one name, so the
+    name expands to every target.  A plan without one renames members that already exist.
+    """
+
+    family_id: str
+    topology: FamilyTopology
+    base_name: str | None
+    members: tuple[ProspectiveMember, ...]
+    precondition_status: FamilyStatus | None = None
+    precondition_reason: str = ""
+
+    @property
+    def source_names(self) -> tuple[str, ...]:
+        """Return the name of every member that already exists, in plan order."""
+        return tuple(member.source_name for member in self.members if member.source_name is not None)
+
+    @property
+    def target_names(self) -> tuple[str, ...]:
+        """Return every intended name, in plan order."""
+        return tuple(member.target_name for member in self.members)
+
+
+@dataclass(frozen=True, slots=True)
+class ProspectiveFamilyPlanSet:
+    """Exactly one prospective plan for each family the rule intends on a module."""
+
+    module_id: int
+    plans: tuple[ProspectiveFamilyPlan, ...]
+
+    def predicted_names(self, source_name: str) -> tuple[str, ...]:
+        """Return the names *source_name* becomes, or the name itself when no plan claims it."""
+        for plan in self.plans:
+            if plan.base_name == source_name:
+                return plan.target_names
+            for member in plan.members:
+                if member.source_name == source_name:
+                    return (member.target_name,)
+        return (source_name,)
+
+
+@dataclass(frozen=True, slots=True)
 class MemberOutcome:
     """Result facts for one planned family member."""
 

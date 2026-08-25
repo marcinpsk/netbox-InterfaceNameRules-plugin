@@ -11,7 +11,6 @@ from django.db import DEFAULT_DB_ALIAS
 from ..choices import BreakoutModeChoices
 from ..naming import evaluate_name_template
 from .domain import (
-    FamilyStatus,
     FamilyTopology,
     InstalledFamilyPlan,
     InstalledFamilyPlanSet,
@@ -19,6 +18,7 @@ from .domain import (
     MemberRole,
     PlannedMember,
 )
+from .targets import channelized_family_targets, flat_family_names, template_channel_suffixes
 from .template_names import resolved_template_names
 
 logger = logging.getLogger(__name__)
@@ -48,53 +48,6 @@ def _is_channelized_parent(interface) -> bool:  # pragma: no cover - requires ch
 def _is_channel(interface) -> bool:  # pragma: no cover - requires channelization support
     """Return whether *interface* is bound to a parent channel."""
     return getattr(interface, "channel_id", None) is not None
-
-
-def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires channelization support
-    """Return the non-alphanumeric suffix that *child_name* adds to its parent."""
-    if not parent_name or not child_name.startswith(parent_name):
-        return None
-    suffix = child_name[len(parent_name) :]
-    if not suffix or suffix[0].isalnum():
-        return None
-    return suffix
-
-
-def _template_channel_suffixes(templates):  # pragma: no cover - requires channelization support
-    """Return the possible resolved suffixes for each template channel."""
-    parents = {template.pk: template.resolved for template in templates if template.channels is not None}
-    suffixes: dict[int, set[str]] = {}
-    for template in templates:
-        if template.channel_id is None or template.parent_id not in parents:
-            continue
-        suffix = _child_name_suffix(template.resolved, parents[template.parent_id])
-        if suffix is not None:
-            suffixes.setdefault(template.channel_id, set()).add(suffix)
-    return suffixes
-
-
-def _simple_child_target(child, parent_name, parent_target, suffixes):  # pragma: no cover - channelization only
-    """Return a simple rule's child target or the reason it cannot be derived."""
-    suffix = _child_name_suffix(child.name, parent_name)
-    if suffix is None:
-        candidates = suffixes.get(child.channel_id, set())
-        if len(candidates) == 1:
-            suffix = next(iter(candidates))
-    if suffix is None:
-        return None, "channel suffix is ambiguous or unavailable"
-    return parent_target + suffix, ""
-
-
-def _flat_names(rule, variables, base_name):
-    """Return the names of the flat family that *rule* defines on *base_name*."""
-    family_variables = {**variables, "base": base_name}
-    return tuple(
-        evaluate_name_template(
-            rule.name_template,
-            {**family_variables, "channel": str(rule.channel_start + offset)},
-        )
-        for offset in range(rule.channel_count)
-    )
 
 
 def _historical_bases(rule, variables, template, interfaces):  # pragma: no cover - requires VC token support
@@ -142,13 +95,13 @@ def _source_bases(template, historical_bases, ambiguous_bases):
 def _template_candidates(rule, variables, by_name, template, source_bases):
     """Return every complete flat family that *template* recovers from *source_bases*."""
     try:
-        target_names = _flat_names(rule, variables, template.resolved)
+        target_names = flat_family_names(rule, variables, template.resolved)
     except (TypeError, ValueError):
         return []
     candidates = []
     for source_base in source_bases:
         try:
-            source_names = _flat_names(rule, variables, source_base)
+            source_names = flat_family_names(rule, variables, source_base)
         except (TypeError, ValueError):
             continue
         if len(set(source_names)) != len(source_names) or not all(name in by_name for name in source_names):
@@ -210,57 +163,18 @@ def _flat_plan(module, db_alias, target_names, interfaces):
 
 def _channelized_plan(module, rule, variables, db_alias, parent, children, suffixes):  # pragma: no cover
     """Build one plan for an existing channelized family."""
-    precondition_status = None
-    precondition_reason = ""
-    parent_target = parent.name
-    child_targets = []
-    if rule.channel_count > 0:
-        if parent.channels != rule.channel_count:
-            precondition_status = FamilyStatus.BLOCKED
-            precondition_reason = (
-                f"installed parent declares {parent.channels} channels but the rule defines {rule.channel_count}"
-            )
-            child_targets = [(child.name, precondition_reason) for child in children]
-        else:
-            try:
-                if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
-                    parent_target = evaluate_name_template(
-                        rule.parent_name_template,
-                        {**variables, "base": parent.name},
-                    )
-                child_targets = [
-                    (
-                        evaluate_name_template(
-                            rule.name_template,
-                            {
-                                **variables,
-                                "base": parent.name,
-                                "channel": str(rule.channel_start + child.channel_id - 1),
-                            },
-                        ),
-                        "",
-                    )
-                    for child in children
-                ]
-            except (TypeError, ValueError) as error:
-                precondition_status = FamilyStatus.FAILED
-                precondition_reason = f"failed to evaluate family targets: {error}"
-                parent_target = parent.name
-                child_targets = [(child.name, precondition_reason) for child in children]
-    else:
-        try:
-            parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent.name})
-            child_targets = [_simple_child_target(child, parent.name, parent_target, suffixes) for child in children]
-        except (TypeError, ValueError) as error:
-            precondition_status = FamilyStatus.FAILED
-            precondition_reason = f"failed to evaluate family targets: {error}"
-            parent_target = parent.name
-            child_targets = [(child.name, precondition_reason) for child in children]
-
+    targets = channelized_family_targets(
+        rule,
+        variables,
+        parent.name,
+        parent.channels,
+        tuple((child.name, child.channel_id) for child in children),
+        suffixes,
+    )
     members = [
         PlannedMember(
             snapshot=InterfaceSnapshot.from_interface(parent),
-            target_name=parent_target,
+            target_name=targets.parent_name,
             role=MemberRole.PARENT,
         )
     ]
@@ -271,7 +185,7 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
             role=MemberRole.CHANNEL,
             reason=reason,
         )
-        for child, (target, reason) in zip(children, child_targets, strict=True)
+        for child, (target, reason) in zip(children, targets.channels, strict=True)
     )
     return InstalledFamilyPlan(
         family_id=f"channelized:{parent.pk}",
@@ -281,8 +195,8 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
         db_alias=db_alias,
         members=tuple(members),
         parent_pk=parent.pk,
-        precondition_status=precondition_status,
-        precondition_reason=precondition_reason,
+        precondition_status=targets.status,
+        precondition_reason=targets.reason,
     )
 
 
@@ -293,7 +207,7 @@ def _channelized_plans(module, rule, variables, db_alias, interfaces, templates)
     for interface in interfaces:
         if _is_channel(interface) and interface.parent_id is not None:
             children_by_parent.setdefault(interface.parent_id, []).append(interface)
-    suffixes = _template_channel_suffixes(templates)
+    suffixes = template_channel_suffixes(templates)
     plans = []
     for parent in parents:
         children = children_by_parent.get(parent.pk, [])

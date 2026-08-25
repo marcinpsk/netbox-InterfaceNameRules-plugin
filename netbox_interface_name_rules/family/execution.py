@@ -213,5 +213,11 @@ def _execute_plan(plan: InstalledFamilyPlan) -> FamilyOutcome:
 
 
 def execute_installed_plan_set(plan_set: InstalledFamilyPlanSet) -> InstalledPlanSetOutcome:
-    """Execute each installed family in a separate transaction."""
+    """Execute each installed family in a separate transaction.
+
+    Only an installed plan set carries the row snapshots execution revalidates, so anything else
+    (a prospective plan set above all) is refused before a single row is locked.
+    """
+    if not isinstance(plan_set, InstalledFamilyPlanSet):
+        raise TypeError(f"{type(plan_set).__name__} is not an executable plan set")
     return InstalledPlanSetOutcome(families=tuple(_execute_plan(plan) for plan in plan_set.plans))

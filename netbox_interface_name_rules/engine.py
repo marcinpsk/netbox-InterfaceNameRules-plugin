@@ -17,6 +17,7 @@ from . import family as family_ops
 from . import naming, rule_selection
 from .choices import BreakoutModeChoices
 from .family import names as family_names
+from .family import targets as family_targets
 from .family import template_names as family_template_names
 from .rule_selection import _compile_pattern
 
@@ -126,21 +127,6 @@ def _partition_families(interfaces):
     for group in children.values():  # pragma: no cover - no channel children exist without support
         group.sort(key=lambda child: child.channel_id)
     return bases, children
-
-
-def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires channelization support
-    """Return the suffix *child_name* adds to *parent_name*, or None when it adds none.
-
-    The first character must be non-alphanumeric so ``et0``/``et01`` is never mistaken for a
-    family; the punctuation itself is free-form (``:``, ``-``, ``_`` and ``@`` all occur in the
-    wild), so it is not restricted to a fixed separator.
-    """
-    if not parent_name or not child_name.startswith(parent_name):
-        return None
-    suffix = child_name[len(parent_name) :]
-    if not suffix or suffix[0].isalnum():
-        return None
-    return suffix
 
 
 def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
@@ -383,84 +369,17 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed
 
 
-def _predicted_channel_name(rule, raw_name, variables, parents, children):  # pragma: no cover - channelized only
-    """Return the name the channel template named *raw_name* takes under *rule*."""
-    parent_name, channel_id = children[raw_name]
-    if rule.channel_count > 0:
-        if parents.get(parent_name) != rule.channel_count:
-            return raw_name  # channel-count mismatch: the apply path skips the whole family
-        channel = str(rule.channel_start + channel_id - 1)
-        return evaluate_name_template(rule.name_template, {**variables, "base": parent_name, "channel": channel})
-    # Simple rule: the channel follows its parent, keeping the suffix it adds to the parent's name.
-    parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent_name})
-    suffix = _child_name_suffix(raw_name, parent_name)
-    return raw_name if suffix is None else parent_target + suffix
-
-
-def _predicted_family_parent_name(rule, raw_name, variables, parents):  # pragma: no cover - channelized only
-    """Return the name the parent template named *raw_name* takes under *rule*.
-
-    Only a channelized rule that names its parent renames it, and only when the family's channel
-    count is the one the rule describes — the same two conditions the apply path applies.
-    """
-    if not (_is_channelized_rule(rule) and rule.parent_name_template):
-        return raw_name
-    if parents.get(raw_name) != rule.channel_count:
-        return raw_name  # channel-count mismatch: the apply path skips the whole family
-    return evaluate_name_template(rule.parent_name_template, {**variables, "base": raw_name})
-
-
-def _predicted_family_names(rule, raw_name, variables):  # pragma: no cover - channelization only
-    """Return the parent and channel names a channelized rule would build on *raw_name*."""
-    parent_name, channels = family_ops.channelized_family_names(rule, raw_name, variables)
-    return [parent_name, *(name for _, name in channels)]
-
-
-def _predicted_names(rule, raw_name, variables, parents, children, family_blocked=False):
-    """Return the names *raw_name* predicts to under *rule*.
-
-    A name the module type's templates describe as a channelized parent or channel follows its
-    family; a channelized rule on a plain name predicts the family it would build there, unless
-    *family_blocked* says the apply path refuses to build it; anything else keeps the per-name
-    prediction, expanding once per channel for a breakout rule and once for a simple one.
-    """
-    if raw_name in parents:  # pragma: no cover - requires a NetBox that models channelization
-        if rule.channel_count > 0:
-            # The rule renames the family's existing channels; only a parent template moves the parent.
-            return [_predicted_family_parent_name(rule, raw_name, variables, parents)]
-        return [evaluate_name_template(rule.name_template, {**variables, "base": raw_name})]
-    if raw_name in children:  # pragma: no cover - requires a NetBox that models channelization
-        return [_predicted_channel_name(rule, raw_name, variables, parents, children)]
-    if rule.channel_count > 0 and _is_channelized_rule(rule):
-        if family_blocked or not supports_channelization():
-            return [raw_name]  # the apply path builds nothing here
-        return _predicted_family_names(rule, raw_name, variables)  # pragma: no cover - see above
-    vars_copy = {**variables, "base": raw_name}
-    if rule.channel_count > 0:
-        return [
-            evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
-            for ch in range(rule.channel_count)
-        ]
-    return [evaluate_name_template(rule.name_template, vars_copy)]
-
-
 def predict_rule_output(module, module_bay, raw_names):
     """Predict the names apply_interface_name_rules would produce for raw_names.
 
-    Read-only — saves and mutates nothing.  A channelized rule additionally counts the module's
-    interfaces, because the apply path refuses to convert a module that already carries a flat
-    breakout family and the prediction has to say the same.  Used by external integrations (e.g.,
+    Read-only — saves and mutates nothing.  Used by external integrations (e.g.
     netbox-librenms-plugin) that need to know the post-rename names without applying any rule.
 
-    For breakout rules (channel_count > 0), each raw name expands to
-    channel_count predicted names. For simple renames, one name in → one name
-    out. Returns raw_names unchanged when no rule matches or evaluation fails.
-
-    A name the module type's interface templates describe as part of a channelized family is
-    predicted as the apply path treats it instead: the family's channels are renamed in place, so a
-    breakout rule leaves the parent's name alone and maps each channel through its ``channel_id``
-    rather than expanding one name into a flat set.  Names no template claims keep the per-name
-    prediction, so a module type without channelized templates is unaffected.
+    The names are planned by the family module from the module type's templates, so prediction
+    describes the same families installed execution builds: a breakout rule expands one plain name
+    into the family it creates, a name the templates describe as part of a channelized family
+    follows that family instead, and a family the apply path refuses to touch predicts unchanged.
+    Returns raw_names unchanged when no rule matches.
 
     Precondition: *raw_names* are resolved by the caller at call time.  A name captured before the
     device's virtual-chassis position changed is predicted from itself, not corrected to the name
@@ -472,26 +391,13 @@ def predict_rule_output(module, module_bay, raw_names):
     if not rule:
         return list(raw_names)
 
-    variables = build_variables(module_bay, device=module.device)
-    parents, children = _template_families(module)
-    # Costs one count pair, and only where a channelized rule could otherwise predict a family.
-    family_blocked = (
-        rule.channel_count > 0
-        and _is_channelized_rule(rule)
-        and supports_channelization()
-        and family_ops.has_flat_expansion(module)
+    plan_set = family_ops.plan_prospective_families(
+        module,
+        rule,
+        build_variables(module_bay, device=module.device),
+        family_ops.describe_module_interfaces(module, raw_names),
     )
-
-    output = []
-    for raw_name in raw_names:
-        try:
-            output.extend(_predicted_names(rule, raw_name, variables, parents, children, family_blocked))
-        except (ValueError, TypeError, re.error):
-            # Template eval failed; apply path would also fail and leave the
-            # interface alone, so the predicted name is the raw name.
-            output.append(raw_name)
-
-    return output
+    return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
 
 def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts=None):
@@ -708,62 +614,6 @@ def _raw_names_by_module(modules):  # pragma: no cover - only the conversion sca
     return family_template_names.raw_names_by_module(modules)
 
 
-def _template_families(module):
-    """Return ``(parents, children)`` describing *module*'s channelized interface templates.
-
-    *parents* maps a channelized parent template's resolved name to its channel count; *children*
-    maps each channel template's resolved name to ``(parent_name, channel_id)``.  Both are empty
-    where nothing can be channelized, so callers keep their pre-channelization behaviour without
-    paying for a template scan.
-    """
-    if not supports_channelization():
-        return {}, {}
-    return _resolve_template_families(module)  # pragma: no cover - requires channelization support
-
-
-def _resolve_template_families(module):  # pragma: no cover - requires a NetBox that models channelization
-    """Resolve *module*'s interface templates into the channelized families they describe.
-
-    Pairing through ``InterfaceTemplate.parent`` (rather than matching against the flat set of raw
-    names) keeps ambiguous prefixes like ``xe``/``xe-0`` apart, and a channel template whose parent
-    declares no channel count is not a family at all.
-    """
-    from dcim.models import InterfaceTemplate
-
-    module_fresh = _module_with_bay_chain(module)
-    templates = list(InterfaceTemplate.objects.filter(module_type=module_fresh.module_type))
-    resolved = {tmpl.pk: tmpl.resolve_name(module_fresh) for tmpl in templates}
-    parents_by_pk = {
-        tmpl.pk: (resolved[tmpl.pk], tmpl.channels) for tmpl in templates if getattr(tmpl, "channels", None) is not None
-    }
-    children = {}
-    for tmpl in templates:
-        channel_id = getattr(tmpl, "channel_id", None)
-        parent = parents_by_pk.get(getattr(tmpl, "parent_id", None))
-        if channel_id is None or parent is None:
-            continue
-        parent_name, _channels = parent
-        children[resolved[tmpl.pk]] = (parent_name, channel_id)
-    return dict(parents_by_pk.values()), children
-
-
-def _template_channel_suffixes(module):  # pragma: no cover - requires a NetBox that models channelization
-    """Map ``channel_id`` → the set of name suffixes *module*'s interface templates give that channel.
-
-    The suffix comes from the template family itself — each channel template's resolved name minus
-    its parent template's resolved name — so a child that lost its parent's prefix in an earlier
-    partial rename can still be repaired.  A module type with several families may spell the same
-    channel differently in each (``et0:2`` vs ``sw0.2``), so the suffixes are collected per channel
-    rather than overwritten: the recovery only uses one when every family agrees on it.
-    """
-    suffixes = defaultdict(set)
-    for child_name, (parent_name, channel_id) in _template_families(module)[1].items():
-        suffix = _child_name_suffix(child_name, parent_name)
-        if suffix is not None:
-            suffixes[channel_id].add(suffix)
-    return suffixes
-
-
 def _recovered_suffix(child, suffixes):  # pragma: no cover - requires channelization support
     """Return the template suffix for *child*'s channel, or None when it is not unambiguous.
 
@@ -796,10 +646,10 @@ def _child_target_names(children, parent_before, parent_after, module):
     suffixes = None
     targets = []
     for child in children:  # pragma: no cover - requires channelization support
-        suffix = _child_name_suffix(child.name, parent_before)
+        suffix = family_targets.child_name_suffix(child.name, parent_before)
         if suffix is None and module is not None:
             if suffixes is None:
-                suffixes = _template_channel_suffixes(module)
+                suffixes = family_ops.template_channel_suffixes(family_ops.resolved_template_names(module))
             suffix = _recovered_suffix(child, suffixes)
         targets.append((child, None if suffix is None else parent_after + suffix))
     return targets
@@ -1212,153 +1062,105 @@ def _name_detail(name, role, channel_id=None) -> dict:
     return {"name": name, "role": role, "channel_id": channel_id}
 
 
-def _family_entry(module, parent, details, children) -> dict | None:
-    """Build a family preview entry from per-name *details*, or None when nothing would change.
+_PREVIEW_ROLES = {
+    family_ops.MemberRole.PARENT: "parent",
+    family_ops.MemberRole.CHANNEL: "channel",
+}
 
-    The entry stays keyed on the parent — the PK the Apply view submits — and lists the family's
-    names in ``new_names``, so the existing template loop keeps working unchanged.
+
+def _member_detail(plan, member) -> dict:
+    """Describe one planned member so the UI can render a family as a family.
+
+    A flat family's members are the channels a breakout rule spells out; a plan that holds only
+    one of them is a plain rename, not a family.
     """
-    if [detail["name"] for detail in details] == [parent.name, *(child.name for child in children)]:
+    role = _PREVIEW_ROLES.get(member.role) or ("channel" if len(plan.members) > 1 else "interface")
+    return _name_detail(member.target_name, role, member.channel_id)
+
+
+def _plan_details(plan) -> list:
+    """Describe every name the plan intends, or the error that stopped it from naming them."""
+    if plan.precondition_status != family_ops.FamilyStatus.FAILED:
+        return [_member_detail(plan, member) for member in plan.members]
+    root = _member_detail(plan, plan.members[0])
+    return [_name_detail(f"<error: {plan.precondition_reason}>", root["role"], root["channel_id"])]
+
+
+def _plan_changes_names(plan, existing_names) -> bool:
+    """Return whether the planned family would rename or create anything.
+
+    A plan that renames members compares intent with the names they carry now.  A plan that builds
+    a family out of one base compares intent with the names the module already holds, so a family
+    an earlier apply already installed previews as no change.
+    """
+    if plan.base_name is None:  # pragma: no cover - requires channelization support
+        return plan.target_names != plan.source_names
+    return plan.target_names[0] != plan.base_name or any(
+        target_name not in existing_names for target_name in plan.target_names
+    )
+
+
+def _plan_entry(module, plan, interface, existing_names) -> dict | None:
+    """Build the preview entry for one family plan, or None when it would change nothing.
+
+    The entry stays keyed on the interface the Apply view submits, and lists the family's names in
+    ``new_names``, so the existing template loop keeps working unchanged.  A plan the live topology
+    blocks previews nothing, because the apply path would build nothing either.
+    """
+    failed = plan.precondition_status == family_ops.FamilyStatus.FAILED
+    if plan.precondition_status is not None and not failed:
         return None
+    if not failed and not _plan_changes_names(plan, existing_names):
+        return None
+    details = _plan_details(plan)
     return {
         "module": module,
-        "interface": parent,
-        "current_name": parent.name,
+        "interface": interface,
+        "current_name": interface.name,
         "new_names": [detail["name"] for detail in details],
         "name_details": details,
     }
 
 
-def _evaluate_plain_interface(rule, module, iface, variables, children=()) -> dict | None:
-    """Return a result dict if *iface* or one of its channels would be renamed by *rule*, else None.
+def _plan_root_name(plan) -> str:
+    """Return the name of the interface a plan is submitted through."""
+    return plan.base_name if plan.base_name is not None else plan.members[0].source_name
 
-    A channelized parent is previewed together with its channels, so the Apply page shows the whole
-    family behind the one PK it submits.
+
+def _preview_plans(rule, plan_set, rows_by_name, variables) -> list:
+    """Return the plans this preview reports.
+
+    A breakout rule is applied once per module through one base interface, so a module that carries
+    no channelized family previews only the family that base would gain.  Every other rule previews
+    each family it names.
     """
-    vars_copy = {**variables, "base": iface.name}
-    try:
-        new_name = evaluate_name_template(rule.name_template, vars_copy)
-    except ValueError as exc:
-        new_name = f"<error: {exc}>"
-    if children:  # pragma: no cover - requires channelization support
-        return _family_entry(module, iface, _lockstep_details(new_name, iface, children, module), children)
-    return _family_entry(module, iface, [_name_detail(new_name, "interface")], ())
+    if rule.channel_count <= 0:
+        return list(plan_set.plans)
+    installed = [plan for plan in plan_set.plans if plan.base_name is None]
+    if installed:  # pragma: no cover - requires a NetBox that models channelization
+        return installed
+    # Every plan here builds a family out of one base, so the module always has one to choose.
+    bases = [rows_by_name[plan.base_name] for plan in plan_set.plans if plan.base_name is not None]
+    base = _find_channel_base(rule, bases, variables)
+    return [plan for plan in plan_set.plans if plan.base_name == base.name]
 
 
-def _lockstep_details(new_name, parent, children, module) -> list:  # pragma: no cover - see above
-    """Per-name preview details for a family renamed in lockstep with its parent.
-
-    A channel whose suffix cannot be derived previews as unchanged — the same thing the apply path
-    does with it.
-    """
-    details = [_name_detail(new_name, "parent")]
-    for child, target in _child_target_names(children, parent.name, new_name, module):
-        details.append(_name_detail(child.name if target is None else target, "channel", child.channel_id))
-    return details
-
-
-def _channelized_family_entry(rule, module, parent, children, variables) -> dict | None:  # pragma: no cover
-    """Preview a breakout rule against an already-channelized family.
-
-    Nothing is created — only the existing channels are renamed, plus the parent when the rule
-    names one — so a family whose channel count disagrees with the rule previews as no change at
-    all.
-    """
-    if getattr(parent, "channels", None) != rule.channel_count:
-        return None
-    parent_name = parent.name
-    if _is_channelized_rule(rule) and rule.parent_name_template:
-        try:
-            parent_name = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
-        except ValueError as exc:
-            parent_name = f"<error: {exc}>"
-    details = [_name_detail(parent_name, "parent")]
-    for child in children:
-        channel = str(rule.channel_start + child.channel_id - 1)
-        try:
-            new_name = evaluate_name_template(
-                rule.name_template, {**variables, "base": parent.name, "channel": channel}
-            )
-        except ValueError as exc:
-            new_name = f"<error: {exc}>"
-        details.append(_name_detail(new_name, "channel", child.channel_id))
-    return _family_entry(module, parent, details, children)
-
-
-def _channelized_family_preview(rule, module, base, variables) -> dict | None:  # pragma: no cover - see below
-    """Describe the channelized family a rule would build on a plain base interface."""
-    try:
-        parent_name, channels = family_ops.channelized_family_names(rule, base.name, variables)
-    except ValueError as exc:
-        return _family_entry(module, base, [_name_detail(f"<error: {exc}>", "parent")], ())
-    details = [_name_detail(parent_name, "parent")]
-    details.extend(_name_detail(name, "channel", channel_id) for channel_id, name in channels)
-    return _family_entry(module, base, details, ())
-
-
-def _channelized_creation_entry(rule, module, bases, variables) -> dict | None:
-    """Return the preview entry for the family a channelized rule would build, or None for none.
-
-    A release that cannot model channels previews nothing, because the apply path builds nothing
-    there either; neither does a module whose flat family the apply path refuses to convert.
-    """
-    if not supports_channelization():
-        return None
-    if family_ops.has_flat_expansion(module):  # pragma: no cover - requires channelization support
-        return None
-    return _channelized_family_preview(  # pragma: no cover - requires channelization support
-        rule, module, _find_channel_base(rule, bases, variables), variables
-    )
-
-
-def _channel_rule_entries(rule, module, bases, children_by_parent, variables) -> list:
-    """Return the preview entries a channel rule produces for one module.
-
-    A module whose base is already channelized previews per family (renames only); a channelized
-    rule on a plain base previews the family it would build; anything else keeps the flat breakout
-    preview of one entry per module.
-    """
-    families = [base for base in bases if _is_channelized_parent(base)]
-    if families:  # pragma: no cover - requires a NetBox that models channelization
-        entries = [
-            _channelized_family_entry(rule, module, parent, children_by_parent.get(parent.pk, ()), variables)
-            for parent in families
-        ]
-        return [entry for entry in entries if entry]
-    if _is_channelized_rule(rule):
-        entry = _channelized_creation_entry(rule, module, bases, variables)
-        return [entry] if entry else []
-    entry = _channel_rule_entry(rule, module, bases, variables)
-    return [entry] if entry else []
-
-
-def _channel_rule_entry(rule, module, ifaces, variables) -> dict | None:
-    """Return a result dict if the channel rule would change any name for this module, else None."""
-    base_iface = _find_channel_base(rule, ifaces, variables)
-    if base_iface is None:
-        return None
-    vars_copy = {**variables, "base": base_iface.name}
-    expected_names = []
-    try:
-        for ch in range(rule.channel_count):
-            expected_names.append(
-                evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
-            )
-    except ValueError as exc:
-        expected_names = [f"<error: {exc}>"]
-    existing_names = {i.name for i in ifaces}
-    # Report if any channel name is missing or the base itself needs renaming
-    if any(n not in existing_names for n in expected_names) or (
-        expected_names and expected_names[0] != base_iface.name
-    ):
-        return {
-            "module": module,
-            "interface": base_iface,
-            "current_name": base_iface.name,
-            "new_names": expected_names,
-            "name_details": [_name_detail(name, "channel") for name in expected_names],
-        }
-    return None
+def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
+    """Preview one module from its family plans.  Returns (checked_count, should_stop)."""
+    plan_set = family_ops.plan_prospective_families(module, rule, variables, family_ops.describe_interfaces(ifaces))
+    checked = len(plan_set.plans)
+    if not checked:
+        return 0, False
+    rows_by_name = {iface.name: iface for iface in ifaces}
+    existing_names = frozenset(rows_by_name)
+    for plan in _preview_plans(rule, plan_set, rows_by_name, variables):
+        entry = _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+        if entry is None:
+            continue
+        results.append(entry)
+        if limit is not None and len(results) >= limit:
+            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
+    return checked, False
 
 
 def _count_remaining_interfaces(module_qs, processed_pks) -> int:
@@ -1369,35 +1171,6 @@ def _count_remaining_interfaces(module_qs, processed_pks) -> int:
     if supports_channelization():  # pragma: no cover - the column exists only on NetBox 4.7+
         qs = qs.filter(channel_id__isnull=True)  # a family counts once, through its parent
     return qs.count()
-
-
-def _process_channel_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Process one module for a channel rule.  Returns (checked_count, should_stop)."""
-    bases, children_by_parent = _partition_families(ifaces)
-    checked = len(bases)
-    if not bases:
-        return checked, False
-    for entry in _channel_rule_entries(rule, module, bases, children_by_parent, variables):
-        results.append(entry)
-        if limit is not None and len(results) >= limit:
-            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
-    return checked, False
-
-
-def _process_plain_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Process one module for a plain (non-channel) rule.  Returns (checked_count, should_stop)."""
-    bases, children_by_parent = _partition_families(ifaces)
-    checked = 0
-    for iface_idx, iface in enumerate(bases):
-        checked += 1
-        entry = _evaluate_plain_interface(rule, module, iface, variables, children_by_parent.get(iface.pk, ()))
-        if entry:
-            results.append(entry)
-            if limit is not None and len(results) >= limit:
-                checked += len(bases) - (iface_idx + 1)
-                checked += _count_remaining_interfaces(module_qs, processed_pks)
-                return checked, True
-    return checked, False
 
 
 def find_interfaces_for_rule(rule, limit=None):
@@ -1433,8 +1206,6 @@ def find_interfaces_for_rule(rule, limit=None):
         "module_bay",
         "module_bay__parent",
     )
-    process_fn = _process_channel_module if rule.channel_count > 0 else _process_plain_module
-
     # Batch-load all interfaces for matching modules to avoid N+1 queries.
     ifaces_by_module = defaultdict(list)
     for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
@@ -1447,7 +1218,7 @@ def find_interfaces_for_rule(rule, limit=None):
         processed_pks.add(module.pk)
         variables = build_variables(module.module_bay, device=module.device)
         ifaces = ifaces_by_module.get(module.pk, [])
-        checked, stop = process_fn(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+        checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
         total_checked += checked
         if stop:
             return results, total_checked

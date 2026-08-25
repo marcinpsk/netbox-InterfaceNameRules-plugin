@@ -1003,12 +1003,12 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _channel_rule_entry ValueError path (lines 618-619)
+# engine.py — preview of a breakout rule whose template cannot be evaluated
 # ---------------------------------------------------------------------------
 
 
-class EngineChannelRuleEntryValueErrorTest(TestCase):
-    """Test _channel_rule_entry handles ValueError from template evaluation (lines 618-619)."""
+class PreviewTemplateErrorTest(TestCase):
+    """A breakout rule the preview cannot evaluate reports the error instead of a name."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1023,42 +1023,32 @@ class EngineChannelRuleEntryValueErrorTest(TestCase):
         cls.device = Device.objects.create(name="chrulex-dev-01", device_type=device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="CRBay 0")
 
-    def test_valueerror_in_template_sets_error_name(self):
-        """_channel_rule_entry stores an ``<error: …>`` placeholder when the template can't be evaluated.
-
-        A template referencing an undefined variable raises ValueError in
-        evaluate_name_template for real (no mock), so the loop that builds
-        expected_names catches it and collapses to a single error-placeholder
-        entry (lines 618-619). The result dict is returned because the
-        placeholder is not in existing_names.
-        """
-        from netbox_interface_name_rules.engine import _channel_rule_entry
-
-        rule = InterfaceNameRule(
+    def test_an_unevaluable_template_previews_one_error_placeholder(self):
+        """An undefined variable raises for real, so the family previews as a single placeholder."""
+        rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="{base}:{channel}:{undefined_var}",  # undefined_var → real ValueError on eval
             channel_count=2,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
-        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
 
-        result = _channel_rule_entry(rule, module, [iface], variables)
+        results, total = find_interfaces_for_rule(rule)
 
-        # The ValueError collapses expected_names to one "<error: …>" placeholder.
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result["new_names"]), 1)
-        self.assertTrue(result["new_names"][0].startswith("<error:"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0]["new_names"]), 1)
+        self.assertTrue(results[0]["new_names"][0].startswith("<error:"))
+        self.assertEqual(total, 1)
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _process_channel_module with empty ifaces (line 640)
+# engine.py — preview of a module that carries no interfaces
 # ---------------------------------------------------------------------------
 
 
-class EngineProcessChannelModuleEmptyIfacesTest(TestCase):
-    """Test _process_channel_module returns early when ifaces is empty (line 640)."""
+class PreviewEmptyModuleTest(TestCase):
+    """A module with no interfaces contributes nothing to a breakout preview."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1071,43 +1061,25 @@ class EngineProcessChannelModuleEmptyIfacesTest(TestCase):
         cls.device = Device.objects.create(name="pcme-dev-01", device_type=device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="PEBay 0")
 
-    def test_empty_ifaces_returns_zero_checked_false(self):
-        """_process_channel_module returns (0, False) for an empty ifaces list (line 640).
-
-        Driven entirely with real ORM objects: a real channel rule, a real module
-        with no interfaces, and the real module queryset the rule would scan.
-        """
-        from netbox_interface_name_rules.engine import _build_module_qs, _process_channel_module
-
+    def test_a_module_without_interfaces_previews_nothing(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="{base}:{channel}",
             channel_count=2,
             channel_start=0,
         )
-        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        module_qs = _build_module_qs(rule)
+        Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
 
-        result = _process_channel_module(
-            rule=rule,
-            module=module,
-            ifaces=[],
-            variables=build_variables(self.bay),
-            limit=None,
-            results=[],
-            module_qs=module_qs,
-            processed_pks={module.pk},
-        )
-        self.assertEqual(result, (0, False))
+        self.assertEqual(find_interfaces_for_rule(rule), ([], 0))
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _process_channel_module limit reached (line 645)
+# engine.py — preview stops at the batch limit
 # ---------------------------------------------------------------------------
 
 
-class EngineProcessChannelModuleLimitTest(TestCase):
-    """Test _process_channel_module stops when limit is reached (line 645)."""
+class PreviewLimitTest(TestCase):
+    """The preview stops once it has collected as many changed families as the limit allows."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1116,46 +1088,28 @@ class EngineProcessChannelModuleLimitTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="ChLim-SFP", part_number="ChLim-SFP"
         )
-        ModuleBayTemplate.objects.create(device_type=device_type, name="CLBay 0", position="0")
+        for position in ("0", "1"):
+            ModuleBayTemplate.objects.create(device_type=device_type, name=f"CLBay {position}", position=position)
         role = DeviceRole.objects.create(name="ChLimRole", slug="chlimrole")
         site = Site.objects.create(name="ChLimSite", slug="chlimsite")
         cls.device = Device.objects.create(name="chlim-dev-01", device_type=device_type, role=role, site=site)
-        cls.bay = ModuleBay.objects.get(device=cls.device, name="CLBay 0")
 
-    def test_limit_reached_returns_true(self):
-        """_process_channel_module returns should_stop=True when the result limit is hit.
-
-        Real objects throughout: the module's interface needs renaming, so
-        _channel_rule_entry appends an entry that brings ``results`` to ``limit=1``,
-        triggering the early-stop path (line 644-645). The real module queryset
-        (with this module already in processed_pks) contributes no extra remaining
-        work to count.
-        """
-        from netbox_interface_name_rules.engine import _build_module_qs, _process_channel_module
-
+    def test_the_scan_stops_at_the_limit_and_still_counts_what_is_left(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="{base}:{channel}",
             channel_count=2,
             channel_start=0,
         )
-        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        for position in ("0", "1"):
+            bay = ModuleBay.objects.get(device=self.device, name=f"CLBay {position}")
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
+            Interface.objects.create(device=self.device, module=module, name=f"Eth{position}", type="100gbase-x-qsfp28")
 
-        results = []
-        _checked, should_stop = _process_channel_module(
-            rule=rule,
-            module=module,
-            ifaces=[iface],
-            variables=build_variables(self.bay),
-            limit=1,  # limit=1 means stop after first result
-            results=results,
-            module_qs=_build_module_qs(rule),
-            processed_pks={module.pk},
-        )
-        # The entry was added and limit=1 reached, so should_stop is True.
-        self.assertTrue(should_stop)
+        results, total = find_interfaces_for_rule(rule, limit=1)
+
         self.assertEqual(len(results), 1)
+        self.assertEqual(total, 2)
 
 
 # ---------------------------------------------------------------------------
