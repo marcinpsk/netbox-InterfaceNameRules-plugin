@@ -32,7 +32,13 @@ def restore_deferred_channel_names(reconciliations, db_alias):
     """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
     child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
     with transaction.atomic(using=db_alias):
-        children = Interface.objects.using(db_alias).select_for_update().select_related("device").in_bulk(child_pks)
+        children = (
+            Interface.objects.using(db_alias)
+            .select_for_update(of=("self",))
+            .select_related("device")
+            .order_by("pk")
+            .in_bulk(child_pks)
+        )
         for child_pk, final_name, cascade_name in reconciliations:
             child = children.get(child_pk)
             if child is None or child.name == final_name:

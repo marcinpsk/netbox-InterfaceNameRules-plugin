@@ -13,6 +13,7 @@ from unittest import skipIf, skipUnless
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.db import IntegrityError, connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
@@ -215,6 +216,22 @@ class DeferredChannelNameReconciliationTest(TestCase):
         occupant.refresh_from_db()
         self.assertEqual(child.name, "xe-0/0/3:1")
         self.assertEqual(occupant.name, "et-0/0/3:1")
+
+    def test_the_reconciliation_locks_only_interfaces_in_primary_key_order(self):
+        """A joined device row must not be locked, and overlapping runs must agree on lock order."""
+        children = [self._interface("et-0/0/3:1"), self._interface("et-0/0/3:2")]
+        reconciliations = tuple(
+            (child.pk, child.name, f"xe-0/0/3:{index}") for index, child in enumerate(children, start=1)
+        )
+
+        with CaptureQueriesContext(connection) as queries:
+            family_names.restore_deferred_channel_names(reconciliations, children[0]._state.db)
+
+        locking = [query["sql"] for query in queries.captured_queries if "FOR UPDATE" in query["sql"]]
+        self.assertEqual(len(locking), 1, locking)
+        self.assertIn('FOR UPDATE OF "dcim_interface"', locking[0])
+        self.assertNotIn("dcim_device", locking[0].split("FOR UPDATE")[1])
+        self.assertIn('ORDER BY "dcim_interface"."id" ASC', locking[0])
 
     def test_an_unrelated_integrity_failure_propagates(self):
         interface = self._interface("cascade-name")
