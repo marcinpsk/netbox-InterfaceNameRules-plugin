@@ -15,7 +15,7 @@ from .domain import (
     PlannedMember,
 )
 from .execution import execute_installed_plan_set
-from .installed import plan_installed_families
+from .installed import module_db_alias, plan_installed_families
 
 __all__ = (
     "FamilyOutcome",
@@ -29,5 +29,6 @@ __all__ = (
     "MemberRole",
     "PlannedMember",
     "execute_installed_plan_set",
+    "module_db_alias",
     "plan_installed_families",
 )

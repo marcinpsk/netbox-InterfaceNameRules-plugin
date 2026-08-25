@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 _BASE_SENTINEL = "InrBaseSentinelEnd"
 
 
+def module_db_alias(module) -> str:
+    """Return the database alias that *module* was loaded from."""
+    return module._state.db or DEFAULT_DB_ALIAS
+
+
 def _is_plain_interface(interface) -> bool:
     """Return whether *interface* can be a flat-family member."""
     return (
@@ -280,7 +285,7 @@ def _channelized_plans(module, rule, variables, db_alias, interfaces, templates)
 
 def plan_installed_families(module, rule, variables) -> InstalledFamilyPlanSet:
     """Return immutable plans for the installed families owned by *module*."""
-    db_alias = module._state.db or DEFAULT_DB_ALIAS
+    db_alias = module_db_alias(module)
     interfaces = list(Interface.objects.using(db_alias).filter(module_id=module.pk).order_by("pk"))
     templates = resolved_template_names(module)
     plans = _channelized_plans(module, rule, variables, db_alias, interfaces, templates)

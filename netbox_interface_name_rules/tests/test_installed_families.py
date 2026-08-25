@@ -21,7 +21,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.db import IntegrityError, connection
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
@@ -720,3 +720,82 @@ class InstalledChannelizedFamilyTest(TestCase):
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
             ["6", "6:3", "xe-0/0/6:0"],
         )
+
+
+class InstalledFamilyDatabaseAliasTest(TestCase):
+    """Automatic renaming reads leftover interfaces from the alias the module row came from.
+
+    A second alias onto the same test database gets its own connection, so it cannot see the rows
+    this test created inside its own open transaction. Binding the module to that alias therefore
+    leaves the leftover query with nothing to rename, unless the query still runs on the default
+    connection, which is the split the review found.
+    """
+
+    ALIAS = "family_alias"
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="AliasMfg", slug="alias-mfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="ALIAS-DEV", slug="alias-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="Bay 7", position="7")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model="ALIAS-QSFP",
+            part_number="ALIAS-QSFP",
+        )
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="{module}", type="100gbase-x-qsfp28")
+        role = DeviceRole.objects.create(name="AliasRole", slug="alias-role")
+        site = Site.objects.create(name="AliasSite", slug="alias-site")
+        cls.device = Device.objects.create(
+            name="alias-device-01",
+            device_type=device_type,
+            role=role,
+            site=site,
+        )
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="Bay 7")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{base}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def _use_second_alias(self):
+        """Point a second alias at the live test database and let this test reach it."""
+        connections.settings[self.ALIAS] = dict(connections[DEFAULT_DB_ALIAS].settings_dict)
+        declared = type(self).databases
+        type(self).databases = frozenset({*declared, self.ALIAS})
+        self.addCleanup(connections.settings.pop, self.ALIAS, None)
+        self.addCleanup(connections[self.ALIAS].close)
+        self.addCleanup(setattr, type(self), "databases", declared)
+        return self.ALIAS
+
+    @staticmethod
+    def _names(module):
+        return sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+
+    def test_leftover_interfaces_are_read_from_the_module_alias(self):
+        module = Module.objects.create(
+            device=self.device,
+            module_bay=self.bay,
+            module_type=self.module_type,
+        )
+        module._state.db = self._use_second_alias()
+
+        with CaptureQueriesContext(connections[self.ALIAS]) as aliased:
+            renamed = apply_interface_name_rules(module, self.bay)
+
+        self.assertEqual(renamed, 0)
+        self.assertEqual(self._names(module), ["7"])
+        self.assertTrue([query for query in aliased.captured_queries if 'FROM "dcim_interface"' in query["sql"]])
+
+    def test_the_same_module_on_the_default_alias_breaks_out_the_family(self):
+        """The control: only the alias makes the leftover pass find no interface to rename."""
+        module = Module.objects.create(
+            device=self.device,
+            module_bay=self.bay,
+            module_type=self.module_type,
+        )
+
+        self.assertEqual(apply_interface_name_rules(module, self.bay), 2)
+        self.assertEqual(self._names(module), ["xe-0/0/7:0", "xe-0/0/7:1"])

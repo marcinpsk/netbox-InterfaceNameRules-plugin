@@ -321,7 +321,8 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=plans)
         family_outcome = family_ops.execute_installed_plan_set(plan_set)
 
-    interfaces = list(Interface.objects.filter(module=module).exclude(pk__in=plan_set.member_pks))
+    remaining = Interface.objects.using(family_ops.module_db_alias(module)).filter(module=module)
+    interfaces = list(remaining.exclude(pk__in=plan_set.member_pks))
 
     if not interfaces:
         return family_outcome.changed_count
