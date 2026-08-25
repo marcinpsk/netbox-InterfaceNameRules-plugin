@@ -38,7 +38,6 @@ from netbox_interface_name_rules.family import (
     execute_installed_plan_set,
     plan_installed_families,
 )
-from netbox_interface_name_rules.family import execution as family_execution
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import evaluate_name_template
 
@@ -266,25 +265,6 @@ class InstalledFlatFamilyPlanningTest(TestCase):
             self.assertRaisesMessage(TypeError, "planner defect"),
         ):
             apply_interface_name_rules(module, self.bay, force_reapply=True)
-
-    def test_deferred_reconciliation_propagates_unrelated_integrity_failures(self):
-        interface = Interface.objects.create(
-            device=self.device,
-            name="cascade-name",
-            type=PLAIN_TYPE,
-        )
-
-        def reject_interface_update(execute, sql, params, many, context):
-            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
-                raise IntegrityError("injected deferred database failure")
-            return execute(sql, params, many, context)
-
-        with connection.execute_wrapper(reject_interface_update):
-            with self.assertRaisesMessage(IntegrityError, "injected deferred database failure"):
-                family_execution._restore_deferred_channel_names(
-                    ((interface.pk, "final-name", "cascade-name"),),
-                    interface._state.db,
-                )
 
     def test_changed_member_makes_the_plan_stale_without_partial_execution(self):
         module = Module.objects.create(

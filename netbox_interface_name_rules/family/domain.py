@@ -102,6 +102,40 @@ class InstalledFamilyPlanSet:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedChannel:
+    """One channel row a structural plan creates under its parent."""
+
+    channel_id: int
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class StructuralFamilyPlan:
+    """An executable plan that turns one plain interface into a channelized family."""
+
+    family_id: str
+    device_id: int
+    module_id: int
+    db_alias: str
+    base: InterfaceSnapshot
+    parent_target_name: str
+    channel_count: int
+    channels: tuple[PlannedChannel, ...]
+    precondition_status: FamilyStatus | None = None
+    precondition_reason: str = ""
+
+    @property
+    def topology(self) -> FamilyTopology:
+        """Return the topology this plan installs."""
+        return FamilyTopology.CHANNELIZED
+
+    @property
+    def target_names(self) -> tuple[str, ...]:
+        """Return the parent name and every channel name in creation order."""
+        return (self.parent_target_name, *(channel.name for channel in self.channels))
+
+
+@dataclass(frozen=True, slots=True)
 class MemberOutcome:
     """Result facts for one planned family member."""
 

@@ -16,6 +16,7 @@ from django.db import IntegrityError, transaction
 from . import family as family_ops
 from . import naming, rule_selection
 from .choices import BreakoutModeChoices
+from .family import names as family_names
 from .family import template_names as family_template_names
 from .rule_selection import _compile_pattern
 
@@ -71,19 +72,8 @@ def _get_parent_module_type(module_bay):
 
 
 def supports_channelization():
-    """Return True when this NetBox models channelized subinterfaces (NetBox 4.7+).
-
-    Probed from the Interface model rather than a version comparison, so a backport or a
-    development build is detected by what it actually provides.
-    """
-    from dcim.models import Interface
-    from django.core.exceptions import FieldDoesNotExist
-
-    try:
-        Interface._meta.get_field("channel_id")
-    except FieldDoesNotExist:
-        return False
-    return True  # pragma: no cover - only reachable on a NetBox that models channelization
+    """Delegate the channelization capability check while preserving the engine entry point."""
+    return family_ops.supports_channelization()
 
 
 def _vc_position_re():
@@ -420,6 +410,12 @@ def _predicted_family_parent_name(rule, raw_name, variables, parents):  # pragma
     return evaluate_name_template(rule.parent_name_template, {**variables, "base": raw_name})
 
 
+def _predicted_family_names(rule, raw_name, variables):  # pragma: no cover - channelization only
+    """Return the parent and channel names a channelized rule would build on *raw_name*."""
+    parent_name, channels = family_ops.channelized_family_names(rule, raw_name, variables)
+    return [parent_name, *(name for _, name in channels)]
+
+
 def _predicted_names(rule, raw_name, variables, parents, children, family_blocked=False):
     """Return the names *raw_name* predicts to under *rule*.
 
@@ -438,8 +434,7 @@ def _predicted_names(rule, raw_name, variables, parents, children, family_blocke
     if rule.channel_count > 0 and _is_channelized_rule(rule):
         if family_blocked or not supports_channelization():
             return [raw_name]  # the apply path builds nothing here
-        parent_name, channels = _channelized_family_names(rule, raw_name, variables)  # pragma: no cover - see above
-        return [parent_name, *(name for _, name in channels)]  # pragma: no cover - see above
+        return _predicted_family_names(rule, raw_name, variables)  # pragma: no cover - see above
     vars_copy = {**variables, "base": raw_name}
     if rule.channel_count > 0:
         return [
@@ -484,7 +479,7 @@ def predict_rule_output(module, module_bay, raw_names):
         rule.channel_count > 0
         and _is_channelized_rule(rule)
         and supports_channelization()
-        and _has_flat_expansion(module)
+        and family_ops.has_flat_expansion(module)
     )
 
     output = []
@@ -931,63 +926,6 @@ def _rename_for_family(iface, new_name, device, conflicts):  # pragma: no cover 
     return _RenameResult(new_name, _RENAMED, 1) if renamed else _RenameResult(new_name, _COLLISION, 0)
 
 
-def _restore_deferred_channel_names(reconciliations, db_alias):  # pragma: no cover - channelization only
-    """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
-    from dcim.models import Interface
-
-    child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
-    with transaction.atomic(using=db_alias):
-        children = Interface.objects.using(db_alias).select_for_update().select_related("device").in_bulk(child_pks)
-        for child_pk, final_name, cascade_name in reconciliations:
-            child = children.get(child_pk)
-            if child is None or child.name == final_name:
-                continue
-            if child.name != cascade_name:
-                logger.warning(
-                    "Channel interface %s changed to unexpected name %r before deferred reconciliation; "
-                    "leaving it unchanged.",
-                    child_pk,
-                    child.name,
-                )
-                continue
-            previous_name = child.name
-            try:
-                with transaction.atomic(using=db_alias):
-                    child.name = final_name
-                    child.full_clean()
-                    child.save(using=db_alias)
-            except (ValueError, ValidationError, IntegrityError):
-                child.name = previous_name
-                logger.exception(
-                    "Failed to restore channel interface %s from NetBox's deferred name %r to %r; skipping.",
-                    child_pk,
-                    cascade_name,
-                    final_name,
-                )
-
-
-def _preserve_names_across_parent_cascade(parent, parent_before, final_names):  # pragma: no cover
-    """Run after NetBox's deferred cascade when a rule intentionally keeps old-parent child names."""
-    if parent.name == parent_before:
-        return
-
-    reconciliations = []
-    for child, final_name in final_names:
-        old_conventional_name = f"{parent_before}:{child.channel_id}"
-        cascade_name = f"{parent.name}:{child.channel_id}"
-        if final_name == old_conventional_name and final_name != cascade_name:
-            reconciliations.append((child.pk, final_name, cascade_name))
-    if not reconciliations:
-        return
-
-    reconciliations = tuple(reconciliations)
-    db_alias = parent._state.db
-    transaction.on_commit(
-        lambda: _restore_deferred_channel_names(reconciliations, db_alias),
-        using=db_alias,
-    )
-
-
 def _rename_channel_children(parent, parent_before, children, module, conflicts):  # pragma: no cover - see above
     """Carry the parent's new name onto its channel subinterfaces; return how many were renamed."""
     count = 0
@@ -1079,7 +1017,12 @@ def _apply_breakout_rule_to_family(rule, parent, children, variables, module, co
         count += child_result.count
         final_name = new_name if child_result.outcome in (_RENAMED, _UNCHANGED) else previous_name
         final_names.append((child, final_name))
-    _preserve_names_across_parent_cascade(parent, base_name, final_names)
+    family_names.reconcile_after_parent_cascade(
+        base_name,
+        parent.name,
+        tuple((child.pk, child.channel_id, final_name) for child, final_name in final_names),
+        family_ops.module_db_alias(module),
+    )
     return count
 
 
@@ -1088,129 +1031,20 @@ def _is_channelized_rule(rule):
     return rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
 
 
-def _channelized_family_names(rule, base_name, variables):  # pragma: no cover - requires channelization support
-    """Return ``(parent_name, [(channel_id, name), ...])`` for the family *rule* builds on *base_name*.
-
-    ``{base}`` is the base interface's current name for the parent and every channel; ``{channel}``
-    is ``channel_start + channel_id - 1``.  A blank parent template leaves the base's name alone.
-    Takes the name rather than the interface so prediction can reuse it without a row to point at.
-    """
-    family_vars = {**variables, "base": base_name}
-    parent_name = base_name
-    if rule.parent_name_template:
-        parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
-    channels = [
-        (
-            channel_id,
-            evaluate_name_template(
-                rule.name_template, {**family_vars, "channel": str(rule.channel_start + channel_id - 1)}
-            ),
-        )
-        for channel_id in range(1, rule.channel_count + 1)
-    ]
-    return parent_name, channels
-
-
-def _has_flat_expansion(module):  # pragma: no cover - requires channelization support
-    """Return True when *module* carries more interfaces than its module type's templates describe.
-
-    A flat breakout leaves N-1 rows beyond the templates, so the surplus is the structural mark of a
-    family an earlier apply installed.  Counting templates rather than their resolved names keeps
-    two templates that resolve to the same string from reading as one.
-    """
-    from dcim.models import Interface, InterfaceTemplate
-
-    templates = InterfaceTemplate.objects.filter(module_type_id=module.module_type_id).count()
-    return Interface.objects.filter(module=module).count() > templates
-
-
-def _first_taken_name(device, names, exclude_pk):  # pragma: no cover - requires channelization support
-    """Return the first of *names* already used by another interface on *device*, or None."""
-    for name in names:
-        if _name_exists_on_device(device, name, exclude_pk=exclude_pk):
-            return name
-    return None
-
-
-def _build_channelized_family(rule, base, variables, module, conflicts):  # pragma: no cover - see above
-    """Turn a plain base interface into a channelized family; return how many rows it changed.
-
-    The whole family is preflighted before anything is written: a module that already carries a flat
-    family, or a single occupied name — the parent's or any channel's — leaves the base exactly as
-    it was instead of half converting it.
-    """
-    from dcim.choices import InterfaceTypeChoices
-    from dcim.models import Interface
-
-    device = module.device
-    base_name = base.name
-    parent_name, channels = _channelized_family_names(rule, base_name, variables)
-    if _has_flat_expansion(module):
-        # Converting one sibling into a parent would strand the others beside the new family.
-        logger.warning(
-            "Module %s already carries a flat breakout family; rule '%s' will not convert interface "
-            "%r into the channelized parent %r — converting an installed family is a separate, "
-            "explicit operation. Skipping.",
-            module,
-            rule,
-            base.name,
-            parent_name,
-        )
-        _record_skip(conflicts, device, base.name, parent_name, base.pk)
-        return 0
-    blocker = _first_taken_name(device, [parent_name, *(name for _, name in channels)], base.pk)
-    if blocker is not None:
-        logger.warning(
-            "Cannot build the channelized family for interface %r on device %s: %r is already taken; skipping.",
-            base.name,
-            device,
-            blocker,
-        )
-        _record_skip(conflicts, device, base.name, blocker, base.pk)
-        return 0
-
-    count = 0
-    with transaction.atomic():
-        created_channels = []
-        base.channels = rule.channel_count
-        if parent_name != base.name:
-            base.name = parent_name
-            count += 1
-        base.full_clean()
-        base.save()
-        for channel_id, name in channels:
-            channel = Interface(
-                device=device,
-                module=module,
-                name=name,
-                type=InterfaceTypeChoices.TYPE_CHANNEL,
-                parent=base,
-                channel_id=channel_id,
-                enabled=base.enabled,
-            )
-            channel.full_clean()
-            channel.save()
-            created_channels.append((channel, name))
-            count += 1
-        _preserve_names_across_parent_cascade(base, base_name, created_channels)
-    return count
-
-
 def _apply_channelized_rule(rule, base, variables, module, conflicts):
     """Build the channelized family *rule* describes on a plain base interface.
 
-    Returns None where NetBox cannot model channels: the rule describes a topology this release has
-    no rows for, and building a flat family instead would silently give the operator another one.
+    Returns the rows the family creation changed, 0 when a structural precondition blocked it, or
+    None where NetBox cannot model channels: the rule describes a topology this release has no rows
+    for, and building a flat family instead would silently give the operator another one.
     """
-    if not supports_channelization():
-        logger.warning(
-            "Rule '%s' builds a channelized family, which this NetBox release cannot model; "
-            "leaving interface %r unchanged.",
-            rule,
-            base.name,
-        )
+    outcome = family_ops.install_channelized_family(module, rule, variables, base)
+    if outcome.status == family_ops.FamilyStatus.UNSUPPORTED:
         return None
-    return _build_channelized_family(rule, base, variables, module, conflicts)  # pragma: no cover - see above
+    if outcome.status != family_ops.FamilyStatus.CHANGED:
+        _record_skip(conflicts, module.device, base.name, outcome.members[0].target_name, base.pk)
+        return 0
+    return outcome.changed_count
 
 
 def _apply_rule_with_family(rule, iface, children, variables, module, conflicts):
@@ -1454,7 +1288,7 @@ def _channelized_family_entry(rule, module, parent, children, variables) -> dict
 def _channelized_family_preview(rule, module, base, variables) -> dict | None:  # pragma: no cover - see below
     """Describe the channelized family a rule would build on a plain base interface."""
     try:
-        parent_name, channels = _channelized_family_names(rule, base.name, variables)
+        parent_name, channels = family_ops.channelized_family_names(rule, base.name, variables)
     except ValueError as exc:
         return _family_entry(module, base, [_name_detail(f"<error: {exc}>", "parent")], ())
     details = [_name_detail(parent_name, "parent")]
@@ -1470,7 +1304,7 @@ def _channelized_creation_entry(rule, module, bases, variables) -> dict | None:
     """
     if not supports_channelization():
         return None
-    if _has_flat_expansion(module):  # pragma: no cover - requires channelization support
+    if family_ops.has_flat_expansion(module):  # pragma: no cover - requires channelization support
         return None
     return _channelized_family_preview(  # pragma: no cover - requires channelization support
         rule, module, _find_channel_base(rule, bases, variables), variables

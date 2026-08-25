@@ -19,12 +19,11 @@ from .domain import (
     MemberOutcome,
     MemberRole,
 )
+from .names import COLLISION_REASON, is_name_collision, name_is_taken, reconcile_after_parent_cascade
 
 logger = logging.getLogger(__name__)
 
 STALE_REASON = "installed family changed after planning"
-COLLISION_REASON = "target name is already in use"
-INTERFACE_NAME_CONSTRAINT = "dcim_interface_unique_device_name"
 PARENT_BLOCKED_REASON = "family parent was blocked"
 
 
@@ -56,23 +55,6 @@ def _member_outcome(member, status, reason=""):
     )
 
 
-def _name_is_taken(interface, target_name, db_alias):
-    """Return whether another interface on the device owns *target_name*."""
-    return (
-        Interface.objects.using(db_alias)
-        .filter(device_id=interface.device_id, name=target_name)
-        .exclude(pk=interface.pk)
-        .exists()
-    )
-
-
-def _is_name_collision(error: IntegrityError) -> bool:
-    """Return whether PostgreSQL identified NetBox's interface-name constraint."""
-    cause = error.__cause__
-    diagnostics = getattr(cause, "diag", None)
-    return getattr(diagnostics, "constraint_name", None) == INTERFACE_NAME_CONSTRAINT
-
-
 def _blocked_member(member, reason):
     """Return a blocked member outcome."""
     return _member_outcome(member, FamilyStatus.BLOCKED, reason)
@@ -89,7 +71,7 @@ def _rename_member(member, interface, db_alias):
         return _blocked_member(member, member.reason)
     if target_name == interface.name:
         return _member_outcome(member, FamilyStatus.UNCHANGED)
-    if _name_is_taken(interface, target_name, db_alias):
+    if name_is_taken(interface.device_id, target_name, db_alias, exclude_pk=interface.pk):
         logger.warning(
             "Interface name %r already exists on device %s; skipping rename of %r to %r.",
             target_name,
@@ -111,7 +93,7 @@ def _rename_member(member, interface, db_alias):
         return _blocked_member(member, " ".join(error.messages))
     except IntegrityError as error:
         interface.name = previous_name
-        if _is_name_collision(error):
+        if is_name_collision(error):
             logger.warning(
                 "Interface name %r became occupied while renaming %r; skipping.",
                 target_name,
@@ -132,48 +114,6 @@ def _family_status(members):
     return FamilyStatus.UNCHANGED
 
 
-def _restore_deferred_channel_names(reconciliations, db_alias):  # pragma: no cover - channelization only
-    """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
-    child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
-    with transaction.atomic(using=db_alias):
-        children = Interface.objects.using(db_alias).select_for_update().in_bulk(child_pks)
-        for child_pk, final_name, cascade_name in reconciliations:
-            child = children.get(child_pk)
-            if child is None or child.name == final_name:
-                continue
-            if child.name != cascade_name:
-                logger.warning(
-                    "Channel interface %s changed to unexpected name %r before deferred reconciliation; "
-                    "leaving it unchanged.",
-                    child_pk,
-                    child.name,
-                )
-                continue
-            previous_name = child.name
-            try:
-                with transaction.atomic(using=db_alias):
-                    child.name = final_name
-                    child.full_clean()
-                    child.save(using=db_alias)
-            except ValidationError:
-                child.name = previous_name
-                logger.exception(
-                    "Failed to restore channel interface %s from NetBox's deferred name %r to %r; skipping.",
-                    child_pk,
-                    cascade_name,
-                    final_name,
-                )
-            except IntegrityError as error:
-                child.name = previous_name
-                if not _is_name_collision(error):
-                    raise
-                logger.warning(
-                    "Channel interface %s could not reclaim name %r after NetBox's deferred rename; skipping.",
-                    child_pk,
-                    final_name,
-                )
-
-
 def _preserve_names_across_parent_cascade(plan, member_outcomes):  # pragma: no cover - channelization only
     """Schedule restoration of blocked conventional channel names after a parent cascade."""
     if plan.parent_pk is None:
@@ -182,27 +122,19 @@ def _preserve_names_across_parent_cascade(plan, member_outcomes):  # pragma: no 
     parent_outcome = next(outcome for outcome in member_outcomes if outcome.interface_pk == plan.parent_pk)
     if parent_outcome.status != FamilyStatus.CHANGED:
         return
-    final_parent_name = parent_member.target_name
     outcomes_by_pk = {outcome.interface_pk: outcome for outcome in member_outcomes}
-    reconciliations = []
-    for member in plan.members:
-        if member.role != MemberRole.CHANNEL:
-            continue
-        channel_id = member.snapshot.channel_id
-        final_name = (
+    channels = tuple(
+        (
+            member.snapshot.pk,
+            member.snapshot.channel_id,
             member.target_name
             if outcomes_by_pk[member.snapshot.pk].status in (FamilyStatus.CHANGED, FamilyStatus.UNCHANGED)
-            else member.snapshot.name
+            else member.snapshot.name,
         )
-        old_conventional_name = f"{parent_member.snapshot.name}:{channel_id}"
-        cascade_name = f"{final_parent_name}:{channel_id}"
-        if final_name == old_conventional_name and final_name != cascade_name:
-            reconciliations.append((member.snapshot.pk, final_name, cascade_name))
-    if reconciliations:
-        transaction.on_commit(
-            lambda: _restore_deferred_channel_names(tuple(reconciliations), plan.db_alias),
-            using=plan.db_alias,
-        )
+        for member in plan.members
+        if member.role == MemberRole.CHANNEL
+    )
+    reconcile_after_parent_cascade(parent_member.snapshot.name, parent_member.target_name, channels, plan.db_alias)
 
 
 def _execute_channelized_members(plan, live_by_pk):  # pragma: no cover - requires channelization support
