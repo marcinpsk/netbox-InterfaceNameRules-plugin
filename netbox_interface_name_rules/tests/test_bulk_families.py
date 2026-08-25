@@ -454,6 +454,16 @@ class BulkApplyChannelizedFamiliesTest(BulkTestCase):
         claimed = [member.interface_pk for family in outcome.families for member in family.members]
         self.assertEqual(len(claimed), len(set(claimed)))
 
+    def test_a_family_missing_a_channel_still_names_the_channels_it_has(self):
+        """A channel is named from its own channel id, so a family that lost one is still repaired."""
+        modules = self._install_families(("1",))
+        Interface.objects.filter(module=modules[0], channel_id=2).delete()
+
+        outcome = apply_rule_to_existing(self.rule)
+
+        self.assertEqual(self._names(modules[0]), ["1", "xe-0/0/1:0", "xe-0/0/1:2", "xe-0/0/1:3"])
+        self.assertEqual(outcome.skipped_members, ())
+
     def _apply_queries(self, positions):
         """Return the queries one batch runs over freshly installed families at *positions*."""
         self._install_families(positions)
@@ -469,11 +479,12 @@ class BulkApplyChannelizedFamiliesTest(BulkTestCase):
 
     def test_eight_channelized_families_cost_no_more_per_module_than_the_first(self):
         """Renaming a fleet stays linear in its modules: no family pays for the ones beside it."""
+        added = self.POSITIONS[1:]
         one_module = len(self._apply_queries(("1",)))
 
-        eight_modules = len(self._apply_queries(self.POSITIONS[1:]))
+        eight_modules = len(self._apply_queries(added))
 
-        per_module = (eight_modules - one_module) / 6
+        per_module = (eight_modules - one_module) / len(added)
         self.assertLessEqual(per_module, one_module, [per_module, one_module, eight_modules])
 
     def test_selecting_a_channel_on_its_own_applies_nothing(self):
