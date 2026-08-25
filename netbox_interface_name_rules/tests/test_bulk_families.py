@@ -30,6 +30,7 @@ from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
     build_variables,
+    find_interfaces_for_rule,
     supports_channelization,
 )
 from netbox_interface_name_rules.family import (
@@ -648,3 +649,41 @@ class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):
         job.logger.info.assert_called_once()
         job.logger.warning.assert_called_once()
         self.assertEqual(job.logger.warning.call_args.args[1], 1)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class BulkApplyBuildsOneFamilyPerPortTest(BulkTestCase):
+    """Every port a channelized rule names gets its own family, however many the module carries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.dual_type = cls._module_type("BULK-DUAL-CH", ("{module}/a", "{module}/b"))
+
+    def setUp(self):
+        self.rule = self._flat_rule(
+            self.dual_type,
+            name_template="{base}:{channel}",
+            parent_name_template="{base}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_start=1,
+        )
+        self.module = self._install("1", module_type=self.dual_type)
+
+    def test_both_ports_gain_the_family_the_rule_describes(self):
+        outcome = apply_rule_to_existing(self.rule)
+
+        self.assertEqual(outcome.skipped_members, ())
+        self.assertEqual(
+            self._names(self.module),
+            ["1/a", "1/a:1", "1/a:2", "1/a:3", "1/a:4", "1/b", "1/b:1", "1/b:2", "1/b:3", "1/b:4"],
+        )
+
+    def test_the_preview_offers_exactly_the_families_the_apply_builds(self):
+        previewed, _total = find_interfaces_for_rule(self.rule)
+
+        outcome = apply_rule_to_existing(self.rule)
+
+        self.assertEqual([entry["current_name"] for entry in previewed], ["1/a", "1/b"])
+        self.assertEqual(len(outcome.families), len(previewed))
+        self.assertEqual({family.status for family in outcome.families}, {FamilyStatus.CHANGED})

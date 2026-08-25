@@ -32,17 +32,20 @@ MODULE_CHANGED_REASON = "the module's interfaces changed after planning"
 
 
 def _flat_expansion(module_type_id, module_id, db_alias) -> bool:  # pragma: no cover - channelization only
-    """Return whether the module carries more interfaces than its module type's templates describe."""
+    """Return whether the module carries more plain interfaces than its templates describe."""
     templates = InterfaceTemplate.objects.using(db_alias).filter(module_type_id=module_type_id).count()
-    return Interface.objects.using(db_alias).filter(module_id=module_id).count() > templates
+    plain = Interface.objects.using(db_alias).filter(module_id=module_id, channel_id__isnull=True)
+    return plain.count() > templates
 
 
 def has_flat_expansion(module) -> bool:  # pragma: no cover - requires channelization support
-    """Return whether *module* carries more interfaces than its module type's templates describe.
+    """Return whether *module* carries more plain interfaces than its module type's templates describe.
 
     A flat breakout leaves N-1 rows beyond the templates, so the surplus is the structural mark of a
-    family an earlier apply installed.  Counting templates rather than their resolved names keeps
-    two templates that resolve to the same string from reading as one.
+    family an earlier apply installed.  A channel belongs to the parent that declares it, so it is
+    never part of that surplus: counting one would stop a second port from gaining its own family.
+    Counting templates rather than their resolved names keeps two templates that resolve to the same
+    string from reading as one.
     """
     return _flat_expansion(module.module_type_id, module.pk, module_db_alias(module))
 
