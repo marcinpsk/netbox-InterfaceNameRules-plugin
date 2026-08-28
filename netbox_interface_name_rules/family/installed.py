@@ -32,7 +32,7 @@ def module_db_alias(module) -> str:
     return module._state.db or DEFAULT_DB_ALIAS
 
 
-def _is_plain_interface(interface) -> bool:
+def is_plain_interface(interface) -> bool:
     """Return whether *interface* can be a flat-family member."""
     return (
         getattr(interface, "parent_id", None) is None
@@ -93,22 +93,38 @@ def _source_bases(template, historical_bases, ambiguous_bases):
     return (template.resolved, *unambiguous)
 
 
-def _template_candidates(rule, variables, by_name, template, source_bases):
-    """Return every complete flat family that *template* recovers from *source_bases*."""
+def flat_family_bases(rule, variables, interfaces, catalog):
+    """Return ``(template base, source base)`` for every base a flat family could be named from.
+
+    The template base is the name the rule resolves for this module now; the source base is the one
+    an installed family still spells, which differs after a virtual-chassis renumber.  A historical
+    base more than one template could claim is dropped: the rows it names are not certainly one
+    family's, and neither renaming nor converting them is this plugin's guess to make.
+    """
+    if rule.channel_count <= 0:
+        return ()
+    templates = catalog.get()
+    historical_by_template = {
+        template.pk: _historical_bases(rule, variables, template, interfaces) for template in templates
+    }
+    ambiguous_bases = _ambiguous_bases(historical_by_template)
+    return tuple(
+        (template.resolved, source_base)
+        for template in templates
+        for source_base in _source_bases(template, historical_by_template[template.pk], ambiguous_bases)
+    )
+
+
+def family_names_for(rule, variables, base_name, source_base):
+    """Return the names the rule intends for the family and the names it still spells, or None."""
     try:
-        target_names = flat_family_names(rule, variables, template.resolved)
+        target_names = flat_family_names(rule, variables, base_name)
+        source_names = flat_family_names(rule, variables, source_base)
     except (TypeError, ValueError):
-        return []
-    candidates = []
-    for source_base in source_bases:
-        try:
-            source_names = flat_family_names(rule, variables, source_base)
-        except (TypeError, ValueError):
-            continue
-        if len(set(source_names)) != len(source_names) or not all(name in by_name for name in source_names):
-            continue
-        candidates.append((template.resolved, target_names, tuple(by_name[name] for name in source_names)))
-    return candidates
+        return None
+    if len(set(source_names)) != len(source_names):
+        return None
+    return target_names, source_names
 
 
 def _singly_claimed(candidates):
@@ -120,27 +136,35 @@ def _singly_claimed(candidates):
     return [candidate for candidate in candidates if all(claims[member.pk] == 1 for member in candidate[2])]
 
 
-def _flat_candidates(rule, variables, interfaces, catalog):
-    """Return complete, unambiguous flat-family candidates for *module*."""
-    if rule.channel_count <= 0 or rule.breakout_mode != BreakoutModeChoices.FLAT:
-        return []
+def flat_family_candidates(rule, variables, interfaces, catalog):
+    """Return complete, unambiguous flat-family candidates on this module.
 
-    by_name = {interface.name: interface for interface in interfaces if _is_plain_interface(interface)}
+    A flat family carries the names the rule's channel range spells, and a flat rule and the
+    channelized rule it later became spell those identically, so the caller decides whether the
+    rule's current breakout mode makes these families its own to rename or its own to convert.
+    """
+    by_name = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
     if not by_name:
         return []
-    templates = catalog.get()
-    historical_by_template = {
-        template.pk: _historical_bases(rule, variables, template, interfaces) for template in templates
-    }
-    ambiguous_bases = _ambiguous_bases(historical_by_template)
-
     candidates = []
-    for template in templates:
-        source_bases = _source_bases(template, historical_by_template[template.pk], ambiguous_bases)
-        for candidate in _template_candidates(rule, variables, by_name, template, source_bases):
-            if candidate not in candidates:  # pragma: no branch - duplicates require historical matchers
-                candidates.append(candidate)
+    for base_name, source_base in flat_family_bases(rule, variables, interfaces, catalog):
+        names = family_names_for(rule, variables, base_name, source_base)
+        if names is None:
+            continue
+        target_names, source_names = names
+        if not all(name in by_name for name in source_names):
+            continue
+        candidate = (base_name, target_names, tuple(by_name[name] for name in source_names))
+        if candidate not in candidates:  # pragma: no branch - duplicates require historical matchers
+            candidates.append(candidate)
     return _singly_claimed(candidates)
+
+
+def _flat_candidates(rule, variables, interfaces, catalog):
+    """Return the flat families a flat-mode rule owns on this module."""
+    if rule.breakout_mode != BreakoutModeChoices.FLAT:
+        return []
+    return flat_family_candidates(rule, variables, interfaces, catalog)
 
 
 def _flat_plan(module, db_alias, target_names, interfaces):
@@ -220,7 +244,7 @@ def _channelized_plans(module, rule, variables, db_alias, interfaces, catalog): 
     return plans
 
 
-class _TemplateNames:
+class TemplateNames:
     """The module type's resolved template names, read only where a plan needs them."""
 
     def __init__(self, module):
@@ -232,6 +256,21 @@ class _TemplateNames:
         if self._templates is None:
             self._templates = resolved_template_names(self._module)
         return self._templates
+
+
+def interfaces_by_module(modules):
+    """Load every interface of a module batch in one query, in stable per-module order."""
+    by_module: dict[int, list] = {module.pk: [] for module in modules}
+    if not by_module:
+        return by_module
+    rows = (
+        Interface.objects.using(module_db_alias(modules[0]))
+        .filter(module_id__in=list(by_module))
+        .order_by("module_id", "name")
+    )
+    for interface in rows:
+        by_module[interface.module_id].append(interface)
+    return by_module
 
 
 def plan_interface_rename(module, rule, variables, interface) -> InstalledFamilyPlan:
@@ -268,7 +307,7 @@ def plan_installed_families(module, rule, variables, interfaces=None) -> Install
     db_alias = module_db_alias(module)
     if interfaces is None:
         interfaces = list(Interface.objects.using(db_alias).filter(module_id=module.pk).order_by("pk"))
-    catalog = _TemplateNames(module)
+    catalog = TemplateNames(module)
     plans = _channelized_plans(module, rule, variables, db_alias, interfaces, catalog)
     plans.extend(
         _flat_plan(module, db_alias, target_names, members)

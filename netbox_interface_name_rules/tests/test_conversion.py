@@ -19,9 +19,9 @@ import uuid
 from unittest import skipIf, skipUnless
 from unittest.mock import patch
 
-from core.models import Job, ObjectType
+from core.models import Job, ObjectChange, ObjectType
 from dcim.choices import InterfaceModeChoices
-from dcim.models import Cable, Interface
+from dcim.models import Cable, Interface, Module
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.db import connection
@@ -38,7 +38,10 @@ from netbox_interface_name_rules.engine import (
     find_convertible_families,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import FamilyStatus, execute_conversion, plan_module_conversions
+from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
     FLAT,
@@ -92,9 +95,13 @@ class ConversionTestCase(ChannelizationTestCase):
         return Interface.objects.get(device=self.device, name=name)
 
     def _verdicts(self, limit=None):
-        """Return just the scan's verdicts; the 'more families' flag is asserted where it is the point."""
-        verdicts, _ = find_convertible_families(self.rule, limit=limit)
-        return verdicts
+        """Return just the scan's candidates; the 'more families' flag is asserted where it is the point."""
+        return find_convertible_families(self.rule, limit=limit).candidates
+
+    @staticmethod
+    def _converted(outcome):
+        """Return how many families a conversion batch actually rewrote."""
+        return len(outcome.changed_families)
 
     @staticmethod
     def _flat_names(position):
@@ -133,30 +140,30 @@ class ConversionVerdictTest(ConversionTestCase):
         verdicts = self._verdicts()
 
         self.assertEqual(len(verdicts), 1)
-        self.assertTrue(verdicts[0]["convertible"])
-        self.assertEqual(verdicts[0]["reason"], "")
+        self.assertTrue(verdicts[0].convertible)
+        self.assertEqual(verdicts[0].reason, "")
 
     def test_the_verdict_is_keyed_on_the_ch0_row(self):
         """The ch-0 interface is the physical row and the pk the confirm form submits."""
         verdict = self._verdicts()[0]
 
-        self.assertEqual(verdict["interface"].pk, self._iface("xe-0/0/3:0").pk)
-        self.assertEqual(verdict["current_name"], "xe-0/0/3:0")
-        self.assertEqual(verdict["module"].pk, self.module.pk)
+        self.assertEqual(verdict.interface.pk, self._iface("xe-0/0/3:0").pk)
+        self.assertEqual(verdict.current_name, "xe-0/0/3:0")
+        self.assertEqual(verdict.module.pk, self.module.pk)
 
     def test_the_verdict_names_the_family_as_it_is_and_as_it_would_be(self):
         """An operator confirms a rewrite of named rows, so both name sets have to be on the page."""
         verdict = self._verdicts()[0]
 
-        self.assertEqual(verdict["current_names"], self._flat_names("3"))
-        self.assertEqual(verdict["new_names"], ["et-0/0/3", *self._flat_names("3")])
+        self.assertEqual(list(verdict.current_names), self._flat_names("3"))
+        self.assertEqual(list(verdict.new_names), ["et-0/0/3", *self._flat_names("3")])
 
     def test_the_verdict_describes_the_parent_and_its_channels(self):
         """The page must show which row becomes the parent and which channel each name binds to."""
         verdict = self._verdicts()[0]
 
         self.assertEqual(
-            [(detail["role"], detail["channel_id"]) for detail in verdict["name_details"]],
+            [(detail.role, detail.channel_id) for detail in verdict.name_details],
             [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
         )
 
@@ -164,13 +171,13 @@ class ConversionVerdictTest(ConversionTestCase):
         """The ch-0 row keeps its pk but loses its addresses — the operator has to be told which row gets them."""
         verdict = self._verdicts()[0]
 
-        self.assertIn("xe-0/0/3:0", verdict["metadata_note"])
+        self.assertIn("xe-0/0/3:0", verdict.metadata_note)
 
     def test_the_verdict_warns_that_the_ch0_interface_id_becomes_the_parent(self):
         """Automation keyed on the ch-0 interface id will address the parent afterwards, silently."""
         verdict = self._verdicts()[0]
 
-        self.assertRegex(verdict["metadata_note"], r"(?i)\bid\b")
+        self.assertRegex(verdict.metadata_note, r"(?i)\bid\b")
 
     def test_finding_the_verdicts_converts_nothing(self):
         """The preflight really performs the conversion to validate it, so the rollback is the feature."""
@@ -185,7 +192,7 @@ class ConversionVerdictTest(ConversionTestCase):
         """In a flat family the ch-0 row is the base: without a parent name there is nowhere to put it."""
         self._switch_to_channelized(parent_name_template="")
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_a_flat_rule_offers_no_conversion(self):
         """The rule still describes the flat topology, so its families are not the wrong shape."""
@@ -193,14 +200,14 @@ class ConversionVerdictTest(ConversionTestCase):
         self.rule.parent_name_template = ""
         self.rule.save()
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_a_rule_without_channels_offers_no_conversion(self):
         """No channel count means no family to identify — there is nothing to convert against."""
         self.rule.channel_count = 0
         self.rule.save()
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_a_port_the_rule_never_touched_is_not_a_conversion_candidate(self):
         """A raw port is an ordinary apply, not a conversion: no flat family exists on it yet."""
@@ -208,21 +215,21 @@ class ConversionVerdictTest(ConversionTestCase):
             iface.delete()
         Interface.objects.filter(pk=self._iface("xe-0/0/3:0").pk).update(name="3")
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_a_disabled_rule_offers_no_conversion(self):
         """A disabled rule renames nothing; offering it the most invasive rewrite of all would be worse."""
         self.rule.enabled = False
         self.rule.save()
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_a_converted_family_is_not_offered_again(self):
         """It is a native family now; offering it again would invite a second, duplicate conversion."""
         base = self._iface("xe-0/0/3:0")
         convert_flat_families(self.rule, [base.pk])
 
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -316,7 +323,7 @@ class ConversionTest(ConversionTestCase):
 
     def test_conversion_reports_how_many_families_it_converted(self):
         """The Apply view reports the count back to the operator, so it counts families, not rows."""
-        self.assertEqual(self._convert(self.base), 1)
+        self.assertEqual(self._converted(self._convert(self.base)), 1)
 
     def test_only_the_selected_family_is_converted(self):
         """Conversion is per family and confirmed per family; an unselected one must not move."""
@@ -326,13 +333,13 @@ class ConversionTest(ConversionTestCase):
 
     def test_converting_without_a_selection_converts_every_convertible_family(self):
         """This is the batch the background job runs after the operator confirms the whole rule."""
-        self.assertEqual(self._convert(), 2)
+        self.assertEqual(self._converted(self._convert()), 2)
         self.assertEqual(self._names(self.module), self._channelized_names("3"))
         self.assertEqual(self._names(self.other_module), self._channelized_names("4"))
 
     def test_converting_an_empty_selection_does_nothing(self):
         """An empty confirmation is not 'convert everything' — that would be the worst possible default."""
-        self.assertEqual(convert_flat_families(self.rule, []), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [])), 0)
         self._assert_still_flat(self.module, "3")
 
     def test_a_second_conversion_run_leaves_the_family_alone(self):
@@ -340,7 +347,7 @@ class ConversionTest(ConversionTestCase):
         self._convert(self.base)
         child_pks = dict(Interface.objects.filter(module=self.module).values_list("name", "pk"))
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), child_pks)
 
     def test_a_disabled_rule_converts_nothing_when_a_family_is_confirmed(self):
@@ -348,7 +355,7 @@ class ConversionTest(ConversionTestCase):
         self.rule.enabled = False
         self.rule.save()
 
-        self.assertEqual(self._convert(self.base), 0)
+        self.assertEqual(self._converted(self._convert(self.base)), 0)
         self._assert_still_flat(self.module, "3")
 
     def test_a_disabled_rule_converts_nothing_in_the_whole_rule_batch(self):
@@ -356,7 +363,7 @@ class ConversionTest(ConversionTestCase):
         self.rule.enabled = False
         self.rule.save()
 
-        self.assertEqual(self._convert(), 0)
+        self.assertEqual(self._converted(self._convert()), 0)
         self._assert_still_flat(self.module, "3")
         self._assert_still_flat(self.other_module, "4")
 
@@ -489,15 +496,23 @@ class ConversionPreflightTest(ConversionTestCase):
 
     def _blocked_verdict(self):
         """Return the verdict for the family in bay 3, asserting it is blocked."""
-        verdicts = {verdict["current_name"]: verdict for verdict in self._verdicts()}
+        verdicts = {verdict.current_name: verdict for verdict in self._verdicts()}
         verdict = verdicts["xe-0/0/3:0"]
-        self.assertFalse(verdict["convertible"], verdict)
+        self.assertFalse(verdict.convertible, verdict)
         return verdict
 
     def _cable_up(self, iface):
         """Attach a real cable between *iface* and a spare device interface."""
         peer = Interface.objects.create(device=self.device, name=f"peer-{iface.name}", type=PLAIN_TYPE)
         Cable.objects.create(a_terminations=[iface], b_terminations=[peer])
+
+    def _plan_for(self, base):
+        """Return the conversion plan the scan builds for the family *base* heads."""
+        module = Module.objects.select_related(*BAY_CHAIN_RELATIONS).get(pk=base.module_id)
+        variables = build_variables(module.module_bay, device=module.device)
+        interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("name"))
+        plans = plan_module_conversions(module, self.rule, variables, interfaces)
+        return next(plan for plan in plans if plan.base.pk == base.pk)
 
     def _bind_to_another_family(self, name):
         """Move the interface called *name* into a second, genuine channelized family on the module."""
@@ -513,29 +528,25 @@ class ConversionPreflightTest(ConversionTestCase):
         return parent
 
     def test_a_base_renamed_between_scan_and_convert_refuses_cleanly(self):
-        """The ch-0 lookup mirrors the sibling checks: a row that vanished mid-race refuses, never crashes."""
-        from netbox_interface_name_rules import engine
-
-        family = next(f for f in engine._conversion_families(self.rule) if f.base.pk == self.base.pk)
+        """Execution revalidates the snapshot it planned against: a row edited mid-race refuses."""
+        plan = self._plan_for(self.base)
         self.base.name = "renamed-by-a-concurrent-request"
         self.base.save()
 
-        reason = engine._convert_family(self.rule, family, commit=True)
+        outcome = execute_conversion(plan)
 
-        self.assertIn("xe-0/0/3:0", reason)
+        self.assertEqual(outcome.status, FamilyStatus.STALE)
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_a_base_replaced_between_scan_and_convert_refuses_cleanly(self):
-        """A same-named replacement is not the scanned row: conversion refuses it instead of rewriting a stranger."""
-        from netbox_interface_name_rules import engine
-
-        family = next(f for f in engine._conversion_families(self.rule) if f.base.pk == self.base.pk)
+        """A same-named replacement is not the scanned row: conversion refuses it rather than rewrite a stranger."""
+        plan = self._plan_for(self.base)
         self.base.delete()
         Interface.objects.create(device=self.device, module=self.module, name="xe-0/0/3:0", type=PLAIN_TYPE)
 
-        reason = engine._convert_family(self.rule, family, commit=True)
+        outcome = execute_conversion(plan)
 
-        self.assertIn("xe-0/0/3:0", reason)
+        self.assertEqual(outcome.status, FamilyStatus.STALE)
         self._assert_still_flat(self.module, "3")
 
     def test_a_cabled_sibling_blocks_the_family(self):
@@ -544,14 +555,14 @@ class ConversionPreflightTest(ConversionTestCase):
 
         verdict = self._blocked_verdict()
 
-        self.assertIn("xe-0/0/3:2", verdict["reason"])
-        self.assertIn("cable", verdict["reason"].lower())
+        self.assertIn("xe-0/0/3:2", verdict.reason)
+        self.assertIn("cable", verdict.reason.lower())
 
     def test_a_cabled_sibling_is_not_partially_converted(self):
         """Blocking after the parent is written would leave the family in neither topology."""
         self._cable_up(self._iface("xe-0/0/3:2"))
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
         self._assert_still_flat(self.module, "3")
 
     def test_an_occupied_parent_target_blocks_the_family(self):
@@ -560,13 +571,13 @@ class ConversionPreflightTest(ConversionTestCase):
 
         verdict = self._blocked_verdict()
 
-        self.assertIn("et-0/0/3", verdict["reason"])
+        self.assertIn("et-0/0/3", verdict.reason)
 
     def test_an_occupied_parent_target_is_not_partially_converted(self):
         """Nothing is written before every name the family needs is known to be free."""
         Interface.objects.create(device=self.device, name="et-0/0/3", type=PLAIN_TYPE)
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
         self._assert_still_flat(self.module, "3")
 
     def test_a_missing_sibling_blocks_the_family(self):
@@ -575,13 +586,22 @@ class ConversionPreflightTest(ConversionTestCase):
 
         verdict = self._blocked_verdict()
 
-        self.assertIn("xe-0/0/3:2", verdict["reason"])
+        self.assertIn("xe-0/0/3:2", verdict.reason)
+
+    def test_a_missing_sibling_is_still_shown_with_what_it_would_become(self):
+        """Dropping the family from the page would read as 'nothing here to convert', which is worse."""
+        self._iface("xe-0/0/3:2").delete()
+
+        verdict = self._blocked_verdict()
+
+        self.assertEqual(list(verdict.current_names), ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:3"])
+        self.assertEqual(list(verdict.new_names), ["et-0/0/3", *self._flat_names("3")])
 
     def test_a_missing_sibling_is_not_partially_converted(self):
         """Converting three of four rows would silently drop a channel from the family."""
         self._iface("xe-0/0/3:2").delete()
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
         self.assertFalse(Interface.objects.filter(module=self.module, channels__isnull=False).exists())
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
@@ -597,8 +617,8 @@ class ConversionPreflightTest(ConversionTestCase):
 
         verdict = self._blocked_verdict()
 
-        self.assertIn("xe-0/0/3:1", verdict["reason"])
-        self.assertIn("channel", verdict["reason"].lower())
+        self.assertIn("xe-0/0/3:1", verdict.reason)
+        self.assertIn("channel", verdict.reason.lower())
 
     def test_a_sibling_that_cannot_be_a_channel_is_not_partially_converted(self):
         """The dry run happens inside a rolled-back transaction, so a late failure still writes nothing."""
@@ -606,7 +626,7 @@ class ConversionPreflightTest(ConversionTestCase):
         sibling.channels = 2
         sibling.save()
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
         self.assertEqual(self._names(self.module), self._flat_names("3"))
         self.assertIsNone(self._iface("xe-0/0/3:0").channels)
 
@@ -616,14 +636,14 @@ class ConversionPreflightTest(ConversionTestCase):
 
         verdict = self._blocked_verdict()
 
-        self.assertIn("xe-0/0/3:1", verdict["reason"])
-        self.assertIn("et-0/0/9", verdict["reason"])
+        self.assertIn("xe-0/0/3:1", verdict.reason)
+        self.assertIn("et-0/0/9", verdict.reason)
 
     def test_a_sibling_bound_to_another_family_is_not_taken_from_it(self):
         """Converting past it would silently drop a channel from a family nobody asked about."""
         parent = self._bind_to_another_family("xe-0/0/3:1")
 
-        self.assertEqual(convert_flat_families(self.rule, [self.base.pk]), 0)
+        self.assertEqual(self._converted(convert_flat_families(self.rule, [self.base.pk])), 0)
 
         foreign_child = self._iface("xe-0/0/3:1")
         self.assertEqual(foreign_child.parent_id, parent.pk)
@@ -634,19 +654,19 @@ class ConversionPreflightTest(ConversionTestCase):
     def test_a_blocked_family_is_reported_to_the_caller(self):
         """The Apply view tells the operator how many families it refused, not just that nothing happened."""
         self._cable_up(self._iface("xe-0/0/3:2"))
-        conflicts: list = []
 
-        convert_flat_families(self.rule, [self.base.pk], conflicts=conflicts)
+        outcome = convert_flat_families(self.rule, [self.base.pk])
 
-        self.assertEqual(len(conflicts), 1)
-        self.assertEqual(conflicts[0]["interface_pk"], self.base.pk)
-        self.assertEqual(conflicts[0]["attempted_name"], "et-0/0/3")
+        self.assertEqual(len(outcome.blocked_families), 1)
+        blocked = outcome.blocked_families[0]
+        self.assertEqual(blocked.members[0].interface_pk, self.base.pk)
+        self.assertEqual(blocked.members[0].target_name, "et-0/0/3")
 
     def test_a_blocked_family_does_not_stop_the_batch(self):
         """One unconvertible family must not cost the operator every other family in the run."""
         self._cable_up(self._iface("xe-0/0/3:2"))
 
-        self.assertEqual(convert_flat_families(self.rule), 1)
+        self.assertEqual(self._converted(convert_flat_families(self.rule)), 1)
         self._assert_still_flat(self.module, "3")
         self.assertEqual(self._names(self.other_module), self._channelized_names("4"))
 
@@ -688,7 +708,7 @@ class ConversionApplyViewTest(ConversionTestCase):
 
         self.assertEqual(response.status_code, 200)
         verdicts = response.context["conversions"]
-        self.assertEqual([verdict["current_name"] for verdict in verdicts], ["xe-0/0/3:0"])
+        self.assertEqual([verdict.current_name for verdict in verdicts], ["xe-0/0/3:0"])
 
     def test_the_page_renders_a_confirm_action_of_its_own(self):
         """Conversion rewrites rows; it must never ride along on the ordinary apply button."""
@@ -707,7 +727,7 @@ class ConversionApplyViewTest(ConversionTestCase):
     def test_the_page_states_where_the_ch0_configuration_goes(self):
         """The surprising part of the conversion is the one the page has to spell out."""
         response = self.client.get(self._url())
-        note = response.context["conversions"][0]["metadata_note"]
+        note = response.context["conversions"][0].metadata_note
 
         self.assertIn(escape(note), response.content.decode())
 
@@ -968,24 +988,24 @@ class ConversionScanLimitTest(ConversionTestCase):
 
     def test_an_unlimited_scan_examines_every_family(self):
         """The background job's batch is unbounded by design, and so is a scan without a limit."""
-        verdicts, has_more = find_convertible_families(self.rule)
+        preview = find_convertible_families(self.rule)
 
-        self.assertEqual(len(verdicts), 3)
-        self.assertFalse(has_more)
+        self.assertEqual(len(preview.candidates), 3)
+        self.assertFalse(preview.has_more)
 
     def test_the_scan_stops_at_the_limit_and_says_more_are_waiting(self):
         """The page has to distinguish 'that is all of them' from 'that is as far as this run went'."""
-        verdicts, has_more = find_convertible_families(self.rule, limit=2)
+        preview = find_convertible_families(self.rule, limit=2)
 
-        self.assertEqual(len(verdicts), 2)
-        self.assertTrue(has_more)
+        self.assertEqual(len(preview.candidates), 2)
+        self.assertTrue(preview.has_more)
 
     def test_a_limit_the_families_never_reach_reports_nothing_waiting(self):
         """A limit above the fleet is not a reason to tell the operator families were left out."""
-        verdicts, has_more = find_convertible_families(self.rule, limit=5)
+        preview = find_convertible_families(self.rule, limit=5)
 
-        self.assertEqual(len(verdicts), 3)
-        self.assertFalse(has_more)
+        self.assertEqual(len(preview.candidates), 3)
+        self.assertFalse(preview.has_more)
 
     def test_the_families_past_the_limit_are_never_dry_run(self):
         """The dry run is the scan's whole cost: capping the verdict list alone would buy nothing."""
@@ -1000,13 +1020,26 @@ class ConversionScanLimitTest(ConversionTestCase):
     def test_a_blocked_family_counts_against_the_limit(self):
         """It costs the same dry run as a convertible one, so it has to bound the scan the same way."""
         for position in ("3", "4", "5"):
+            sibling = self._iface(f"xe-0/0/{position}:2")
+            peer = Interface.objects.create(device=self.device, name=f"peer-{sibling.name}", type=PLAIN_TYPE)
+            Cable.objects.create(a_terminations=[sibling], b_terminations=[peer])
+
+        preview = find_convertible_families(self.rule, limit=2)
+
+        self.assertEqual(len(preview.candidates), 2)
+        self.assertFalse(any(candidate.convertible for candidate in preview.candidates), preview)
+        self.assertTrue(preview.has_more)
+
+    def test_an_incomplete_family_counts_against_the_limit(self):
+        """A family refused before a row is locked still occupies a slot the operator can see."""
+        for position in ("3", "4", "5"):
             self._iface(f"xe-0/0/{position}:2").delete()
 
-        verdicts, has_more = find_convertible_families(self.rule, limit=2)
+        preview = find_convertible_families(self.rule, limit=2)
 
-        self.assertEqual(len(verdicts), 2)
-        self.assertFalse(any(verdict["convertible"] for verdict in verdicts), verdicts)
-        self.assertTrue(has_more)
+        self.assertEqual(len(preview.candidates), 2)
+        self.assertFalse(any(candidate.convertible for candidate in preview.candidates), preview)
+        self.assertTrue(preview.has_more)
 
     def test_the_scan_converts_nothing_whatever_the_limit(self):
         """A capped scan is still a preview; stopping early must not leave a half-converted fleet."""
@@ -1014,6 +1047,82 @@ class ConversionScanLimitTest(ConversionTestCase):
 
         for position, module in self.modules.items():
             self._assert_still_flat(module, position)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ConversionChangelogTest(ConversionTestCase):
+    """The rows conversion carries onto the new channel are written the way the family write is.
+
+    Addresses and FHRP group assignments are objects an operator owns and audits.  Moving them with
+    a queryset update would relocate them with no validation, no signal and no changelog entry, so
+    the device history would show the family rewritten and the addresses on it moved by nobody.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="convlog", password=TEST_PASSWORD, email="convlog@example.com"
+        )
+        manufacturer, cls.device = _build_device("ConvLog", ["3"])
+        cls.module_type = _plain_module_type(manufacturer, "ConvLog-QSFP")
+        cls.rule = cls._flat_rule(cls.module_type)
+        cls.fhrp_group = FHRPGroup.objects.create(group_id=81, protocol="vrrp2")
+
+    def setUp(self):
+        """Address ch-0, give it a first-hop group, then convert the family from the Apply page."""
+        self.module, self.bay = self._install(self.module_type, "3")
+        self._switch_to_channelized()
+        self.base = self._iface("xe-0/0/3:0")
+        self.address = IPAddress.objects.create(address="192.0.2.9/24", assigned_object=self.base)
+        self.assignment = FHRPGroupAssignment.objects.create(group=self.fhrp_group, interface=self.base, priority=10)
+        self.client.force_login(self.superuser)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
+        with self.captureOnCommitCallbacks(execute=True):
+            self.response = self.client.post(url, {"action": "convert", "convert_ids": [str(self.base.pk)]})
+        self.channel = self._child(self.module, 1)
+
+    def _changes_for(self, instance):
+        """Return the changelog entries recorded for *instance*."""
+        return ObjectChange.objects.filter(
+            changed_object_type=ObjectType.objects.get_for_model(instance),
+            changed_object_id=instance.pk,
+        )
+
+    def test_the_conversion_succeeded(self):
+        """The changelog assertions below only mean something once the family really converted."""
+        self.assertEqual(self.response.status_code, 302)
+        self.assertEqual(self._names(self.module), self._channelized_names("3"))
+
+    def test_the_carried_address_lands_on_the_channel(self):
+        """The address was reachable over one 10G channel, and still is."""
+        self.address.refresh_from_db()
+
+        self.assertEqual(self.address.assigned_object_id, self.channel.pk)
+
+    def test_the_carried_address_is_recorded_in_the_changelog(self):
+        """An operator auditing the device has to see who moved the address, and when."""
+        changes = self._changes_for(self.address)
+
+        self.assertTrue(changes.exists(), "the carried address left no changelog entry")
+        self.assertEqual(changes.latest("time").postchange_data["assigned_object_id"], self.channel.pk)
+
+    def test_the_carried_fhrp_assignment_lands_on_the_channel(self):
+        """The group is a gateway on the addressed interface, which is now the channel."""
+        self.assignment.refresh_from_db()
+
+        self.assertEqual(self.assignment.interface_id, self.channel.pk)
+
+    def test_the_carried_fhrp_assignment_is_recorded_in_the_changelog(self):
+        """Same audit trail: a first-hop gateway must not change interface silently."""
+        changes = self._changes_for(self.assignment)
+
+        self.assertTrue(changes.exists(), "the carried FHRP group assignment left no changelog entry")
+        self.assertEqual(changes.latest("time").postchange_data["interface_id"], self.channel.pk)
+
+    def test_the_family_rows_are_recorded_in_the_changelog(self):
+        """The carried rows are held to the standard the family write already meets."""
+        self.assertTrue(self._changes_for(self.channel).exists())
+        self.assertTrue(self._changes_for(self._parent(self.module)).exists())
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -1112,7 +1221,7 @@ class FlatToChannelizedJuniperE2ETest(ConversionTestCase):
         verdicts = self._verdicts()
 
         self.assertEqual(len(verdicts), 1)
-        self.assertTrue(verdicts[0]["convertible"], verdicts[0]["reason"])
+        self.assertTrue(verdicts[0].convertible, verdicts[0].reason)
         self._assert_still_flat(self.module, "3")
 
     def test_the_conversion_produces_the_juniper_family(self):
@@ -1186,14 +1295,14 @@ class ConversionWithoutSupportTest(ConversionTestCase):
 
     def test_no_family_is_offered_for_conversion(self):
         """There is no channelized topology on this release, so no family can be converted into one."""
-        self.assertEqual(self._verdicts(), [])
+        self.assertEqual(self._verdicts(), ())
 
     def test_converting_refuses_gracefully_and_says_so(self):
         """A refusal has to be visible: a silent zero looks exactly like 'nothing needed converting'."""
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            converted = convert_flat_families(self.rule, [self.base.pk])
+            outcome = convert_flat_families(self.rule, [self.base.pk])
 
-        self.assertEqual(converted, 0)
+        self.assertEqual(self._converted(outcome), 0)
         self.assertEqual(self._names(self.module), self._flat_names("3"))
         self.assertTrue(any("channeliz" in line.lower() for line in logs.output), logs.output)
 

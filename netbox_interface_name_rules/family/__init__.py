@@ -4,7 +4,18 @@
 
 from .batch import BatchOutcome, apply_rule_to_modules, execute_family_plan, plan_module_families
 from .capabilities import supports_channelization
+from .conversion import (
+    conversion_offered,
+    convert_rule_families,
+    execute_conversion,
+    plan_module_conversions,
+    preview_rule_conversions,
+)
 from .domain import (
+    ConversionCandidate,
+    ConversionMember,
+    ConversionPlan,
+    ConversionPreview,
     FamilyOutcome,
     FamilyStatus,
     FamilyTopology,
@@ -17,13 +28,19 @@ from .domain import (
     MemberRole,
     PlannedChannel,
     PlannedMember,
+    PlannedName,
     ProspectiveFamilyPlan,
     ProspectiveFamilyPlanSet,
     ProspectiveMember,
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan, execute_installed_plan_set
-from .installed import module_db_alias, plan_installed_families, plan_interface_rename
+from .installed import (
+    interfaces_by_module,
+    module_db_alias,
+    plan_installed_families,
+    plan_interface_rename,
+)
 from .prospective import (
     ProspectiveInterface,
     describe_interfaces,
@@ -44,6 +61,10 @@ from .template_names import pinned_template_cache, resolved_template_names
 
 __all__ = (
     "BatchOutcome",
+    "ConversionCandidate",
+    "ConversionMember",
+    "ConversionPlan",
+    "ConversionPreview",
     "FamilyOutcome",
     "FamilyStatus",
     "FamilyTopology",
@@ -56,6 +77,7 @@ __all__ = (
     "MemberRole",
     "PlannedChannel",
     "PlannedMember",
+    "PlannedName",
     "ProspectiveFamilyPlan",
     "ProspectiveFamilyPlanSet",
     "ProspectiveInterface",
@@ -63,9 +85,12 @@ __all__ = (
     "StructuralFamilyPlan",
     "apply_rule_to_modules",
     "channelized_family_names",
+    "conversion_offered",
+    "convert_rule_families",
     "describe_interfaces",
     "describe_module_interfaces",
     "describe_template_interfaces",
+    "execute_conversion",
     "execute_family_plan",
     "execute_flat_family",
     "execute_installed_plan",
@@ -73,15 +98,18 @@ __all__ = (
     "execute_structural_family",
     "has_flat_expansion",
     "install_channelized_family",
+    "interfaces_by_module",
     "module_db_alias",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_flat_family",
     "plan_installed_families",
     "plan_interface_rename",
+    "plan_module_conversions",
     "plan_module_families",
     "plan_prospective_families",
     "plan_structural_family",
+    "preview_rule_conversions",
     "resolved_template_names",
     "supports_channelization",
     "template_channel_suffixes",

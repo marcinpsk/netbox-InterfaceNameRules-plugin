@@ -713,12 +713,12 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self.assertEqual(self._names(module), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
         self._switch_to_channelized(rule)
 
-        verdicts, _ = find_convertible_families(rule)
+        candidates = find_convertible_families(rule).candidates
 
-        self.assertEqual(len(verdicts), 1)
-        self.assertTrue(verdicts[0]["convertible"], verdicts[0]["reason"])
-        self.assertEqual(verdicts[0]["current_names"], [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
-        self.assertEqual(verdicts[0]["new_names"][0], "et-0/0/3")
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].convertible, candidates[0].reason)
+        self.assertEqual(list(candidates[0].current_names), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
+        self.assertEqual(candidates[0].new_names[0], "et-0/0/3")
 
     def test_a_template_that_repeats_the_base_is_recovered_through_a_backreference(self):
         """One capture group and a backreference — a repeated ``{base}`` must not become a second group."""
@@ -728,11 +728,11 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._renumber(2)
         self._switch_to_channelized(rule)
 
-        verdicts, _ = find_convertible_families(rule)
+        candidates = find_convertible_families(rule).candidates
 
-        self.assertEqual(len(verdicts), 1)
-        self.assertTrue(verdicts[0]["convertible"], verdicts[0]["reason"])
-        self.assertEqual(verdicts[0]["new_names"][0], "et-0/0/4")
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].convertible, candidates[0].reason)
+        self.assertEqual(candidates[0].new_names[0], "et-0/0/4")
 
     def test_a_base_inside_an_arithmetic_expression_is_skipped_cleanly(self):
         """A non-numeric sentinel cannot go through the arithmetic validator; the family is simply not offered."""
@@ -742,10 +742,10 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._renumber(2)
         self._switch_to_channelized(rule)
 
-        verdicts, has_more = find_convertible_families(rule)
+        preview = find_convertible_families(rule)
 
-        self.assertEqual(verdicts, [])
-        self.assertFalse(has_more)
+        self.assertEqual(preview.candidates, ())
+        self.assertFalse(preview.has_more)
         self.assertEqual(self._names(module), [f"p16:{channel}" for channel in range(4)])
 
     def test_a_family_matcher_that_captures_two_bases_is_not_offered(self):
@@ -765,9 +765,7 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._join(VirtualChassis.objects.create(name="vcconv-vc2"), 5, device=standalone)
         self._switch_to_channelized(rule)
 
-        verdicts, _ = find_convertible_families(rule)
-
-        self.assertEqual(verdicts, [])
+        self.assertEqual(find_convertible_families(rule).candidates, ())
 
     def test_a_rule_without_a_base_is_identified_after_a_renumber(self):
         """Drift-immune by construction — asserted, not assumed, so the fix cannot regress it."""
@@ -777,8 +775,8 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._renumber(2)
         self._switch_to_channelized(rule, parent_name_template="pe-0/0/{bay_position}")
 
-        verdicts, _ = find_convertible_families(rule)
+        candidates = find_convertible_families(rule).candidates
 
-        self.assertEqual(len(verdicts), 1)
-        self.assertTrue(verdicts[0]["convertible"], verdicts[0]["reason"])
-        self.assertEqual(verdicts[0]["new_names"][0], "pe-0/0/7")
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].convertible, candidates[0].reason)
+        self.assertEqual(candidates[0].new_names[0], "pe-0/0/7")

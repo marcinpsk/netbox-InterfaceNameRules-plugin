@@ -62,13 +62,14 @@ class ConvertFlatFamiliesJob(JobRunner):
             self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
             return
 
-        conflicts = []
         try:
-            count = convert_flat_families(rule, conflicts=conflicts)
+            outcome = convert_flat_families(rule)
         except Exception as exc:
             self.logger.exception("Failed to convert families for rule '%s': %s", rule_id, exc)
             raise
 
-        self.logger.info("Converted %d interface family(ies) using rule '%s'", count, rule)
-        if conflicts:
-            self.logger.warning("%d family(ies) skipped — the plugin log names each one.", len(conflicts))
+        self.logger.info("Converted %d interface family(ies) using rule '%s'", len(outcome.changed_families), rule)
+        if outcome.blocked_families:
+            self.logger.warning(
+                "%d family(ies) skipped — the plugin log names each one.", len(outcome.blocked_families)
+            )

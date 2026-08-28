@@ -10,7 +10,6 @@ each module type's templates are read once for the whole batch.
 import logging
 from dataclasses import dataclass
 
-from dcim.models import Interface
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 
@@ -25,7 +24,7 @@ from .domain import (
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
-from .installed import module_db_alias, plan_installed_families, plan_interface_rename
+from .installed import interfaces_by_module, plan_installed_families, plan_interface_rename
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
 from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
 from .template_names import pinned_template_cache
@@ -60,6 +59,16 @@ class BatchOutcome:
         return tuple(
             member for family in self.families for member in family.members if member.status in _SKIPPED_STATUSES
         )
+
+    @property
+    def changed_families(self) -> tuple[FamilyOutcome, ...]:
+        """Return every family this batch actually rewrote."""
+        return tuple(family for family in self.families if family.status == FamilyStatus.CHANGED)
+
+    @property
+    def blocked_families(self) -> tuple[FamilyOutcome, ...]:
+        """Return every family a collision, a stale plan or a failure left as it was."""
+        return tuple(family for family in self.families if family.status in _SKIPPED_STATUSES)
 
 
 def execute_family_plan(plan) -> FamilyOutcome:
@@ -151,19 +160,6 @@ def _apply_module(rule, module, interfaces, selected_pks):
     return [outcome for plan in plans if (outcome := _execute(rule, module, plan)) is not None]
 
 
-def _interfaces_by_module(modules):
-    """Load every interface of the batch in one query, in stable per-module order."""
-    by_module: dict[int, list] = {module.pk: [] for module in modules}
-    rows = (
-        Interface.objects.using(module_db_alias(modules[0]))
-        .filter(module_id__in=list(by_module))
-        .order_by("module_id", "name")
-    )
-    for interface in rows:
-        by_module[interface.module_id].append(interface)
-    return by_module
-
-
 def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> BatchOutcome:
     """Apply *rule* to every module in *modules*, one family at a time.
 
@@ -172,12 +168,12 @@ def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> Batch
     """
     if not modules:
         return BatchOutcome(families=())
-    interfaces_by_module = _interfaces_by_module(modules)
+    by_module = interfaces_by_module(modules)
     families: list[FamilyOutcome] = []
     changed = 0
     with pinned_template_cache(modules):
         for module in modules:
-            outcomes = _apply_module(rule, module, interfaces_by_module[module.pk], selected_pks)
+            outcomes = _apply_module(rule, module, by_module[module.pk], selected_pks)
             families.extend(outcomes)
             changed += sum(outcome.changed_count for outcome in outcomes)
             if limit is not None and changed >= limit:
