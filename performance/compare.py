@@ -132,9 +132,12 @@ def _environment_table(before, after):
         rows.append(f"| {key} | `{before['environment'].get(key)}` | `{after['environment'].get(key)}` |")
     for key in ("samples", "warmups"):
         rows.append(f"| {key} | `{before['configuration'].get(key)}` | `{after['configuration'].get(key)}` |")
-    postgres_before = before["environment"].get("postgresql", {}).get("version")
-    postgres_after = after["environment"].get("postgresql", {}).get("version")
+    postgres_before = before["environment"].get("postgresql", {}).get("server_version")
+    postgres_after = after["environment"].get("postgresql", {}).get("server_version")
     rows.append(f"| postgresql | `{postgres_before}` | `{postgres_after}` |")
+    settings_before = before["environment"].get("postgresql", {}).get("planner_settings")
+    settings_after = after["environment"].get("postgresql", {}).get("planner_settings")
+    rows.append(f"| planner settings | `{'identical' if settings_before == settings_after else 'CHANGED'}` | |")
     return rows
 
 
