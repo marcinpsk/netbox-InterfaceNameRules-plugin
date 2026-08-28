@@ -17,6 +17,7 @@ export NETBOX_PERFORMANCE_SOURCE_REVISION="$(git -C /path/to/netbox rev-parse HE
 export INTERFACE_FAMILY_PERFORMANCE_OUTPUT="$PWD/performance/baselines/existing-feature.json"
 export INTERFACE_FAMILY_PERFORMANCE_SAMPLES="15"
 export INTERFACE_FAMILY_PERFORMANCE_WARMUPS="3"
+export INTERFACE_FAMILY_PERFORMANCE_KIND="existing_implementation"
 
 cd /path/to/netbox/netbox
 python manage.py test \
@@ -41,6 +42,9 @@ performance.
 
 `performance/compare.py BEFORE.json AFTER.json OUT.md` writes a readable comparison of database
 work and machine time, and breaks any scenario whose statement count rose down by table.
+
+Set `INTERFACE_FAMILY_PERFORMANCE_KIND` to name what a run measured, such as `family_package` for
+an after run. It labels the artifact and titles its summary.
 
 ## Result of the interface-family comparison
 
