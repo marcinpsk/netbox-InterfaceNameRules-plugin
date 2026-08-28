@@ -46,6 +46,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
 
 PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
@@ -598,7 +599,7 @@ class FlatFamilyCreationTest(BulkTestCase):
     def test_a_base_renamed_after_planning_is_refused_as_stale(self):
         """Planning is not a lock: the row it described has to still be the row it finds."""
         plan = self._plan()
-        Interface.objects.filter(pk=self.base.pk).update(name="moved")
+        rename_out_of_band(Interface.objects.get(pk=self.base.pk), "moved")
 
         outcome = execute_flat_family(plan)
 

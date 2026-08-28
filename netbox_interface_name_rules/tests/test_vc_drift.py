@@ -56,6 +56,7 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import _apply_rules_deferred
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
     CHANNEL_TYPE,
     PARENT_TYPE,
@@ -340,7 +341,7 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         module, bay = self._install_on(self.device, self.decoy_type, "3")
         self.assertEqual(self._names(module), ["mgmt-3", "xe-1/0/3"])
         # An earlier rename left the plain template's interface sitting on the token template's fallback name.
-        Interface.objects.filter(module=module, name="mgmt-3").update(name="xe-0/0/3")
+        rename_out_of_band(Interface.objects.get(module=module, name="mgmt-3"), "xe-0/0/3")
         self._renumber(2)
         InterfaceNameRule.objects.create(module_type=self.decoy_type, name_template="et-{base}")
 
@@ -362,7 +363,7 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         downstream refuses the second one: the guard has to be the thing that stops it.
         """
         module, _ = self._install_on(self.device, self.decoy_type, "3")
-        Interface.objects.filter(module=module, name="mgmt-3").update(name="xe-0/0/3")
+        rename_out_of_band(Interface.objects.get(module=module, name="mgmt-3"), "xe-0/0/3")
         InterfaceNameRule.objects.create(
             module_type=self.decoy_type, name_template="et-{base}:{channel}", channel_count=2, channel_start=0
         )
@@ -519,7 +520,7 @@ class VcPositionLegacyNetboxTest(VcDriftTestCase):
         """Byte-identical pre-4.6 behaviour: a name only a matcher could claim is not a candidate."""
         module, bay = self._install_on(self.device, self.module_type, "3")
         # Named explicitly, so the interface sits on a position variant whatever the release resolved.
-        Interface.objects.filter(module=module).update(name="xe-1/0/3")
+        rename_out_of_band(Interface.objects.get(module=module), "xe-1/0/3")
         self._renumber(2)
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 

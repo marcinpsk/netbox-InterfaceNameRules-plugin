@@ -42,6 +42,7 @@ from netbox_interface_name_rules.family import FamilyStatus, execute_conversion,
 from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
     FLAT,
@@ -213,7 +214,7 @@ class ConversionVerdictTest(ConversionTestCase):
         """A raw port is an ordinary apply, not a conversion: no flat family exists on it yet."""
         for iface in Interface.objects.filter(module=self.module).exclude(name="xe-0/0/3:0"):
             iface.delete()
-        Interface.objects.filter(pk=self._iface("xe-0/0/3:0").pk).update(name="3")
+        rename_out_of_band(self._iface("xe-0/0/3:0"), "3")
 
         self.assertEqual(self._verdicts(), ())
 

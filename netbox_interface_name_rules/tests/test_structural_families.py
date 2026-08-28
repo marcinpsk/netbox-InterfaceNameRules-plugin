@@ -29,6 +29,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
 from netbox_interface_name_rules.tests.test_channelization import (
     PLAIN_TYPE,
@@ -140,9 +141,10 @@ class DeferredChannelNameReconciliationTest(TestCase):
         """Create one plain interface on the shared device."""
         return Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE)
 
-    def _cascade(self, child, name):
+    @staticmethod
+    def _cascade(child, name):
         """Rename *child* the way NetBox's parent cascade does, without running the plugin."""
-        Interface.objects.filter(pk=child.pk).update(name=name)
+        rename_out_of_band(child, name)
 
     def test_the_intended_name_is_restored_after_the_cascade(self):
         child = self._interface("et-0/0/3:1")
@@ -299,7 +301,7 @@ class StructuralFamilyPlanTest(StructuralFamilyTestCase):
 
     def test_a_base_that_changed_after_planning_is_stale_and_untouched(self):
         module, _bay, plan = self._plan()
-        Interface.objects.filter(pk=plan.base.pk).update(name="renamed-by-someone-else")
+        rename_out_of_band(Interface.objects.get(pk=plan.base.pk), "renamed-by-someone-else")
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             outcome = execute_structural_family(plan)

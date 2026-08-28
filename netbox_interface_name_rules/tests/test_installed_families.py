@@ -40,6 +40,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import evaluate_name_template
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
 PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
@@ -279,7 +280,7 @@ class InstalledFlatFamilyPlanningTest(TestCase):
             build_variables(self.bay, device=self.device),
         )
         changed_pk = plan_set.plans[0].members[1].snapshot.pk
-        Interface.objects.filter(pk=changed_pk).update(name="operator-change")
+        rename_out_of_band(Interface.objects.get(pk=changed_pk), "operator-change")
 
         result = execute_installed_plan_set(plan_set)
 
