@@ -13,6 +13,8 @@ import json
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+
 _DB_METRICS = (
     ("statement_calls", "SQL calls"),
     ("planner_total_cost", "Planner cost"),
@@ -25,6 +27,17 @@ _TIME_METRICS = (
     ("wall", "p95_ms", "Wall p95 (ms)"),
     ("process_cpu", "median_ms", "CPU median (ms)"),
 )
+
+
+def _artifact_path(raw, must_exist):
+    """Resolve *raw* inside this repository, refusing a path that points outside it."""
+    candidate = Path(raw)
+    path = (candidate if candidate.is_absolute() else _ROOT / candidate).resolve()
+    if not path.is_relative_to(_ROOT):
+        raise SystemExit(f"{raw} is outside the repository")
+    if must_exist and not path.is_file():
+        raise SystemExit(f"{raw} is not a readable artifact")
+    return path
 
 
 def _scenarios(artifact):
@@ -45,13 +58,6 @@ def _format(value):
     if isinstance(value, float) and not value.is_integer():
         return f"{value:.2f}"
     return f"{int(value)}"
-
-
-def _row(name, before, after):
-    """Return one Markdown table row for a metric that both runs recorded."""
-    change, percent = _delta(before, after)
-    share = "n/a" if percent is None else f"{percent:+.1f}%"
-    return f"| `{name}` | {_format(before)} | {_format(after)} | {_format(change)} | {share} |"
 
 
 def _database_table(before, after):
@@ -109,8 +115,9 @@ def main(argv):
     """Write the comparison of two artifacts to a Markdown file."""
     if len(argv) != 4:
         raise SystemExit(__doc__)
-    before = json.loads(Path(argv[1]).read_text())
-    after = json.loads(Path(argv[2]).read_text())
+    before = json.loads(_artifact_path(argv[1], must_exist=True).read_text())
+    after = json.loads(_artifact_path(argv[2], must_exist=True).read_text())
+    destination = _artifact_path(argv[3], must_exist=False)
     before_scenarios, after_scenarios = _scenarios(before), _scenarios(after)
 
     database_lines, regressions = _database_table(before_scenarios, after_scenarios)
@@ -142,8 +149,8 @@ def main(argv):
     else:
         report.append("None. No scenario issues more statements than the baseline.")
     report.append("")
-    Path(argv[3]).write_text("\n".join(report))
-    print(f"wrote {argv[3]} ({len(regressions)} statement-count regressions)")
+    destination.write_text("\n".join(report))
+    print(f"wrote {destination} ({len(regressions)} statement-count regressions)")
 
 
 if __name__ == "__main__":
