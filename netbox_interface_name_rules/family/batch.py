@@ -43,6 +43,23 @@ _EXECUTORS = {
 
 
 @dataclass(frozen=True, slots=True)
+class ModuleFamilyPlans:
+    """The families a rule intends on one module, split by how each was found.
+
+    *installed* are the families the module already carries; *leftover* are the plans for the
+    interfaces no installed family claimed, whether the rule renames one or builds a family on it.
+    """
+
+    installed: tuple
+    leftover: tuple
+
+    @property
+    def plans(self) -> tuple:
+        """Return every plan, installed families first."""
+        return (*self.installed, *self.leftover)
+
+
+@dataclass(frozen=True, slots=True)
 class BatchOutcome:
     """Every family one batch operation planned, and what happened to it."""
 
@@ -102,24 +119,29 @@ def _creation_plans(module, rule, variables, plain):
     return [_creation_plan(module, rule, variables, candidates[index][0]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces):
+def plan_module_families(module, rule, variables, interfaces) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
     what is left over is planned as the family the rule would build on it.
     """
     installed = plan_installed_families(module, rule, variables, interfaces=interfaces)
-    plans = list(installed.plans)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
     if rule.channel_count <= 0:
-        plans.extend(plan_interface_rename(module, rule, variables, interface) for interface in plain)
-        return tuple(plans)
-    if any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
+        leftover = tuple(plan_interface_rename(module, rule, variables, interface) for interface in plain)
+    elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
-        return tuple(plans)  # pragma: no cover - requires channelization support
-    plans.extend(_creation_plans(module, rule, variables, plain))
-    return tuple(plans)
+        leftover = ()  # pragma: no cover - requires channelization support
+        for interface in plain:  # pragma: no cover - see above
+            logger.debug(
+                "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
+                interface.name,
+                rule,
+            )
+    else:
+        leftover = tuple(_creation_plans(module, rule, variables, plain))
+    return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
 
 
 def _selection_pks(plan):
@@ -142,6 +164,11 @@ def _selected(plans, selected_pks):
     return [plan for plan in plans if selected_pks.intersection(_selection_pks(plan))]
 
 
+def execute_module_families(rule, module, plans):
+    """Execute each planned family in order, keeping the ones after a failure."""
+    return [outcome for plan in plans if (outcome := _execute(rule, module, plan)) is not None]
+
+
 def _execute(rule, module, plan):
     """Execute one family, logging (never raising) so the batch keeps its later families."""
     try:
@@ -156,8 +183,8 @@ def _execute(rule, module, plan):
 def _apply_module(rule, module, interfaces, selected_pks):
     """Plan and execute every selected family on one module."""
     variables = build_variables(module.module_bay, device=module.device)
-    plans = _selected(plan_module_families(module, rule, variables, interfaces), selected_pks)
-    return [outcome for plan in plans if (outcome := _execute(rule, module, plan)) is not None]
+    plans = _selected(plan_module_families(module, rule, variables, interfaces).plans, selected_pks)
+    return execute_module_families(rule, module, plans)
 
 
 def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> BatchOutcome:

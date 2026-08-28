@@ -2,7 +2,14 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Plan and execute interface-family operations."""
 
-from .batch import BatchOutcome, apply_rule_to_modules, execute_family_plan, plan_module_families
+from .batch import (
+    BatchOutcome,
+    ModuleFamilyPlans,
+    apply_rule_to_modules,
+    execute_family_plan,
+    execute_module_families,
+    plan_module_families,
+)
 from .capabilities import supports_channelization
 from .conversion import (
     conversion_offered,
@@ -75,6 +82,7 @@ __all__ = (
     "InterfaceSnapshot",
     "MemberOutcome",
     "MemberRole",
+    "ModuleFamilyPlans",
     "PlannedChannel",
     "PlannedMember",
     "PlannedName",
@@ -95,6 +103,7 @@ __all__ = (
     "execute_flat_family",
     "execute_installed_plan",
     "execute_installed_plan_set",
+    "execute_module_families",
     "execute_structural_family",
     "has_flat_expansion",
     "install_channelized_family",

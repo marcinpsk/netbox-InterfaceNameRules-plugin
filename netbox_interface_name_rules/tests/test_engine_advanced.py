@@ -305,7 +305,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         self.assertEqual(iface1.name, "1")  # untouched
 
     def test_channel_rule_applies_once_per_module(self):
-        """Channel rule calls _apply_rule_to_interface once per module, not per interface."""
+        """A channel rule plans one family per module, not one per interface."""
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -674,7 +674,7 @@ class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
             name_template="et-0/0/{bay_position}",
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Create with the final correct name (so _apply_rule_to_interface returns 0 for it)
+        # Create with the final correct name (so the rule renames nothing for it)
         # But the name "et-0/0/0" is NOT in raw_names (raw = "0"), so this won't trigger deprecated.
         # Instead, set force_reapply so it's in unrenamed but produces 0 renames.
         iface = Interface.objects.create(device=self.device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
@@ -1527,18 +1527,18 @@ class FindInterfacesProcessedPksTest(EngineAdvancedFixtures):
 
 
 class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
-    """Test that _apply_rule_to_interface rolls back on mid-breakout failure."""
+    """The install path writes a breakout family whole or not at all."""
 
     def test_partial_breakout_rolls_back(self):
         """If channel 2 fails validation, channels 0–1 are rolled back too."""
-        rule = InterfaceNameRule.objects.create(
+        InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="Hu0/0/0/{bay_position}:{channel}",
             channel_count=4,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         original_full_clean = Interface.full_clean
         call_count = [0]
@@ -1551,18 +1551,11 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
                 raise ValidationError("simulated failure")
             return original_full_clean(self_iface, *args, **kwargs)
 
-        from netbox_interface_name_rules.engine import _apply_rule_to_interface
-
-        variables = build_variables(module.module_bay, device=module.device)
-        variables["base"] = iface.name
-
-        from django.core.exceptions import ValidationError
-
         with patch.object(Interface, "full_clean", failing_full_clean):
-            with self.assertRaises(ValidationError):
-                _apply_rule_to_interface(rule, iface, variables, module)
+            renamed = apply_interface_name_rules(module, module.module_bay)
 
-        # Transaction rolled back — only the original interface remains
+        # Transaction rolled back — only the original interface remains, under its original name
+        self.assertEqual(renamed, 0)
         iface_names = list(Interface.objects.filter(module=module).values_list("name", flat=True))
         self.assertEqual(iface_names, ["0"])
 

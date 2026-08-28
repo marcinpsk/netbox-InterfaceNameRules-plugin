@@ -260,7 +260,7 @@ class InstalledFlatFamilyPlanningTest(TestCase):
 
         with (
             patch(
-                "netbox_interface_name_rules.engine.family_ops.plan_installed_families",
+                "netbox_interface_name_rules.engine.family_ops.plan_module_families",
                 side_effect=TypeError("planner defect"),
             ),
             self.assertRaisesMessage(TypeError, "planner defect"),

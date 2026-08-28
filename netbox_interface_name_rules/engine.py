@@ -16,7 +16,6 @@ from django.db import IntegrityError, transaction
 from . import family as family_ops
 from . import naming, rule_selection
 from .choices import BreakoutModeChoices
-from .family import names as family_names
 from .family import targets as family_targets
 from .family import template_names as family_template_names
 
@@ -236,6 +235,47 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
     return _forced_channel_bases(interfaces, raw_names, matchers, module)
 
 
+def _plan_base(plan):
+    """Return the interface facts a leftover plan is anchored on."""
+    if isinstance(plan, family_ops.InstalledFamilyPlan):
+        return plan.members[0].snapshot
+    return plan.base
+
+
+def _touches_a_family(plan) -> bool:
+    """Return whether *plan* acts on a family rather than one standalone interface."""
+    if isinstance(plan, family_ops.InstalledFamilyPlan):
+        return plan.parent_pk is not None or len(plan.members) > 1
+    return True
+
+
+def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module):
+    """Return the installed families this install path should execute.
+
+    A channelized family is always executed: its parent decides the family's names, and the raw-name
+    guard describes flat rows.  A flat family is executed while the guard still claims a member of it.
+    """
+    flat = [plan for plan in plans if plan.topology == family_ops.FamilyTopology.FLAT]
+    snapshots = [member.snapshot for plan in flat for member in plan.members]
+    selected = {
+        interface.pk for interface in _collect_unrenamed(snapshots, rule, raw_names, force_reapply, matchers, module)
+    }
+    return [
+        plan
+        for plan in plans
+        if plan.topology == family_ops.FamilyTopology.CHANNELIZED or selected.intersection(plan.member_pks)
+    ]
+
+
+def _admitted_leftover(plans, rule, raw_names, force_reapply, matchers, module):
+    """Return the plans for leftover interfaces the raw-name guard still claims."""
+    bases = [_plan_base(plan) for plan in plans]
+    selected = {
+        interface.pk for interface in _collect_unrenamed(bases, rule, raw_names, force_reapply, matchers, module)
+    }
+    return [plan for plan, base in zip(plans, bases, strict=True) if base.pk in selected]
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -247,122 +287,52 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     ``force_reapply=True`` to skip this check and re-apply rules to ALL
     module interfaces (used when vc_position or other variables change).
 
-    A channelized parent and its channel subinterfaces are processed as one family: the parent
-    decides, the children follow it (see ``_apply_rule_with_family``).
+    Every rename and every creation goes through the family package, so this path builds and names
+    exactly what retroactive apply and the preview describe.
 
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
 
     """
-    from dcim.models import Interface
-
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
         return 0
+    # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
+    with family_ops.pinned_template_cache():
+        return _apply_rule_to_module(rule, module, module_bay, force_reapply)
+
+
+def _apply_rule_to_module(rule, module, module_bay, force_reapply):
+    """Plan and execute every family *rule* intends on *module*; see ``apply_interface_name_rules``."""
+    from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
-    plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=())
-    family_outcome = family_ops.InstalledPlanSetOutcome(families=())
-    if supports_channelization() or (force_reapply and rule.channel_count > 0):
-        discovered = family_ops.plan_installed_families(module, rule, variables)
-        flat_snapshots = [
-            member.snapshot
-            for plan in discovered.plans
-            if plan.topology == family_ops.FamilyTopology.FLAT
-            for member in plan.members
-        ]
-        selected_flat_member_pks = frozenset(
-            interface.pk
-            for interface in _collect_unrenamed(
-                flat_snapshots,
-                rule,
-                raw_names,
-                force_reapply,
-                raw.matchers,
-                module,
-            )
-        )
-        plans = tuple(
-            plan
-            for plan in discovered.plans
-            if plan.topology == family_ops.FamilyTopology.CHANNELIZED
-            or selected_flat_member_pks.intersection(plan.member_pks)
-        )
-        plan_set = family_ops.InstalledFamilyPlanSet(module_id=module.pk, plans=plans)
-        family_outcome = family_ops.execute_installed_plan_set(plan_set)
-
-    remaining = Interface.objects.using(family_ops.module_db_alias(module)).filter(module=module)
-    interfaces = list(remaining.exclude(pk__in=plan_set.member_pks))
-
-    if not interfaces:
-        return family_outcome.changed_count
-
-    # Only bases are rule candidates; the idempotency guard therefore looks at them alone.
-    bases, children_by_parent = _partition_families(interfaces)
-    unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply, raw.matchers, module)
-
-    if not unrenamed:
-        return family_outcome.changed_count  # Already renamed (idempotent guard)
-
-    # A breakout rule on a module that has channelized families processes only those families —
-    # the same rule the preview and bulk-apply paths follow.
-    installed_channelized = any(plan.topology == family_ops.FamilyTopology.CHANNELIZED for plan in plan_set.plans)
-    families_only = rule.channel_count > 0 and (
-        installed_channelized or any(_is_channelized_parent(base) for base in bases)
+    interfaces = list(
+        Interface.objects.using(family_ops.module_db_alias(module)).filter(module_id=module.pk).order_by("pk")
     )
+    planned = family_ops.plan_module_families(module, rule, variables, interfaces)
+    installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
+    leftover = _admitted_leftover(planned.leftover, rule, raw_names, force_reapply, raw.matchers, module)
 
-    renamed = family_outcome.changed_count
-    families_seen = bool(plan_set.plans) or families_only
-    conflicts: list = [
-        member
-        for result in family_outcome.families
-        for member in result.members
-        if member.status == family_ops.FamilyStatus.BLOCKED
+    outcomes = family_ops.execute_module_families(rule, module, [*installed, *leftover])
+    renamed = sum(outcome.changed_count for outcome in outcomes)
+    blocked = [
+        member for outcome in outcomes for member in outcome.members if member.status == family_ops.FamilyStatus.BLOCKED
     ]
-    for iface in unrenamed:
-        children = children_by_parent.get(iface.pk, ())
-        if families_only and not _is_channelized_parent(iface):  # pragma: no cover - see families_only above
-            logger.debug(
-                "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
-                iface.name,
-                rule,
-            )
-            continue
-        families_seen = families_seen or bool(children) or _is_channelized_parent(iface)
-        try:
-            count = _apply_rule_with_family(rule, iface, children, variables, module, conflicts)
-        except (ValueError, ValidationError, IntegrityError):
-            # The collision pre-check closes the common case, but a concurrent
-            # insert can still win between that check and the save — surfacing
-            # here as IntegrityError/ValidationError out of the per-interface
-            # atomic block (which has already rolled back cleanly).  Log and keep
-            # going so one racing interface never aborts the whole install batch,
-            # mirroring apply_rule_to_existing().
-            logger.exception(
-                "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
-                rule,
-                iface.name,
-                iface.pk,
-            )
-            continue
-        if count is None:
-            # A structural skip (unsupported topology, channel-count mismatch) says nothing about the rule.
-            families_seen = True
-            continue
-        renamed += count
+    families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if unrenamed and renamed == 0 and not conflicts and not families_seen:
+    if leftover and renamed == 0 and not blocked and not families_seen:
         # All interfaces already have the names the rule would produce — flag as
         # potentially obsolete (e.g., newer NetBox generates correct names natively).
         # Skipped when the 0-count was caused by name collisions (a different reason
         # than a no-op rule), so a collision never mislabels the rule as deprecated.
-        # Skipped for channelized families too: a structural skip, or a family whose parent
-        # deliberately keeps its raw name, says nothing about the rule being obsolete.
+        # Skipped for families too: a structural skip, or a family whose parent deliberately
+        # keeps its raw name, says nothing about the rule being obsolete.
         _flag_rule_potentially_deprecated(rule)
 
     return renamed
@@ -786,199 +756,9 @@ def _rename_for_family(iface, new_name, device, conflicts):  # pragma: no cover 
     return _RenameResult(new_name, _RENAMED, 1) if renamed else _RenameResult(new_name, _COLLISION, 0)
 
 
-def _rename_channel_children(parent, parent_before, children, module, conflicts):  # pragma: no cover - see above
-    """Carry the parent's new name onto its channel subinterfaces; return how many were renamed."""
-    count = 0
-    for child, target in _child_target_names(children, parent_before, parent.name, module):
-        if target is None:
-            logger.warning(
-                "Cannot derive a name for channel interface %r from parent %r; leaving it unchanged.",
-                child.name,
-                parent.name,
-            )
-            continue
-        count += _rename_for_family(child, target, module.device, conflicts).count
-    return count
-
-
-def _apply_simple_rule_to_family(rule, parent, children, variables, module, conflicts):  # pragma: no cover
-    """Rename a channelized family in lockstep with its parent; return the count renamed.
-
-    The children act on the parent's *outcome*, never on its computed target: a parent that
-    collided or failed to save leaves the whole family untouched, while a parent that already
-    carries the right name still lets a stale child be repaired.
-    """
-    parent_before = parent.name
-    new_name = evaluate_name_template(rule.name_template, {**variables, "base": parent.name})
-    result = _rename_for_family(parent, new_name, module.device, conflicts)
-    if result.outcome in (_COLLISION, _ERROR):
-        logger.debug("Family of %r left unchanged: the parent could not be renamed to %r.", parent.name, new_name)
-        return result.count
-    return result.count + _rename_channel_children(parent, parent_before, children, module, conflicts)
-
-
-def _rename_family_parent(rule, parent, variables, module, conflicts):  # pragma: no cover - see above
-    """Rename an existing family's parent per the rule's parent template; return its rename outcome.
-
-    Only a channelized rule that names its parent touches it — a flat rule, or a blank parent
-    template, leaves the parent the name it already has.
-    """
-    if not (_is_channelized_rule(rule) and rule.parent_name_template):
-        return _RenameResult(parent.name, _UNCHANGED, 0)
-    target = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
-    return _rename_for_family(parent, target, module.device, conflicts)
-
-
-def _apply_breakout_rule_to_family(rule, parent, children, variables, module, conflicts):  # pragma: no cover
-    """Rename an already-channelized family; return the count renamed, or None when skipped.
-
-    Nothing is ever created here: the channels the rule describes are rows NetBox already models,
-    so a breakout rule renames them in place.  The parent is renamed only when the rule builds
-    channelized families and names their parent; the channels' ``{base}`` stays the parent's name
-    as it was before that rename.  A rule whose channel count disagrees with the hardware is a
-    modelling mismatch — the family is skipped whole rather than renamed into a shape it does not
-    have, and a parent that could not take its name stops the family the same way a simple rule's
-    does.
-
-    Every child's name is computed before the first save, so a template that only fails on a later
-    channel (channel-dependent arithmetic) aborts the family untouched instead of half renaming it.
-    """
-    if getattr(parent, "channels", None) != rule.channel_count:
-        logger.warning(
-            "Interface %r provides %s channels but rule '%s' defines %s; skipping the family.",
-            parent.name,
-            getattr(parent, "channels", None),
-            rule,
-            rule.channel_count,
-        )
-        return None
-    base_name = parent.name
-    targets = [
-        (
-            child,
-            evaluate_name_template(
-                rule.name_template,
-                {**variables, "base": base_name, "channel": str(rule.channel_start + child.channel_id - 1)},
-            ),
-        )
-        for child in children
-    ]
-    result = _rename_family_parent(rule, parent, variables, module, conflicts)
-    if result.outcome in (_COLLISION, _ERROR):
-        logger.debug(
-            "Family of %r left unchanged: the parent could not be renamed to %r.", base_name, result.target_name
-        )
-        return result.count
-    count = result.count
-    final_names = []
-    for child, new_name in targets:
-        previous_name = child.name
-        child_result = _rename_for_family(child, new_name, module.device, conflicts)
-        count += child_result.count
-        final_name = new_name if child_result.outcome in (_RENAMED, _UNCHANGED) else previous_name
-        final_names.append((child, final_name))
-    family_names.reconcile_after_parent_cascade(
-        base_name,
-        parent.name,
-        tuple((child.pk, child.channel_id, final_name) for child, final_name in final_names),
-        family_ops.module_db_alias(module),
-    )
-    return count
-
-
 def _is_channelized_rule(rule):
     """Return True when *rule* asks for the channelized topology instead of flat sibling interfaces."""
     return rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
-
-
-def _apply_channelized_rule(rule, base, variables, module, conflicts):
-    """Build the channelized family *rule* describes on a plain base interface.
-
-    Returns the rows the family creation changed, 0 when a structural precondition blocked it, or
-    None where NetBox cannot model channels: the rule describes a topology this release has no rows
-    for, and building a flat family instead would silently give the operator another one.
-    """
-    outcome = family_ops.install_channelized_family(module, rule, variables, base)
-    if outcome.status == family_ops.FamilyStatus.UNSUPPORTED:
-        return None
-    if outcome.status != family_ops.FamilyStatus.CHANGED:
-        _record_skip(conflicts, module.device, base.name, outcome.members[0].target_name, base.pk)
-        return 0
-    return outcome.changed_count
-
-
-def _apply_rule_with_family(rule, iface, children, variables, module, conflicts):
-    """Apply *rule* to *iface*, carrying its channel subinterfaces along.
-
-    Returns the number of interfaces renamed/created, or None when a channelized family was
-    skipped for a structural reason.  Interfaces that own no family take the plain path unchanged.
-    """
-    if rule.channel_count > 0 and (_is_channelized_parent(iface) or children):  # pragma: no cover
-        return _apply_breakout_rule_to_family(rule, iface, children, variables, module, conflicts)
-    if children:  # pragma: no cover - requires channelization support
-        return _apply_simple_rule_to_family(rule, iface, children, variables, module, conflicts)
-    if rule.channel_count > 0 and _is_channelized_rule(rule):
-        return _apply_channelized_rule(rule, iface, variables, module, conflicts)
-    return _apply_rule_to_interface(rule, iface, {**variables, "base": iface.name}, module, conflicts=conflicts)
-
-
-def _create_channel(iface, module, new_name, device, conflicts):
-    """Create a breakout channel interface *new_name*; return 1 if created, else 0.
-
-    Silently skips when this module already has the channel (idempotent
-    re-apply); records a conflict when *new_name* is taken by a different
-    interface on the device.
-    """
-    from dcim.models import Interface
-
-    if Interface.objects.filter(module=module, name=new_name).exists():
-        return 0  # idempotent: channel already created on this module
-    if _name_exists_on_device(device, new_name):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return 0
-    breakout_iface = Interface(
-        device=device,
-        module=module,
-        name=new_name,
-        type=iface.type,
-        enabled=iface.enabled,
-    )
-    breakout_iface.full_clean()
-    breakout_iface.save()
-    return 1
-
-
-def _apply_rule_to_interface(rule, iface, variables, module, conflicts=None):
-    """Apply a single rule to an interface, handling breakout channels.
-
-    All saves are wrapped in a transaction so a failure mid-breakout rolls
-    back any partially created interfaces.  A computed name that already exists
-    on the device is skipped (logged, and recorded in *conflicts* when a list
-    is passed) instead of raising — so automatic renaming (module install,
-    module-type change, VC change) never aborts the rest of the batch on a
-    name collision.
-
-    Returns the number of interfaces renamed/created.
-    """
-    count = 0
-    device = module.device
-
-    with transaction.atomic():
-        if rule.channel_count > 0:
-            # Breakout: rename base interface and create additional channel interfaces
-            for ch in range(rule.channel_count):
-                variables["channel"] = str(rule.channel_start + ch)
-                new_name = evaluate_name_template(rule.name_template, variables)
-                if ch == 0:
-                    count += _rename_in_place(iface, new_name, device, conflicts)
-                else:
-                    count += _create_channel(iface, module, new_name, device, conflicts)
-        else:
-            # Simple rename (converter offset, platform naming, etc.)
-            new_name = evaluate_name_template(rule.name_template, variables)
-            count += _rename_in_place(iface, new_name, device, conflicts)
-
-    return count
 
 
 def _matching_moduletype_pks(module_type_pattern):
