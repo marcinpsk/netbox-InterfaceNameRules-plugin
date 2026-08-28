@@ -10,7 +10,9 @@ which numbers it is reporting and leaves the judgement to the reader.
 """
 
 import json
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +40,31 @@ def _artifact_path(raw, must_exist):
     if must_exist and not path.is_file():
         raise SystemExit(f"{raw} is not a readable artifact")
     return path
+
+
+def _statement_table(sql):
+    """Return the table a normalized statement reads or writes, for attribution."""
+    match = re.search(r'(?:FROM|INTO|UPDATE)\s+"([a-z_]+)"', sql)
+    return match.group(1) if match else sql.split()[0][:24]
+
+
+def _calls_by_table(scenario):
+    """Return how many statements the scenario issued against each table."""
+    counts: Counter = Counter()
+    for entry in scenario["database"]["statements"]:
+        counts[_statement_table(entry["normalized_sql"])] += entry["calls"]
+    return counts
+
+
+def _attribution(name, before_scenario, after_scenario):
+    """Return the per-table statement deltas behind one scenario's change."""
+    before_calls, after_calls = _calls_by_table(before_scenario), _calls_by_table(after_scenario)
+    rows = []
+    for table in sorted(set(before_calls) | set(after_calls)):
+        change = after_calls[table] - before_calls[table]
+        if change:
+            rows.append(f"| `{name}` | `{table}` | {before_calls[table]} | {after_calls[table]} | {change:+d} |")
+    return rows
 
 
 def _scenarios(artifact):
@@ -146,6 +173,19 @@ def main(argv):
     ]
     if regressions:
         report.extend(f"- `{name}` {label}: {_format(old)} to {_format(new)}" for name, label, old, new in regressions)
+        report += [
+            "",
+            "### Where those statements come from",
+            "",
+            "Each raised scenario is broken down by the table its statements touch, so the work this "
+            "plugin drives can be told apart from the per-save bookkeeping NetBox does for the object "
+            "types and custom fields the database happens to hold.",
+            "",
+            "| Scenario | Table | Before | After | Change |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+        for name, _label, _old, _new in regressions:
+            report.extend(_attribution(name, before_scenarios[name], after_scenarios[name]))
     else:
         report.append("None. No scenario issues more statements than the baseline.")
     report.append("")

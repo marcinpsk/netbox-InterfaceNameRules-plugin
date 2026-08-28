@@ -36,3 +36,31 @@ The complete model-save scenarios include NetBox model creation, plugin signal s
 committed callback. Direct-callback scenarios isolate the deferred callback for diagnosis. Compare
 the complete model-save scenarios first when deciding whether the refactor changed production-path
 performance.
+
+## Comparing two runs
+
+`performance/compare.py BEFORE.json AFTER.json OUT.md` writes a readable comparison of database
+work and machine time, and breaks any scenario whose statement count rose down by table.
+
+## Result of the interface-family comparison
+
+`comparisons/family-package-vs-existing.md` compares the pre-refactor baseline with the family
+package on the same NetBox revision and the same host.
+
+Database work carries the verdict, because it is deterministic. The plugin's own committed callback
+issues fewer or the same statements in every scenario: unchanged where no rule matches, and down by
+5% to 36% everywhere else, with the largest reductions on virtual-chassis reapplication (-29% for
+one module, -36% for eight).
+
+Two complete-model-save scenarios show more statements than the baseline. The per-table breakdown
+attributes every one of them to `core_objecttype`, `extras_customfield` and `extras_cachedvalue`:
+NetBox's own per-save bookkeeping for the object types and custom fields the test database holds,
+which grew between the two runs. The control is `module.complete_model_save.no_matching_rule`, where
+this plugin returns before doing anything and its callback issues the same 7 statements in both
+runs, yet the surrounding save costs 17 more. Neither increase is work this refactor added.
+
+Machine time in that run is not evidence. The host was running unrelated workloads at a load average
+between 17 and 44, and the same no-op scenario shows +72% wall time against identical SQL. The
+virtual-chassis scenarios were still 32% to 35% faster despite the contention, which is consistent
+with their statement reductions. Rerun both artifacts on an otherwise-idle host before quoting any
+timing figure as evidence.
