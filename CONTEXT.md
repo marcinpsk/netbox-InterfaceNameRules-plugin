@@ -49,6 +49,18 @@ _Avoid_: Family conversion
 A change that creates an interface family or changes it between flat and channelized topologies.
 _Avoid_: Family rename
 
+**Flat-to-channelized conversion**:
+A structural family change that rebuilds one installed flat breakout family as a channelized family, keeping the physical interface row and moving its logical identity onto the channel that takes its name. It is always an explicit operator action, never a side effect of applying a rule.
+_Avoid_: Migration, upgrade
+
+**Out-of-band rename**:
+A change to an interface name made by an actor other than this plugin, such as an operator edit or an import. A family plan is stale when one arrives between planning and execution.
+_Avoid_: External rename, manual fix
+
+**Engine facade**:
+The compatibility surface downstream callers import. It selects rules, builds template variables and decides which interfaces an automatic path may touch on a run; it holds no family discovery, planning or mutation.
+_Avoid_: Engine layer, core
+
 **Unsupported topology**:
 An interface-family topology that the active NetBox data model cannot represent.
 _Avoid_: Legacy fallback
