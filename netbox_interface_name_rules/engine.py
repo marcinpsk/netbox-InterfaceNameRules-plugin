@@ -545,29 +545,20 @@ def _build_module_qs(rule):
     return qs
 
 
-def _name_detail(name, role, channel_id=None) -> dict:
-    """Describe one previewed name so the UI can render a family as a family.
-
-    *role* is ``interface`` (a plain rename), ``parent`` (the family's physical interface) or
-    ``channel``; *channel_id* is the parent channel a channel name is bound to, when known.
-    """
-    return {"name": name, "role": role, "channel_id": channel_id}
-
-
 _PREVIEW_ROLES = {
     family_ops.MemberRole.PARENT: "parent",
     family_ops.MemberRole.CHANNEL: "channel",
 }
 
 
-def _member_detail(plan, member) -> dict:
+def _member_detail(plan, member) -> family_ops.PlannedName:
     """Describe one planned member so the UI can render a family as a family.
 
     A flat family's members are the channels a breakout rule spells out; a plan that holds only
     one of them is a plain rename, not a family.
     """
     role = _PREVIEW_ROLES.get(member.role) or ("channel" if len(plan.members) > 1 else "interface")
-    return _name_detail(member.target_name, role, member.channel_id)
+    return family_ops.PlannedName(member.target_name, role, member.channel_id)
 
 
 def _plan_details(plan) -> list:
@@ -575,7 +566,7 @@ def _plan_details(plan) -> list:
     if plan.precondition_status != family_ops.FamilyStatus.FAILED:
         return [_member_detail(plan, member) for member in plan.members]
     root = _member_detail(plan, plan.members[0])
-    return [_name_detail(f"<error: {plan.precondition_reason}>", root["role"], root["channel_id"])]
+    return [family_ops.PlannedName(f"<error: {plan.precondition_reason}>", root.role, root.channel_id)]
 
 
 def _plan_changes_names(plan, existing_names) -> bool:
@@ -609,7 +600,7 @@ def _plan_entry(module, plan, interface, existing_names) -> dict | None:
         "module": module,
         "interface": interface,
         "current_name": interface.name,
-        "new_names": [detail["name"] for detail in details],
+        "new_names": [detail.name for detail in details],
         "name_details": details,
     }
 
@@ -678,7 +669,7 @@ def find_interfaces_for_rule(rule, limit=None):
             "interface":    Interface instance,
             "current_name": str,
             "new_names":    list[str],    # one entry per channel, or single-element
-            "name_details": list[dict],   # {"name", "role", "channel_id"} per new_names entry
+            "name_details": list[PlannedName],  # name, role and channel id per new_names entry
         }
 
     Only includes entries where at least one new_name differs from current_name.

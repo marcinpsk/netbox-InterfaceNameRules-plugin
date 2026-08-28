@@ -524,7 +524,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         self.assertEqual(results[0]["current_name"], "3")
         self.assertEqual(results[0]["new_names"], self.FAMILY_NAMES)
         self.assertEqual(
-            [(detail["role"], detail["channel_id"]) for detail in results[0]["name_details"]],
+            [(detail.role, detail.channel_id) for detail in results[0]["name_details"]],
             [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
         )
 

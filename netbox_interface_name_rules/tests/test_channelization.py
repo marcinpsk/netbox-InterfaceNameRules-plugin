@@ -347,7 +347,7 @@ class ChannelizedBreakoutRuleTest(ChannelizationTestCase):
         self.assertEqual(results[0]["current_name"], "3")
         self.assertEqual(results[0]["new_names"], ["3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
         self.assertEqual(
-            [(detail["role"], detail["channel_id"]) for detail in results[0]["name_details"]],
+            [(detail.role, detail.channel_id) for detail in results[0]["name_details"]],
             [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
         )
 
@@ -402,17 +402,20 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
 
         self.assertEqual(family["new_names"], ["et-3", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
         self.assertEqual(
-            family["name_details"],
+            [(detail.name, detail.role, detail.channel_id) for detail in family["name_details"]],
             [
-                {"name": "et-3", "role": "parent", "channel_id": None},
-                {"name": "et-3:1", "role": "channel", "channel_id": 1},
-                {"name": "et-3:2", "role": "channel", "channel_id": 2},
-                {"name": "et-3:3", "role": "channel", "channel_id": 3},
-                {"name": "et-3:4", "role": "channel", "channel_id": 4},
+                ("et-3", "parent", None),
+                ("et-3:1", "channel", 1),
+                ("et-3:2", "channel", 2),
+                ("et-3:3", "channel", 3),
+                ("et-3:4", "channel", 4),
             ],
         )
         self.assertEqual(family["interface"], self._parent(family["module"]))
-        self.assertEqual(standalone["name_details"], [{"name": "et-3-mgmt", "role": "interface", "channel_id": None}])
+        self.assertEqual(
+            [(detail.name, detail.role, detail.channel_id) for detail in standalone["name_details"]],
+            [("et-3-mgmt", "interface", None)],
+        )
 
     def test_has_applicable_interfaces_ignores_a_renamed_family(self):
         """Children must not keep the rule looking 'applicable' after the family is correctly named."""

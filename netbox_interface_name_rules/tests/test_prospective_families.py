@@ -507,7 +507,7 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
 
         self.assertEqual(checked, 1)
         self.assertEqual(preview[0]["new_names"], list(plan.target_names))
-        self.assertEqual([detail["role"] for detail in preview[0]["name_details"]], ["channel"] * 4)
+        self.assertEqual([detail.role for detail in preview[0]["name_details"]], ["channel"] * 4)
 
     def test_the_preview_changes_no_interface(self):
         from netbox_interface_name_rules.engine import find_interfaces_for_rule
