@@ -166,8 +166,11 @@ def _outcome(plan, status, members, reason=""):  # pragma: no cover - requires c
 def _refused(plan, status, reason):  # pragma: no cover - requires channelization support
     """Log why the family was not converted and return an outcome that touched no row."""
     logger.warning(
-        "Cannot convert the flat family of interface %r into the channelized parent %r: %s. Skipping.",
+        "Cannot convert the flat family of interface %r (device %s, module %s) into the channelized "
+        "parent %r: %s. Skipping.",
         plan.base.name,
+        plan.device_id,
+        plan.module_id,
         plan.parent_target_name,
         reason,
     )
@@ -240,13 +243,17 @@ def _carry_assignments(plan, base, channel):  # pragma: no cover - requires chan
     """Move the ch-0 row's addresses and first-hop groups onto the channel that took its name.
 
     Saved one row at a time so each carried object is validated, and recorded in the changelog,
-    like every other row this conversion writes.
+    like every other row this conversion writes.  A model save writes back every field it read, so
+    each row is locked first: an edit landing between the read and the save would otherwise be
+    overwritten by the values this transaction started with.
     """
-    for address in base.ip_addresses.using(plan.db_alias).all():
+    addresses = base.ip_addresses.using(plan.db_alias).select_for_update().order_by("pk")
+    for address in addresses:
         address.assigned_object = channel
         address.full_clean()
         address.save(using=plan.db_alias)
-    for assignment in base.fhrp_group_assignments.using(plan.db_alias).all():
+    assignments = base.fhrp_group_assignments.using(plan.db_alias).select_for_update().order_by("pk")
+    for assignment in assignments:
         assignment.interface = channel
         assignment.full_clean()
         assignment.save(using=plan.db_alias)

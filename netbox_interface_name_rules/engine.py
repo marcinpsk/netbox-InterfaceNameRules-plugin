@@ -235,13 +235,6 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
     return _forced_channel_bases(interfaces, raw_names, matchers, module)
 
 
-def _plan_base(plan):
-    """Return the interface facts a leftover plan is anchored on."""
-    if isinstance(plan, family_ops.InstalledFamilyPlan):
-        return plan.members[0].snapshot
-    return plan.base
-
-
 def _touches_a_family(plan) -> bool:
     """Return whether *plan* acts on a family rather than one standalone interface."""
     if isinstance(plan, family_ops.InstalledFamilyPlan):
@@ -265,15 +258,6 @@ def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module)
         for plan in plans
         if plan.topology == family_ops.FamilyTopology.CHANNELIZED or selected.intersection(plan.member_pks)
     ]
-
-
-def _admitted_leftover(plans, rule, raw_names, force_reapply, matchers, module):
-    """Return the plans for leftover interfaces the raw-name guard still claims."""
-    bases = [_plan_base(plan) for plan in plans]
-    selected = {
-        interface.pk for interface in _collect_unrenamed(bases, rule, raw_names, force_reapply, matchers, module)
-    }
-    return [plan for plan, base in zip(plans, bases, strict=True) if base.pk in selected]
 
 
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
@@ -315,9 +299,17 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     interfaces = list(
         Interface.objects.using(family_ops.module_db_alias(module)).filter(module_id=module.pk).order_by("pk")
     )
-    planned = family_ops.plan_module_families(module, rule, variables, interfaces)
+    planned = family_ops.plan_module_families(
+        module,
+        rule,
+        variables,
+        interfaces,
+        # The guard runs while it can still see every claimed row, before two of them that intend
+        # one family are collapsed into it.
+        admit_leftover=lambda plain: _collect_unrenamed(plain, rule, raw_names, force_reapply, raw.matchers, module),
+    )
     installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
-    leftover = _admitted_leftover(planned.leftover, rule, raw_names, force_reapply, raw.matchers, module)
+    leftover = planned.leftover
 
     outcomes = family_ops.execute_module_families(rule, module, [*installed, *leftover])
     renamed = sum(outcome.changed_count for outcome in outcomes)

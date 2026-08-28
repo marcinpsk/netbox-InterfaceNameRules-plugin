@@ -378,6 +378,30 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         for candidate in ("xe-0/0/3", "xe-1/0/3"):
             self.assertIn(candidate, output)
 
+    def test_a_forced_re_apply_does_not_break_out_an_ambiguous_pair_with_one_target(self):
+        """The same claim where both bases intend one family, so nothing downstream tells them apart.
+
+        A breakout rule without ``{base}`` gives every base on the module the same names, so the two
+        claimed rows collapse into one family before anything is written.  The guard has to refuse
+        the pair while it can still see both of them.
+        """
+        module, _ = self._install_on(self.device, self.decoy_type, "3")
+        rename_out_of_band(Interface.objects.get(module=module, name="mgmt-3"), "xe-0/0/3")
+        InterfaceNameRule.objects.create(
+            module_type=self.decoy_type,
+            name_template="et-0/0/{bay_position}:{channel}",
+            channel_count=2,
+            channel_start=0,
+        )
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            self._renumber(2)
+
+        self.assertEqual(self._names(module), ["xe-0/0/3", "xe-1/0/3"])
+        output = "\n".join(logs.output)
+        for candidate in ("xe-0/0/3", "xe-1/0/3"):
+            self.assertIn(candidate, output)
+
     def test_an_interface_claimed_by_two_templates_renames_nothing(self):
         """Two matchers over one name is the same failure seen from the other side; both claims are dropped."""
         module, bay = self._install_on(self.device, self.overlap_type, "4")

@@ -119,15 +119,21 @@ def _creation_plans(module, rule, variables, plain):
     return [_creation_plan(module, rule, variables, candidates[index][0]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces) -> ModuleFamilyPlans:
+def plan_module_families(module, rule, variables, interfaces, admit_leftover=None) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
     what is left over is planned as the family the rule would build on it.
+
+    *admit_leftover* filters the interfaces no installed family claimed.  It runs before two of
+    them that intend one family are collapsed into it, so a caller that must not touch one of the
+    two cannot have it survive the collapse as the row the family is built on.
     """
     installed = plan_installed_families(module, rule, variables, interfaces=interfaces)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
+    if admit_leftover is not None:
+        plain = list(admit_leftover(plain))
     if rule.channel_count <= 0:
         leftover = tuple(plan_interface_rename(module, rule, variables, interface) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
