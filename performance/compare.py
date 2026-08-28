@@ -137,7 +137,8 @@ def _environment_table(before, after):
     rows.append(f"| postgresql | `{postgres_before}` | `{postgres_after}` |")
     settings_before = before["environment"].get("postgresql", {}).get("planner_settings")
     settings_after = after["environment"].get("postgresql", {}).get("planner_settings")
-    rows.append(f"| planner settings | `{'identical' if settings_before == settings_after else 'CHANGED'}` | |")
+    planner_status = "identical" if settings_before == settings_after else "CHANGED"
+    rows.append(f"| planner settings | `{planner_status}` | `{planner_status}` |")
     return rows
 
 
