@@ -157,12 +157,12 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
 
         # assertLogs asserts the warning branch actually fired — without it, "no rule matched" would
         # also yield result==0 and a preserved name, so the test would pass without covering the path.
-        with self.assertLogs("netbox_interface_name_rules.engine", level="WARNING") as logs:
+        with self.assertLogs("netbox_interface_name_rules.family.execution", level="WARNING") as logs:
             result = apply_device_interface_rules(self.device1)
 
         self.assertEqual(result, 0)  # validation failed → nothing renamed
         self.assertTrue(
-            any("Validation failed renaming device interface" in line for line in logs.output),
+            any("NetBox rejected rename" in line for line in logs.output),
             logs.output,
         )
         iface.refresh_from_db()
@@ -309,7 +309,7 @@ class ApplyDeviceInterfaceRulesModuleTypeTest(TestCase):
 
 
 class DeviceInterfaceEdgeCaseNamesTest(TestCase):
-    """Test _try_rename_device_interface with edge-case interface names."""
+    """Test device-level rules with edge-case interface names."""
 
     @classmethod
     def setUpTestData(cls):

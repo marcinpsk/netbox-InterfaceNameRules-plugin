@@ -43,8 +43,11 @@ from .domain import (
 )
 from .execution import execute_installed_plan, execute_installed_plan_set
 from .installed import (
+    device_interface_families,
     interfaces_by_module,
+    is_channelized_parent,
     module_db_alias,
+    plan_device_interface_rename,
     plan_installed_families,
     plan_interface_rename,
 )
@@ -98,6 +101,7 @@ __all__ = (
     "describe_interfaces",
     "describe_module_interfaces",
     "describe_template_interfaces",
+    "device_interface_families",
     "execute_conversion",
     "execute_family_plan",
     "execute_flat_family",
@@ -108,9 +112,11 @@ __all__ = (
     "has_flat_expansion",
     "install_channelized_family",
     "interfaces_by_module",
+    "is_channelized_parent",
     "module_db_alias",
     "one_family_per_name_set",
     "pinned_template_cache",
+    "plan_device_interface_rename",
     "plan_flat_family",
     "plan_installed_families",
     "plan_interface_rename",

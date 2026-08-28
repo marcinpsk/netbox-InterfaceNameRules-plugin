@@ -75,7 +75,7 @@ class InstalledFamilyPlan:
     family_id: str
     topology: FamilyTopology
     device_id: int
-    module_id: int
+    module_id: int | None
     db_alias: str
     members: tuple[PlannedMember, ...]
     parent_pk: int | None = None

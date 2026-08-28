@@ -491,6 +491,20 @@ class ChannelizedDeviceRuleTest(TestCase):
         self.assertEqual(renamed, 5)
         self.assertEqual(self._names(), ["eth1", "eth1:1", "eth1:2", "eth1:3", "eth1:4"])
 
+    def test_a_channel_count_on_a_device_rule_does_not_block_the_family(self):
+        """A device rule never builds a family, so a channel count on one says nothing about this one."""
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="eth{vc_position}",
+            channel_count=2,
+            channel_start=0,
+        )
+
+        renamed = apply_device_interface_rules(self.device)
+
+        self.assertEqual(renamed, 5)
+        self.assertEqual(self._names(), ["eth1", "eth1:1", "eth1:2", "eth1:3", "eth1:4"])
+
     def test_rule_matching_only_children_renames_nothing(self):
         """A pattern that hits only channel subinterfaces has no parent to act on."""
         InterfaceNameRule.objects.create(

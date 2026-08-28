@@ -1350,12 +1350,12 @@ class FlagDeprecatedExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — DB save exception rollback in _try_rename_device_interface (lines 159-168)
+# Device interface save exception rollback
 # ---------------------------------------------------------------------------
 
 
 class DeviceInterfaceSaveExceptionTest(TestCase):
-    """Test _try_rename_device_interface rolls back name on iface.save() failure (lines 159-168)."""
+    """Test the device rule path rolls back the name when an interface save fails."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1373,11 +1373,11 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
             vc_position=1,
         )
 
-    def test_save_exception_restores_name_and_returns_false(self):
-        """When iface.save() raises, name is rolled back to old_name and False returned (lines 159-168)."""
-        from netbox_interface_name_rules.engine import _try_rename_device_interface
+    def test_save_exception_restores_name_and_returns_zero(self):
+        """Restore the old name and return zero when an interface save fails."""
+        from netbox_interface_name_rules.engine import apply_device_interface_rules
 
-        rule = InterfaceNameRule.objects.create(
+        InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True,
             name_template="xe-{vc_position}/{port}",
         )
@@ -1386,9 +1386,9 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         from django.db import IntegrityError
 
         with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
-            result = _try_rename_device_interface(rule, iface, "1", self.device, set())
+            result = apply_device_interface_rules(self.device)
 
-        self.assertFalse(result)
+        self.assertEqual(result, 0)
         self.assertEqual(iface.name, "Gi0/1")  # rolled back
 
 

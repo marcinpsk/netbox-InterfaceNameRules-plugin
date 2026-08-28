@@ -8,14 +8,13 @@ after Django is fully initialised.
 
 import logging
 import re
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
 from . import family as family_ops
 from . import naming, rule_selection
-from .choices import BreakoutModeChoices
 from .family import targets as family_targets
 from .family import template_names as family_template_names
 
@@ -89,44 +88,6 @@ def supports_vc_position_token():
     return _vc_position_re() is not None
 
 
-def _is_channel_child(iface):
-    """Return True when *iface* is a channel subinterface bound to a parent's channel.
-
-    Structural, not name-based: a row imported without ``full_clean()`` may carry a ``channel_id``
-    without the channel type.  ``channel_id`` does not exist before NetBox 4.7, so this is False
-    on every older release and the family paths below stay dormant there.
-    """
-    return getattr(iface, "channel_id", None) is not None
-
-
-def _is_channelized_parent(iface):
-    """Return True when *iface* declares a channel count.
-
-    A channelized parent owns a family even when no subinterface is bound yet — this, not the
-    presence of children, is what disables flat channel creation.
-    """
-    return getattr(iface, "channels", None) is not None
-
-
-def _partition_families(interfaces):
-    """Split *interfaces* into ``(bases, children_by_parent_pk)``.
-
-    Bases are the interfaces a rule may match on its own: standalone interfaces and channelized
-    parents.  Channel subinterfaces are never independent candidates — they are renamed only by
-    following their parent, so they are grouped under it instead.
-    """
-    bases = []
-    children = defaultdict(list)
-    for iface in interfaces:
-        if not _is_channel_child(iface):
-            bases.append(iface)
-            continue
-        children[iface.parent_id].append(iface)  # pragma: no cover - requires channelization support
-    for group in children.values():  # pragma: no cover - no channel children exist without support
-        group.sort(key=lambda child: child.channel_id)
-    return bases, children
-
-
 def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
     """Return the labels of *candidates* that exactly one drifted ``{vc_position}`` template claims.
 
@@ -188,7 +149,7 @@ def _forced_channel_bases(interfaces, raw_names, matchers, module):
     for i in interfaces:
         # A channelized parent is its own base: its channels are separate rows, so the name needs no
         # ":"-splitting to find them.
-        base = i.name if _is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        base = i.name if family_ops.is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
         forms = (base, base.rsplit("/", 1)[-1])
         if not any(form in raw_names for form in forms) and not any(
             matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
@@ -361,112 +322,6 @@ def predict_rule_output(module, module_bay, raw_names):
     return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
 
-def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts=None):
-    """Attempt to rename a single device-level interface using *rule*.
-
-    Returns ``True`` if the interface was successfully renamed, ``False`` otherwise.
-    Mutates ``renamed_pks`` on success.
-
-    A computed name already taken by another interface on the device is skipped
-    with a tidy WARNING (no traceback), mirroring the module-install path; pass a
-    list as *conflicts* to also collect them.  ``full_clean()`` remains the
-    backstop for the rarer cross-member (VC) uniqueness violation.
-    """
-    if iface.pk in renamed_pks:
-        return False  # Already renamed by a higher-priority rule
-
-    if rule.module_type_pattern:
-        try:
-            if not re.fullmatch(rule.module_type_pattern, iface.name):
-                return False
-        except re.error:
-            return False
-
-    port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
-    variables = {"vc_position": vc_position, "base": iface.name, "port": port}
-
-    try:
-        new_name = evaluate_name_template(rule.name_template, variables)
-    except (ValueError, TypeError, re.error):
-        logger.exception(
-            "Failed to evaluate template %r for interface %s (rule %s)",
-            rule.name_template,
-            iface.name,
-            rule.pk,
-        )
-        return False
-
-    if new_name == iface.name:
-        return False
-
-    # Pre-check device-scope name uniqueness so an expected collision is a clean
-    # WARNING + skip instead of an ERROR traceback out of full_clean().
-    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return False
-
-    old_name = iface.name
-    iface.name = new_name
-    try:
-        iface.full_clean()
-    except ValidationError as exc:
-        logger.warning(
-            "Validation failed renaming device interface %r → %r (rule %s, device %s); skipping: %s",
-            old_name,
-            new_name,
-            rule.pk,
-            device.pk,
-            exc,
-        )
-        iface.name = old_name
-        return False
-    try:
-        iface.save()
-    except (IntegrityError, ValidationError):
-        logger.exception(
-            "DB save failed for device interface %s → %s (rule %s, device %s)",
-            old_name,
-            new_name,
-            rule.pk,
-            device.pk,
-        )
-        iface.name = old_name
-        return False
-
-    renamed_pks.add(iface.pk)
-    logger.debug("Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk)
-    return True
-
-
-def _try_rename_device_family(rule, iface, children, vc_position, device, renamed_pks, conflicts=None):
-    """Rename a device-level interface with *rule* and carry its channel subinterfaces along.
-
-    Returns the number of interfaces renamed.  The whole family is claimed in *renamed_pks* the
-    moment its parent is renamed, so a lower-priority rule can never rename the leftovers of a
-    family a higher-priority rule already took.
-
-    Healing is best-effort here: device-level interfaces have no module template family to recover
-    a suffix from, so a child that lost its parent's prefix in an earlier run is left alone.
-    """
-    parent_before = iface.name
-    if not _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts):
-        return 0
-    count = 1
-    for child, target in _child_target_names(  # pragma: no cover - requires channelization support
-        children, parent_before, iface.name, module=None
-    ):
-        renamed_pks.add(child.pk)
-        if target is None:
-            logger.warning(
-                "Cannot derive a name for channel interface %r from parent %r; leaving it unchanged.",
-                child.name,
-                iface.name,
-            )
-            continue
-        count += _rename_for_family(child, target, device, conflicts).count
-    return count
-
-
 def reapply_module_rules(device):
     """Re-apply module rules to every module on *device* after its virtual-chassis position changed.
 
@@ -555,18 +410,39 @@ def apply_device_interface_rules(device):
     if not rules:
         return 0
 
-    interfaces = list(Interface.objects.filter(device=device, module=None))
+    interfaces = list(Interface.objects.filter(device=device, module=None).order_by("pk"))
     if not interfaces:
         return 0
 
-    bases, children_by_parent = _partition_families(interfaces)
+    families = family_ops.device_interface_families(interfaces)
     total = 0
     renamed_pks: set[int] = set()
     for rule in rules:
-        for iface in bases:
-            total += _try_rename_device_family(
-                rule, iface, children_by_parent.get(iface.pk, ()), vc_position, device, renamed_pks
-            )
+        for interface, children in families:
+            if interface.pk in renamed_pks:
+                continue
+            if rule.module_type_pattern:
+                try:
+                    if not re.fullmatch(rule.module_type_pattern, interface.name):
+                        continue
+                except re.error:
+                    continue
+            port = interface.name.rsplit("/", 1)[-1]
+            variables = {"vc_position": vc_position, "base": interface.name, "port": port}
+            plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
+            try:
+                outcome = family_ops.execute_installed_plan(plan)
+            except (IntegrityError, ValidationError):
+                logger.exception(
+                    "Failed to apply rule %s to device interface %r on device %s; skipping.",
+                    rule.pk,
+                    interface.name,
+                    device.pk,
+                )
+                continue
+            total += outcome.changed_count
+            if outcome.members[0].status == family_ops.FamilyStatus.CHANGED:
+                renamed_pks.update(plan.member_pks)
 
     return total
 
@@ -584,47 +460,6 @@ def _get_raw_interface_names(module):
 def _raw_name_patterns(module):
     """Delegate historical raw-name pattern construction."""
     return family_template_names.raw_name_patterns(module)
-
-
-def _recovered_suffix(child, suffixes):  # pragma: no cover - requires channelization support
-    """Return the template suffix for *child*'s channel, or None when it is not unambiguous.
-
-    Once a parent has been renamed there is no reliable way back from a stranded child to the family
-    it belongs to, so a channel spelled differently by two families is left alone rather than guessed.
-    """
-    candidates = suffixes.get(child.channel_id) or set()
-    if len(candidates) == 1:
-        return next(iter(candidates))
-    if candidates:
-        logger.warning(
-            "Channel %s is spelled %s by different families of this module type; "
-            "cannot recover a name for interface %r.",
-            child.channel_id,
-            sorted(candidates),
-            child.name,
-        )
-    return None
-
-
-def _child_target_names(children, parent_before, parent_after, module):
-    """Pair every child with the name it takes when its parent is renamed to *parent_after*.
-
-    The suffix is read from the child's own name against *parent_before* (the parent's name before
-    this run's rename); when the child no longer carries that prefix the suffix is recovered from
-    the module's template family instead.  A child that neither shares the prefix nor has an
-    unambiguous template pairing is returned with a None target — the engine leaves it alone rather
-    than guessing at a free-form name.
-    """
-    suffixes = None
-    targets = []
-    for child in children:  # pragma: no cover - requires channelization support
-        suffix = family_targets.child_name_suffix(child.name, parent_before)
-        if suffix is None and module is not None:
-            if suffixes is None:
-                suffixes = family_ops.template_channel_suffixes(family_ops.resolved_template_names(module))
-            suffix = _recovered_suffix(child, suffixes)
-        targets.append((child, None if suffix is None else parent_after + suffix))
-    return targets
 
 
 def _flag_rule_potentially_deprecated(rule):
@@ -653,104 +488,6 @@ def _flag_rule_potentially_deprecated(rule):
         )
     except Exception:
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
-
-
-def _name_exists_on_device(device, name, exclude_pk=None):
-    """Return True if another interface on *device* already uses *name*.
-
-    Pre-checks the per-device interface-name uniqueness NetBox enforces so a
-    rename/create that would collide is skipped cleanly instead of raising
-    mid-transaction.  (VC-wide uniqueness is not pre-checked here; full_clean()
-    remains the authoritative validator for that rarer cross-member case.)
-    """
-    from dcim.models import Interface
-
-    qs = Interface.objects.filter(device=device, name=name)
-    if exclude_pk is not None:
-        qs = qs.exclude(pk=exclude_pk)
-    return qs.exists()
-
-
-def _record_skip(conflicts, device, current_name, attempted_name, interface_pk=None):
-    """Append a skipped rename to *conflicts* when the caller is collecting them.
-
-    The caller has already logged why it skipped; this only lets the interactive Apply view report
-    how many renames were dropped.
-    """
-    if conflicts is not None:
-        conflicts.append(
-            {
-                "device": str(device),
-                "current_name": current_name,
-                "attempted_name": attempted_name,
-                "interface_pk": interface_pk,
-            }
-        )
-
-
-def _record_conflict(conflicts, device, current_name, attempted_name, interface_pk=None):
-    """Log a name collision at WARNING and record it as a skipped rename.
-
-    Collisions are expected during automatic renaming (module install, type
-    change, VC change) when the computed name is already taken on the device;
-    they must never abort the batch, so callers skip the rename and carry on.
-    """
-    logger.warning(
-        "Interface name %r already exists on device %s — skipping rename of %r → %r",
-        attempted_name,
-        device,
-        current_name,
-        attempted_name,
-    )
-    _record_skip(conflicts, device, current_name, attempted_name, interface_pk)
-
-
-# What a family-aware rename did, so the children can act on their parent's outcome rather than on
-# its computed target name (which says nothing about whether the parent actually took it).
-_RENAMED = "renamed"
-_UNCHANGED = "unchanged"
-_COLLISION = "collision"
-_ERROR = "error"
-
-_RenameResult = namedtuple("_RenameResult", ("target_name", "outcome", "count"))
-
-
-def _rename_in_place(iface, new_name, device, conflicts):
-    """Rename *iface* to *new_name*; return 1 if renamed, 0 if no-op or collision."""
-    if new_name == iface.name:
-        return 0
-    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return 0
-    iface.name = new_name
-    iface.full_clean()
-    iface.save()
-    return 1
-
-
-def _rename_for_family(iface, new_name, device, conflicts):  # pragma: no cover - requires channelization support
-    """Rename *iface* as part of a family walk, reporting the outcome instead of raising.
-
-    The save runs in its own savepoint so an unexpected failure on one member leaves the
-    surrounding transaction usable: family processing is best-effort per interface, and only a
-    failed *parent* stops the rest of its family.
-    """
-    if new_name == iface.name:
-        return _RenameResult(new_name, _UNCHANGED, 0)
-    old_name = iface.name
-    try:
-        with transaction.atomic():
-            renamed = _rename_in_place(iface, new_name, device, conflicts)
-    except (ValueError, ValidationError, IntegrityError):
-        logger.exception("Failed to rename interface %r → %r on device %s; skipping.", old_name, new_name, device)
-        iface.name = old_name
-        return _RenameResult(new_name, _ERROR, 0)
-    return _RenameResult(new_name, _RENAMED, 1) if renamed else _RenameResult(new_name, _COLLISION, 0)
-
-
-def _is_channelized_rule(rule):
-    """Return True when *rule* asks for the channelized topology instead of flat sibling interfaces."""
-    return rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
 
 
 def _matching_moduletype_pks(module_type_pattern):

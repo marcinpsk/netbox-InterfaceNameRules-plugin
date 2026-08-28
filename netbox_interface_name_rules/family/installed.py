@@ -19,7 +19,12 @@ from .domain import (
     MemberRole,
     PlannedMember,
 )
-from .targets import channelized_family_targets, flat_family_names, template_channel_suffixes
+from .targets import (
+    channelized_family_targets,
+    flat_family_names,
+    lockstep_family_targets,
+    template_channel_suffixes,
+)
 from .template_names import resolved_template_names
 
 logger = logging.getLogger(__name__)
@@ -27,9 +32,14 @@ logger = logging.getLogger(__name__)
 _BASE_SENTINEL = "InrBaseSentinelEnd"
 
 
+def _db_alias(instance) -> str:
+    """Return the database alias that *instance* was loaded from."""
+    return instance._state.db or DEFAULT_DB_ALIAS
+
+
 def module_db_alias(module) -> str:
     """Return the database alias that *module* was loaded from."""
-    return module._state.db or DEFAULT_DB_ALIAS
+    return _db_alias(module)
 
 
 def is_plain_interface(interface) -> bool:
@@ -41,7 +51,7 @@ def is_plain_interface(interface) -> bool:
     )
 
 
-def _is_channelized_parent(interface) -> bool:  # pragma: no cover - requires channelization support
+def is_channelized_parent(interface) -> bool:  # pragma: no cover - requires channelization support
     """Return whether *interface* declares a channelized family."""
     return getattr(interface, "channels", None) is not None
 
@@ -187,16 +197,8 @@ def _flat_plan(module, db_alias, target_names, interfaces):
     )
 
 
-def _channelized_plan(module, rule, variables, db_alias, parent, children, suffixes):  # pragma: no cover
-    """Build one plan for an existing channelized family."""
-    targets = channelized_family_targets(
-        rule,
-        variables,
-        parent.name,
-        parent.channels,
-        tuple((child.name, child.channel_id) for child in children),
-        suffixes,
-    )
+def _channelized_plan(device_id, module_id, db_alias, parent, children, targets):  # pragma: no cover
+    """Build one plan for an existing channelized family from the names *targets* intends."""
     members = [
         PlannedMember(
             snapshot=InterfaceSnapshot.from_interface(parent),
@@ -216,8 +218,8 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
     return InstalledFamilyPlan(
         family_id=f"channelized:{parent.pk}",
         topology=FamilyTopology.CHANNELIZED,
-        device_id=module.device_id,
-        module_id=module.pk,
+        device_id=device_id,
+        module_id=module_id,
         db_alias=db_alias,
         members=tuple(members),
         parent_pk=parent.pk,
@@ -226,9 +228,21 @@ def _channelized_plan(module, rule, variables, db_alias, parent, children, suffi
     )
 
 
+def _module_family_targets(rule, variables, parent, children, suffixes):  # pragma: no cover
+    """Return the names *rule* intends for a channelized family a module carries."""
+    return channelized_family_targets(
+        rule,
+        variables,
+        parent.name,
+        parent.channels,
+        tuple((child.name, child.channel_id) for child in children),
+        suffixes,
+    )
+
+
 def _channelized_plans(module, rule, variables, db_alias, interfaces, catalog):  # pragma: no cover
     """Return one plan for every structurally discovered channelized family."""
-    parents = [interface for interface in interfaces if _is_channelized_parent(interface)]
+    parents = [interface for interface in interfaces if is_channelized_parent(interface)]
     if not parents:
         return []
     children_by_parent: dict[int, list] = {}
@@ -240,7 +254,8 @@ def _channelized_plans(module, rule, variables, db_alias, interfaces, catalog): 
     for parent in parents:
         children = children_by_parent.get(parent.pk, [])
         children.sort(key=lambda child: (child.channel_id, child.pk))
-        plans.append(_channelized_plan(module, rule, variables, db_alias, parent, children, suffixes))
+        targets = _module_family_targets(rule, variables, parent, children, suffixes)
+        plans.append(_channelized_plan(module.device_id, module.pk, db_alias, parent, children, targets))
     return plans
 
 
@@ -273,8 +288,23 @@ def interfaces_by_module(modules):
     return by_module
 
 
-def plan_interface_rename(module, rule, variables, interface) -> InstalledFamilyPlan:
-    """Return the plan that renames one interface which belongs to no family."""
+def device_interface_families(interfaces):
+    """Return each device-level base interface with its channel children."""
+    children_by_parent: dict[int, list] = {}
+    for interface in interfaces:
+        if _is_channel(interface) and interface.parent_id is not None:
+            children_by_parent.setdefault(interface.parent_id, []).append(interface)
+    for children in children_by_parent.values():
+        children.sort(key=lambda child: (child.channel_id, child.pk))
+    return tuple(
+        (interface, tuple(children_by_parent.get(interface.pk, ())))
+        for interface in interfaces
+        if not _is_channel(interface)
+    )
+
+
+def _interface_rename_plan(device_id, module_id, db_alias, rule, variables, interface) -> InstalledFamilyPlan:
+    """Return a plan that renames one interface which belongs to no family."""
     status, reason, target_name = None, "", interface.name
     try:
         target_name = evaluate_name_template(rule.name_template, {**variables, "base": interface.name})
@@ -283,9 +313,9 @@ def plan_interface_rename(module, rule, variables, interface) -> InstalledFamily
     return InstalledFamilyPlan(
         family_id=f"flat:{interface.pk}",
         topology=FamilyTopology.FLAT,
-        device_id=module.device_id,
-        module_id=module.pk,
-        db_alias=module_db_alias(module),
+        device_id=device_id,
+        module_id=module_id,
+        db_alias=db_alias,
         members=(
             PlannedMember(
                 snapshot=InterfaceSnapshot.from_interface(interface),
@@ -296,6 +326,32 @@ def plan_interface_rename(module, rule, variables, interface) -> InstalledFamily
         precondition_status=status,
         precondition_reason=reason,
     )
+
+
+def plan_interface_rename(module, rule, variables, interface) -> InstalledFamilyPlan:
+    """Return the plan that renames one interface which belongs to no family."""
+    return _interface_rename_plan(
+        module.device_id,
+        module.pk,
+        module_db_alias(module),
+        rule,
+        variables,
+        interface,
+    )
+
+
+def plan_device_interface_rename(device, rule, variables, interface, children=()) -> InstalledFamilyPlan:
+    """Return the plan that renames one device-level interface family."""
+    db_alias = _db_alias(device)
+    if not children and not is_channelized_parent(interface):
+        return _interface_rename_plan(device.pk, None, db_alias, rule, variables, interface)
+    # A device rule never builds a family, so its channel count says nothing about this one: the
+    # members keep the suffixes they carry under whatever name the parent takes.  A device-level
+    # interface has no module template family, so there is no suffix to recover from one either.
+    targets = lockstep_family_targets(
+        rule, variables, interface.name, tuple((child.name, child.channel_id) for child in children), {}
+    )
+    return _channelized_plan(device.pk, None, db_alias, interface, children, targets)
 
 
 def plan_installed_families(module, rule, variables, interfaces=None) -> InstalledFamilyPlanSet:

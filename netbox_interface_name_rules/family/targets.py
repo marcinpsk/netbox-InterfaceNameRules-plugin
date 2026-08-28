@@ -183,8 +183,12 @@ def _breakout_targets(rule, variables, parent_name, parent_channels, children): 
     return FamilyTargets(parent_name=parent_target, channels=channels)
 
 
-def _lockstep_targets(rule, variables, parent_name, children, suffixes):  # pragma: no cover
-    """Return the names a simple rule intends for a family renamed in lockstep with its parent."""
+def lockstep_family_targets(rule, variables, parent_name, children, suffixes):  # pragma: no cover
+    """Return the names a simple rule intends for a family renamed in lockstep with its parent.
+
+    The rule's channel count says nothing here: this family already exists, and every member keeps
+    the suffix it carries under whatever name the parent takes.
+    """
     try:
         parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent_name})
     except (TypeError, ValueError) as error:
@@ -207,4 +211,4 @@ def channelized_family_targets(  # pragma: no cover - requires channelization su
     """
     if rule.channel_count > 0:
         return _breakout_targets(rule, variables, parent_name, parent_channels, children)
-    return _lockstep_targets(rule, variables, parent_name, children, suffixes)
+    return lockstep_family_targets(rule, variables, parent_name, children, suffixes)
