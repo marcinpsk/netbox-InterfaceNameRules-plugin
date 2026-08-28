@@ -39,8 +39,10 @@ from netbox_interface_name_rules.family import (
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
+    pinned_template_cache,
     plan_flat_family,
     plan_prospective_families,
+    template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
@@ -317,6 +319,44 @@ class BulkApplyQueryScalingTest(BulkTestCase):
 
         per_module = (eight_modules - two_modules) / 6
         self.assertLessEqual(per_module, (two_modules / 2), [per_module, two_modules])
+
+
+class PinnedTemplateCacheBalanceTest(BulkTestCase):
+    """The batch template cache has to be released even when setting it up fails.
+
+    A stranded cache outlives the batch that opened it, so every later batch on that thread reads
+    the failed batch's resolved template names instead of its own.  On a long-lived worker that is
+    a rename against names the modules no longer carry.
+    """
+
+    def _setup_failure(self):
+        """Enter the cache with a batch that raises while it is being pinned."""
+        broken = MagicMock()
+        type(broken).pk = property(lambda _self: (_ for _ in ()).throw(RuntimeError("module went away")))
+        return pinned_template_cache([broken])
+
+    def test_a_failed_setup_releases_the_cache(self):
+        """Anything left behind here is served to the next batch as its own template names."""
+        with self.assertRaises(RuntimeError), self._setup_failure():
+            pass  # pragma: no cover - the block never runs
+
+        self.assertNotIn("resolved", template_names._pin.__dict__)
+        self.assertNotIn("chained", template_names._pin.__dict__)
+        self.assertEqual(getattr(template_names._pin, "depth", 0), 0)
+
+    def test_a_later_batch_still_resolves_its_own_names(self):
+        """The damage the balance prevents: one batch's names outliving it and serving the next one."""
+        self._install("1")
+        rule = self._flat_rule(self.module_type)
+        with self.assertRaises(RuntimeError), self._setup_failure():
+            pass  # pragma: no cover - the block never runs
+        apply_rule_to_existing(rule)  # fills a cache that a stranded pin would keep
+
+        with CaptureQueriesContext(connection) as captured:
+            apply_rule_to_existing(rule)
+
+        template_queries = [query for query in captured.captured_queries if "dcim_interfacetemplate" in query["sql"]]
+        self.assertEqual(len(template_queries), 1, [query["sql"] for query in captured.captured_queries])
 
 
 class VirtualChassisReapplyTestCase(BulkTestCase):

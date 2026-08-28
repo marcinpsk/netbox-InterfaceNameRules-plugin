@@ -105,12 +105,13 @@ def pinned_template_cache(modules=()):
     """
     depth = getattr(_pin, "depth", 0)
     _pin.depth = depth + 1
-    if depth == 0:
-        _pin.chained = {}
-        _pin.templates = {}
-        _pin.resolved = {}
-    _pin.chained.update({module.pk: module for module in modules})
     try:
+        # Setting up the cache must sit inside the try, or a raise here strands the depth forever.
+        if depth == 0:
+            _pin.chained = {}
+            _pin.templates = {}
+            _pin.resolved = {}
+        _pin.chained.update({module.pk: module for module in modules})
         yield
     finally:
         _pin.depth -= 1
@@ -174,17 +175,6 @@ def raw_name_matchers(module):
 def raw_name_patterns(module):
     """Return historical matchers for the module's token templates."""
     return [matcher.pattern for matcher in raw_name_matchers(module).matchers]
-
-
-def raw_names_by_module(modules):  # pragma: no cover - only the channel conversion scan batches names
-    """Resolve raw names for a prefetched module batch with one template query."""
-    by_module_type = {}
-    for template in InterfaceTemplate.objects.filter(module_type_id__in={module.module_type_id for module in modules}):
-        by_module_type.setdefault(template.module_type_id, []).append(template)
-    return {
-        module.pk: raw_names_from(resolve_templates(by_module_type.get(module.module_type_id, ()), module))
-        for module in modules
-    }
 
 
 def resolved_template_names(module) -> tuple[ResolvedTemplateName, ...]:
