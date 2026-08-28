@@ -56,12 +56,18 @@ issues fewer or the same statements in every scenario: unchanged where no rule m
 5% to 36% everywhere else, with the largest reductions on virtual-chassis reapplication (-29% for
 one module, -36% for eight).
 
-Two complete-model-save scenarios show more statements than the baseline. The per-table breakdown
-attributes every one of them to `core_objecttype`, `extras_customfield` and `extras_cachedvalue`:
+Two complete-model-save scenarios show more statements than the baseline. Most of the increase is
 NetBox's own per-save bookkeeping for the object types and custom fields the test database holds,
-which grew between the two runs. The control is `module.complete_model_save.no_matching_rule`, where
-this plugin returns before doing anything and its callback issues the same 7 statements in both
-runs, yet the surrounding save costs 17 more. Neither increase is work this refactor added.
+which grew between the two runs: `core_objecttype`, `extras_customfield` and `extras_cachedvalue`
+carry the whole net increase of 11 in `structural_creation`, where every other table nets to zero,
+and 11 of the 17 in `no_matching_rule`. The remaining 6 there are 2 `RELEASE` and 2 `SAVEPOINT`
+statements beside the new cached-value writes, and one extra read each of `dcim_interface` and
+`dcim_module`.
+
+The control is `module.complete_model_save.no_matching_rule`, where this plugin returns before doing
+anything and its callback issues the same 7 statements in both runs, yet the surrounding save costs
+17 more. On `structural_creation` the plugin's own callback got cheaper, from 119 statements to 94.
+Neither increase is work this refactor added.
 
 Machine time in that run is not evidence. The host was running unrelated workloads at a load average
 between 17 and 44, and the same no-op scenario shows +72% wall time against identical SQL. The
