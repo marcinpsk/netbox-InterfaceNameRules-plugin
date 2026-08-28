@@ -41,7 +41,7 @@ performance.
 ## Comparing two runs
 
 `performance/compare.py BEFORE.json AFTER.json OUT.md` writes a readable comparison of database
-work and machine time, and breaks any scenario whose statement count rose down by table.
+work and machine time, and breaks down by table any scenario whose statement count rose.
 
 Set `INTERFACE_FAMILY_PERFORMANCE_KIND` to name what a run measured, such as `family_package` for
 an after run. It labels the artifact and titles its summary.
