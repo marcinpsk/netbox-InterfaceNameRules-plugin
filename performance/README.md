@@ -49,28 +49,38 @@ an after run. It labels the artifact and titles its summary.
 ## Result of the interface-family comparison
 
 `comparisons/family-package-vs-existing.md` compares the pre-refactor baseline with the family
-package on the same NetBox revision and the same host.
+package. Both sides were measured with the same runner, against the same NetBox revision, on the
+same host, and each recorded count reproduced twice before it was written.
 
-Database work carries the verdict, because it is deterministic. The plugin's own committed callback
-issues fewer or the same statements in every scenario: unchanged where no rule matches, and down by
-5% to 36% everywhere else, with the largest reductions on virtual-chassis reapplication (-29% for
-one module, -36% for eight).
+The refactor moves the committed callback's database work as follows:
 
-Two complete-model-save scenarios show more statements than the baseline. Most of the increase is
-NetBox's own per-save bookkeeping for the object types and custom fields the test database holds,
-which grew between the two runs: `core_objecttype`, `extras_customfield` and `extras_cachedvalue`
-carry the whole net increase of 11 in `structural_creation`, where every other table nets to zero,
-and 11 of the 17 in `no_matching_rule`. The remaining 6 there are 2 `RELEASE` and 2 `SAVEPOINT`
-statements beside the new cached-value writes, and one extra read each of `dcim_interface` and
-`dcim_module`.
+| Scenario | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| `no_matching_rule` | 7 | 7 | 0 |
+| `plain_rename` | 36 | 38 | +2 |
+| `structural_creation` | 113 | 113 | 0 |
+| `existing_family` | 254 | 168 | -86 |
+| `reconciliation` | 255 | 257 | +2 |
+| `vc.reapply_1` | 37 | 36 | -1 |
+| `vc.reapply_8` | 254 | 239 | -15 |
 
-The control is `module.complete_model_save.no_matching_rule`, where this plugin returns before doing
-anything and its callback issues the same 7 statements in both runs, yet the surrounding save costs
-17 more. On `structural_creation` the plugin's own callback got cheaper, from 119 statements to 94.
-Neither increase is work this refactor added.
+One scenario improves substantially: naming a module into a family that already exists costs 86
+fewer statements, a third of the callback's work. Virtual-chassis reapplication is slightly cheaper.
+Two scenarios cost two statements more.
 
-Machine time in that run is not evidence. The host was running unrelated workloads at a load average
-between 17 and 44, and the same no-op scenario shows +72% wall time against identical SQL. The
-virtual-chassis scenarios were still 32% to 35% faster despite the contention, which is consistent
-with their statement reductions. Rerun both artifacts on an otherwise-idle host before quoting any
-timing figure as evidence.
+Those two increases are this refactor's, not the environment's. The per-table breakdown gives the
+same shape for each: one more `SAVEPOINT` and `RELEASE`, one more `dcim_interface` read, and one
+fewer `dcim_moduletype` read. That is the locked family executor: it opens a savepoint per family
+and re-reads the rows it locked before it writes them. The plugin buys stale-plan revalidation and
+per-family rollback for two statements on a rename.
+
+Read the deltas at the `direct_callback` layer. Every scenario's `complete_model_save` delta equals
+its `direct_callback` delta exactly, which says NetBox's own per-save bookkeeping costs the same on
+both sides and every difference above belongs to this plugin. `no_matching_rule` is the control: the
+plugin returns before doing anything and issues the same 7 statements either way.
+
+Machine time is not measured in these artifacts. Both runs used
+`INTERFACE_FAMILY_PERFORMANCE_SAMPLES=0`, so every timing column reads `not measured` rather than
+reporting a number taken under an unknown load. This host carries unrelated work at load 8 to 33.
+Rerun both sides with samples on an otherwise-idle host to fill those columns in; each artifact
+records the load span it ran under, so a reader can check rather than trust the prose.
