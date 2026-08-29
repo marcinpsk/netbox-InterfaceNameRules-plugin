@@ -28,6 +28,46 @@ def _artifact(planner_settings, load=None):
     }
 
 
+def _timed_artifact(machine_time):
+    """Return an artifact whose single scenario carries *machine_time*."""
+    artifact = _artifact({"work_mem": "4MB"})
+    artifact["scenarios"] = [
+        {
+            "name": "module.direct_callback.plain_rename",
+            "layer": "direct_callback",
+            "database": {"totals": {"statement_calls": 31}},
+            "machine_time": machine_time,
+        }
+    ]
+    return artifact
+
+
+_MACHINE_TIME = {"wall": {"median_ms": 2.0, "p95_ms": 3.0}, "process_cpu": {"median_ms": 1.0}}
+
+
+class TimeTableTest(unittest.TestCase):
+    """A comparison must not invent machine time that a run did not measure."""
+
+    def test_unmeasured_machine_time_is_reported_not_crashed(self):
+        rows = compare._time_table(
+            {"module.direct_callback.plain_rename": _timed_artifact(None)["scenarios"][0]},
+            {"module.direct_callback.plain_rename": _timed_artifact(_MACHINE_TIME)["scenarios"][0]},
+        )
+
+        self.assertEqual(
+            rows[-1],
+            "| `module.direct_callback.plain_rename` | machine time | not measured | not measured | not measured | n/a |",
+        )
+
+    def test_measured_machine_time_is_still_compared(self):
+        rows = compare._time_table(
+            {"module.direct_callback.plain_rename": _timed_artifact(_MACHINE_TIME)["scenarios"][0]},
+            {"module.direct_callback.plain_rename": _timed_artifact(_MACHINE_TIME)["scenarios"][0]},
+        )
+
+        self.assertIn("Wall median (ms)", "".join(rows))
+
+
 class EnvironmentTableTest(unittest.TestCase):
     """Exercise the environment table the comparison writes."""
 

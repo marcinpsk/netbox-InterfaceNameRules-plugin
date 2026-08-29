@@ -116,6 +116,9 @@ def _time_table(before, after):
         after_scenario = after.get(name)
         if after_scenario is None:
             continue
+        if before_scenario["machine_time"] is None or after_scenario["machine_time"] is None:
+            lines.append(f"| `{name}` | machine time | not measured | not measured | not measured | n/a |")
+            continue
         for section, key, label in _TIME_METRICS:
             old = before_scenario["machine_time"][section][key]
             new = after_scenario["machine_time"][section][key]
