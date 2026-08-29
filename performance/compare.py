@@ -125,6 +125,14 @@ def _time_table(before, after):
     return lines
 
 
+def _load_span(artifact):
+    """Return the run-queue length a run started and finished under."""
+    load = artifact["environment"].get("host_load")
+    if not load:
+        return "not recorded"
+    return f"{load['started']['one_minute']:.2f} to {load['finished']['one_minute']:.2f}"
+
+
 def _environment_table(before, after):
     """Return the revisions and settings each run was taken under."""
     rows = ["| Field | Before | After |", "| --- | --- | --- |"]
@@ -139,6 +147,9 @@ def _environment_table(before, after):
     settings_after = after["environment"].get("postgresql", {}).get("planner_settings")
     planner_status = "identical" if settings_before == settings_after else "CHANGED"
     rows.append(f"| planner settings | `{planner_status}` | `{planner_status}` |")
+    load_before = _load_span(before)
+    load_after = _load_span(after)
+    rows.append(f"| host load (1 min, start to end) | `{load_before}` | `{load_after}` |")
     return rows
 
 
