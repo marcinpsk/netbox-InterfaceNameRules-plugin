@@ -30,6 +30,8 @@ _SAFE_PATTERNS = (
     "(a)+?",
     r"Ethernet\d+",
     "^(10|25|100)G$",
+    "(ab){2,4}",
+    r"\d{1,3}(\.\d{1,3}){3}",
 )
 
 # Patterns whose evaluation backtracks exponentially; all must be refused.
@@ -41,6 +43,7 @@ _EXPONENTIAL_PATTERNS = (
     "(a+)+?",
     "(?:a|aa)+",
     r"^(\w+\s?)*$",
+    "((a+)+){2}",
 )
 
 

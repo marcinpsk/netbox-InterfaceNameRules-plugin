@@ -88,9 +88,14 @@ def _matches_ambiguously(node):
 
 
 def _repeats_ambiguously(node):
-    """Return True when *node* repeats an ambiguous body, which backtracks exponentially."""
+    """Return True when *node* repeats an ambiguous body without bound, which backtracks exponentially."""
     for opcode, argument in node:
-        if opcode in _BACKTRACKING_REPEATS and argument[1] > 1 and _matches_ambiguously(argument[2]):
+        # A bounded repeat costs a bounded exponent; only an unbounded one compounds.
+        if (
+            opcode in _BACKTRACKING_REPEATS
+            and argument[1] == _re_constants.MAXREPEAT
+            and _matches_ambiguously(argument[2])
+        ):
             return True
         if any(_repeats_ambiguously(child) for child in _parsed_subpatterns(argument)):
             return True
