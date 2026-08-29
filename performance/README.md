@@ -68,11 +68,28 @@ One scenario improves substantially: naming a module into a family that already 
 fewer statements, a third of the callback's work. Virtual-chassis reapplication is slightly cheaper.
 Two scenarios cost two statements more.
 
-Those two increases are this refactor's, not the environment's. The per-table breakdown gives the
-same shape for each: one more `SAVEPOINT` and `RELEASE`, one more `dcim_interface` read, and one
-fewer `dcim_moduletype` read. That is the locked family executor: it opens a savepoint per family
-and re-reads the rows it locked before it writes them. The plugin buys stale-plan revalidation and
-per-family rollback for two statements on a rename.
+Count the statements, but read the work. Planner cost and buffer hits fall in **every** scenario,
+including the two whose statement count rose:
+
+| Scenario | SQL calls | Planner cost | Shared hits |
+| --- | ---: | ---: | ---: |
+| `plain_rename` | +5.6% | -2.4% | -6.7% |
+| `reconciliation` | +0.8% | -6.0% | -21.8% |
+| `existing_family` | -33.9% | -50.5% | -54.7% |
+| `vc.reapply_8` | -5.9% | -11.5% | -20.9% |
+
+Shared reads reach zero everywhere, so no scenario goes to disk.
+
+The two extra statements are one `SAVEPOINT` and `RELEASE` pair, from the transaction the executor
+opens per family, plus one `dcim_interface` read: the `... WHERE id IN (...) FOR UPDATE` that locks
+and revalidates the planned rows. They replace a single read that joined `dcim_device` and ordered
+by a collated name, which is why the two newer reads together cost less planner work than the one
+they replaced. The plugin buys stale-plan revalidation and per-family rollback for two round trips
+and 108 bytes of WAL on a rename.
+
+That revalidation is the part to keep. This callback runs after commit, so another actor, including
+another plugin, can rename an interface between the moment a family is planned and the moment it is
+written. The locked re-read is what detects that.
 
 Read the deltas at the `direct_callback` layer. Every scenario's `complete_model_save` delta equals
 its `direct_callback` delta exactly, which says NetBox's own per-save bookkeeping costs the same on
