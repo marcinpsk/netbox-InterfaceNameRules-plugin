@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-import re
-
 from dcim.models import DeviceType, ModuleType, Platform
 from django import forms
 from django.core.exceptions import ValidationError
@@ -139,15 +137,13 @@ class RuleTestForm(forms.Form):
             if not module_type_pattern:
                 self.add_error("module_type_pattern", "A regex pattern is required when regex mode is enabled.")
             else:
-                try:
-                    re.compile(module_type_pattern)
-                except re.error as exc:
-                    self.add_error("module_type_pattern", f"Invalid regex: {exc}")
-                else:
-                    from .models import _REDOS_PATTERN
+                from .models import _validate_module_type_pattern
 
-                    if _REDOS_PATTERN.search(module_type_pattern):
-                        self.add_error("module_type_pattern", "Pattern contains potentially unsafe nested quantifiers.")
+                try:
+                    _validate_module_type_pattern(module_type_pattern)
+                except ValidationError as exc:
+                    for field, messages in exc.message_dict.items():
+                        self.add_error(field, messages)
             if module_type:
                 self.add_error("module_type", "Module Type (exact) must be empty when regex mode is enabled.")
         else:

@@ -3,6 +3,10 @@
 import ast
 import re
 
+# Python exposes no public regex AST, and re._parser is the only way to see a nested quantifier.
+from re import _constants as _re_constants
+from re import _parser as _re_parser
+
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -12,7 +16,7 @@ from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
 
-_REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
+_BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_REPEAT})
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
@@ -64,20 +68,51 @@ def _has_unbalanced_braces(template):
     return depth != 0
 
 
-def _validate_module_type_pattern(pattern):
-    """Compile *pattern* and check for ReDoS-prone constructs.
+def _parsed_subpatterns(argument):
+    """Yield every sub-pattern nested anywhere inside a parsed node's argument."""
+    if isinstance(argument, _re_parser.SubPattern):
+        yield argument
+    elif isinstance(argument, (tuple, list)):
+        for item in argument:
+            yield from _parsed_subpatterns(item)
 
-    Raises ``ValidationError`` targeting ``module_type_pattern`` if the
-    pattern is syntactically invalid or contains nested quantifiers.
-    Called from ``InterfaceNameRule.clean()`` to avoid duplicating the same
-    try/except + ReDoS guard in each branch.
+
+def _matches_ambiguously(node):
+    """Return True when *node* can match one string in more than one way."""
+    for opcode, argument in node:
+        if opcode in _BACKTRACKING_REPEATS or opcode is _re_constants.BRANCH:
+            return True
+        if any(_matches_ambiguously(child) for child in _parsed_subpatterns(argument)):
+            return True
+    return False
+
+
+def _repeats_ambiguously(node):
+    """Return True when *node* repeats an ambiguous body, which backtracks exponentially."""
+    for opcode, argument in node:
+        if opcode in _BACKTRACKING_REPEATS and argument[1] > 1 and _matches_ambiguously(argument[2]):
+            return True
+        if any(_repeats_ambiguously(child) for child in _parsed_subpatterns(argument)):
+            return True
+    return False
+
+
+def _validate_module_type_pattern(pattern):
+    """Compile *pattern* and refuse one whose evaluation can backtrack exponentially.
+
+    Raises ``ValidationError`` targeting ``module_type_pattern`` if the pattern is syntactically
+    invalid, or if it repeats a body that can match the same input in more than one way.  Called
+    from ``InterfaceNameRule.clean()`` and from ``RuleTestForm``, so every write path and the
+    interactive tester refuse the same patterns.
     """
     try:
         re.compile(pattern)
     except re.error as e:
         raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
-    if _REDOS_PATTERN.search(pattern):
-        raise ValidationError({"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."})
+    if _repeats_ambiguously(_re_parser.parse(pattern)):
+        raise ValidationError(
+            {"module_type_pattern": "Pattern contains nested quantifiers that can backtrack exponentially."}
+        )
 
 
 def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):

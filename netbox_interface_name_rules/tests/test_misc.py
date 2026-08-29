@@ -262,12 +262,11 @@ class ModelCleanDeviceIfaceTest(TestCase):
         rule.clean()
         self.assertFalse(rule.module_type_is_regex)
 
-    def test_exact_rule_with_redos_pattern_fails(self):
-        """Regex rule with ReDoS-prone pattern (nested quantifiers) fails validation."""
-        # "(ab)+*" has ")+*" which triggers the nested-quantifier guard
+    def test_exact_rule_with_unsafe_pattern_fails(self):
+        """A regex rule that repeats an ambiguous body fails validation."""
         rule = InterfaceNameRule(
             module_type_is_regex=True,
-            module_type_pattern="(ab)+*",
+            module_type_pattern="^(a+)+$",
             name_template="port{bay_position}",
         )
         with self.assertRaises(ValidationError) as ctx:
@@ -485,12 +484,8 @@ class RuleTestFormValidationTest(TestCase):
         self.assertIn("module_type_pattern", form.errors)
 
     def test_regex_mode_redos_pattern_adds_error(self):
-        """RuleTestForm.clean() adds error when pattern contains nested quantifiers (line 125).
-
-        (a)+? compiles OK (valid lazy quantifier syntax) but triggers the ReDoS guard
-        because )+? matches \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
-        """
-        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "(a)+?"})
+        """RuleTestForm.clean() adds an error when the pattern repeats an ambiguous body."""
+        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "^(a+)+$"})
         form.is_valid()
         self.assertIn("module_type_pattern", form.errors)
 
@@ -661,30 +656,6 @@ class ModelSpecificityLabelScopeTest(TestCase):
         self.assertIn("parent", label)
         self.assertIn("device", label)
         self.assertIn("platform", label)
-
-
-# ---------------------------------------------------------------------------
-# models.py — _validate_module_type_pattern ReDoS guard (line 29)
-# ---------------------------------------------------------------------------
-
-
-class ModelValidatePatternReDoSTest(TestCase):
-    """Test _validate_module_type_pattern raises for valid-but-ReDoS-prone patterns."""
-
-    def test_valid_regex_with_nested_quantifiers_raises(self):
-        """A valid regex with nested quantifiers e.g. (a)+? raises ValidationError (line 29).
-
-        (a)+? compiles without error but contains )+? which matches
-        \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
-        """
-        from django.core.exceptions import ValidationError
-
-        from netbox_interface_name_rules.models import _validate_module_type_pattern
-
-        with self.assertRaises(ValidationError) as ctx:
-            _validate_module_type_pattern("(a)+?")
-        self.assertIn("module_type_pattern", ctx.exception.message_dict)
-        self.assertIn("nested quantifiers", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

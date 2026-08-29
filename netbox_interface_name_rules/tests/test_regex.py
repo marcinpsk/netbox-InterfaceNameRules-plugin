@@ -20,6 +20,79 @@ from django.test import TestCase
 from netbox_interface_name_rules.engine import apply_interface_name_rules, find_matching_rule
 from netbox_interface_name_rules.models import InterfaceNameRule
 
+# Realistic module-model patterns an operator writes; none of these may be refused.
+_SAFE_PATTERNS = (
+    "QSFP-.*",
+    "QSFP28-(100G|40G)",
+    r"^ge-\d+/\d+/\d+$",
+    r"[A-Z]+-\d+",
+    "(abc)+",
+    "(a)+?",
+    r"Ethernet\d+",
+    "^(10|25|100)G$",
+)
+
+# Patterns whose evaluation backtracks exponentially; all must be refused.
+_EXPONENTIAL_PATTERNS = (
+    "^(a+)+$",
+    "(a*)*",
+    "^(a|a)+$",
+    r"(\d+)+",
+    "(a+)+?",
+    "(?:a|aa)+",
+    r"^(\w+\s?)*$",
+)
+
+
+class RegexPatternSafetyTest(TestCase):
+    """Refuse a module-type pattern whose evaluation can backtrack exponentially."""
+
+    def _rule(self, pattern):
+        return InterfaceNameRule(
+            module_type_is_regex=True,
+            module_type_pattern=pattern,
+            name_template="port{bay_position}",
+        )
+
+    def test_exponential_patterns_are_refused(self):
+        for pattern in _EXPONENTIAL_PATTERNS:
+            with self.subTest(pattern=pattern), self.assertRaises(ValidationError) as ctx:
+                self._rule(pattern).clean()
+            self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_realistic_patterns_are_accepted(self):
+        for pattern in _SAFE_PATTERNS:
+            with self.subTest(pattern=pattern):
+                self._rule(pattern).clean()
+
+    def test_device_level_rule_refuses_an_exponential_pattern(self):
+        rule = InterfaceNameRule(
+            applies_to_device_interfaces=True,
+            module_type_pattern="^(a+)+$",
+            name_template="port{bay_position}",
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            rule.clean()
+
+        self.assertIn("module_type_pattern", ctx.exception.message_dict)
+
+    def test_rule_tester_refuses_an_exponential_pattern(self):
+        from netbox_interface_name_rules.forms import RuleTestForm
+
+        form = RuleTestForm(
+            {
+                "name_template": "et-0/0/{bay_position}",
+                "channel_count": "0",
+                "channel_start": "0",
+                "module_type_is_regex": True,
+                "module_type_pattern": "^(a+)+$",
+            }
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("module_type_pattern", form.errors)
+
 
 class RegexModelValidationTest(TestCase):
     """Test model clean() validation for regex fields."""
