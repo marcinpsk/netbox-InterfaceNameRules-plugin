@@ -115,9 +115,9 @@ class TimeTableTest(unittest.TestCase):
         self.assertEqual(
             rows[-3:],
             [
-                "| `module.direct_callback.plain_rename` | Wall median (ms) | not measured | 2 | not measured | n/a |",
-                "| `module.direct_callback.plain_rename` | Wall p95 (ms) | not measured | 3 | not measured | n/a |",
-                "| `module.direct_callback.plain_rename` | CPU median (ms) | not measured | 1 | not measured | n/a |",
+                "| `module.direct_callback.plain_rename` | Wall median (ms) | not measured | 2 | n/a | n/a |",
+                "| `module.direct_callback.plain_rename` | Wall p95 (ms) | not measured | 3 | n/a | n/a |",
+                "| `module.direct_callback.plain_rename` | CPU median (ms) | not measured | 1 | n/a | n/a |",
             ],
         )
 
@@ -128,6 +128,16 @@ class TimeTableTest(unittest.TestCase):
         )
 
         self.assertIn("Wall median (ms)", "".join(rows))
+
+    def test_an_after_only_scenario_reports_its_missing_baseline(self):
+        scenario = _timed_artifact(_MACHINE_TIME)["scenarios"][0]
+
+        rows = compare._time_table({}, {scenario["name"]: scenario})
+
+        self.assertIn(
+            "| `module.direct_callback.plain_rename` | Wall median (ms) | missing baseline | 2 | n/a | n/a |",
+            rows,
+        )
 
 
 class DatabaseTableTest(unittest.TestCase):
@@ -145,6 +155,16 @@ class DatabaseTableTest(unittest.TestCase):
 
         self.assertIn(
             "| `module.direct_callback.plain_rename` | Planner cost | 12.50 | n/a | n/a | n/a |",
+            rows,
+        )
+
+    def test_an_after_only_scenario_reports_its_missing_baseline(self):
+        scenario = _timed_artifact(None)["scenarios"][0]
+
+        rows, _regressions = compare._database_table({}, {scenario["name"]: scenario})
+
+        self.assertIn(
+            "| `module.direct_callback.plain_rename` | SQL calls | missing baseline | 31 | n/a | n/a |",
             rows,
         )
 

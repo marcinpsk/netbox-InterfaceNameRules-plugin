@@ -69,6 +69,11 @@ def _scenarios(artifact):
     return {scenario["name"]: scenario for scenario in artifact["scenarios"]}
 
 
+def _scenario_names(before, after):
+    """Return the scenario-name union in stable artifact order."""
+    return (*before, *(name for name in after if name not in before))
+
+
 def _delta(before, after):
     """Return the absolute and percentage change, or None when there is no baseline to divide by."""
     change = after - before
@@ -84,20 +89,25 @@ def _format(value):
     return f"{int(value)}"
 
 
-def _comparison_cells(before, after, unavailable):
+def _comparison_cells(before, after, before_unavailable, after_unavailable):
     """Return rendered comparison cells for one optional metric."""
     if before is None or after is None:
-        before_value = unavailable if before is None else _format(before)
-        after_value = unavailable if after is None else _format(after)
-        return before_value, after_value, unavailable, "n/a"
+        before_value = before_unavailable if before is None else _format(before)
+        after_value = after_unavailable if after is None else _format(after)
+        return before_value, after_value, "n/a", "n/a"
     change, percent = _delta(before, after)
     share = "n/a" if percent is None else f"{percent:+.1f}%"
     return _format(before), _format(after), _format(change), share
 
 
-def _metric_row(name, label, before, after, unavailable):
+def _metric_row(name, label, before, after, before_unavailable, after_unavailable):
     """Render one database-work or machine-time comparison row."""
-    before_value, after_value, change, share = _comparison_cells(before, after, unavailable)
+    before_value, after_value, change, share = _comparison_cells(
+        before,
+        after,
+        before_unavailable,
+        after_unavailable,
+    )
     return f"| `{name}` | {label} | {before_value} | {after_value} | {change} | {share} |"
 
 
@@ -105,15 +115,15 @@ def _database_table(before, after):
     """Return the per-scenario database-work comparison."""
     lines = ["| Scenario | Metric | Before | After | Change | Share |", "| --- | --- | ---: | ---: | ---: | ---: |"]
     regressions = []
-    for name, before_scenario in before.items():
+    for name in _scenario_names(before, after):
+        before_scenario = before.get(name)
         after_scenario = after.get(name)
-        if after_scenario is None:
-            lines.append(f"| `{name}` | n/a | n/a | missing | n/a | n/a |")
-            continue
+        before_unavailable = "missing baseline" if before_scenario is None else "n/a"
+        after_unavailable = "missing" if after_scenario is None else "n/a"
         for key, label in DATABASE_METRICS:
-            old = before_scenario["database"]["totals"].get(key)
-            new = after_scenario["database"]["totals"].get(key)
-            lines.append(_metric_row(name, label, old, new, "n/a"))
+            old = None if before_scenario is None else before_scenario["database"]["totals"].get(key)
+            new = None if after_scenario is None else after_scenario["database"]["totals"].get(key)
+            lines.append(_metric_row(name, label, old, new, before_unavailable, after_unavailable))
             if key == "statement_calls" and old is not None and new is not None and new > old:
                 regressions.append((name, label, old, new))
     return lines, regressions
@@ -121,6 +131,8 @@ def _database_table(before, after):
 
 def _time_value(scenario, section, key):
     """Return one timing value, or None when the scenario was not measured."""
+    if scenario is None:
+        return None
     machine_time = scenario["machine_time"]
     return None if machine_time is None else machine_time[section][key]
 
@@ -128,14 +140,15 @@ def _time_value(scenario, section, key):
 def _time_table(before, after):
     """Return the per-scenario machine-time comparison."""
     lines = ["| Scenario | Metric | Before | After | Change | Share |", "| --- | --- | ---: | ---: | ---: | ---: |"]
-    for name, before_scenario in before.items():
+    for name in _scenario_names(before, after):
+        before_scenario = before.get(name)
         after_scenario = after.get(name)
-        if after_scenario is None:
-            continue
+        before_unavailable = "missing baseline" if before_scenario is None else "not measured"
+        after_unavailable = "missing" if after_scenario is None else "not measured"
         for section, key, label in _TIME_METRICS:
             old = _time_value(before_scenario, section, key)
             new = _time_value(after_scenario, section, key)
-            lines.append(_metric_row(name, label, old, new, "not measured"))
+            lines.append(_metric_row(name, label, old, new, before_unavailable, after_unavailable))
     return lines
 
 

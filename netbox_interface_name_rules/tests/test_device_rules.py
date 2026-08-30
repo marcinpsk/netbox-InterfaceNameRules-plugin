@@ -250,6 +250,18 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi1/1")
 
+    def test_first_matching_rule_wins_when_name_is_already_correct(self):
+        """A no-op from the first rule prevents a less specific rule from renaming the interface."""
+        self._make_rule("Gi{vc_position}/{port}", device_type=self.device_type)
+        self._make_rule("OVERWRITTEN{vc_position}/{port}")
+        iface = self._make_interface("Gi1/1")
+
+        result = apply_device_interface_rules(self.device1)
+
+        self.assertEqual(result, 0)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "Gi1/1")
+
     def test_disabled_rule_skipped(self):
         """Disabled rules are not applied."""
         InterfaceNameRule.objects.create(

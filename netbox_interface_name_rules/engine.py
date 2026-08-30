@@ -396,11 +396,11 @@ def _matches_device_interface(rule, interface):
         return False
 
 
-def _apply_device_rule_to_families(device, vc_position, rule, families, renamed_pks):
+def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
     """Apply one rule to each eligible device-interface family."""
     total = 0
     for interface, children in families:
-        if interface.pk in renamed_pks or not _matches_device_interface(rule, interface):
+        if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         port = interface.name.rsplit("/", 1)[-1]
         variables = {"vc_position": vc_position, "base": interface.name, "port": port}
@@ -416,8 +416,8 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, renamed_
             )
             continue
         total += outcome.changed_count
-        if outcome.members[0].status == family_ops.FamilyStatus.CHANGED:
-            renamed_pks.update(plan.member_pks)
+        if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
+            claimed_pks.update(plan.member_pks)
     return total
 
 
@@ -454,10 +454,10 @@ def apply_device_interface_rules(device):
         return 0
 
     families = family_ops.device_interface_families(interfaces)
-    renamed_pks: set[int] = set()
+    claimed_pks: set[int] = set()
     total = 0
     for rule in rules:
-        total += _apply_device_rule_to_families(device, vc_position, rule, families, renamed_pks)
+        total += _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
 
     return total
 
