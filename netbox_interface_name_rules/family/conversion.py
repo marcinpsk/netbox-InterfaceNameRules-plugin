@@ -362,7 +362,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
                 return _refused(plan, FamilyStatus.BLOCKED, reason)
             members = _rewrite(plan, live)
             if not commit:
-                transaction.set_rollback(True)
+                transaction.set_rollback(True, using=plan.db_alias)
     except ValidationError as error:
         return _refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
     except IntegrityError as error:

@@ -172,18 +172,55 @@ def _selected(plans, selected_pks):
 
 def execute_module_families(rule, module, plans):
     """Execute each planned family in order, keeping the ones after a failure."""
-    return [outcome for plan in plans if (outcome := _execute(rule, module, plan)) is not None]
+    return [_execute(rule, module, plan) for plan in plans]
+
+
+def _failed_members(plan, reason):
+    """Return failed member facts for the live rows an executor left unchanged."""
+    if isinstance(plan, InstalledFamilyPlan):
+        return tuple(
+            MemberOutcome(
+                interface_pk=member.snapshot.pk,
+                current_name=member.snapshot.name,
+                target_name=member.target_name,
+                status=FamilyStatus.FAILED,
+                reason=reason,
+            )
+            for member in plan.members
+        )
+    target_name = plan.parent_target_name if isinstance(plan, StructuralFamilyPlan) else plan.target_names[0]
+    return (
+        MemberOutcome(
+            interface_pk=plan.base.pk,
+            current_name=plan.base.name,
+            target_name=target_name,
+            status=FamilyStatus.FAILED,
+            reason=reason,
+        ),
+    )
+
+
+def _failed_outcome(plan, error):
+    """Represent an executor exception without dropping the planned family from the batch."""
+    reason = f"family execution failed: {error}"
+    return FamilyOutcome(
+        family_id=plan.family_id,
+        topology=plan.topology,
+        status=FamilyStatus.FAILED,
+        members=_failed_members(plan, reason),
+        reason=reason,
+    )
 
 
 def _execute(rule, module, plan):
     """Execute one family, logging (never raising) so the batch keeps its later families."""
     try:
         return execute_family_plan(plan)
-    except (ValueError, ValidationError, IntegrityError):
+    except (ValueError, ValidationError, IntegrityError) as error:
         logger.exception(
             "Failed to apply rule '%s' to a family on module '%s' (id=%s); skipping.", rule, module, module.pk
         )
-        return None
+        return _failed_outcome(plan, error)
 
 
 def _apply_module(rule, module, interfaces, selected_pks):

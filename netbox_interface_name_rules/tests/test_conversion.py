@@ -24,7 +24,7 @@ from dcim.choices import InterfaceModeChoices
 from dcim.models import Cable, Interface, Module
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils.html import escape
@@ -184,8 +184,13 @@ class ConversionVerdictTest(ConversionTestCase):
         """The preflight really performs the conversion to validate it, so the rollback is the feature."""
         pks = dict(Interface.objects.filter(module=self.module).values_list("name", "pk"))
 
-        self._verdicts()
+        with patch(
+            "netbox_interface_name_rules.family.conversion.transaction.set_rollback",
+            wraps=transaction.set_rollback,
+        ) as set_rollback:
+            self._verdicts()
 
+        set_rollback.assert_called_once_with(True, using=self.module._state.db)
         self._assert_still_flat(self.module, "3")
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), pks)
 

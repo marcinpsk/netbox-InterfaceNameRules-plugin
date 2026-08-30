@@ -149,6 +149,11 @@ class FlatCreationPlan:
     precondition_status: FamilyStatus | None = None
     precondition_reason: str = ""
 
+    @property
+    def topology(self) -> FamilyTopology:
+        """Return the topology this plan installs."""
+        return FamilyTopology.FLAT
+
 
 @dataclass(frozen=True, slots=True)
 class ProspectiveMember:

@@ -36,9 +36,14 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
+    InstalledFamilyPlan,
+    MemberRole,
+    PlannedMember,
+    StructuralFamilyPlan,
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
+    execute_module_families,
     pinned_template_cache,
     plan_flat_family,
     plan_prospective_families,
@@ -278,6 +283,8 @@ class BulkApplyContinuesPastOneBlockedFamilyTest(BulkTestCase):
         self.assertEqual(self._names(self.modules[0]), ["1"])
         self.assertEqual(self._names(self.modules[1]), ["xe-0/0/2:0", "xe-0/0/2:1", "xe-0/0/2:2", "xe-0/0/2:3"])
         self.assertEqual(outcome.changed_count, 4)
+        self.assertEqual([family.status for family in outcome.families], [FamilyStatus.FAILED, FamilyStatus.CHANGED])
+        self.assertEqual([member.target_name for member in outcome.skipped_members], ["xe-0/0/1:0"])
 
 
 class BulkApplyQueryScalingTest(BulkTestCase):
@@ -669,6 +676,46 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             execute_flat_family(self._prospective_plan())
 
         self.assertEqual(self._names(self.module), ["1"])
+
+    def test_every_plan_kind_retains_its_live_members_after_an_executor_failure(self):
+        base = Interface.objects.get(module=self.module)
+        flat = plan_flat_family(
+            self.module,
+            self.rule,
+            build_variables(self.module.module_bay, device=self.device),
+            base,
+        )
+        installed = InstalledFamilyPlan(
+            family_id=f"installed:{base.pk}",
+            topology=FamilyTopology.FLAT,
+            device_id=self.device.pk,
+            module_id=self.module.pk,
+            db_alias=flat.db_alias,
+            members=(PlannedMember(flat.base, "installed-target", MemberRole.FLAT_MEMBER),),
+        )
+        structural = StructuralFamilyPlan(
+            family_id=f"structural:{base.pk}",
+            device_id=self.device.pk,
+            module_id=self.module.pk,
+            module_type_id=self.module_type.pk,
+            db_alias=flat.db_alias,
+            base=flat.base,
+            parent_target_name="parent-target",
+            channel_count=0,
+            channels=(),
+        )
+
+        with (
+            patch("netbox_interface_name_rules.family.batch.execute_family_plan", side_effect=ValueError("boom")),
+            self.assertLogs("netbox_interface_name_rules.family.batch", level="ERROR"),
+        ):
+            outcomes = execute_module_families(self.rule, self.module, (installed, structural, flat))
+
+        self.assertEqual([outcome.status for outcome in outcomes], [FamilyStatus.FAILED] * 3)
+        self.assertEqual(
+            [outcome.members[0].target_name for outcome in outcomes],
+            ["installed-target", "parent-target", "xe-0/0/1:0"],
+        )
 
 
 class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):

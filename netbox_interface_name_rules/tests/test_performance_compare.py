@@ -66,6 +66,12 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertIn(".", configuration["tool"]["pytest"]["ini_options"]["pythonpath"])
 
+    def test_shared_read_claim_is_scoped_to_direct_callbacks(self):
+        analysis = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+
+        self.assertIn("Shared reads reach zero in every direct-callback scenario", analysis)
+        self.assertNotIn("Shared reads reach zero everywhere", analysis)
+
 
 class XdistWorkerCapTest(unittest.TestCase):
     """The shared host gets a bounded number of automatic pytest workers."""
