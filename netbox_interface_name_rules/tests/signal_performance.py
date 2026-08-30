@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import django
 from dcim.choices import InterfaceTypeChoices
@@ -45,6 +46,8 @@ from django.apps import apps
 from django.conf import settings
 from django.db import DatabaseError, connection, transaction
 from django.test import TransactionTestCase
+from netbox.constants import RQ_QUEUE_DEFAULT
+from utilities.rqworker import any_workers_for_queue
 
 from netbox_interface_name_rules import __version__ as plugin_version
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -548,6 +551,15 @@ def _host_load() -> dict[str, float]:
     return {"one_minute": one, "five_minute": five, "fifteen_minute": fifteen}
 
 
+def _assert_isolated_task_queue() -> None:
+    """Refuse a run whose search-cache writes can switch between queued and inline paths."""
+    if any_workers_for_queue(RQ_QUEUE_DEFAULT):
+        raise AssertionError(
+            "The performance run requires a task Redis database with no live RQ workers. "
+            "Use an isolated Redis database so NetBox search-cache writes stay inline."
+        )
+
+
 def _source_environment() -> dict[str, Any]:
     """Return source and machine revisions without an environment-specific host name."""
     plugin_root = Path(__file__).resolve().parents[2]
@@ -954,6 +966,12 @@ class SignalPathPerformanceTest(TransactionTestCase):
             "nobody should quote.",
         )
 
+    @patch("netbox_interface_name_rules.tests.signal_performance.any_workers_for_queue", return_value=True)
+    def test_a_shared_task_queue_is_refused(self, _workers):
+        """A live worker makes identical saves alternate between queued and inline search indexing."""
+        with self.assertRaisesRegex(AssertionError, "isolated Redis database"):
+            _assert_isolated_task_queue()
+
     def test_sql_normalization_scrubs_dollar_quoted_literals(self):
         """Remove both untagged and tagged PostgreSQL dollar-quoted values."""
         normalized = _normalize_sql("SELECT $$customer-token$$, $audit$second-token$audit$")
@@ -1140,6 +1158,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
         warmups = _positive_integer_from_environment(_WARMUP_VARIABLE, _DEFAULT_WARMUPS, allow_zero=True)
         self.assertTrue(supports_channelization(), "The baseline requires NetBox channelization support.")
         self.assertTrue(supports_vc_position_token(), "The baseline requires NetBox VC position token support.")
+        _assert_isolated_task_queue()
 
         load_before = _host_load()
         scenario_results = []

@@ -227,12 +227,13 @@ class ConversionVerdictTest(ConversionTestCase):
 
     def test_an_unsupported_release_reports_the_family_explicitly(self):
         """Capability refusal is a family result, not an empty scan or batch."""
+        base = self._iface("xe-0/0/3:0")
         with patch(
             "netbox_interface_name_rules.family.conversion.supports_channelization",
             return_value=False,
         ):
             verdicts = self._verdicts()
-            outcome = convert_flat_families(self.rule, [self.base.pk])
+            outcome = convert_flat_families(self.rule, [base.pk])
 
         self.assertEqual(len(verdicts), 1)
         self.assertFalse(verdicts[0].convertible)

@@ -9,8 +9,12 @@ channelized interfaces. Use the same NetBox revision, PostgreSQL version, planne
 counts, and hardware for the after-run. NetBox `main` does not contain the channelization feature
 while its development takes place on `feature`.
 
-The command below records a new measured run with 15 timing samples. To reproduce the committed
-unmeasured summaries instead, set `INTERFACE_FAMILY_PERFORMANCE_SAMPLES=0` on both sides.
+Point NetBox's task queue at an isolated Redis database with no live RQ workers. NetBox chooses
+between queued and inline search-cache writes based on worker availability. Mixing those paths
+changes the SQL profile between identical saves. The runner checks this condition before it starts.
+
+The command below records a measured run with the retained configuration of 15 timing samples and
+3 warmups per scenario.
 
 ```bash
 export PYTHONPATH="$PWD/.devcontainer/config"
@@ -71,15 +75,16 @@ One scenario improves substantially: naming a module into a family that already 
 fewer statements, a third of the callback's work. Virtual-chassis reapplication is slightly cheaper.
 Two scenarios cost two statements more.
 
-Count the statements, but read the work. Planner cost and buffer hits fall in **every scenario
-shown**, including the two whose statement count rose:
+Count the statements, but read the work. The direct-callback database and process-CPU changes are:
 
-| Scenario | SQL calls | Planner cost | Shared hits |
-| --- | ---: | ---: | ---: |
-| `plain_rename` | +5.6% | -2.4% | -6.7% |
-| `reconciliation` | +0.8% | -6.0% | -21.8% |
-| `existing_family` | -33.9% | -50.5% | -54.7% |
-| `vc.reapply_8` | -5.9% | -11.5% | -20.9% |
+| Scenario | SQL calls | Planner cost | Shared hits | CPU median |
+| --- | ---: | ---: | ---: | ---: |
+| `plain_rename` | +5.6% | +3.1% | -46.0% | -9.1% |
+| `structural_creation` | 0.0% | -23.3% | -29.6% | -3.1% |
+| `existing_family` | -33.9% | -59.9% | -41.2% | -34.2% |
+| `reconciliation` | +0.8% | +2.4% | +35.8% | +3.1% |
+| `vc.reapply_1` | -2.7% | -6.6% | +13.5% | +6.7% |
+| `vc.reapply_8` | -5.9% | -18.6% | -7.2% | -4.0% |
 
 Shared reads reach zero everywhere, so no scenario goes to disk.
 
@@ -94,13 +99,13 @@ That revalidation is the part to keep. This callback runs after commit, so anoth
 another plugin, can rename an interface between the moment a family is planned and the moment it is
 written. The locked re-read is what detects that.
 
-Read the deltas at the `direct_callback` layer. Every scenario's `complete_model_save` delta equals
-its `direct_callback` delta exactly, which says NetBox's own per-save bookkeeping costs the same on
-both sides and every difference above belongs to this plugin. `no_matching_rule` is the control: the
-plugin returns before doing anything and issues the same 7 statements either way.
+Read SQL deltas at the `direct_callback` layer. Every scenario's `complete_model_save` SQL delta
+equals its direct-callback delta, which says the changed statement count belongs to this plugin.
+`no_matching_rule` is the control: the plugin returns before doing anything and issues the same 7
+statements either way.
 
-Machine time is not measured in these artifacts. Both runs used
-`INTERFACE_FAMILY_PERFORMANCE_SAMPLES=0`, so every timing column reads `not measured` rather than
-reporting a number taken under an unknown load. This host carries unrelated work at load 8 to 33.
-Rerun both sides with samples on an otherwise-idle host to fill those columns in; each artifact
-records the load span it ran under, so a reader can check rather than trust the prose.
+Both runs recorded 15 machine-time samples after 3 warmups on the same hardware. Process CPU
+supports the large existing-family improvement: its median falls 34.2%. The smaller changes are
+diagnostic, not pass/fail limits. Host load was not comparable: the before run moved from 25.02 to
+9.59, and the after run moved from 9.24 to 16.28. Treat wall time, especially p95, as contextual
+evidence and use the deterministic SQL profile as the verdict.
