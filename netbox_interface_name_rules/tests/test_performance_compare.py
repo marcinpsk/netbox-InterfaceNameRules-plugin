@@ -68,6 +68,15 @@ class PerformancePackageTest(unittest.TestCase):
 
     def test_recorded_direct_callbacks_reach_zero_shared_reads(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        expected_scenarios = {
+            "module.direct_callback.no_matching_rule",
+            "module.direct_callback.plain_rename",
+            "module.direct_callback.structural_creation",
+            "module.direct_callback.existing_family",
+            "module.direct_callback.reconciliation",
+            "vc.direct_callback.reapply_1",
+            "vc.direct_callback.reapply_8",
+        }
         rows = [
             [cell.strip().strip("`") for cell in line.strip("|\n").split("|")]
             for line in comparison.splitlines()
@@ -81,8 +90,14 @@ class PerformancePackageTest(unittest.TestCase):
         )
 
         self.assertEqual(len(direct_reads), 7)
+        self.assertEqual({row[0] for row in direct_reads}, expected_scenarios)
         self.assertEqual({row[3] for row in direct_reads}, {"0"})
         self.assertEqual(structural_save[3], "1")
+
+    def test_readme_does_not_equate_shared_reads_with_all_disk_io(self):
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+
+        self.assertNotIn("never goes to disk", readme)
 
 
 class XdistWorkerCapTest(unittest.TestCase):

@@ -86,7 +86,7 @@ Count the statements, but read the work. The direct-callback database and proces
 | `vc.reapply_1` | -2.7% | -6.6% | +13.5% | +6.7% |
 | `vc.reapply_8` | -5.9% | -18.6% | -7.2% | -4.0% |
 
-Shared reads reach zero in every direct-callback scenario, so the callback itself never goes to disk.
+No shared-buffer reads were observed in any direct-callback scenario.
 
 The two extra statements are one `SAVEPOINT` and `RELEASE` pair, from the transaction the executor
 opens per family, plus one `dcim_interface` read: the `... WHERE id IN (...) FOR UPDATE` that locks
