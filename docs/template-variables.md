@@ -193,7 +193,7 @@ link and `mark_connected`, and becomes the parent. Its interface VRF, IP address
 untagged/tagged VLANs, 802.1Q mode, MTU, description and tags move to a newly created channel 1
 interface that takes over its name; custom field values are copied to it. The remaining siblings are
 retyped in place, keeping their own interface IDs. Automation keyed on the ch-0 interface ID
-addresses the parent afterwards, not the channel that carries its name.
+addresses the parent afterward, not the channel that carries its name.
 
 On a NetBox release that cannot model channels, each flat family is shown as unsupported without a
 conversion action, and direct conversion reports the same explicit family outcome.

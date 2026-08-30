@@ -901,6 +901,19 @@ class ConversionBatchLimitViewTest(ConversionTestCase):
         self.assertIn(f"at most {self.BATCH_LIMIT} per run", content)
         self.assertIn("Convert as Background Job", content)
 
+    def test_more_families_keep_the_background_action_when_the_page_is_blocked(self):
+        """Later families can convert even when every family in the capped preview is blocked."""
+        for position in ("3", "4"):
+            sibling = self._iface(f"xe-0/0/{position}:2")
+            peer = Interface.objects.create(device=self.device, name=f"peer-{position}", type=PLAIN_TYPE)
+            Cable.objects.create(a_terminations=[sibling], b_terminations=[peer])
+
+        response = self._capped(self.client.get, self._url())
+
+        self.assertFalse(response.context["conversions_available"])
+        self.assertTrue(response.context["conversions_have_more"])
+        self.assertIn('value="convert_background"', response.content.decode())
+
     def test_a_page_that_shows_every_family_flags_nothing(self):
         """The hint has to mean something, so it cannot be on when the batch really is the whole fleet."""
         response = self.client.get(self._url())

@@ -279,18 +279,22 @@
       </tbody>
     </table>
   </div>
-  {% if can_apply and conversions_available %}
-    <div class="card-footer">
-      <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
-              onclick="return confirm('Convert the selected flat families to the channelized topology?')">
-        <i class="mdi mdi-call-split me-1"></i>Convert Selected
-      </button>
-      <button type="submit" name="action" value="convert_background" class="btn btn-outline-warning"
-              onclick="return confirm('Enqueue a background job to convert ALL convertible families of this rule?')">
-        <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
-      </button>
-    </div>
-  {% elif not can_apply %}
+  {% if can_apply %}
+    {% if conversions_available or conversions_have_more %}
+      <div class="card-footer">
+        {% if conversions_available %}
+          <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
+                  onclick="return confirm('Convert the selected flat families to the channelized topology?')">
+            <i class="mdi mdi-call-split me-1"></i>Convert Selected
+          </button>
+        {% endif %}
+        <button type="submit" name="action" value="convert_background" class="btn btn-outline-warning"
+                onclick="return confirm('Enqueue a background job to convert ALL convertible families of this rule?')">
+          <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
+        </button>
+      </div>
+    {% endif %}
+  {% else %}
     <div class="card-footer text-muted">
       <i class="mdi mdi-lock me-1"></i>You do not have permission to apply interface changes.
       <span class="text-muted small">(requires <code>dcim.change_interface</code>)</span>
