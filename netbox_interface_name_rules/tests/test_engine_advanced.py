@@ -3,6 +3,7 @@
 """Tests for advanced engine functions: find_interfaces_for_rule, apply_rule_to_existing,
 has_applicable_interfaces, _matching_moduletype_pks, build_variables edges."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from dcim.models import (
@@ -33,6 +34,7 @@ from netbox_interface_name_rules.engine import (
     has_applicable_interfaces,
 )
 from netbox_interface_name_rules.family import FamilyStatus
+from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 
@@ -1763,11 +1765,9 @@ class NameCollisionTest(EngineAdvancedFixtures):
         """A post-check save race on one interface is logged + skipped; the rest still rename.
 
         The collision pre-check closes the common case, but a concurrent insert can
-        still win between the check and the save — a true race we cannot reproduce
-        deterministically, so the IntegrityError is injected on the first save only
-        (everything else is a real rule / real interfaces / the real install path).
-        Without the per-interface guard in apply_interface_name_rules this exception
-        propagates and aborts the whole batch.
+        still win between the check and the save, a true race we cannot reproduce
+        deterministically. The first save injects the PostgreSQL constraint diagnostic
+        that identifies this race. Everything else uses the real install path.
         """
         from django.db import IntegrityError
 
@@ -1785,7 +1785,9 @@ class NameCollisionTest(EngineAdvancedFixtures):
         def flaky_save(self_iface, *args, **kwargs):
             calls["n"] += 1
             if calls["n"] == 1:  # first interface loses the race
-                raise IntegrityError("duplicate key value violates unique constraint")
+                cause = Exception("duplicate key value violates unique constraint")
+                cause.diag = SimpleNamespace(constraint_name=INTERFACE_NAME_CONSTRAINT)
+                raise IntegrityError("duplicate key value violates unique constraint") from cause
             return real_save(self_iface, *args, **kwargs)
 
         with patch.object(Interface, "save", flaky_save):
