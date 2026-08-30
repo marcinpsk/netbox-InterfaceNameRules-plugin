@@ -294,7 +294,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
 def predict_rule_output(module, module_bay, raw_names):
     """Predict the names apply_interface_name_rules would produce for raw_names.
 
-    Read-only — saves and mutates nothing.  Used by external integrations (e.g.
+    Read-only: saves and mutates nothing.  Used by external integrations (e.g.
     netbox-librenms-plugin) that need to know the post-rename names without applying any rule.
 
     The names are planned by the family module from the module type's templates, so prediction
@@ -326,8 +326,8 @@ def reapply_module_rules(device):
     """Re-apply module rules to every module on *device* after its virtual-chassis position changed.
 
     The whole device is one batch: its modules match against one enabled-rule snapshot, and one
-    module type's interface templates are read once however many modules carry it.  A module that
-    fails is logged and left behind, so the rest of the device still follows the new position.
+    module type's interface templates are read once however many modules carry it.  A failure is
+    logged and leaves that module behind. Remaining modules continue with the new position.
 
     Returns the number of interfaces renamed across the device's modules.
     """

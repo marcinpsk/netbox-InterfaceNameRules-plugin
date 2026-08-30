@@ -15,6 +15,9 @@ _spec.loader.exec_module(compare)
 def _artifact(planner_settings, load=None):
     """Return the smallest artifact the environment table reads."""
     return {
+        "schema_version": 1,
+        "baseline_kind": "test",
+        "generated_at": "2026-08-30T00:00:00+00:00",
         "environment": {
             "host_load": load,
             "plugin_revision": "abc123",
@@ -35,7 +38,7 @@ def _timed_artifact(machine_time):
         {
             "name": "module.direct_callback.plain_rename",
             "layer": "direct_callback",
-            "database": {"totals": {"statement_calls": 31}},
+            "database": {"statements": [], "totals": {"statement_calls": 31}},
             "machine_time": machine_time,
         }
     ]
@@ -43,6 +46,27 @@ def _timed_artifact(machine_time):
 
 
 _MACHINE_TIME = {"wall": {"median_ms": 2.0, "p95_ms": 3.0}, "process_cpu": {"median_ms": 1.0}}
+
+
+class ArtifactValidationTest(unittest.TestCase):
+    """The comparison refuses an artifact it cannot interpret completely."""
+
+    def test_the_current_artifact_shape_is_accepted(self):
+        compare.validate_artifact(_timed_artifact(_MACHINE_TIME), "before artifact")
+
+    def test_a_newer_schema_version_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["schema_version"] = 2
+
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_missing_required_environment_field_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        del artifact["environment"]["plugin_revision"]
+
+        with self.assertRaisesRegex(ValueError, "plugin_revision"):
+            compare.validate_artifact(artifact, "before artifact")
 
 
 class TimeTableTest(unittest.TestCase):

@@ -16,6 +16,10 @@ from collections import Counter
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from performance.artifact import validate_artifact  # noqa: E402
 
 _DB_METRICS = (
     ("statement_calls", "SQL calls"),
@@ -94,7 +98,7 @@ def _database_table(before, after):
     for name, before_scenario in before.items():
         after_scenario = after.get(name)
         if after_scenario is None:
-            lines.append(f"| `{name}` | — | — | missing | — | — |")
+            lines.append(f"| `{name}` | n/a | n/a | missing | n/a | n/a |")
             continue
         for key, label in _DB_METRICS:
             old = before_scenario["database"]["totals"].get(key)
@@ -166,6 +170,8 @@ def main(argv):
         raise SystemExit(__doc__)
     before = json.loads(_artifact_path(argv[1], must_exist=True).read_text())
     after = json.loads(_artifact_path(argv[2], must_exist=True).read_text())
+    validate_artifact(before, argv[1])
+    validate_artifact(after, argv[2])
     destination = _artifact_path(argv[3], must_exist=False)
     before_scenarios, after_scenarios = _scenarios(before), _scenarios(after)
 

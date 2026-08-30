@@ -177,7 +177,7 @@ disabled rule converts nothing, on this page or in the background job.
 Conversion is only ever performed from that page, by an operator who confirmed
 it: **Apply** renames, it never rewrites a family. Each family gets its own
 verdict before anything is written. A family the plugin can already refuse from
-what it knows — a module that no longer carries the whole family — is reported
+what it knows, such as a module that no longer carries the whole family, is reported
 without touching a row; every other verdict comes from performing the whole
 conversion inside a transaction that is rolled back again, so a family NetBox
 would reject is reported with NetBox's own reason (a cabled sibling, an occupied
@@ -193,7 +193,7 @@ What the conversion does to the ch-0 row, per family:
 
 Custom field values are copied to the channel rather than moved, because they
 can describe either the port or the link. The remaining siblings are retyped in
-place, so their own addresses, descriptions and tags — and their interface IDs —
+place, so their own addresses, descriptions, tags, and interface IDs
 survive.
 
 The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the

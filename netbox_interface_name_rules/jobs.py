@@ -35,9 +35,7 @@ class ApplyRuleJob(JobRunner):
 
         self.logger.info("Renamed %d interface(s) using rule '%s'", outcome.changed_count, rule)
         if outcome.skipped_members:
-            self.logger.warning(
-                "%d interface(s) skipped — the plugin log names each one.", len(outcome.skipped_members)
-            )
+            self.logger.warning("%d interface(s) skipped. The plugin log names each one.", len(outcome.skipped_members))
 
 
 class ConvertFlatFamiliesJob(JobRunner):
@@ -70,6 +68,4 @@ class ConvertFlatFamiliesJob(JobRunner):
 
         self.logger.info("Converted %d interface family(ies) using rule '%s'", len(outcome.changed_families), rule)
         if outcome.blocked_families:
-            self.logger.warning(
-                "%d family(ies) skipped — the plugin log names each one.", len(outcome.blocked_families)
-            )
+            self.logger.warning("%d family(ies) skipped. The plugin log names each one.", len(outcome.blocked_families))

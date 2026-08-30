@@ -3,8 +3,8 @@
 """Integration tests for structural (channelized) interface-family plans.
 
 A structural plan turns one plain port into the topology NetBox models: the base row becomes the
-physical parent and N channel subinterfaces are created under it.  The whole family is one unit —
-it is installed completely or not at all — and the family module, not the engine, decides whether
+physical parent and N channel subinterfaces are created under it.  The whole family is one unit.
+It is installed completely or not at all. The family module, not the engine, decides whether
 the active NetBox release can hold it.
 """
 

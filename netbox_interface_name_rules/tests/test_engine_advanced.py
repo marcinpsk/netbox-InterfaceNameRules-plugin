@@ -1004,7 +1004,7 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — preview of a breakout rule whose template cannot be evaluated
+# engine.py: preview of a breakout rule whose template cannot be evaluated
 # ---------------------------------------------------------------------------
 
 
@@ -1044,7 +1044,7 @@ class PreviewTemplateErrorTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — preview of a module that carries no interfaces
+# engine.py: preview of a module that carries no interfaces
 # ---------------------------------------------------------------------------
 
 
@@ -1075,7 +1075,7 @@ class PreviewEmptyModuleTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — preview stops at the batch limit
+# engine.py: preview stops at the batch limit
 # ---------------------------------------------------------------------------
 
 
@@ -1555,7 +1555,7 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
         with patch.object(Interface, "full_clean", failing_full_clean):
             renamed = apply_interface_name_rules(module, module.module_bay)
 
-        # Transaction rolled back — only the original interface remains, under its original name
+        # The transaction rolled back. Only the original interface remains with its original name.
         self.assertEqual(renamed, 0)
         iface_names = list(Interface.objects.filter(module=module).values_list("name", flat=True))
         self.assertEqual(iface_names, ["0"])

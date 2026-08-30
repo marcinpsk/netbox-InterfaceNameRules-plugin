@@ -518,7 +518,7 @@ class RuleApplyDetailView(generic.ObjectView):
         messages.success(request, f"Converted {converted} interface family(ies) to the channelized topology.")
         if outcome.blocked_families:
             messages.warning(
-                request, f"{len(outcome.blocked_families)} family(ies) skipped — the plugin log names each one."
+                request, f"{len(outcome.blocked_families)} family(ies) skipped. The plugin log names each one."
             )
 
     def post(self, request, **kwargs):
@@ -550,7 +550,7 @@ class RuleApplyDetailView(generic.ObjectView):
                     if outcome.skipped_members:
                         messages.warning(
                             request,
-                            f"{len(outcome.skipped_members)} interface(s) skipped — the plugin log names each one.",
+                            f"{len(outcome.skipped_members)} interface(s) skipped. The plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

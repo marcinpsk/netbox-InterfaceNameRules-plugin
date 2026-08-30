@@ -51,6 +51,7 @@ from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.signals import _apply_rules_deferred, _apply_rules_for_device_deferred
+from performance.artifact import SCHEMA_VERSION, validate_artifact
 
 _OUTPUT_VARIABLE = "INTERFACE_FAMILY_PERFORMANCE_OUTPUT"
 _SAMPLE_VARIABLE = "INTERFACE_FAMILY_PERFORMANCE_SAMPLES"
@@ -1155,7 +1156,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
             )
 
         artifact = {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "baseline_kind": os.environ.get(_KIND_VARIABLE, _DEFAULT_KIND),
             "generated_at": datetime.now(UTC).isoformat(),
             "configuration": {
@@ -1171,5 +1172,6 @@ class SignalPathPerformanceTest(TransactionTestCase):
             },
             "scenarios": scenario_results,
         }
+        validate_artifact(artifact, "generated performance artifact")
         output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
         output.with_suffix(".md").write_text(_markdown_summary(artifact))
