@@ -19,15 +19,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from performance.artifact import validate_artifact  # noqa: E402
+from performance.artifact import DATABASE_METRICS, validate_artifact  # noqa: E402
 
-_DB_METRICS = (
-    ("statement_calls", "SQL calls"),
-    ("planner_total_cost", "Planner cost"),
-    ("shared_hit_blocks", "Shared hits"),
-    ("shared_read_blocks", "Shared reads"),
-    ("wal_bytes", "WAL bytes"),
-)
 _TIME_METRICS = (
     ("wall", "median_ms", "Wall median (ms)"),
     ("wall", "p95_ms", "Wall p95 (ms)"),
@@ -100,7 +93,7 @@ def _database_table(before, after):
         if after_scenario is None:
             lines.append(f"| `{name}` | n/a | n/a | missing | n/a | n/a |")
             continue
-        for key, label in _DB_METRICS:
+        for key, label in DATABASE_METRICS:
             old = before_scenario["database"]["totals"].get(key)
             new = after_scenario["database"]["totals"].get(key)
             if old is None or new is None:

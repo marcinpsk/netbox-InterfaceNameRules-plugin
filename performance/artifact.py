@@ -3,9 +3,17 @@
 """Define and validate the performance artifact boundary."""
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 SCHEMA_VERSION = 1
+DATABASE_METRICS = (
+    ("statement_calls", "SQL calls"),
+    ("planner_total_cost", "Planner cost"),
+    ("shared_hit_blocks", "Shared hits"),
+    ("shared_read_blocks", "Shared reads"),
+    ("wal_bytes", "WAL bytes"),
+)
 
 
 def _invalid(source: str, path: str, expectation: str) -> ValueError:
@@ -41,10 +49,10 @@ def _string(value: Any, source: str, path: str) -> str:
     return value
 
 
-def _number(value: Any, source: str, path: str) -> int | float:
-    """Require one JSON number value."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise _invalid(source, path, "must be a number")
+def _finite_number(value: Any, source: str, path: str) -> int | float:
+    """Require one finite JSON number value."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value):
+        raise _invalid(source, path, "must be a finite number")
     return value
 
 
@@ -67,7 +75,7 @@ def _validate_host_load(environment: Mapping[str, Any], source: str) -> None:
             source,
             f"environment.host_load.{phase}",
         )
-        _number(
+        _finite_number(
             _required(load, "one_minute", source, f"environment.host_load.{phase}"),
             source,
             f"environment.host_load.{phase}.one_minute",
@@ -115,8 +123,8 @@ def _validate_machine_time(value: Any, source: str, path: str) -> None:
         f"{path}.process_cpu",
     )
     for field in ("median_ms", "p95_ms"):
-        _number(_required(wall, field, source, f"{path}.wall"), source, f"{path}.wall.{field}")
-    _number(
+        _finite_number(_required(wall, field, source, f"{path}.wall"), source, f"{path}.wall.{field}")
+    _finite_number(
         _required(process_cpu, "median_ms", source, f"{path}.process_cpu"),
         source,
         f"{path}.process_cpu.median_ms",
@@ -142,11 +150,15 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
             source,
             f"{path}.database.totals",
         )
-        _number(
-            _required(totals, "statement_calls", source, f"{path}.database.totals"),
-            source,
-            f"{path}.database.totals.statement_calls",
-        )
+        for field, _label in DATABASE_METRICS:
+            if field == "statement_calls":
+                _non_negative_integer(
+                    _required(totals, field, source, f"{path}.database.totals"),
+                    source,
+                    f"{path}.database.totals.{field}",
+                )
+            elif field in totals:
+                _finite_number(totals[field], source, f"{path}.database.totals.{field}")
         statements = _list(
             _required(database, "statements", source, f"{path}.database"),
             source,
@@ -160,7 +172,11 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
                 source,
                 f"{statement_path}.normalized_sql",
             )
-            _number(_required(statement, "calls", source, statement_path), source, f"{statement_path}.calls")
+            _non_negative_integer(
+                _required(statement, "calls", source, statement_path),
+                source,
+                f"{statement_path}.calls",
+            )
 
         _validate_machine_time(_required(scenario, "machine_time", source, path), source, f"{path}.machine_time")
 

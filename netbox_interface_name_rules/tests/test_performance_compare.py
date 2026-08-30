@@ -2,11 +2,14 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the performance artifact comparison script."""
 
+import fnmatch
 import importlib.util
+import tomllib
 import unittest
 from pathlib import Path
 
-_COMPARE_PATH = Path(__file__).resolve().parents[2] / "performance" / "compare.py"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_COMPARE_PATH = _PROJECT_ROOT / "performance" / "compare.py"
 _spec = importlib.util.spec_from_file_location("performance_compare", _COMPARE_PATH)
 compare = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(compare)
@@ -48,6 +51,16 @@ def _timed_artifact(machine_time):
 _MACHINE_TIME = {"wall": {"median_ms": 2.0, "p95_ms": 3.0}, "process_cpu": {"median_ms": 1.0}}
 
 
+class PerformancePackageTest(unittest.TestCase):
+    """The shared performance contract ships with the plugin distribution."""
+
+    def test_package_discovery_includes_the_performance_tools(self):
+        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
+        patterns = configuration["tool"]["setuptools"]["packages"]["find"]["include"]
+
+        self.assertTrue(any(fnmatch.fnmatchcase("performance", pattern) for pattern in patterns))
+
+
 class ArtifactValidationTest(unittest.TestCase):
     """The comparison refuses an artifact it cannot interpret completely."""
 
@@ -66,6 +79,20 @@ class ArtifactValidationTest(unittest.TestCase):
         del artifact["environment"]["plugin_revision"]
 
         with self.assertRaisesRegex(ValueError, "plugin_revision"):
+            compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_non_numeric_database_metric_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["totals"]["planner_total_cost"] = "not a number"
+
+        with self.assertRaisesRegex(ValueError, "planner_total_cost"):
+            compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_fractional_statement_call_count_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["statements"] = [{"normalized_sql": "SELECT * FROM example", "calls": 1.5}]
+
+        with self.assertRaisesRegex(ValueError, "calls"):
             compare.validate_artifact(artifact, "before artifact")
 
 

@@ -42,7 +42,7 @@ Documentation = "https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/"
 Changelog = "https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
-include = ["netbox_interface_name_rules*"]
+include = ["netbox_interface_name_rules*", "performance*"]
 
 [tool.setuptools.package-data]
 netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
