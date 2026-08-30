@@ -50,9 +50,9 @@ def _string(value: Any, source: str, path: str) -> str:
 
 
 def _finite_number(value: Any, source: str, path: str) -> int | float:
-    """Require one finite JSON number value."""
-    if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value):
-        raise _invalid(source, path, "must be a finite number")
+    """Require one non-negative finite JSON number value."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(value) or value < 0:
+        raise _invalid(source, path, "must be a non-negative finite number")
     return value
 
 
@@ -93,20 +93,17 @@ def _validate_environment(artifact: Mapping[str, Any], source: str) -> None:
         "operating_system_release",
     ):
         _string(_required(environment, field, source, "environment"), source, f"environment.{field}")
-    postgresql = _mapping(
-        _required(environment, "postgresql", source, "environment"),
-        source,
-        "environment.postgresql",
-    )
+    postgresql_path = "environment.postgresql"
+    postgresql = _mapping(_required(environment, "postgresql", source, "environment"), source, postgresql_path)
     _string(
-        _required(postgresql, "server_version", source, "environment.postgresql"),
+        _required(postgresql, "server_version", source, postgresql_path),
         source,
-        "environment.postgresql.server_version",
+        f"{postgresql_path}.server_version",
     )
     _mapping(
-        _required(postgresql, "planner_settings", source, "environment.postgresql"),
+        _required(postgresql, "planner_settings", source, postgresql_path),
         source,
-        "environment.postgresql.planner_settings",
+        f"{postgresql_path}.planner_settings",
     )
     _validate_host_load(environment, source)
 

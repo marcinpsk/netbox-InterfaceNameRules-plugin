@@ -84,6 +84,23 @@ def _format(value):
     return f"{int(value)}"
 
 
+def _comparison_cells(before, after, unavailable):
+    """Return rendered comparison cells for one optional metric."""
+    if before is None or after is None:
+        before_value = unavailable if before is None else _format(before)
+        after_value = unavailable if after is None else _format(after)
+        return before_value, after_value, unavailable, "n/a"
+    change, percent = _delta(before, after)
+    share = "n/a" if percent is None else f"{percent:+.1f}%"
+    return _format(before), _format(after), _format(change), share
+
+
+def _metric_row(name, label, before, after, unavailable):
+    """Render one database-work or machine-time comparison row."""
+    before_value, after_value, change, share = _comparison_cells(before, after, unavailable)
+    return f"| `{name}` | {label} | {before_value} | {after_value} | {change} | {share} |"
+
+
 def _database_table(before, after):
     """Return the per-scenario database-work comparison."""
     lines = ["| Scenario | Metric | Before | After | Change | Share |", "| --- | --- | ---: | ---: | ---: | ---: |"]
@@ -96,14 +113,16 @@ def _database_table(before, after):
         for key, label in DATABASE_METRICS:
             old = before_scenario["database"]["totals"].get(key)
             new = after_scenario["database"]["totals"].get(key)
-            if old is None or new is None:
-                continue
-            change, percent = _delta(old, new)
-            share = "n/a" if percent is None else f"{percent:+.1f}%"
-            lines.append(f"| `{name}` | {label} | {_format(old)} | {_format(new)} | {_format(change)} | {share} |")
-            if key == "statement_calls" and change > 0:
+            lines.append(_metric_row(name, label, old, new, "n/a"))
+            if key == "statement_calls" and old is not None and new is not None and new > old:
                 regressions.append((name, label, old, new))
     return lines, regressions
+
+
+def _time_value(scenario, section, key):
+    """Return one timing value, or None when the scenario was not measured."""
+    machine_time = scenario["machine_time"]
+    return None if machine_time is None else machine_time[section][key]
 
 
 def _time_table(before, after):
@@ -114,18 +133,9 @@ def _time_table(before, after):
         if after_scenario is None:
             continue
         for section, key, label in _TIME_METRICS:
-            before_time = before_scenario["machine_time"]
-            after_time = after_scenario["machine_time"]
-            old = None if before_time is None else before_time[section][key]
-            new = None if after_time is None else after_time[section][key]
-            if old is None or new is None:
-                before_value = "not measured" if old is None else _format(old)
-                after_value = "not measured" if new is None else _format(new)
-                lines.append(f"| `{name}` | {label} | {before_value} | {after_value} | not measured | n/a |")
-            else:
-                change, percent = _delta(old, new)
-                share = "n/a" if percent is None else f"{percent:+.1f}%"
-                lines.append(f"| `{name}` | {label} | {_format(old)} | {_format(new)} | {_format(change)} | {share} |")
+            old = _time_value(before_scenario, section, key)
+            new = _time_value(after_scenario, section, key)
+            lines.append(_metric_row(name, label, old, new, "not measured"))
     return lines
 
 

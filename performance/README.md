@@ -6,7 +6,7 @@ discovery or CI.
 
 Start in this plugin checkout, and use a fixed NetBox `feature` source checkout that supports
 channelized interfaces. Use the same NetBox revision, PostgreSQL version, planner settings, sample
-counts, and hardware for the after run. NetBox `main` does not contain the channelization feature
+counts, and hardware for the after-run. NetBox `main` does not contain the channelization feature
 while its development takes place on `feature`.
 
 The command below records a new measured run with 15 timing samples. To reproduce the committed

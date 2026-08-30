@@ -357,37 +357,14 @@ def reapply_module_rules(device):
     return total
 
 
-def apply_device_interface_rules(device):
-    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
-
-    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
-    type and platform, then renames any matching interfaces using the name_template.
-
-    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
-    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
-
-    Channel subinterfaces are not matched independently — they follow the parent whose family
-    a rule wins, so a template like ``eth{vc_position}`` cannot collapse a whole family onto
-    one name.
-
-    Returns the number of interfaces renamed.
-    """
-    from dcim.models import Interface
+def _device_interface_rules(device):
+    """Return enabled device-interface rules in matching priority order."""
+    from django.db.models import Q
 
     from .models import InterfaceNameRule
 
-    if not getattr(device, "virtual_chassis_id", None):
-        return 0  # Only rename for VC members (vc_position must be set)
-
-    if device.vc_position is None:
-        return 0  # vc_position unset (e.g. VC master before position assigned)
-
-    vc_position = str(device.vc_position)
     device_type = getattr(device, "device_type", None)
     platform = getattr(device, "platform", None)
-
-    from django.db.models import Q
-
     rules = list(
         InterfaceNameRule.objects.filter(
             applies_to_device_interfaces=True,
@@ -402,11 +379,73 @@ def apply_device_interface_rules(device):
     rules.sort(
         key=lambda r: (
             -r.specificity_score,
-            -(len(r.module_type_pattern or "") if r.applies_to_device_interfaces else 0),
+            -len(r.module_type_pattern or ""),
             r.pk,
         )
     )
+    return rules
 
+
+def _matches_device_interface(rule, interface):
+    """Return whether one device-interface rule matches one family parent."""
+    if not rule.module_type_pattern:
+        return True
+    try:
+        return re.fullmatch(rule.module_type_pattern, interface.name) is not None
+    except re.error:
+        return False
+
+
+def _apply_device_rule_to_families(device, vc_position, rule, families, renamed_pks):
+    """Apply one rule to each eligible device-interface family."""
+    total = 0
+    for interface, children in families:
+        if interface.pk in renamed_pks or not _matches_device_interface(rule, interface):
+            continue
+        port = interface.name.rsplit("/", 1)[-1]
+        variables = {"vc_position": vc_position, "base": interface.name, "port": port}
+        plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
+        try:
+            outcome = family_ops.execute_installed_plan(plan)
+        except (IntegrityError, ValidationError):
+            logger.exception(
+                "Failed to apply rule %s to device interface %r on device %s; skipping.",
+                rule.pk,
+                interface.name,
+                device.pk,
+            )
+            continue
+        total += outcome.changed_count
+        if outcome.members[0].status == family_ops.FamilyStatus.CHANGED:
+            renamed_pks.update(plan.member_pks)
+    return total
+
+
+def apply_device_interface_rules(device):
+    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
+
+    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
+    type and platform, then renames any matching interfaces using the name_template.
+
+    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
+    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
+
+    Channel subinterfaces are not matched independently. They follow the parent whose family
+    a rule wins, so a template like ``eth{vc_position}`` cannot collapse a whole family onto
+    one name.
+
+    Returns the number of interfaces renamed.
+    """
+    from dcim.models import Interface
+
+    if not getattr(device, "virtual_chassis_id", None):
+        return 0  # Only rename for VC members (vc_position must be set)
+
+    if device.vc_position is None:
+        return 0  # vc_position unset (e.g. VC master before position assigned)
+
+    vc_position = str(device.vc_position)
+    rules = _device_interface_rules(device)
     if not rules:
         return 0
 
@@ -415,34 +454,10 @@ def apply_device_interface_rules(device):
         return 0
 
     families = family_ops.device_interface_families(interfaces)
-    total = 0
     renamed_pks: set[int] = set()
+    total = 0
     for rule in rules:
-        for interface, children in families:
-            if interface.pk in renamed_pks:
-                continue
-            if rule.module_type_pattern:
-                try:
-                    if not re.fullmatch(rule.module_type_pattern, interface.name):
-                        continue
-                except re.error:
-                    continue
-            port = interface.name.rsplit("/", 1)[-1]
-            variables = {"vc_position": vc_position, "base": interface.name, "port": port}
-            plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
-            try:
-                outcome = family_ops.execute_installed_plan(plan)
-            except (IntegrityError, ValidationError):
-                logger.exception(
-                    "Failed to apply rule %s to device interface %r on device %s; skipping.",
-                    rule.pk,
-                    interface.name,
-                    device.pk,
-                )
-                continue
-            total += outcome.changed_count
-            if outcome.members[0].status == family_ops.FamilyStatus.CHANGED:
-                renamed_pks.update(plan.member_pks)
+        total += _apply_device_rule_to_families(device, vc_position, rule, families, renamed_pks)
 
     return total
 

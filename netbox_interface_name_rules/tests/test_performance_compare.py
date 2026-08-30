@@ -88,6 +88,13 @@ class ArtifactValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "planner_total_cost"):
             compare.validate_artifact(artifact, "before artifact")
 
+    def test_a_negative_database_metric_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["totals"]["planner_total_cost"] = -1.0
+
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            compare.validate_artifact(artifact, "before artifact")
+
     def test_a_fractional_statement_call_count_is_rejected(self):
         artifact = _timed_artifact(_MACHINE_TIME)
         artifact["scenarios"][0]["database"]["statements"] = [{"normalized_sql": "SELECT * FROM example", "calls": 1.5}]
@@ -121,6 +128,25 @@ class TimeTableTest(unittest.TestCase):
         )
 
         self.assertIn("Wall median (ms)", "".join(rows))
+
+
+class DatabaseTableTest(unittest.TestCase):
+    """A comparison must show every database metric present on either side."""
+
+    def test_a_metric_missing_from_one_artifact_is_reported(self):
+        before_scenario = _timed_artifact(None)["scenarios"][0]
+        after_scenario = _timed_artifact(None)["scenarios"][0]
+        before_scenario["database"]["totals"]["planner_total_cost"] = 12.5
+
+        rows, _regressions = compare._database_table(
+            {before_scenario["name"]: before_scenario},
+            {after_scenario["name"]: after_scenario},
+        )
+
+        self.assertIn(
+            "| `module.direct_callback.plain_rename` | Planner cost | 12.50 | n/a | n/a | n/a |",
+            rows,
+        )
 
 
 class EnvironmentTableTest(unittest.TestCase):
