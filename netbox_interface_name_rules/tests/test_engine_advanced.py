@@ -214,7 +214,7 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
 
     def test_template_error_shown_in_new_names(self):
         """A template that raises ValueError produces '<error: ...>' in new_names."""
-        # {vc_position} is undefined for a non-VC device → ValueError at eval time
+        # {vc_position} is undefined for a non-VC device, so evaluation raises ValueError.
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-{vc_position}/0/{bay_position}",
@@ -547,7 +547,7 @@ class EvaluateNameTemplateEdgesTest(TestCase):
             evaluate_name_template("{1 + }", {})
 
     def test_unsafe_ast_node_rejected(self):
-        """AST node not in allowlist (e.g., Name lookup — not a call) raises ValueError."""
+        """The arithmetic evaluator rejects a name lookup before it can execute."""
         with self.assertRaises(ValueError):
             evaluate_name_template("{__import__}", {})
 
@@ -697,12 +697,12 @@ class EngineEvaluateTemplateUnsafeASTTest(TestCase):
     """Test evaluate_name_template raises for unsafe AST node types (defense-in-depth)."""
 
     def test_unsafe_ast_node_raises_valueerror(self):
-        """An exponent expression passes the char guard but fails the AST allowlist.
+        """An exponent expression passes the character guard but fails the AST evaluator.
 
         ``{2**3}`` is built only from characters the guard regex permits
-        (digits and ``*``), so it slips past the cheap char check — but
-        ``ast.parse`` yields a ``Pow`` node, which is not in the arithmetic
-        allowlist, so the AST walk raises ValueError for real (no mock needed).
+        (digits and ``*``), so it slips past the cheap character check. The
+        parser yields a ``Pow`` node, which the recursive arithmetic
+        evaluator rejects with ValueError.
         """
         from netbox_interface_name_rules.engine import evaluate_name_template
 
@@ -813,7 +813,7 @@ class BreakoutTemplateValueErrorTest(TestCase):
         """``{undefined_var}`` is not a naming variable, so every family reports the failure."""
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
-            name_template="{undefined_var}:{channel}",  # undefined_var → real ValueError on eval
+            name_template="{undefined_var}:{channel}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
@@ -1028,7 +1028,7 @@ class PreviewTemplateErrorTest(TestCase):
         """An undefined variable raises for real, so the family previews as a single placeholder."""
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
-            name_template="{base}:{channel}:{undefined_var}",  # undefined_var → real ValueError on eval
+            name_template="{base}:{channel}:{undefined_var}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
@@ -1388,6 +1388,7 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
             result = apply_device_interface_rules(self.device)
 
+        iface.refresh_from_db()
         self.assertEqual(result, 0)
         self.assertEqual(iface.name, "Gi0/1")  # rolled back
 

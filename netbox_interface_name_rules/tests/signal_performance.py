@@ -606,8 +606,9 @@ def _timing_sentence(artifact: dict[str, Any]) -> str:
     if artifact["configuration"]["samples"]:
         return "This run measured machine time. Statement counts are reproducible and carry the verdict."
     return (
-        "This run measured statement counts only. It took no machine-time samples, so every timing "
-        "column reads `not measured` rather than reporting a number nobody should quote."
+        "This run measured database work, including SQL calls, planner cost, and shared hits. It took no "
+        "machine-time samples, so every timing column reads `not measured` rather than reporting a number "
+        "nobody should quote."
     )
 
 
@@ -940,6 +941,17 @@ class SignalPathPerformanceTest(TransactionTestCase):
         prepared = self._prepare_module("PerfDirectFixture", "plain_rename", direct=True)
 
         self.assertEqual(prepared.fixture["enabled_rules"], 1)
+
+    def test_unmeasured_summary_names_the_recorded_database_work(self):
+        """Do not describe a planner and buffer profile as statement counts alone."""
+        artifact = {"configuration": {"samples": 0}}
+
+        self.assertEqual(
+            _timing_sentence(artifact),
+            "This run measured database work, including SQL calls, planner cost, and shared hits. It took no "
+            "machine-time samples, so every timing column reads `not measured` rather than reporting a number "
+            "nobody should quote.",
+        )
 
     def test_sql_normalization_scrubs_dollar_quoted_literals(self):
         """Remove both untagged and tagged PostgreSQL dollar-quoted values."""

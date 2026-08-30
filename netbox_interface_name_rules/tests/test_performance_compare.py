@@ -55,8 +55,12 @@ class TimeTableTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            rows[-1],
-            "| `module.direct_callback.plain_rename` | machine time | not measured | not measured | not measured | n/a |",
+            rows[-3:],
+            [
+                "| `module.direct_callback.plain_rename` | Wall median (ms) | not measured | 2 | not measured | n/a |",
+                "| `module.direct_callback.plain_rename` | Wall p95 (ms) | not measured | 3 | not measured | n/a |",
+                "| `module.direct_callback.plain_rename` | CPU median (ms) | not measured | 1 | not measured | n/a |",
+            ],
         )
 
     def test_measured_machine_time_is_still_compared(self):

@@ -43,6 +43,7 @@ class ProspectiveInterface:
 
 def describe_interfaces(interfaces) -> tuple[ProspectiveInterface, ...]:
     """Describe live interface rows for prospective planning."""
+    interfaces = tuple(interfaces)
     names_by_pk = {interface.pk: interface.name for interface in interfaces}
     return tuple(
         ProspectiveInterface(

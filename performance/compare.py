@@ -116,15 +116,19 @@ def _time_table(before, after):
         after_scenario = after.get(name)
         if after_scenario is None:
             continue
-        if before_scenario["machine_time"] is None or after_scenario["machine_time"] is None:
-            lines.append(f"| `{name}` | machine time | not measured | not measured | not measured | n/a |")
-            continue
         for section, key, label in _TIME_METRICS:
-            old = before_scenario["machine_time"][section][key]
-            new = after_scenario["machine_time"][section][key]
-            change, percent = _delta(old, new)
-            share = "n/a" if percent is None else f"{percent:+.1f}%"
-            lines.append(f"| `{name}` | {label} | {_format(old)} | {_format(new)} | {_format(change)} | {share} |")
+            before_time = before_scenario["machine_time"]
+            after_time = after_scenario["machine_time"]
+            old = None if before_time is None else before_time[section][key]
+            new = None if after_time is None else after_time[section][key]
+            if old is None or new is None:
+                before_value = "not measured" if old is None else _format(old)
+                after_value = "not measured" if new is None else _format(new)
+                lines.append(f"| `{name}` | {label} | {before_value} | {after_value} | not measured | n/a |")
+            else:
+                change, percent = _delta(old, new)
+                share = "n/a" if percent is None else f"{percent:+.1f}%"
+                lines.append(f"| `{name}` | {label} | {_format(old)} | {_format(new)} | {_format(change)} | {share} |")
     return lines
 
 

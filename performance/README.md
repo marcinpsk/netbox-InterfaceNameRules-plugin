@@ -4,10 +4,13 @@ The performance runner records the current implementation before an interface-fa
 uses real NetBox models, signals, committed callbacks, and PostgreSQL. It is not part of default test
 discovery or CI.
 
-Run it from a fixed NetBox `feature` source checkout that supports channelized interfaces. Use the
-same NetBox revision, PostgreSQL version, planner settings, sample counts, and hardware for the
-after run. NetBox `main` does not contain the channelization feature while its development takes
-place on `feature`.
+Start in this plugin checkout, and use a fixed NetBox `feature` source checkout that supports
+channelized interfaces. Use the same NetBox revision, PostgreSQL version, planner settings, sample
+counts, and hardware for the after run. NetBox `main` does not contain the channelization feature
+while its development takes place on `feature`.
+
+The command below records a new measured run with 15 timing samples. To reproduce the committed
+unmeasured summaries instead, set `INTERFACE_FAMILY_PERFORMANCE_SAMPLES=0` on both sides.
 
 ```bash
 export PYTHONPATH="$PWD/.devcontainer/config"
@@ -68,8 +71,8 @@ One scenario improves substantially: naming a module into a family that already 
 fewer statements, a third of the callback's work. Virtual-chassis reapplication is slightly cheaper.
 Two scenarios cost two statements more.
 
-Count the statements, but read the work. Planner cost and buffer hits fall in **every** scenario,
-including the two whose statement count rose:
+Count the statements, but read the work. Planner cost and buffer hits fall in **every scenario
+shown**, including the two whose statement count rose:
 
 | Scenario | SQL calls | Planner cost | Shared hits |
 | --- | ---: | ---: | ---: |

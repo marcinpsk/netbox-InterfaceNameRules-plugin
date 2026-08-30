@@ -88,6 +88,23 @@ class ProspectivePlanSetLookupTest(SimpleTestCase):
         self.assertEqual(self.PLAN.target_names, ("xe0", "xe0:1"))
 
 
+class DescribeInterfacesTest(SimpleTestCase):
+    """Live-row adaptation accepts every iterable promised by its public boundary."""
+
+    def test_a_one_shot_iterable_retains_every_interface(self):
+        parent = Interface(pk=1, name="3")
+        channel = Interface(pk=2, name="3:0", parent_id=1)
+        channel.channel_id = 0
+        interfaces = iter((parent, channel))
+
+        described = describe_interfaces(interfaces)
+
+        self.assertEqual(
+            [(interface.name, interface.parent_name) for interface in described],
+            [("3", None), ("3:0", "3")],
+        )
+
+
 class ProspectivePlanTestCase(ChannelizationTestCase):
     """Plan the families a rule intends for a module, from its templates alone."""
 

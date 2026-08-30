@@ -32,6 +32,7 @@ _SAFE_PATTERNS = (
     "^(10|25|100)G$",
     "(ab){2,4}",
     r"\d{1,3}(\.\d{1,3}){3}",
+    "(?:QSFP|SFP)+",
 )
 
 # Patterns whose evaluation backtracks exponentially; all must be refused.

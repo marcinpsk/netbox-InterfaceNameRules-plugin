@@ -77,10 +77,41 @@ def _parsed_subpatterns(argument):
             yield from _parsed_subpatterns(item)
 
 
+def _leading_literals(node):
+    """Return known literal first characters and whether *node* can be empty."""
+    for opcode, argument in node:
+        if opcode is _re_constants.AT:
+            continue
+        if opcode is _re_constants.LITERAL:
+            return frozenset({argument}), False
+        if opcode is _re_constants.IN:
+            literals = frozenset(value for item_opcode, value in argument if item_opcode is _re_constants.LITERAL)
+            if len(literals) != len(argument):
+                return None, False
+            return literals, False
+        if opcode is _re_constants.SUBPATTERN:
+            return _leading_literals(argument[-1])
+        return None, False
+    return frozenset(), True
+
+
+def _branch_matches_ambiguously(branches):
+    """Return True unless every alternative starts with a distinct literal."""
+    seen = set()
+    for branch in branches:
+        literals, empty = _leading_literals(branch)
+        if literals is None or empty or seen.intersection(literals):
+            return True
+        seen.update(literals)
+    return False
+
+
 def _matches_ambiguously(node):
     """Return True when *node* can match one string in more than one way."""
     for opcode, argument in node:
-        if opcode in _BACKTRACKING_REPEATS or opcode is _re_constants.BRANCH:
+        if opcode in _BACKTRACKING_REPEATS:
+            return True
+        if opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1]):
             return True
         if any(_matches_ambiguously(child) for child in _parsed_subpatterns(argument)):
             return True

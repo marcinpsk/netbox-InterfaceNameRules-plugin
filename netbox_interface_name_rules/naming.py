@@ -3,7 +3,35 @@
 """Build naming variables and evaluate interface-name templates."""
 
 import ast
+import operator
 import re
+
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv,
+}
+_UNARY_OPERATORS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+def _evaluate_arithmetic(node):
+    """Evaluate one validated integer arithmetic syntax tree without executing code."""
+    if isinstance(node, ast.Expression):
+        return _evaluate_arithmetic(node.body)
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
+        return _BINARY_OPERATORS[type(node.op)](
+            _evaluate_arithmetic(node.left),
+            _evaluate_arithmetic(node.right),
+        )
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
+        return _UNARY_OPERATORS[type(node.op)](_evaluate_arithmetic(node.operand))
+    raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
 
 
 def _extract_trailing_digits(value: str) -> str:
@@ -109,24 +137,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
             raise ValueError(f"Unsafe expression in name template: {expr}")
         try:
             node = ast.parse(expr, mode="eval")
-            for child in ast.walk(node):
-                if not isinstance(
-                    child,
-                    (
-                        ast.Expression,
-                        ast.BinOp,
-                        ast.UnaryOp,
-                        ast.Constant,
-                        ast.Add,
-                        ast.Sub,
-                        ast.Mult,
-                        ast.FloorDiv,
-                        ast.USub,
-                        ast.UAdd,
-                    ),
-                ):
-                    raise ValueError(f"Unsafe AST node in expression: {type(child).__name__}")
-            return str(int(eval(compile(node, "<template>", "eval"))))  # noqa: S307
+            return str(int(_evaluate_arithmetic(node)))
         except (SyntaxError, TypeError, ZeroDivisionError) as exc:
             raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
 
