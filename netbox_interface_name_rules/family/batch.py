@@ -11,7 +11,6 @@ import logging
 from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
 
 from ..naming import build_variables
 from .domain import (
@@ -177,26 +176,15 @@ def execute_module_families(rule, module, plans):
 
 def _failed_members(plan, reason):
     """Return failed member facts for the live rows an executor left unchanged."""
-    if isinstance(plan, InstalledFamilyPlan):
-        return tuple(
-            MemberOutcome(
-                interface_pk=member.snapshot.pk,
-                current_name=member.snapshot.name,
-                target_name=member.target_name,
-                status=FamilyStatus.FAILED,
-                reason=reason,
-            )
-            for member in plan.members
-        )
-    target_name = plan.parent_target_name if isinstance(plan, StructuralFamilyPlan) else plan.target_names[0]
-    return (
+    return tuple(
         MemberOutcome(
-            interface_pk=plan.base.pk,
-            current_name=plan.base.name,
-            target_name=target_name,
+            interface_pk=member.snapshot.pk,
+            current_name=member.snapshot.name,
+            target_name=member.target_name,
             status=FamilyStatus.FAILED,
             reason=reason,
-        ),
+        )
+        for member in plan.live_members
     )
 
 
@@ -216,7 +204,7 @@ def _execute(rule, module, plan):
     """Execute one family, logging (never raising) so the batch keeps its later families."""
     try:
         return execute_family_plan(plan)
-    except (ValueError, ValidationError, IntegrityError) as error:
+    except (ValueError, ValidationError) as error:
         logger.exception(
             "Failed to apply rule '%s' to a family on module '%s' (id=%s); skipping.", rule, module, module.pk
         )

@@ -20,7 +20,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.db import connection
+from django.db import IntegrityError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
@@ -43,7 +43,6 @@ from netbox_interface_name_rules.family import (
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
-    execute_module_families,
     pinned_template_cache,
     plan_flat_family,
     plan_prospective_families,
@@ -285,6 +284,19 @@ class BulkApplyContinuesPastOneBlockedFamilyTest(BulkTestCase):
         self.assertEqual(outcome.changed_count, 4)
         self.assertEqual([family.status for family in outcome.families], [FamilyStatus.FAILED, FamilyStatus.CHANGED])
         self.assertEqual([member.target_name for member in outcome.skipped_members], ["xe-0/0/1:0"])
+
+    def test_an_unrelated_integrity_failure_reaches_the_operation_boundary(self):
+        def reject_interface_update(execute, sql, params, many, context):
+            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+                raise IntegrityError("injected batch database failure")
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(reject_interface_update):
+            with self.assertRaisesMessage(IntegrityError, "injected batch database failure"):
+                apply_rule_to_existing(self.rule)
+
+        self.assertEqual(self._names(self.modules[0]), ["1"])
+        self.assertEqual(self._names(self.modules[1]), ["2"])
 
 
 class BulkApplyQueryScalingTest(BulkTestCase):
@@ -677,7 +689,7 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
 
         self.assertEqual(self._names(self.module), ["1"])
 
-    def test_every_plan_kind_retains_its_live_members_after_an_executor_failure(self):
+    def test_every_plan_kind_exposes_its_live_members_for_failure_reporting(self):
         base = Interface.objects.get(module=self.module)
         flat = plan_flat_family(
             self.module,
@@ -705,15 +717,8 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             channels=(),
         )
 
-        with (
-            patch("netbox_interface_name_rules.family.batch.execute_family_plan", side_effect=ValueError("boom")),
-            self.assertLogs("netbox_interface_name_rules.family.batch", level="ERROR"),
-        ):
-            outcomes = execute_module_families(self.rule, self.module, (installed, structural, flat))
-
-        self.assertEqual([outcome.status for outcome in outcomes], [FamilyStatus.FAILED] * 3)
         self.assertEqual(
-            [outcome.members[0].target_name for outcome in outcomes],
+            [plan.live_members[0].target_name for plan in (installed, structural, flat)],
             ["installed-target", "parent-target", "xe-0/0/1:0"],
         )
 

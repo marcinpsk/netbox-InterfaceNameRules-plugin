@@ -66,11 +66,23 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertIn(".", configuration["tool"]["pytest"]["ini_options"]["pythonpath"])
 
-    def test_shared_read_claim_is_scoped_to_direct_callbacks(self):
-        analysis = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+    def test_recorded_direct_callbacks_reach_zero_shared_reads(self):
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        rows = [
+            [cell.strip().strip("`") for cell in line.strip("|\n").split("|")]
+            for line in comparison.splitlines()
+            if line.startswith("|")
+        ]
+        direct_reads = [row for row in rows if ".direct_callback." in row[0] and row[1] == "Shared reads"]
+        structural_save = next(
+            row
+            for row in rows
+            if row[0] == "module.complete_model_save.structural_creation" and row[1] == "Shared reads"
+        )
 
-        self.assertIn("Shared reads reach zero in every direct-callback scenario", analysis)
-        self.assertNotIn("Shared reads reach zero everywhere", analysis)
+        self.assertEqual(len(direct_reads), 7)
+        self.assertEqual({row[3] for row in direct_reads}, {"0"})
+        self.assertEqual(structural_save[3], "1")
 
 
 class XdistWorkerCapTest(unittest.TestCase):

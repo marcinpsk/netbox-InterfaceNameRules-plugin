@@ -87,6 +87,11 @@ class InstalledFamilyPlan:
         """Return member primary keys in plan order."""
         return tuple(member.snapshot.pk for member in self.members)
 
+    @property
+    def live_members(self) -> tuple[PlannedMember, ...]:
+        """Return the planned members that already have live interface rows."""
+        return self.members
+
 
 @dataclass(frozen=True, slots=True)
 class InstalledFamilyPlanSet:
@@ -135,6 +140,11 @@ class StructuralFamilyPlan:
         """Return the parent name and every channel name in creation order."""
         return (self.parent_target_name, *(channel.name for channel in self.channels))
 
+    @property
+    def live_members(self) -> tuple[PlannedMember, ...]:
+        """Return the base row this plan rewrites."""
+        return (PlannedMember(self.base, self.parent_target_name, MemberRole.PARENT),)
+
 
 @dataclass(frozen=True, slots=True)
 class FlatCreationPlan:
@@ -153,6 +163,11 @@ class FlatCreationPlan:
     def topology(self) -> FamilyTopology:
         """Return the topology this plan installs."""
         return FamilyTopology.FLAT
+
+    @property
+    def live_members(self) -> tuple[PlannedMember, ...]:
+        """Return the base row this plan rewrites."""
+        return (PlannedMember(self.base, self.target_names[0], MemberRole.FLAT_MEMBER),)
 
 
 @dataclass(frozen=True, slots=True)
