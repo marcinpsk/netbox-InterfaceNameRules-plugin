@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Tests for jobs, model properties, and API serializer edge-cases."""
+"""Tests for jobs, model properties, family contracts, and API serializer edge-cases."""
 
+from typing import get_args, get_type_hints
 from unittest.mock import MagicMock, patch
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
@@ -9,6 +10,21 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+
+
+class FamilyTargetContractTest(TestCase):
+    """The target contract describes values the planners can produce."""
+
+    def test_channel_targets_allow_an_unresolved_name(self):
+        """Lockstep naming can leave one channel unresolved without invalidating the tuple."""
+        from netbox_interface_name_rules.family.targets import FamilyTargets
+
+        channels = get_type_hints(FamilyTargets)["channels"]
+        channel_pair = get_args(channels)[0]
+        target_name = get_args(channel_pair)[0]
+
+        self.assertIn(type(None), get_args(target_name))
+
 
 # ---------------------------------------------------------------------------
 # jobs.py

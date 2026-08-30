@@ -17,6 +17,7 @@ from taggit.managers import TaggableManager
 from .choices import BreakoutModeChoices
 
 _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_REPEAT})
+_MAX_AMBIGUOUS_REPEAT = 4
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
@@ -119,12 +120,11 @@ def _matches_ambiguously(node):
 
 
 def _repeats_ambiguously(node):
-    """Return True when *node* repeats an ambiguous body without bound, which backtracks exponentially."""
+    """Return True when *node* repeats an ambiguous body enough to backtrack excessively."""
     for opcode, argument in node:
-        # A bounded repeat costs a bounded exponent; only an unbounded one compounds.
         if (
             opcode in _BACKTRACKING_REPEATS
-            and argument[1] == _re_constants.MAXREPEAT
+            and argument[1] > _MAX_AMBIGUOUS_REPEAT
             and _matches_ambiguously(argument[2])
         ):
             return True

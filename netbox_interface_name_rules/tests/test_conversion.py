@@ -9,7 +9,7 @@ rule: the operator asks for it per family, from the Apply page, after reading wh
 would become.
 
 The conversion keeps the physical row: the old ch-0 interface becomes the parent (same pk, cable,
-type and module link) and its *logical* identity — addresses, VLANs, description, tags — moves to a
+type and module link) and its logical identity (VRF, addresses, VLANs, description, and tags) moves to a
 newly created channel-1 child that takes over its name.  Every family is preflighted whole,
 including a dry-run ``full_clean()`` of the parent and of every prospective child, so a family that
 cannot become a valid channelized family is reported as blocked instead of half converted.
@@ -29,7 +29,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils.html import escape
 from extras.models import CustomField, Tag
-from ipam.models import VLAN, FHRPGroup, FHRPGroupAssignment, IPAddress
+from ipam.models import VLAN, VRF, FHRPGroup, FHRPGroupAssignment, IPAddress
 
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
@@ -225,6 +225,22 @@ class ConversionVerdictTest(ConversionTestCase):
 
         self.assertEqual(self._verdicts(), ())
 
+    def test_an_unsupported_release_reports_the_family_explicitly(self):
+        """Capability refusal is a family result, not an empty scan or batch."""
+        with patch(
+            "netbox_interface_name_rules.family.conversion.supports_channelization",
+            return_value=False,
+        ):
+            verdicts = self._verdicts()
+            outcome = convert_flat_families(self.rule, [self.base.pk])
+
+        self.assertEqual(len(verdicts), 1)
+        self.assertFalse(verdicts[0].convertible)
+        self.assertIn("cannot model channelized interfaces", verdicts[0].reason)
+        self.assertEqual(len(outcome.families), 1)
+        self.assertEqual(outcome.families[0].status, FamilyStatus.UNSUPPORTED)
+        self._assert_still_flat(self.module, "3")
+
     def test_a_converted_family_is_not_offered_again(self):
         """It is a native family now; offering it again would invite a second, duplicate conversion."""
         base = self._iface("xe-0/0/3:0")
@@ -389,7 +405,7 @@ class Ch0MetadataSplitTest(ConversionTestCase):
     """The ch-0 row splits in two: the physical port stays put, its logical identity moves to channel 1.
 
     Everything an operator configured on ``xe-0/0/3:0`` described a 10G channel, not the QSFP cage
-    that carries it — so addresses, VLANs, description and tags belong on the new channel-1 child,
+    that carries it, so its VRF, addresses, VLANs, description, and tags belong on the new channel-1 child,
     while cable, type, module link and mark_connected stay on the row that is now the parent.
     """
 
@@ -404,6 +420,7 @@ class Ch0MetadataSplitTest(ConversionTestCase):
         cls.tagged = VLAN.objects.create(vid=200, name="ConvMeta-200", site=cls.device.site)
         cls.tag = Tag.objects.create(name="ConvMetaTag", slug="convmeta-tag")
         cls.fhrp_group = FHRPGroup.objects.create(group_id=71, protocol="vrrp2")
+        cls.vrf = VRF.objects.create(name="ConvMeta VRF", rd="64512:71")
 
     def setUp(self):
         """Install the flat family and load ch-0 with the configuration an operator would have put there."""
@@ -415,6 +432,7 @@ class Ch0MetadataSplitTest(ConversionTestCase):
         self.base.mode = InterfaceModeChoices.MODE_TAGGED
         self.base.untagged_vlan = self.untagged
         self.base.mark_connected = True
+        self.base.vrf = self.vrf
         self.base.custom_field_data = {"conv_note": "keep me"}
         self.base.save()
         self.base.tagged_vlans.set([self.tagged])
@@ -448,6 +466,11 @@ class Ch0MetadataSplitTest(ConversionTestCase):
         self.assertEqual(self.parent.mode, "")
         self.assertIsNone(self.parent.untagged_vlan_id)
         self.assertEqual(list(self.parent.tagged_vlans.all()), [])
+
+    def test_the_vrf_moves_to_the_child(self):
+        """The VRF belongs to the logical channel interface, not the physical parent."""
+        self.assertEqual(self.channel.vrf_id, self.vrf.pk)
+        self.assertIsNone(self.parent.vrf_id)
 
     def test_the_tags_move_to_the_child(self):
         """Tags drive saved filters and automation aimed at the channel, not at the physical port."""
@@ -1277,7 +1300,7 @@ class FlatToChannelizedJuniperE2ETest(ConversionTestCase):
 
 @skipIf(supports_channelization(), REQUIRES_NO_CHANNELIZATION)
 class ConversionWithoutSupportTest(ConversionTestCase):
-    """Where NetBox has no channel model there is no topology to convert to, so nothing is offered."""
+    """Where NetBox has no channel model each flat family reports an unsupported conversion."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1294,9 +1317,13 @@ class ConversionWithoutSupportTest(ConversionTestCase):
         self._switch_to_channelized()
         self.base = self._iface("xe-0/0/3:0")
 
-    def test_no_family_is_offered_for_conversion(self):
-        """There is no channelized topology on this release, so no family can be converted into one."""
-        self.assertEqual(self._verdicts(), ())
+    def test_family_is_reported_as_unsupported(self):
+        """The scan distinguishes unsupported topology from no family found."""
+        verdicts = self._verdicts()
+
+        self.assertEqual(len(verdicts), 1)
+        self.assertFalse(verdicts[0].convertible)
+        self.assertIn("cannot model channelized interfaces", verdicts[0].reason)
 
     def test_converting_refuses_gracefully_and_says_so(self):
         """A refusal has to be visible: a silent zero looks exactly like 'nothing needed converting'."""
@@ -1304,15 +1331,19 @@ class ConversionWithoutSupportTest(ConversionTestCase):
             outcome = convert_flat_families(self.rule, [self.base.pk])
 
         self.assertEqual(self._converted(outcome), 0)
+        self.assertEqual(len(outcome.families), 1)
+        self.assertEqual(outcome.families[0].status, FamilyStatus.UNSUPPORTED)
         self.assertEqual(self._names(self.module), self._flat_names("3"))
         self.assertTrue(any("channeliz" in line.lower() for line in logs.output), logs.output)
 
-    def test_the_apply_page_has_no_conversion_section(self):
-        """Offering an action this release cannot perform is worse than not mentioning it."""
+    def test_the_apply_page_reports_the_unsupported_family_without_an_action(self):
+        """The page explains the refusal but does not offer a conversion checkbox."""
         self.client.force_login(self.superuser)
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
 
         response = self.client.get(url)
 
-        self.assertFalse(response.context["conversions"])
+        self.assertEqual(len(response.context["conversions"]), 1)
+        self.assertContains(response, "Unsupported")
+        self.assertContains(response, "cannot model channelized interfaces")
         self.assertNotIn('value="convert"', response.content.decode())

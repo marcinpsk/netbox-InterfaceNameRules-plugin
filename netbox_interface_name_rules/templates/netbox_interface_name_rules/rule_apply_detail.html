@@ -259,9 +259,9 @@
             </td>
             <td>
               {% if verdict.convertible %}
-                <span class="badge text-bg-success">Convertible</span>
+                <span class="badge text-bg-success">{{ verdict.status_label }}</span>
               {% else %}
-                <span class="badge text-bg-danger">Blocked</span>
+                <span class="badge text-bg-danger">{{ verdict.status_label }}</span>
               {% endif %}
             </td>
           </tr>
@@ -279,7 +279,7 @@
       </tbody>
     </table>
   </div>
-  {% if can_apply %}
+  {% if can_apply and conversions_available %}
     <div class="card-footer">
       <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
               onclick="return confirm('Convert the selected flat families to the channelized topology?')">
@@ -290,7 +290,7 @@
         <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
       </button>
     </div>
-  {% else %}
+  {% elif not can_apply %}
     <div class="card-footer text-muted">
       <i class="mdi mdi-lock me-1"></i>You do not have permission to apply interface changes.
       <span class="text-muted small">(requires <code>dcim.change_interface</code>)</span>

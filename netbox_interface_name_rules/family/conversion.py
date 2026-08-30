@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 STALE_REASON = "the flat family changed after it was scanned"
 INCOMPLETE_REASON = "this module carries no complete flat family"
+UNSUPPORTED_REASON = "this NetBox release cannot model channelized interfaces"
 
 
 def conversion_offered(rule) -> bool:
@@ -66,7 +67,9 @@ def conversion_offered(rule) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _conversion_plan(module, db_alias, parent_name, channel_names, rows):  # pragma: no cover - channelization only
+def _conversion_plan(
+    module, db_alias, parent_name, channel_names, rows, channelization_supported
+):  # pragma: no cover - channelization only
     """Build one immutable conversion plan from the rows a module carries for one family."""
     base, *siblings = rows
     plan = ConversionPlan(
@@ -82,6 +85,12 @@ def _conversion_plan(module, db_alias, parent_name, channel_names, rows):  # pra
             for channel_id, sibling in siblings
         ),
     )
+    if not channelization_supported:
+        return replace(
+            plan,
+            precondition_status=FamilyStatus.UNSUPPORTED,
+            precondition_reason=UNSUPPORTED_REASON,
+        )
     missing = plan.missing_names
     if not missing:
         return plan
@@ -116,6 +125,7 @@ def plan_module_conversions(
     db_alias = module_db_alias(module)
     catalog = TemplateNames(module)
     by_name = {interface.name: interface for interface in interfaces}
+    channelization_supported = supports_channelization()
     plans = []
     claimed = set()
     for base_name, source_base in flat_family_bases(rule, variables, interfaces, catalog):
@@ -128,7 +138,16 @@ def plan_module_conversions(
             continue
         claimed.add(rows[0].pk)
         parent_name, _channels = channelized_family_names(rule, base_name, variables)
-        plans.append(_conversion_plan(module, db_alias, parent_name, channel_names, rows))
+        plans.append(
+            _conversion_plan(
+                module,
+                db_alias,
+                parent_name,
+                channel_names,
+                rows,
+                channelization_supported,
+            )
+        )
     return tuple(plans)
 
 
@@ -271,6 +290,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
         "mtu": base.mtu,
         "mode": base.mode,
         "untagged_vlan_id": base.untagged_vlan_id,
+        "vrf_id": base.vrf_id,
     }
     tagged_vlans = list(base.tagged_vlans.all())
     tags = list(base.tags.all())
@@ -282,6 +302,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     base.mtu = None
     base.mode = ""
     base.untagged_vlan = None
+    base.vrf = None
     _validate_or_block(base, "parent")
     base.save(using=plan.db_alias)  # BaseInterface.save() drops the tagged VLANs of a row that no longer tags
     base.tags.clear()
@@ -384,7 +405,7 @@ def preview_rule_conversions(rule, modules, limit=None) -> ConversionPreview:
     its rules.  That dry run is what the scan costs, and a blocked family costs it too, so *limit*
     caps the families examined rather than the convertible ones among them.
     """
-    if not (conversion_offered(rule) and supports_channelization()):
+    if not conversion_offered(rule):
         return ConversionPreview(candidates=())
     return _preview(rule, modules, limit)  # pragma: no cover - requires channelization support
 
@@ -409,13 +430,6 @@ def convert_rule_families(rule, modules, selected_pks=None) -> BatchOutcome:
     converts none.  A family that cannot be converted is reported and passed over, so it is never
     half converted and never costs the rest of the batch.
     """
-    if not supports_channelization():
-        logger.warning(
-            "Rule '%s' converts flat families into the channelized topology, which this NetBox release "
-            "cannot model; nothing was converted.",
-            rule,
-        )
-        return BatchOutcome(families=())
     return _convert_families(rule, modules, selected_pks)  # pragma: no cover - see above
 
 

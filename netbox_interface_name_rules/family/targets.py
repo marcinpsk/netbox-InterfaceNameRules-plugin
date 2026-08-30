@@ -21,7 +21,7 @@ class FamilyTargets:
     """The names a rule intends for one channelized family, and why it may refuse."""
 
     parent_name: str
-    channels: tuple[tuple[str, str], ...]
+    channels: tuple[tuple[str | None, str], ...]
     status: FamilyStatus | None = None
     reason: str = ""
 

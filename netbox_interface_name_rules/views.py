@@ -464,6 +464,7 @@ class RuleApplyDetailView(generic.ObjectView):
                 "rule": rule,
                 "preview": preview,
                 "conversions": preview_conversions.candidates,
+                "conversions_available": any(candidate.convertible for candidate in preview_conversions.candidates),
                 "conversions_have_more": preview_conversions.has_more,
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,

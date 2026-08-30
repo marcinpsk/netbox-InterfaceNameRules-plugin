@@ -189,7 +189,7 @@ What the conversion does to the ch-0 row, per family:
 
 | Stays on the physical row (same interface ID) | Moves to the new channel 1 interface |
 |---|---|
-| cable, interface type, module link, `mark_connected` | IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
+| cable, interface type, module link, `mark_connected` | interface VRF, IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
 
 Custom field values are copied to the channel rather than moved, because they
 can describe either the port or the link. The remaining siblings are retyped in
@@ -207,7 +207,9 @@ and says so when more are waiting, and it refuses a confirmation naming more tha
 that many rather than converting part of it. **Convert as Background Job** runs
 every convertible family of the rule and is not capped.
 
-On NetBox 4.6 and older no family is offered and no conversion section is shown.
+On a NetBox release that cannot model channelized interfaces, each installed flat family is shown as
+unsupported without a conversion checkbox. A direct conversion request returns the same explicit
+unsupported family outcome and changes no row.
 
 ### Partial breakout repair
 

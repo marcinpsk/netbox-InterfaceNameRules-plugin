@@ -339,6 +339,15 @@ class ConversionCandidate:  # pragma: no cover - requires channelization support
         return not self.reason
 
     @property
+    def status_label(self) -> str:
+        """Return the operator-facing result of the conversion preview."""
+        if self.convertible:
+            return "Convertible"
+        if self.plan.precondition_status == FamilyStatus.UNSUPPORTED:
+            return "Unsupported"
+        return "Blocked"
+
+    @property
     def current_name(self) -> str:
         """Return the name of the ch-0 row the confirm form submits."""
         return self.plan.base.name
@@ -368,7 +377,7 @@ class ConversionCandidate:  # pragma: no cover - requires channelization support
     def metadata_note(self) -> str:
         """Return the sentence the Apply page shows about where the ch-0 configuration ends up."""
         return (
-            f"The addresses, VLANs, MTU, description and tags on {self.plan.base.name} move to the new "
+            f"The interface VRF, addresses, VLANs, MTU, description and tags on {self.plan.base.name} move to the new "
             f"channel 1 interface that takes over that name; custom field values are copied. The physical "
             f"row keeps its ID and becomes the parent {self.plan.parent_target_name}, so automation keyed "
             f"on that interface ID will address the parent afterwards."

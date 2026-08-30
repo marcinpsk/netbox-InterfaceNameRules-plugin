@@ -111,21 +111,30 @@ def _metric_row(name, label, before, after, before_unavailable, after_unavailabl
     return f"| `{name}` | {label} | {before_value} | {after_value} | {change} | {share} |"
 
 
+def _database_scenario(name, before_scenario, after_scenario):
+    """Return metric rows and an optional statement regression for one scenario."""
+    before_unavailable = "missing baseline" if before_scenario is None else "n/a"
+    after_unavailable = "missing" if after_scenario is None else "n/a"
+    rows = []
+    regression = None
+    for key, label in DATABASE_METRICS:
+        old = None if before_scenario is None else before_scenario["database"]["totals"].get(key)
+        new = None if after_scenario is None else after_scenario["database"]["totals"].get(key)
+        rows.append(_metric_row(name, label, old, new, before_unavailable, after_unavailable))
+        if key == "statement_calls" and old is not None and new is not None and new > old:
+            regression = (name, label, old, new)
+    return rows, regression
+
+
 def _database_table(before, after):
     """Return the per-scenario database-work comparison."""
     lines = ["| Scenario | Metric | Before | After | Change | Share |", "| --- | --- | ---: | ---: | ---: | ---: |"]
     regressions = []
     for name in _scenario_names(before, after):
-        before_scenario = before.get(name)
-        after_scenario = after.get(name)
-        before_unavailable = "missing baseline" if before_scenario is None else "n/a"
-        after_unavailable = "missing" if after_scenario is None else "n/a"
-        for key, label in DATABASE_METRICS:
-            old = None if before_scenario is None else before_scenario["database"]["totals"].get(key)
-            new = None if after_scenario is None else after_scenario["database"]["totals"].get(key)
-            lines.append(_metric_row(name, label, old, new, before_unavailable, after_unavailable))
-            if key == "statement_calls" and old is not None and new is not None and new > old:
-                regressions.append((name, label, old, new))
+        scenario_lines, regression = _database_scenario(name, before.get(name), after.get(name))
+        lines.extend(scenario_lines)
+        if regression is not None:
+            regressions.append(regression)
     return lines, regressions
 
 

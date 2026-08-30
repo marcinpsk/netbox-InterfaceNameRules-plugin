@@ -189,14 +189,14 @@ so the verdict carries NetBox's own reason for refusing it — a cabled sibling,
 name, a missing sibling — and a refused family is never half converted.
 
 Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
-link and `mark_connected`, and becomes the parent. Its IP addresses, FHRP group assignments,
+link and `mark_connected`, and becomes the parent. Its interface VRF, IP addresses, FHRP group assignments,
 untagged/tagged VLANs, 802.1Q mode, MTU, description and tags move to a newly created channel 1
 interface that takes over its name; custom field values are copied to it. The remaining siblings are
 retyped in place, keeping their own interface IDs. Automation keyed on the ch-0 interface ID
 addresses the parent afterwards, not the channel that carries its name.
 
-On NetBox 4.6 and older no family is offered and conversion reports that this release cannot model
-channels.
+On a NetBox release that cannot model channels, each flat family is shown as unsupported without a
+conversion action, and direct conversion reports the same explicit family outcome.
 
 A family installed by a rule that uses `{base}` carries the raw name it was named with, which on a
 module type using the `{vc_position}` template token may predate a chassis position change (see

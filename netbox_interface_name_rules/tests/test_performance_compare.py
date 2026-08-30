@@ -7,6 +7,7 @@ import importlib.util
 import tomllib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _COMPARE_PATH = _PROJECT_ROOT / "performance" / "compare.py"
@@ -52,13 +53,31 @@ _MACHINE_TIME = {"wall": {"median_ms": 2.0, "p95_ms": 3.0}, "process_cpu": {"med
 
 
 class PerformancePackageTest(unittest.TestCase):
-    """The shared performance contract ships with the plugin distribution."""
+    """The repository-only performance harness does not ship as a generic package."""
 
-    def test_package_discovery_includes_the_performance_tools(self):
+    def test_package_discovery_excludes_the_performance_tools(self):
         configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
         patterns = configuration["tool"]["setuptools"]["packages"]["find"]["include"]
 
-        self.assertTrue(any(fnmatch.fnmatchcase("performance", pattern) for pattern in patterns))
+        self.assertFalse(any(fnmatch.fnmatchcase("performance", pattern) for pattern in patterns))
+
+    def test_pytest_adds_the_repository_checkout_to_pythonpath(self):
+        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
+
+        self.assertIn(".", configuration["tool"]["pytest"]["ini_options"]["pythonpath"])
+
+
+class XdistWorkerCapTest(unittest.TestCase):
+    """The shared host gets a bounded number of automatic pytest workers."""
+
+    def test_auto_worker_count_is_capped_at_eight(self):
+        configuration_path = _PROJECT_ROOT / "conftest.py"
+        spec = importlib.util.spec_from_file_location("project_conftest", configuration_path)
+        configuration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(configuration)
+
+        with patch("xdist.plugin.pytest_xdist_auto_num_workers", return_value=32):
+            self.assertEqual(configuration.pytest_xdist_auto_num_workers(object()), 8)
 
 
 class ArtifactValidationTest(unittest.TestCase):
@@ -167,6 +186,18 @@ class DatabaseTableTest(unittest.TestCase):
             "| `module.direct_callback.plain_rename` | SQL calls | missing baseline | 31 | n/a | n/a |",
             rows,
         )
+
+    def test_a_statement_increase_is_reported_as_a_regression(self):
+        before_scenario = _timed_artifact(None)["scenarios"][0]
+        after_scenario = _timed_artifact(None)["scenarios"][0]
+        after_scenario["database"]["totals"]["statement_calls"] = 32
+
+        _rows, regressions = compare._database_table(
+            {before_scenario["name"]: before_scenario},
+            {after_scenario["name"]: after_scenario},
+        )
+
+        self.assertEqual(regressions, [(before_scenario["name"], "SQL calls", 31, 32)])
 
 
 class EnvironmentTableTest(unittest.TestCase):
