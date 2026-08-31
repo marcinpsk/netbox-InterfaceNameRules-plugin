@@ -104,6 +104,46 @@ def _matches_ambiguously(node, flags):
     return False
 
 
+def _operation_branches_ambiguously(opcode, argument, flags, children):
+    """Return whether one parsed operation contains an ambiguous branch."""
+    if opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], flags):
+        return True
+    return any(_branches_ambiguously(child, child_flags) for child, child_flags in children)
+
+
+def _branches_ambiguously(node, flags):
+    """Return True when *node* contains an ambiguous branch."""
+    for opcode, argument in node:
+        children = tuple(_child_subpatterns(opcode, argument, flags))
+        if _operation_branches_ambiguously(opcode, argument, flags, children):
+            return True
+    return False
+
+
+def _ambiguous_component_width(opcode, argument, flags, children):
+    """Return the number of adjacent ambiguous expressions in one operation."""
+    if opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], flags):
+        return 1
+    if opcode is _re_constants.SUBPATTERN:
+        child, child_flags = children[0]
+        return _grouped_ambiguous_width(child, child_flags) or int(_branches_ambiguously(child, child_flags))
+    return 0
+
+
+def _grouped_ambiguous_width(node, flags):
+    """Return an ambiguity width when a group contains only ambiguous expressions."""
+    width = 0
+    for opcode, argument in node:
+        if opcode in _ZERO_WIDTH_OPCODES:
+            continue
+        children = tuple(_child_subpatterns(opcode, argument, flags))
+        component_width = _ambiguous_component_width(opcode, argument, flags, children)
+        if not component_width:
+            return 0
+        width += component_width
+    return width
+
+
 def _has_ambiguous_sequence(node, flags):
     """Return True when adjacent ambiguous expressions exceed the safe bound."""
     run_length = 0
@@ -113,8 +153,9 @@ def _has_ambiguous_sequence(node, flags):
             return True
         if opcode in _ZERO_WIDTH_OPCODES:
             continue
-        if _operation_matches_ambiguously(opcode, argument, flags, children):
-            run_length += 1
+        component_width = _ambiguous_component_width(opcode, argument, flags, children)
+        if component_width:
+            run_length += component_width
             if run_length > _MAX_AMBIGUOUS_RUN:
                 return True
         else:
