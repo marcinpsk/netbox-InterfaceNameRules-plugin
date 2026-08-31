@@ -10,7 +10,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 # _blocking_reason() and the staleness check decide these before _rewrite() runs, so NetBox never sees them.
-_PREFLIGHT_REASONS = ("missing member", "stale family", "occupied parent name", "cabled sibling")
+_PREFLIGHT_REASONS = (
+    "missing member",
+    "stale family",
+    "occupied parent name",
+    "another channel family",
+    "cabled sibling",
+)
 
 
 def _conversion_sentences():
