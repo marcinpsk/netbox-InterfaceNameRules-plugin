@@ -15,14 +15,25 @@ _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_R
 _MAX_AMBIGUOUS_RUN = 4
 _ZERO_WIDTH_OPCODES = frozenset({_re_constants.ASSERT, _re_constants.ASSERT_NOT, _re_constants.AT})
 _SEQUENCE_BARRIER = object()
+_TRAILING_FAILURE = object()
+
+
+@dataclass(frozen=True)
+class _EndpointCharacters:
+    """Describe a finite character set or its finite complement."""
+
+    included: frozenset | None
+    excluded: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
 class _AmbiguousToken:
     """Store the character sets at one ambiguous expression's edges."""
 
-    leading: frozenset | None
-    trailing: frozenset | None
+    leading: _EndpointCharacters | None
+    trailing: _EndpointCharacters | None
+    can_match_empty: bool
+    same_string_choices: bool
 
 
 def _effective_flags(flags, add_flags, delete_flags):
@@ -52,46 +63,80 @@ def _child_subpatterns(opcode, argument, flags):
 def _operation_endpoint_literals(opcode, argument, flags, trailing):
     """Return one operation's possible endpoint literals and empty-match state."""
     if opcode in _ZERO_WIDTH_OPCODES:
-        return frozenset(), True
+        return _EndpointCharacters(frozenset()), True
     if opcode is _re_constants.LITERAL:
-        return frozenset({(argument, flags)}), False
+        return _EndpointCharacters(frozenset({(argument, flags)})), False
+    if opcode is _re_constants.NOT_LITERAL:
+        return _EndpointCharacters(None, frozenset({(argument, flags)})), False
     if opcode is _re_constants.IN:
         literals = frozenset((value, flags) for item_opcode, value in argument if item_opcode is _re_constants.LITERAL)
-        return (literals, False) if len(literals) == len(argument) else (None, False)
+        if len(literals) == len(argument):
+            return _EndpointCharacters(literals), False
+        if argument and argument[0][0] is _re_constants.NEGATE and len(literals) + 1 == len(argument):
+            return _EndpointCharacters(None, literals), False
+        return None, False
     if opcode is _re_constants.SUBPATTERN:
         _, add_flags, delete_flags, child = argument
         return _endpoint_literals(child, _effective_flags(flags, add_flags, delete_flags), trailing)
     if opcode is _re_constants.BRANCH:
-        literals = set()
+        endpoints = []
         can_match_empty = False
         for branch in argument[1]:
-            branch_literals, branch_empty = _endpoint_literals(branch, flags, trailing)
-            if branch_literals is None:
+            branch_endpoint, branch_empty = _endpoint_literals(branch, flags, trailing)
+            if branch_endpoint is None:
                 return None, False
-            literals.update(branch_literals)
+            endpoints.append(branch_endpoint)
             can_match_empty = can_match_empty or branch_empty
-        return frozenset(literals), can_match_empty
+        return _union_endpoints(endpoints), can_match_empty
     if opcode in _BACKTRACKING_REPEATS:
         minimum, maximum, child = argument
         if maximum == 0:
-            return frozenset(), True
-        literals, child_empty = _endpoint_literals(child, flags, trailing)
-        return literals, minimum == 0 or child_empty
+            return _EndpointCharacters(frozenset()), True
+        endpoint, child_empty = _endpoint_literals(child, flags, trailing)
+        return endpoint, minimum == 0 or child_empty
+    if opcode is _re_constants.ATOMIC_GROUP:
+        return _endpoint_literals(argument, flags, trailing)
     return None, False
+
+
+def _union_endpoints(endpoints):
+    """Return the union of endpoint character constraints when representable."""
+    if all(endpoint.included is not None for endpoint in endpoints):
+        return _EndpointCharacters(frozenset().union(*(endpoint.included for endpoint in endpoints)))
+    if all(endpoint.included is None for endpoint in endpoints):
+        excluded = set(endpoints[0].excluded)
+        for endpoint in endpoints[1:]:
+            excluded.intersection_update(endpoint.excluded)
+        return _EndpointCharacters(None, frozenset(excluded))
+    return None
 
 
 def _endpoint_literals(node, flags, trailing=False):
     """Return known literals at one end of a parsed sequence."""
-    literals = set()
+    endpoints = []
     operations = reversed(node) if trailing else iter(node)
     for opcode, argument in operations:
-        operation_literals, can_match_empty = _operation_endpoint_literals(opcode, argument, flags, trailing)
-        if operation_literals is None:
+        endpoint, can_match_empty = _operation_endpoint_literals(opcode, argument, flags, trailing)
+        if endpoint is None:
             return None, False
-        literals.update(operation_literals)
+        endpoints.append(endpoint)
         if not can_match_empty:
-            return frozenset(literals), False
-    return frozenset(literals), True
+            return _union_endpoints(endpoints), False
+    return _union_endpoints(endpoints), True
+
+
+def _annotated_endpoint_literals(operations, trailing=False):
+    """Return endpoint literals for operations carrying their effective flags."""
+    endpoints = []
+    ordered = reversed(operations) if trailing else iter(operations)
+    for opcode, argument, flags in ordered:
+        endpoint, can_match_empty = _operation_endpoint_literals(opcode, argument, flags, trailing)
+        if endpoint is None:
+            return None, False
+        endpoints.append(endpoint)
+        if not can_match_empty:
+            return _union_endpoints(endpoints), False
+    return _union_endpoints(endpoints), True
 
 
 def _leading_literals(node, flags):
@@ -119,14 +164,97 @@ def _literal_sets_overlap(left, right):
     )
 
 
+def _literal_languages_equal(left, right):
+    """Return whether two literal nodes accept the same characters."""
+    left_literal, left_flags = left
+    right_literal, right_flags = right
+    return (
+        left_flags == right_flags
+        and _literal_matches(left_literal, left_flags, right_literal)
+        and _literal_matches(right_literal, right_flags, left_literal)
+    )
+
+
+def _endpoint_accepts_literal(endpoint, literal):
+    """Return whether an endpoint can accept a literal node's full language."""
+    if endpoint.included is not None:
+        return _literal_sets_overlap(endpoint.included, frozenset({literal}))
+    return not any(_literal_languages_equal(literal, excluded) for excluded in endpoint.excluded)
+
+
+def _endpoint_sets_overlap(left, right):
+    """Return whether two endpoint character constraints can overlap."""
+    if left is None or right is None:
+        return True
+    if left.included is not None:
+        return any(_endpoint_accepts_literal(right, literal) for literal in left.included)
+    if right.included is not None:
+        return any(_endpoint_accepts_literal(left, literal) for literal in right.included)
+    return True
+
+
 def _branch_matches_ambiguously(branches, flags):
     """Return True unless every alternative starts with a distinct literal."""
     seen = []
     for branch in branches:
-        literals, empty = _leading_literals(branch, flags)
-        if literals is None or empty or any(_literal_sets_overlap(literals, previous) for previous in seen):
+        endpoint, empty = _leading_literals(branch, flags)
+        if endpoint is None or empty or any(_endpoint_sets_overlap(endpoint, previous) for previous in seen):
             return True
-        seen.append(literals)
+        seen.append(endpoint)
+    return False
+
+
+def _literal_sequence(node, flags):
+    """Return fixed-width character constraints for one simple sequence."""
+    sequence = []
+    for opcode, argument in node:
+        if opcode is _re_constants.LITERAL or opcode is _re_constants.NOT_LITERAL or opcode is _re_constants.IN:
+            endpoint, _ = _operation_endpoint_literals(opcode, argument, flags, False)
+            if endpoint is None:
+                return None
+            sequence.append(endpoint)
+            continue
+        if opcode is _re_constants.SUBPATTERN:
+            _, add_flags, delete_flags, child = argument
+            child_sequence = _literal_sequence(child, _effective_flags(flags, add_flags, delete_flags))
+        elif opcode in _BACKTRACKING_REPEATS and argument[0] == argument[1] <= _MAX_AMBIGUOUS_RUN + 1:
+            child_sequence = _literal_sequence(argument[2], flags)
+            child_sequence = None if child_sequence is None else child_sequence * argument[0]
+        else:
+            return None
+        if child_sequence is None:
+            return None
+        sequence.extend(child_sequence)
+    return sequence
+
+
+def _branch_matches_same_string(branches, flags):
+    """Return whether two alternatives can consume the same string."""
+    sequences = []
+    for branch in branches:
+        sequence = _literal_sequence(branch, flags)
+        if sequence is None:
+            return True
+        if any(
+            len(sequence) == len(previous)
+            and all(_endpoint_sets_overlap(left, right) for left, right in zip(sequence, previous, strict=True))
+            for previous in sequences
+        ):
+            return True
+        sequences.append(sequence)
+    return False
+
+
+def _matches_same_string_ambiguously(node, flags):
+    """Return whether one sequence has distinct paths for the same string."""
+    for opcode, argument in node:
+        if opcode is _re_constants.BRANCH and _branch_matches_same_string(argument[1], flags):
+            return True
+        if any(
+            _matches_same_string_ambiguously(child, child_flags)
+            for child, child_flags in _child_subpatterns(opcode, argument, flags)
+        ):
+            return True
     return False
 
 
@@ -148,6 +276,29 @@ def _matches_ambiguously(node, flags):
     return False
 
 
+def _flatten_operations(node, flags):
+    """Yield syntax-neutral operations with their effective flags."""
+    for opcode, argument in node:
+        if opcode is _re_constants.SUBPATTERN:
+            _, add_flags, delete_flags, child = argument
+            yield from _flatten_operations(child, _effective_flags(flags, add_flags, delete_flags))
+        elif opcode in _BACKTRACKING_REPEATS and argument[0] == argument[1]:
+            for _ in range(min(argument[0], _MAX_AMBIGUOUS_RUN + 1)):
+                yield from _flatten_operations(argument[2], flags)
+        else:
+            yield opcode, argument, flags
+
+
+def _transparent_operations(node, flags):
+    """Yield operations after removing capture-only syntax."""
+    for opcode, argument in node:
+        if opcode is _re_constants.SUBPATTERN:
+            _, add_flags, delete_flags, child = argument
+            yield from _transparent_operations(child, _effective_flags(flags, add_flags, delete_flags))
+        else:
+            yield opcode, argument, flags
+
+
 def _append_sequence_barrier(tokens, pending):
     """Append one barrier for pending consuming operations."""
     if pending:
@@ -159,80 +310,99 @@ def _sequence_tokens(node, flags):
     """Flatten transparent groups and fixed repeats into ambiguity tokens."""
     tokens = []
     pending = []
-    for opcode, argument in node:
+    for opcode, argument, operation_flags in _flatten_operations(node, flags):
         if opcode in _ZERO_WIDTH_OPCODES:
+            if tokens:
+                tokens.append(_TRAILING_FAILURE)
             continue
-        if opcode is _re_constants.SUBPATTERN:
-            _, add_flags, delete_flags, child = argument
-            child_tokens = _sequence_tokens(child, _effective_flags(flags, add_flags, delete_flags))
-            if child.getwidth() == (0, 0):
-                continue
-            _append_sequence_barrier(tokens, pending)
-            tokens.extend(child_tokens)
-            continue
-        if opcode in _BACKTRACKING_REPEATS and argument[0] == argument[1]:
-            child_tokens = _sequence_tokens(argument[2], flags)
-            if not child_tokens:
-                continue
-            _append_sequence_barrier(tokens, pending)
-            tokens.extend(child_tokens * min(argument[0], _MAX_AMBIGUOUS_RUN + 1))
-            continue
-        if opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], flags):
-            segment = [*pending, (opcode, argument)]
-            leading, _ = _leading_literals(segment, flags)
-            trailing, _ = _trailing_literals(segment, flags)
-            tokens.append(_AmbiguousToken(leading, trailing))
+        ambiguous_branch = opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], operation_flags)
+        variable_repeat = opcode in _BACKTRACKING_REPEATS and argument[0] != argument[1]
+        if ambiguous_branch or variable_repeat:
+            segment = [*pending, (opcode, argument, operation_flags)]
+            leading, leading_empty = _annotated_endpoint_literals(segment)
+            trailing, trailing_empty = _annotated_endpoint_literals(segment, trailing=True)
+            same_string_choices = (
+                _branch_matches_same_string(argument[1], operation_flags)
+                if ambiguous_branch
+                else _matches_same_string_ambiguously(argument[2], operation_flags)
+            )
+            tokens.append(_AmbiguousToken(leading, trailing, leading_empty and trailing_empty, same_string_choices))
             pending.clear()
             continue
-        pending.append((opcode, argument))
+        pending.append((opcode, argument, operation_flags))
     _append_sequence_barrier(tokens, pending)
     return tokens
 
 
 def _boundaries_overlap(left, right):
     """Return whether two ambiguity tokens can share a character boundary."""
-    return not left or not right or _literal_sets_overlap(left, right)
+    return left.can_match_empty or right.can_match_empty or _endpoint_sets_overlap(left.trailing, right.leading)
 
 
-def _tokens_backtrack_exponentially(tokens):
+def _tokens_backtrack_exponentially(tokens, require_trailing_failure=False):
     """Return True when ambiguity tokens form an excessive overlapping run."""
     run_length = 0
-    previous_trailing = None
+    same_string_choices = 0
+    previous = None
+    unsafe_run = False
     for token in tokens:
-        if token is _SEQUENCE_BARRIER:
-            run_length = 0
-            previous_trailing = None
+        if token is _TRAILING_FAILURE:
+            if unsafe_run:
+                return True
             continue
-        run_length = run_length + 1 if run_length and _boundaries_overlap(previous_trailing, token.leading) else 1
-        if run_length > _MAX_AMBIGUOUS_RUN:
-            return True
-        previous_trailing = token.trailing
+        if token is _SEQUENCE_BARRIER:
+            if unsafe_run:
+                return True
+            run_length = 0
+            same_string_choices = 0
+            previous = None
+            continue
+        run_length = run_length + 1 if previous is not None and _boundaries_overlap(previous, token) else 1
+        same_string_choices += int(token.same_string_choices)
+        if run_length > _MAX_AMBIGUOUS_RUN or same_string_choices > _MAX_AMBIGUOUS_RUN:
+            if not require_trailing_failure:
+                return True
+            unsafe_run = True
+        previous = token
     return False
 
 
-def _has_ambiguous_sequence(node, flags):
+def _has_ambiguous_sequence(node, flags, require_trailing_failure=False):
     """Return True when adjacent ambiguous expressions exceed the safe bound."""
     for opcode, argument in node:
+        if opcode is _re_constants.ATOMIC_GROUP:
+            if _has_ambiguous_sequence(argument, flags, require_trailing_failure=True):
+                return True
+            continue
         if any(
             _has_ambiguous_sequence(child, child_flags)
             for child, child_flags in _child_subpatterns(opcode, argument, flags)
         ):
             return True
-    return _tokens_backtrack_exponentially(_sequence_tokens(node, flags))
+    return _tokens_backtrack_exponentially(
+        _sequence_tokens(node, flags), require_trailing_failure=require_trailing_failure
+    )
 
 
-def _repeats_ambiguously(node, flags):
+def _repeats_ambiguously(node, flags, require_trailing_failure=False):
     """Return True when *node* repeats an ambiguous body enough to backtrack excessively."""
-    for opcode, argument in node:
+    operations = tuple(_transparent_operations(node, flags))
+    for index, (opcode, argument, operation_flags) in enumerate(operations):
+        has_local_failure = not require_trailing_failure or index < len(operations) - 1
         if (
             opcode in _BACKTRACKING_REPEATS
             and argument[1] > _MAX_AMBIGUOUS_RUN
-            and _matches_ambiguously(argument[2], flags)
+            and _matches_ambiguously(argument[2], operation_flags)
+            and has_local_failure
         ):
             return True
+        if opcode is _re_constants.ATOMIC_GROUP:
+            if _repeats_ambiguously(argument, operation_flags, require_trailing_failure=True):
+                return True
+            continue
         if any(
             _repeats_ambiguously(child, child_flags)
-            for child, child_flags in _child_subpatterns(opcode, argument, flags)
+            for child, child_flags in _child_subpatterns(opcode, argument, operation_flags)
         ):
             return True
     return False
