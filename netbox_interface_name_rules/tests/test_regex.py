@@ -404,6 +404,7 @@ class RegexEngineMigrationTest(TestCase):
                 r"\bMóduló\b",
                 r"(?i)i",
                 r"[[:alpha:]]+",
+                r"[[:^alpha:]]+",
                 r"a{,3}",
                 r"a{01}",
                 r"a{1,03}",

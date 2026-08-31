@@ -62,8 +62,10 @@ def _uses_different_re2_semantics(pattern):
         if in_character_class:
             if pattern.startswith("[:", index):
                 class_end = pattern.find(":]", index + 2)
-                if class_end >= 0 and pattern[index + 2 : class_end] in _POSIX_CLASSES:
-                    return True
+                if class_end >= 0:
+                    class_name = pattern[index + 2 : class_end].removeprefix("^")
+                    if class_name in _POSIX_CLASSES:
+                        return True
             if character == "]" and character_class_has_content:
                 in_character_class = False
             elif character != "^" or character_class_has_content:
