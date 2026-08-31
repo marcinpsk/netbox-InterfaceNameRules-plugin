@@ -26,10 +26,12 @@ plugin starts executing stored patterns with RE2. It stops when RE2 cannot
 compile a pattern or when a Python shorthand can change its Unicode behavior.
 The latter check includes `\d`, `\s`, `\w`, word boundaries, case-insensitive
 matching, and POSIX character classes. The migration lists the affected
-Interface Name Rule IDs and does not modify any rule. Rewrite those patterns
-with explicit [RE2 syntax](https://github.com/google/re2/wiki/syntax), then run
-the migration again. For example, use `[0-9]` for ASCII digits or `\p{L}` for
-Unicode letters.
+Interface Name Rule IDs and does not modify any rule. It also stops on Python
+counted repeats that RE2 would treat as literal text, such as `{,3}` or `{01}`.
+Rewrite those patterns with explicit
+[RE2 syntax](https://github.com/google/re2/wiki/syntax), then run the migration
+again. For example, use `[0-9]` for ASCII digits, `\p{L}` for Unicode letters,
+and `{0,3}` for a repeat with an omitted Python lower bound.
 
 ```bash
 cd /opt/netbox/netbox

@@ -387,7 +387,7 @@ class RegexEngineMigrationTest(TestCase):
             Rule.objects.filter(pk=rule.pk).delete()
             self._migrate(latest)
 
-    def test_upgrade_refuses_a_stored_pattern_with_different_unicode_semantics(self):
+    def test_upgrade_refuses_a_stored_pattern_with_different_re2_semantics(self):
         latest = self._latest_migration()
         old_state = self._migrate(self.BEFORE)
         Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
@@ -397,7 +397,17 @@ class RegexEngineMigrationTest(TestCase):
                 module_type_pattern=pattern,
                 name_template="Gi{vc_position}/{port}",
             )
-            for pattern in (r"\w+", r"\d+", r"\s+", r"\bMóduló\b", r"(?i)i", r"[[:alpha:]]+")
+            for pattern in (
+                r"\w+",
+                r"\d+",
+                r"\s+",
+                r"\bMóduló\b",
+                r"(?i)i",
+                r"[[:alpha:]]+",
+                r"a{,3}",
+                r"a{01}",
+                r"a{1,03}",
+            )
         ]
         connection.check_constraints()
 
@@ -405,28 +415,34 @@ class RegexEngineMigrationTest(TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 self._migrate(latest)
             for rule in rules:
-                self.assertIn(str(rule.pk), str(ctx.exception))
+                self.assertRegex(str(ctx.exception), rf"\b{rule.pk}\b")
         finally:
             Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
             self._migrate(latest)
 
-    def test_upgrade_preserves_an_escaped_unicode_shorthand(self):
+    def test_upgrade_preserves_unambiguous_shared_syntax(self):
         latest = self._latest_migration()
         old_state = self._migrate(self.BEFORE)
         Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
-        rule = Rule.objects.create(
-            applies_to_device_interfaces=True,
-            module_type_pattern=r"\\w+",
-            name_template="Gi{vc_position}/{port}",
-        )
+        patterns = (r"\\w+", r"a{1,3}")
+        rules = [
+            Rule.objects.create(
+                applies_to_device_interfaces=True,
+                module_type_pattern=pattern,
+                name_template="Gi{vc_position}/{port}",
+            )
+            for pattern in patterns
+        ]
         connection.check_constraints()
 
         try:
             new_state = self._migrate(latest)
-            migrated_rule = new_state.apps.get_model(self.APP, "InterfaceNameRule").objects.get(pk=rule.pk)
-            self.assertEqual(migrated_rule.module_type_pattern, r"\\w+")
+            migrated_patterns = new_state.apps.get_model(self.APP, "InterfaceNameRule").objects.filter(
+                pk__in=[rule.pk for rule in rules]
+            )
+            self.assertEqual(set(migrated_patterns.values_list("module_type_pattern", flat=True)), set(patterns))
         finally:
-            Rule.objects.filter(pk=rule.pk).delete()
+            Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
             self._migrate(latest)
 
     def test_upgrade_preserves_a_backtracking_pattern_that_re2_can_execute(self):
