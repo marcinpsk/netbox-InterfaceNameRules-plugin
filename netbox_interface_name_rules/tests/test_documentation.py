@@ -15,5 +15,5 @@ class ConversionDocumentationTest(unittest.TestCase):
         guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text()
         section = guide.split("### Converting an installed flat family", 1)[1].split("### Converter Offset", 1)[0]
 
-        self.assertIn("missing members are rejected locally before a conversion transaction starts", section.lower())
+        self.assertIn("rejects missing members locally before a conversion transaction starts", section.lower())
         self.assertNotIn("a missing sibling", section)

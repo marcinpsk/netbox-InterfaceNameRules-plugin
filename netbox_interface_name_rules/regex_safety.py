@@ -14,6 +14,11 @@ _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_R
 _MAX_AMBIGUOUS_REPEAT = 4
 
 
+def _effective_flags(flags, add_flags, delete_flags):
+    """Return the flags effective inside a scoped sub-pattern."""
+    return (flags | add_flags) & ~delete_flags
+
+
 def _parsed_subpatterns(argument):
     """Yield every sub-pattern nested anywhere inside a parsed node's argument."""
     if isinstance(argument, _re_parser.SubPattern):
@@ -27,7 +32,7 @@ def _child_subpatterns(opcode, argument, flags):
     """Yield child sub-patterns with the flags effective inside each child."""
     if opcode is _re_constants.SUBPATTERN:
         _, add_flags, delete_flags, child = argument
-        yield child, (flags | add_flags) & ~delete_flags
+        yield child, _effective_flags(flags, add_flags, delete_flags)
         return
     for child in _parsed_subpatterns(argument):
         yield child, flags
@@ -49,7 +54,7 @@ def _leading_literals(node, flags):
             return literals, False
         if opcode is _re_constants.SUBPATTERN:
             _, add_flags, delete_flags, child = argument
-            return _leading_literals(child, (flags | add_flags) & ~delete_flags)
+            return _leading_literals(child, _effective_flags(flags, add_flags, delete_flags))
         return None, False
     return frozenset(), True
 

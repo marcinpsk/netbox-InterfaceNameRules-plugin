@@ -201,7 +201,7 @@ class RegexFindMatchingRuleTest(TestCase):
         self.assertIsNone(find_matching_rule(self.sfp_10g, None, None))
 
     def test_unsafe_pattern_written_without_validation_is_not_evaluated(self):
-        """A legacy unsafe row is skipped in favor of the next matching rule."""
+        """Rule selection skips a legacy unsafe row and returns the next match."""
         fallback = InterfaceNameRule.objects.create(
             module_type_is_regex=True,
             module_type_pattern=r"(?i)^abab$",
