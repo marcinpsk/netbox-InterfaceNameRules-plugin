@@ -387,6 +387,48 @@ class RegexEngineMigrationTest(TestCase):
             Rule.objects.filter(pk=rule.pk).delete()
             self._migrate(latest)
 
+    def test_upgrade_refuses_a_stored_pattern_with_different_unicode_semantics(self):
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rules = [
+            Rule.objects.create(
+                applies_to_device_interfaces=True,
+                module_type_pattern=pattern,
+                name_template="Gi{vc_position}/{port}",
+            )
+            for pattern in (r"\w+", r"\d+", r"\s+", r"\bMóduló\b", r"(?i)i", r"[[:alpha:]]+")
+        ]
+        connection.check_constraints()
+
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                self._migrate(latest)
+            for rule in rules:
+                self.assertIn(str(rule.pk), str(ctx.exception))
+        finally:
+            Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
+            self._migrate(latest)
+
+    def test_upgrade_preserves_an_escaped_unicode_shorthand(self):
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rule = Rule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern=r"\\w+",
+            name_template="Gi{vc_position}/{port}",
+        )
+        connection.check_constraints()
+
+        try:
+            new_state = self._migrate(latest)
+            migrated_rule = new_state.apps.get_model(self.APP, "InterfaceNameRule").objects.get(pk=rule.pk)
+            self.assertEqual(migrated_rule.module_type_pattern, r"\\w+")
+        finally:
+            Rule.objects.filter(pk=rule.pk).delete()
+            self._migrate(latest)
+
     def test_upgrade_preserves_a_backtracking_pattern_that_re2_can_execute(self):
         latest = self._latest_migration()
         old_state = self._migrate(self.BEFORE)
