@@ -184,10 +184,13 @@ a `parent_name_template` set instead offers each such family for conversion on *
 Preview & Apply**, where the operator confirms it per family; a blank parent template offers
 nothing, because a flat family's ch-0 interface is the base and has nowhere else to go.
 
-The plugin rejects missing members locally before a conversion transaction starts. For every other
-family, the plugin performs the conversion inside a transaction and rolls it back. The verdict then
-carries NetBox's own reason for refusing it, such as a cabled sibling or an occupied parent name.
-The plugin never half converts a refused family.
+The plugin rejects missing members locally before a conversion transaction starts. Its local
+preflight also refuses a stale family, an occupied parent name, a sibling that already belongs to
+another channel family, and a cabled sibling. Each of those verdicts is the plugin's own, and no
+row is written. Only a family that passes preflight reaches NetBox's own rules. The plugin runs
+that rewrite inside a transaction and rolls it back when NetBox refuses a row or a name collides,
+so the verdict then carries NetBox's own reason. A preview rolls back a successful rewrite the same
+way. The plugin never half converts a refused family.
 
 Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
 link and `mark_connected`, and becomes the parent. Its interface VRF, IP addresses, FHRP group assignments,

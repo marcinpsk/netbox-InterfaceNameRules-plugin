@@ -88,12 +88,14 @@ Count the statements, but read the work. The direct-callback database and proces
 
 No shared-buffer reads were observed in any direct-callback scenario.
 
-The two extra statements are one `SAVEPOINT` and `RELEASE` pair, from the transaction the executor
-opens per family, plus one `dcim_interface` read: the `... WHERE id IN (...) FOR UPDATE` that locks
-and revalidates the planned rows. They replace a single read that joined `dcim_device` and ordered
-by a collated name, which is why the two newer reads together cost less planner work than the one
-they replaced. The plugin buys stale-plan revalidation and per-family rollback for two round trips
-and 108 bytes of WAL on a rename.
+The net change of two statements has four parts: `SAVEPOINT` (+1), `RELEASE` (+1),
+`dcim_interface` (+1) and `dcim_moduletype` (-1), which sum to +2. The savepoint pair comes from the
+transaction the executor opens per family. On `dcim_interface`, two new reads replace one: a read of
+the module's interfaces ordered by interface ID, and the `... WHERE id IN (...) FOR UPDATE` read
+that locks and revalidates the planned rows. The read they replace joined `dcim_device` and ordered
+by a collated name, which is why the two together cost less planner work than the one. The module
+type is now read once instead of twice. The plugin buys stale-plan revalidation and per-family
+rollback for two round trips and 108 bytes of WAL on a rename.
 
 That revalidation is the part to keep. This callback runs after commit, so another actor, including
 another plugin, can rename an interface between the moment a family is planned and the moment it is
