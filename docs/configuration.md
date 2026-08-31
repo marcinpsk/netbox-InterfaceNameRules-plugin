@@ -9,7 +9,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off) |
-| Module Type Pattern | Conditional | Regex pattern matched against module type model name via `re.fullmatch()` (required when Regex Mode is on) |
+| Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name (required when Regex Mode is on) |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter) |
 | Device Type | No | Restrict to devices of this type |
@@ -28,7 +28,17 @@ When multiple rules could match, the most specific one wins. Exact FK matches al
 4. Module type only (universal)
 
 **Tier 2 — Regex pattern match (fallback, longest pattern first):**
-5–8. Same four specificity levels, but `module_type_pattern` is matched via `re.fullmatch()` against the installed module type's model name. When multiple patterns match at the same level, the longest pattern is preferred.
+5–8. Same four specificity levels, but `module_type_pattern` is matched against the complete installed module type model name. When multiple patterns match at the same level, the longest pattern is preferred.
+
+### RE2 Pattern Syntax
+
+The plugin compiles and executes every stored rule pattern with
+[RE2](https://github.com/google/re2/wiki/syntax). RE2 guarantees bounded memory
+use and linear matching time. It does not support Python-only features that
+require backtracking, including lookaround, backreferences, and atomic groups.
+Use `\z` instead of Python's `\Z` end-of-text escape. The `\d`, `\s`, and `\w`
+classes match ASCII characters. Use an RE2 Unicode property such as `\p{L}` when
+the rule must match Unicode letters.
 
 ## NetBox Module Interface Templates
 

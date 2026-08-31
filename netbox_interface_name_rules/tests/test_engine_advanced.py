@@ -718,7 +718,7 @@ class EngineEvaluateTemplateUnsafeASTTest(TestCase):
 
 
 class EngineFindRegexMatchErrorTest(TestCase):
-    """Test that _find_regex_match silently skips rules with invalid regex patterns."""
+    """Test that rule selection silently skips stored patterns RE2 cannot compile."""
 
     @classmethod
     def setUpTestData(cls):
@@ -738,12 +738,11 @@ class EngineFindRegexMatchErrorTest(TestCase):
         cls.bad_regex_rule.save()
 
     def test_invalid_regex_pattern_is_skipped_not_raised(self):
-        """_find_regex_match silently skips rules whose module_type_pattern is not valid regex.
+        """_find_regex_match silently skips rules whose module_type_pattern is not valid RE2.
 
         The bad-pattern rule is inserted directly via save() to bypass clean()
-        validation. _find_regex_match wraps re.fullmatch in a try/except re.error
-        so an invalid pattern just moves on to the next candidate instead of
-        propagating the exception to the caller (lines 355-356).
+        validation. Rule loading compiles through the RE2 seam, so an invalid
+        pattern moves on to the next candidate instead of propagating.
         """
         from netbox_interface_name_rules.rule_selection import _find_regex_match
 
@@ -773,7 +772,7 @@ class EngineHasApplicableExceptionTest(TestCase):
         A rule with an invalid ``module_type_pattern`` (inserted via save() to
         bypass clean() validation) makes ``_matching_moduletype_pks`` raise a
         real ValueError inside ``find_interfaces_for_rule``; has_applicable_interfaces
-        catches (ValueError, re.error) and returns False — no mock required.
+        catches ValueError and returns False. No mock is required.
         """
         from netbox_interface_name_rules.engine import has_applicable_interfaces
 

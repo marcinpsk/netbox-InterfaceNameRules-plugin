@@ -115,7 +115,7 @@ class InterfaceNameRule(NetBoxModel):
 
     Module type matching supports two modes:
       - Exact: FK reference to a specific ModuleType (default)
-      - Regex: Pattern matched against ModuleType.model via re.fullmatch()
+      - Regex: RE2 pattern matched against the complete ModuleType.model value
 
     Scoping fields (all optional):
       - parent_module_type: match only when installed inside this module type
@@ -137,8 +137,7 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         default="",
         verbose_name="Module Type Pattern",
-        help_text="Regex pattern to match module type model name (e.g. 'QSFP-DD-400G-.*'). "
-        "Uses Python re.fullmatch() — pattern must match the entire model name.",
+        help_text="RE2 pattern to match the complete module type model name (e.g. 'QSFP-DD-400G-.*').",
     )
     module_type_is_regex = models.BooleanField(
         default=False,

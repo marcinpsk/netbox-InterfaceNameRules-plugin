@@ -46,7 +46,7 @@ def pinned_rule_cache():
 
 
 def _compile_pattern(pattern):
-    """Compile a safe pattern once, or return None when it is invalid or unsafe."""
+    """Compile a stored pattern once, or return None when RE2 rejects it."""
     try:
         return compile_module_type_pattern(pattern)
     except ValidationError:

@@ -15,106 +15,39 @@ from dcim.models import (
     Site,
 )
 from django.core.exceptions import ValidationError
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase
 
-from netbox_interface_name_rules.engine import apply_interface_name_rules, find_matching_rule
+from netbox_interface_name_rules.engine import apply_interface_name_rules, find_matching_rule, has_applicable_interfaces
 from netbox_interface_name_rules.models import InterfaceNameRule
 
-# Realistic module-model patterns an operator writes; none of these may be refused.
-_SAFE_PATTERNS = (
+_SUPPORTED_PATTERNS = (
     "QSFP-.*",
     "QSFP28-(100G|40G)",
     r"^ge-\d+/\d+/\d+$",
     r"[A-Z]+-\d+",
-    "(abc)+",
-    "(a)+?",
     r"Ethernet\d+",
     "^(10|25|100)G$",
-    "(ab){2,4}",
-    "^(a|aa)(a|aa)(a|aa)(a|aa)$",
-    "^" + "(|)" * 4 + "x$",
-    "^a+b+c+d+e+$",
-    "^" + "((a|aa)x)" * 5 + "$",
-    "^" + "(?:xa|xaa)" * 5 + "$",
-    "^" + "[^a](a|aa)" * 5 + "$",
-    "^" + "[^a](?:a|aa)" * 5 + "$",
-    "^" + "(?i:[^a])(?-i:a|aa)" * 5 + "Z$",
-    "^" + "(?i:[^a])(?:A|AA)" * 5 + "$",
-    "^" + r"\d(?:a|aa)" * 5 + "$",
-    "^" + r"\D(?:\d|\d\d)" * 5 + "$",
-    "^" + r"\D(?a:\d|\d\d)" * 5 + "$",
-    "^" + r"[^\d](?i:\d|\d\d)" * 5 + "$",
-    "^" + r"[^\d](?a:\d|\d\d)" * 5 + "$",
-    "^" + r"\W(?:\w|\w\w)" * 5 + "$",
-    "^" + r"\S(?:\s|\s\s)" * 5 + "$",
-    "^" + r"\s(?:\w|\w\w)" * 5 + "$",
-    "^" + r"\W(?:\d|\d\d)" * 5 + "$",
-    "^" + r"\W(?a:\d|\d\d)" * 5 + "$",
-    "^" + r"[^\S](?:\w|\w\w)" * 5 + "$",
-    "^" + r"[^\W](?:\s|\s\s)" * 5 + "$",
-    "^" + r"[^\w](?:\d|\d\d)" * 5 + "$",
-    "^" + "a?x" * 5 + "$",
-    "^" + "(?>x)(a|aa)" * 5 + "$",
-    "^" + "(?:a[^a]|aa[^b])" * 2 + "a$",
-    "^" + "[^a](|)" * 2 + "x$",
-    "^(?>(a|aa)+)Z$",
-    "^(?>(a|aa){4,})Z$",
-    "^(?:a{0}|b)x$",
-    "^(?:[ab]x|[bc]y)$",
-    "^(?:[^ab]x|[^bc]y)$",
-    "^(?:a|[^bc])x$",
-    "^([a-z]x|ay)$",
-    r"\d{1,3}(\.\d{1,3}){3}",
     "(?:QSFP|SFP)+",
-    r"(?i)^(?-i:ab|AB)+$",
-)
-
-# Patterns whose evaluation backtracks exponentially; all must be refused.
-_EXPONENTIAL_PATTERNS = (
+    r"(?i)^qsfp-.*$",
     "^(a+)+$",
-    "(a*)*",
-    "^(a|a)+$",
-    r"(\d+)+",
-    "(a+)+?",
     "(?:a|aa)+",
-    r"^(\w+\s?)*$",
-    "((a+)+){2}",
-    "(a{0,30}){0,30}",
-    r"(?i)^(ab|AB)+$",
-    r"^(?:(?i:ab)|AB)+$",
     "^" + "(a|aa)" * 40 + "$",
-    "^" + "(|)" * 5 + "x$",
-    "^" + ("(" + "(a|aa)" * 4 + ")") * 4 + "$",
-    "^" + "(a|aa)()" * 40 + "$",
-    "^" + "(?:(a|aa)){1}" * 40 + "$",
-    "^" + "(?:a|aa)" * 40 + "$",
-    "^" + "a(a|aa)" * 5 + "Z$",
-    "^" + "(a|aa)a" * 5 + "Z$",
-    "^" + "(?:(a|aa)){1,2}" * 5 + "Z$",
-    "^" + "a?" * 5 + "a" * 5 + "$",
-    "^" + "(?i:(ab|AB))" * 5 + "Z$",
-    "^" + "(?i:((ab){1}|(AB)))" * 5 + "Z$",
-    "^" + "(?i:(ab|AB)){1,2}" * 5 + "Z$",
-    "^" + "(?-i:[^a])(?i:a|aa)" * 5 + "Z$",
-    "^" + r"(?a:\D)(?:\d|\d\d)" * 5 + "$",
-    "^" + r"(?a:[^\d])(?:\d|\d\d)" * 5 + "$",
-    "^" + r"(?a:\D)(?:a|aa)" * 5 + "Z$",
-    "^" + r"(?a:\W)(?:\d|\d\d)" * 5 + "$",
-    "^(?>(a|aa){40})Z$",
-    "^(?>(a|aa){40,})Z$",
-    "^(?>(a|aa){40}Z)$",
-    "^(?>((a|aa){40}Z))$",
-    "^(?>((a|aa){40}))Z$",
-    "^(?>(?i:((ab|AB)){40}))Z$",
-    "^(?>" + "(?:a|aa)" * 5 + ")Z$",
-    "^(?>" + "(a|aa)" * 5 + "$)",
-    "^(?>" + "(a|aa)" * 5 + "Z)",
-    "^(" + "(a|aa)" * 5 + ")Z$",
+)
+
+_PYTHON_ONLY_PATTERNS = (
+    r"(?=QSFP)QSFP",
+    r"(?<=QSFP-)100G",
+    r"(QSFP)\1",
+    r"(?>QSFP)",
+    r"(?a:QSFP)",
+    r"QSFP\Z",
 )
 
 
-class RegexPatternSafetyTest(TestCase):
-    """Refuse a module-type pattern whose evaluation can backtrack exponentially."""
+class RegexPatternEngineTest(TestCase):
+    """Compile and execute stored patterns with RE2's bounded engine."""
 
     def _rule(self, pattern):
         return InterfaceNameRule(
@@ -123,21 +56,31 @@ class RegexPatternSafetyTest(TestCase):
             name_template="port{bay_position}",
         )
 
-    def test_exponential_patterns_are_refused(self):
-        for pattern in _EXPONENTIAL_PATTERNS:
-            with self.subTest(pattern=pattern), self.assertRaises(ValidationError) as ctx:
-                self._rule(pattern).clean()
-            self.assertIn("module_type_pattern", ctx.exception.message_dict)
+    def test_backtracking_shape_is_accepted_and_matches_through_rule_selection(self):
+        rule = self._rule("^(a+)+$")
+        rule.clean()
+        rule.save()
+        manufacturer = Manufacturer.objects.create(name="Linear Regex", slug="linear-regex")
+        module_type = ModuleType.objects.create(manufacturer=manufacturer, model="aaaa", part_number="LINEAR")
 
-    def test_realistic_patterns_are_accepted(self):
-        for pattern in _SAFE_PATTERNS:
+        self.assertEqual(find_matching_rule(module_type, None, None), rule)
+
+    def test_supported_patterns_are_accepted(self):
+        for pattern in _SUPPORTED_PATTERNS:
             with self.subTest(pattern=pattern):
                 self._rule(pattern).clean()
 
-    def test_device_level_rule_refuses_an_exponential_pattern(self):
+    def test_python_only_patterns_are_refused(self):
+        for pattern in _PYTHON_ONLY_PATTERNS:
+            with self.subTest(pattern=pattern), self.assertRaises(ValidationError) as ctx:
+                self._rule(pattern).clean()
+            self.assertIn("module_type_pattern", ctx.exception.message_dict)
+            self.assertIn("Invalid RE2 pattern", ctx.exception.messages[0])
+
+    def test_device_level_rule_refuses_python_only_syntax(self):
         rule = InterfaceNameRule(
             applies_to_device_interfaces=True,
-            module_type_pattern="^(a+)+$",
+            module_type_pattern=r"(?=Gi)Gi\d+/\d+",
             name_template="port{bay_position}",
         )
 
@@ -146,7 +89,7 @@ class RegexPatternSafetyTest(TestCase):
 
         self.assertIn("module_type_pattern", ctx.exception.message_dict)
 
-    def test_rule_tester_refuses_an_exponential_pattern(self):
+    def test_rule_tester_refuses_python_only_syntax(self):
         from netbox_interface_name_rules.forms import RuleTestForm
 
         form = RuleTestForm(
@@ -155,12 +98,13 @@ class RegexPatternSafetyTest(TestCase):
                 "channel_count": "0",
                 "channel_start": "0",
                 "module_type_is_regex": True,
-                "module_type_pattern": "^(a+)+$",
+                "module_type_pattern": r"(?=QSFP)QSFP-.*",
             }
         )
 
         self.assertFalse(form.is_valid())
         self.assertIn("module_type_pattern", form.errors)
+        self.assertIn("Invalid RE2 pattern", form.errors["module_type_pattern"][0])
 
 
 class RegexModelValidationTest(TestCase):
@@ -261,19 +205,19 @@ class RegexFindMatchingRuleTest(TestCase):
         )
         self.assertIsNone(find_matching_rule(self.sfp_10g, None, None))
 
-    def test_unsafe_pattern_written_without_validation_is_not_evaluated(self):
-        """Rule selection skips a legacy unsafe row and returns the next match."""
+    def test_python_only_pattern_written_without_validation_is_not_evaluated(self):
+        """Rule selection skips a legacy RE2-incompatible row and returns the next match."""
         fallback = InterfaceNameRule.objects.create(
             module_type_is_regex=True,
-            module_type_pattern=r"(?i)^abab$",
+            module_type_pattern="abab",
             name_template="fallback/{bay_position}",
         )
-        unsafe = InterfaceNameRule.objects.create(
+        incompatible = InterfaceNameRule.objects.create(
             module_type_is_regex=True,
             module_type_pattern="unused",
-            name_template="unsafe/{bay_position}",
+            name_template="incompatible/{bay_position}",
         )
-        InterfaceNameRule.objects.filter(pk=unsafe.pk).update(module_type_pattern=r"(?i)^(ab|AB)+$")
+        InterfaceNameRule.objects.filter(pk=incompatible.pk).update(module_type_pattern=r"(?=abab)abab")
         module_type = ModuleType.objects.create(
             manufacturer=self.sfp_lr4.manufacturer,
             model="abab",
@@ -317,7 +261,7 @@ class RegexFindMatchingRuleTest(TestCase):
         self.assertEqual(result, generic)
 
     def test_regex_fullmatch_not_partial(self):
-        """re.fullmatch requires the entire model name to match."""
+        """A regex rule requires the entire model name to match."""
         InterfaceNameRule.objects.create(
             module_type_is_regex=True,
             module_type_pattern="400G",  # Partial — should NOT match
@@ -395,3 +339,69 @@ class RegexApplyRulesTest(TestCase):
         self.assertEqual(renamed, 1)
         iface.refresh_from_db()
         self.assertEqual(iface.name, "FourHundredGigE0/0/0/1")
+
+    def test_python_only_pattern_written_without_validation_is_not_applicable(self):
+        """The applicability scan must not execute a legacy pattern outside RE2 syntax."""
+        rule = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern=r"(?=QSFP)QSFP-DD-400G-.*",
+            name_template="FourHundredGigE0/0/0/{bay_position}",
+        )
+        bay = ModuleBay.objects.get(device=self.device, name="Transceiver 0")
+        module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.mt_lr4)
+        Interface.objects.create(device=self.device, module=module, name="0", type="400gbase-x-osfp")
+
+        self.assertFalse(has_applicable_interfaces(rule))
+
+
+class RegexEngineMigrationTest(TestCase):
+    """Audit stored rule patterns before the plugin starts executing them with RE2."""
+
+    APP = "netbox_interface_name_rules"
+    BEFORE = "0013_interfacenamerule_breakout_mode_and_more"
+
+    def _migrate(self, target):
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        return executor.migrate([(self.APP, target)])
+
+    def _latest_migration(self):
+        loader = MigrationExecutor(connection).loader
+        return sorted(name for app_label, name in loader.graph.leaf_nodes(self.APP))[-1]
+
+    def test_upgrade_refuses_a_stored_pattern_outside_re2_syntax(self):
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rule = Rule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern=r"(?=Gi)Gi\d+/\d+",
+            name_template="Gi{vc_position}/{port}",
+        )
+        connection.check_constraints()
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, rf"InterfaceNameRule ID: {rule.pk}\b"):
+                self._migrate(latest)
+        finally:
+            Rule.objects.filter(pk=rule.pk).delete()
+            self._migrate(latest)
+
+    def test_upgrade_preserves_a_backtracking_pattern_that_re2_can_execute(self):
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rule = Rule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern="^(a+)+$",
+            name_template="Gi{vc_position}/{port}",
+        )
+        connection.check_constraints()
+
+        try:
+            new_state = self._migrate(latest)
+            migrated_rule = new_state.apps.get_model(self.APP, "InterfaceNameRule").objects.get(pk=rule.pk)
+            self.assertEqual(migrated_rule.module_type_pattern, "^(a+)+$")
+        finally:
+            Rule.objects.filter(pk=rule.pk).delete()
+            self._migrate(latest)

@@ -24,7 +24,9 @@ keywords = [
     "transceiver",
     "automation",
 ]
-dependencies = []
+dependencies = [
+    "google-re2>=1.1.20251105",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",

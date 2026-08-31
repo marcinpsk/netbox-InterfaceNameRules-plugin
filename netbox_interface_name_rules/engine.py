@@ -7,7 +7,6 @@ after Django is fully initialised.
 """
 
 import logging
-import re
 from collections import defaultdict
 
 from django.core.exceptions import ValidationError
@@ -17,6 +16,7 @@ from . import family as family_ops
 from . import naming, rule_selection
 from .family import targets as family_targets
 from .family import template_names as family_template_names
+from .regex_safety import compile_module_type_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -391,9 +391,10 @@ def _matches_device_interface(rule, interface):
     if not rule.module_type_pattern:
         return True
     try:
-        return re.fullmatch(rule.module_type_pattern, interface.name) is not None
-    except re.error:
+        compiled = compile_module_type_pattern(rule.module_type_pattern)
+    except ValidationError:
         return False
+    return compiled.fullmatch(interface.name) is not None
 
 
 def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
@@ -506,17 +507,17 @@ def _flag_rule_potentially_deprecated(rule):
 
 
 def _matching_moduletype_pks(module_type_pattern):
-    """Return PKs of ModuleTypes whose model name matches the given regex pattern.
+    """Return PKs of ModuleTypes whose model name matches the given RE2 pattern.
 
-    Raises ValueError for invalid regex patterns, mirroring evaluate_name_template's
+    Raises ValueError for invalid patterns, mirroring evaluate_name_template's
     error-handling convention so callers can treat both as ValueError.
     """
     from dcim.models import ModuleType
 
     try:
-        compiled = re.compile(module_type_pattern)
-    except re.error as exc:
-        raise ValueError(f"Invalid module_type_pattern regex '{module_type_pattern}': {exc}") from exc
+        compiled = compile_module_type_pattern(module_type_pattern)
+    except ValidationError as exc:
+        raise ValueError(exc.messages[0]) from exc
     return [mt.pk for mt in ModuleType.objects.only("pk", "model") if compiled.fullmatch(mt.model)]
 
 
@@ -535,7 +536,7 @@ def has_applicable_interfaces(rule) -> bool:
     try:
         results, _ = find_interfaces_for_rule(rule, limit=1)
         return len(results) > 0
-    except (ValueError, re.error):
+    except ValueError:
         return False
 
 

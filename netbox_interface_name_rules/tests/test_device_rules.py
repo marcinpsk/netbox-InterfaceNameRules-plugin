@@ -113,6 +113,15 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         result = apply_device_interface_rules(self.device1)
         self.assertEqual(result, 0)
 
+    def test_python_only_filter_written_without_validation_is_skipped(self):
+        """A legacy filter that RE2 cannot compile must not run through Python's engine."""
+        self._make_rule("Gi{vc_position}/{port}", pattern=r"(?=Gi)Gi\d+/\d+")
+        interface = self._make_interface("Gi0/1")
+
+        self.assertEqual(apply_device_interface_rules(self.device1), 0)
+        interface.refresh_from_db()
+        self.assertEqual(interface.name, "Gi0/1")
+
     # ------------------------------------------------------------------
     # Successful renames
     # ------------------------------------------------------------------

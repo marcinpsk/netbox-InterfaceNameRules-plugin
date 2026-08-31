@@ -61,6 +61,10 @@ _Avoid_: External rename, manual fix
 The compatibility surface downstream callers import. It selects rules, builds template variables and decides which interfaces an automatic path may touch on a run; it holds no family discovery, planning or mutation.
 _Avoid_: Engine layer, core
 
+**Stored rule pattern**:
+An operator-provided RE2 expression saved on an Interface Name Rule. It matches the complete module type model or current device-interface name, depending on the rule mode.
+_Avoid_: Python regex, partial regex
+
 **Unsupported topology**:
 An interface-family topology that the active NetBox data model cannot represent.
 _Avoid_: Legacy fallback

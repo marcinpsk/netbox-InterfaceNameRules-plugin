@@ -37,8 +37,8 @@ class RuleTestForm(forms.Form):
     )
     module_type_pattern = forms.CharField(
         required=False,
-        label="Module Type Pattern (regex)",
-        help_text="Regex pattern matched against ModuleType.model via re.fullmatch()",
+        label="Module Type Pattern (RE2)",
+        help_text="RE2 pattern matched against the complete ModuleType.model value",
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
     parent_module_type = forms.ModelChoiceField(

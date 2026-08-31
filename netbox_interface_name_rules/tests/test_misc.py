@@ -278,11 +278,11 @@ class ModelCleanDeviceIfaceTest(TestCase):
         rule.clean()
         self.assertFalse(rule.module_type_is_regex)
 
-    def test_exact_rule_with_unsafe_pattern_fails(self):
-        """A regex rule that repeats an ambiguous body fails validation."""
+    def test_exact_rule_with_python_only_pattern_fails(self):
+        """A regex rule using syntax outside RE2 fails validation."""
         rule = InterfaceNameRule(
             module_type_is_regex=True,
-            module_type_pattern="^(a+)+$",
+            module_type_pattern=r"(?=QSFP)QSFP-.*",
             name_template="port{bay_position}",
         )
         with self.assertRaises(ValidationError) as ctx:
@@ -499,9 +499,9 @@ class RuleTestFormValidationTest(TestCase):
         form.is_valid()
         self.assertIn("module_type_pattern", form.errors)
 
-    def test_regex_mode_redos_pattern_adds_error(self):
-        """RuleTestForm.clean() adds an error when the pattern repeats an ambiguous body."""
-        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "^(a+)+$"})
+    def test_regex_mode_python_only_pattern_adds_error(self):
+        """RuleTestForm.clean() adds an error when RE2 does not support the pattern."""
+        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": r"(?=QSFP)QSFP-.*"})
         form.is_valid()
         self.assertIn("module_type_pattern", form.errors)
 
