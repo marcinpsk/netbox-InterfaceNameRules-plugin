@@ -31,6 +31,7 @@ _SAFE_PATTERNS = (
     r"Ethernet\d+",
     "^(10|25|100)G$",
     "(ab){2,4}",
+    "^(a|aa)(a|aa)(a|aa)(a|aa)$",
     r"\d{1,3}(\.\d{1,3}){3}",
     "(?:QSFP|SFP)+",
     r"(?i)^(?-i:ab|AB)+$",
@@ -49,6 +50,7 @@ _EXPONENTIAL_PATTERNS = (
     "(a{0,30}){0,30}",
     r"(?i)^(ab|AB)+$",
     r"^(?:(?i:ab)|AB)+$",
+    "^" + "(a|aa)" * 40 + "$",
 )
 
 

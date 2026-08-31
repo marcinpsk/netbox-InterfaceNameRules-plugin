@@ -16,4 +16,4 @@ class ConversionDocumentationTest(unittest.TestCase):
         section = guide.split("### Converting an installed flat family", 1)[1].split("### Converter Offset", 1)[0]
 
         self.assertIn("rejects missing members locally before a conversion transaction starts", section.lower())
-        self.assertNotIn("a missing sibling", section)
+        self.assertNotIn("a missing sibling", section.lower())

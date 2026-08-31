@@ -11,7 +11,8 @@ from re import _parser as _re_parser
 from django.core.exceptions import ValidationError
 
 _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_REPEAT})
-_MAX_AMBIGUOUS_REPEAT = 4
+_MAX_AMBIGUOUS_RUN = 4
+_ZERO_WIDTH_OPCODES = frozenset({_re_constants.ASSERT, _re_constants.ASSERT_NOT, _re_constants.AT})
 
 
 def _effective_flags(flags, add_flags, delete_flags):
@@ -85,18 +86,39 @@ def _branch_matches_ambiguously(branches, flags):
     return False
 
 
+def _operation_matches_ambiguously(opcode, argument, flags, children):
+    """Return whether one parsed operation can match ambiguously."""
+    return (
+        opcode in _BACKTRACKING_REPEATS
+        or (opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], flags))
+        or any(_matches_ambiguously(child, child_flags) for child, child_flags in children)
+    )
+
+
 def _matches_ambiguously(node, flags):
     """Return True when *node* can match one string in more than one way."""
     for opcode, argument in node:
-        if opcode in _BACKTRACKING_REPEATS:
+        children = tuple(_child_subpatterns(opcode, argument, flags))
+        if _operation_matches_ambiguously(opcode, argument, flags, children):
             return True
-        if opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], flags):
+    return False
+
+
+def _has_ambiguous_sequence(node, flags):
+    """Return True when adjacent ambiguous expressions exceed the safe bound."""
+    run_length = 0
+    for opcode, argument in node:
+        children = tuple(_child_subpatterns(opcode, argument, flags))
+        if any(_has_ambiguous_sequence(child, child_flags) for child, child_flags in children):
             return True
-        if any(
-            _matches_ambiguously(child, child_flags)
-            for child, child_flags in _child_subpatterns(opcode, argument, flags)
-        ):
-            return True
+        if opcode in _ZERO_WIDTH_OPCODES:
+            continue
+        if _operation_matches_ambiguously(opcode, argument, flags, children):
+            run_length += 1
+            if run_length > _MAX_AMBIGUOUS_RUN:
+                return True
+        else:
+            run_length = 0
     return False
 
 
@@ -105,7 +127,7 @@ def _repeats_ambiguously(node, flags):
     for opcode, argument in node:
         if (
             opcode in _BACKTRACKING_REPEATS
-            and argument[1] > _MAX_AMBIGUOUS_REPEAT
+            and argument[1] > _MAX_AMBIGUOUS_RUN
             and _matches_ambiguously(argument[2], flags)
         ):
             return True
@@ -124,8 +146,6 @@ def compile_module_type_pattern(pattern):
         parsed = _re_parser.parse(pattern)
     except re.error as exc:
         raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {exc}"}) from exc
-    if _repeats_ambiguously(parsed, parsed.state.flags):
-        raise ValidationError(
-            {"module_type_pattern": "Pattern contains nested quantifiers that can backtrack exponentially."}
-        )
+    if _repeats_ambiguously(parsed, parsed.state.flags) or _has_ambiguous_sequence(parsed, parsed.state.flags):
+        raise ValidationError({"module_type_pattern": "Pattern can backtrack exponentially."})
     return compiled
