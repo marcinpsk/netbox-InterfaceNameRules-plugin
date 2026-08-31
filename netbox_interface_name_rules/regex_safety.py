@@ -23,6 +23,21 @@ _CATEGORY_PATTERNS = {
     _re_constants.CATEGORY_WORD: r"\w",
     _re_constants.CATEGORY_NOT_WORD: r"\W",
 }
+_CATEGORY_COMPLEMENTS = {
+    _re_constants.CATEGORY_DIGIT: _re_constants.CATEGORY_NOT_DIGIT,
+    _re_constants.CATEGORY_NOT_DIGIT: _re_constants.CATEGORY_DIGIT,
+    _re_constants.CATEGORY_SPACE: _re_constants.CATEGORY_NOT_SPACE,
+    _re_constants.CATEGORY_NOT_SPACE: _re_constants.CATEGORY_SPACE,
+    _re_constants.CATEGORY_WORD: _re_constants.CATEGORY_NOT_WORD,
+    _re_constants.CATEGORY_NOT_WORD: _re_constants.CATEGORY_WORD,
+}
+_POSITIVE_CATEGORIES = frozenset(
+    {
+        _re_constants.CATEGORY_DIGIT,
+        _re_constants.CATEGORY_SPACE,
+        _re_constants.CATEGORY_WORD,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -187,6 +202,9 @@ def _expressions_overlap(left, right):
         return _expression_matches(right, left.value)
     if right.opcode is _re_constants.LITERAL:
         return _expression_matches(left, right.value)
+    if _CATEGORY_COMPLEMENTS[left.value] is right.value:
+        positive, negative = (left, right) if left.value in _POSITIVE_CATEGORIES else (right, left)
+        return not positive.flags & re.ASCII and bool(negative.flags & re.ASCII)
     return True
 
 
@@ -424,7 +442,8 @@ def _repeats_ambiguously(node, flags, require_trailing_failure=False):
     """Return True when *node* repeats an ambiguous body enough to backtrack excessively."""
     operations = tuple(_transparent_operations(node, flags))
     for index, (opcode, argument, operation_flags) in enumerate(operations):
-        has_local_failure = not require_trailing_failure or index < len(operations) - 1
+        minimum_can_fail = opcode in _BACKTRACKING_REPEATS and argument[0] > _MAX_AMBIGUOUS_RUN
+        has_local_failure = not require_trailing_failure or index < len(operations) - 1 or minimum_can_fail
         if (
             opcode in _BACKTRACKING_REPEATS
             and argument[1] > _MAX_AMBIGUOUS_RUN
