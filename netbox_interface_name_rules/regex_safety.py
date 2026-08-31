@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError
 _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_REPEAT})
 _MAX_AMBIGUOUS_RUN = 4
 _ZERO_WIDTH_OPCODES = frozenset({_re_constants.ASSERT, _re_constants.ASSERT_NOT, _re_constants.AT})
+_CHARACTER_MODE_FLAGS = re.ASCII | re.LOCALE | re.UNICODE
 _SEQUENCE_BARRIER = object()
 _CATEGORY_PATTERNS = {
     _re_constants.CATEGORY_DIGIT: r"\d",
@@ -69,6 +70,8 @@ class _AmbiguousToken:
 
 def _effective_flags(flags, add_flags, delete_flags):
     """Return the flags effective inside a scoped sub-pattern."""
+    if add_flags & _CHARACTER_MODE_FLAGS:
+        flags &= ~_CHARACTER_MODE_FLAGS
     return (flags | add_flags) & ~delete_flags
 
 
@@ -194,6 +197,35 @@ def _expression_matches(expression, candidate):
     return re.fullmatch(_CATEGORY_PATTERNS[expression.value], chr(candidate), flags=expression.flags) is not None
 
 
+def _positive_category_is_subset(value, flags, superset_value, superset_flags):
+    """Return whether one positive category language is a subset of another."""
+    same_family = value is superset_value
+    digit_is_word = value is _re_constants.CATEGORY_DIGIT and superset_value is _re_constants.CATEGORY_WORD
+    if not same_family and not digit_is_word:
+        return False
+    return bool(flags & re.ASCII) or not superset_flags & re.ASCII
+
+
+def _category_expressions_overlap(left, right):
+    """Return whether two category expressions accept a common character."""
+    left_positive = left.value in _POSITIVE_CATEGORIES
+    right_positive = right.value in _POSITIVE_CATEGORIES
+    if left_positive and right_positive:
+        return not (
+            left.value is not right.value
+            and (left.value is _re_constants.CATEGORY_SPACE or right.value is _re_constants.CATEGORY_SPACE)
+        )
+    if not left_positive and not right_positive:
+        return True
+    positive, negative = (left, right) if left_positive else (right, left)
+    return not _positive_category_is_subset(
+        positive.value,
+        positive.flags,
+        _CATEGORY_COMPLEMENTS[negative.value],
+        negative.flags,
+    )
+
+
 def _expressions_overlap(left, right):
     """Return whether two character expressions accept a common character."""
     if left.opcode is _re_constants.LITERAL and right.opcode is _re_constants.LITERAL:
@@ -202,10 +234,7 @@ def _expressions_overlap(left, right):
         return _expression_matches(right, left.value)
     if right.opcode is _re_constants.LITERAL:
         return _expression_matches(left, right.value)
-    if _CATEGORY_COMPLEMENTS[left.value] is right.value:
-        positive, negative = (left, right) if left.value in _POSITIVE_CATEGORIES else (right, left)
-        return not positive.flags & re.ASCII and bool(negative.flags & re.ASCII)
-    return True
+    return _category_expressions_overlap(left, right)
 
 
 def _expression_sets_overlap(left, right):
@@ -235,7 +264,12 @@ def _expression_language_is_covered(expression, exclusion):
     """Return whether an exclusion covers one character expression."""
     if expression.opcode is _re_constants.LITERAL:
         return _literal_language_is_covered(expression, exclusion)
-    return expression == exclusion
+    complement = _CharacterExpression(
+        _re_constants.CATEGORY,
+        _CATEGORY_COMPLEMENTS[exclusion.value],
+        exclusion.flags,
+    )
+    return not _category_expressions_overlap(expression, complement)
 
 
 def _endpoint_accepts_expression(endpoint, expression):
