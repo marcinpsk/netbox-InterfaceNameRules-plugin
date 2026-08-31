@@ -15,7 +15,23 @@ _BACKTRACKING_REPEATS = frozenset({_re_constants.MAX_REPEAT, _re_constants.MIN_R
 _MAX_AMBIGUOUS_RUN = 4
 _ZERO_WIDTH_OPCODES = frozenset({_re_constants.ASSERT, _re_constants.ASSERT_NOT, _re_constants.AT})
 _SEQUENCE_BARRIER = object()
-_TRAILING_FAILURE = object()
+_CATEGORY_PATTERNS = {
+    _re_constants.CATEGORY_DIGIT: r"\d",
+    _re_constants.CATEGORY_NOT_DIGIT: r"\D",
+    _re_constants.CATEGORY_SPACE: r"\s",
+    _re_constants.CATEGORY_NOT_SPACE: r"\S",
+    _re_constants.CATEGORY_WORD: r"\w",
+    _re_constants.CATEGORY_NOT_WORD: r"\W",
+}
+
+
+@dataclass(frozen=True)
+class _CharacterExpression:
+    """Describe one literal or category expression and its effective flags."""
+
+    opcode: object
+    value: object
+    flags: int
 
 
 @dataclass(frozen=True)
@@ -60,29 +76,36 @@ def _child_subpatterns(opcode, argument, flags):
         yield child, flags
 
 
-def _operation_endpoint_literals(opcode, argument, flags, trailing):
+def _operation_endpoint_characters(opcode, argument, flags, trailing):
     """Return one operation's possible endpoint literals and empty-match state."""
     if opcode in _ZERO_WIDTH_OPCODES:
         return _EndpointCharacters(frozenset()), True
     if opcode is _re_constants.LITERAL:
-        return _EndpointCharacters(frozenset({(argument, flags)})), False
+        expression = _CharacterExpression(opcode, argument, flags)
+        return _EndpointCharacters(frozenset({expression})), False
     if opcode is _re_constants.NOT_LITERAL:
-        return _EndpointCharacters(None, frozenset({(argument, flags)})), False
+        expression = _CharacterExpression(_re_constants.LITERAL, argument, flags)
+        return _EndpointCharacters(None, frozenset({expression})), False
     if opcode is _re_constants.IN:
-        literals = frozenset((value, flags) for item_opcode, value in argument if item_opcode is _re_constants.LITERAL)
-        if len(literals) == len(argument):
-            return _EndpointCharacters(literals), False
-        if argument and argument[0][0] is _re_constants.NEGATE and len(literals) + 1 == len(argument):
-            return _EndpointCharacters(None, literals), False
-        return None, False
+        negated = bool(argument and argument[0][0] is _re_constants.NEGATE)
+        expressions = []
+        for item_opcode, value in argument[1:] if negated else argument:
+            if item_opcode is _re_constants.LITERAL or (
+                item_opcode is _re_constants.CATEGORY and value in _CATEGORY_PATTERNS
+            ):
+                expressions.append(_CharacterExpression(item_opcode, value, flags))
+                continue
+            return None, False
+        values = frozenset(expressions)
+        return (_EndpointCharacters(None, values) if negated else _EndpointCharacters(values)), False
     if opcode is _re_constants.SUBPATTERN:
         _, add_flags, delete_flags, child = argument
-        return _endpoint_literals(child, _effective_flags(flags, add_flags, delete_flags), trailing)
+        return _endpoint_characters(child, _effective_flags(flags, add_flags, delete_flags), trailing)
     if opcode is _re_constants.BRANCH:
         endpoints = []
         can_match_empty = False
         for branch in argument[1]:
-            branch_endpoint, branch_empty = _endpoint_literals(branch, flags, trailing)
+            branch_endpoint, branch_empty = _endpoint_characters(branch, flags, trailing)
             if branch_endpoint is None:
                 return None, False
             endpoints.append(branch_endpoint)
@@ -92,10 +115,10 @@ def _operation_endpoint_literals(opcode, argument, flags, trailing):
         minimum, maximum, child = argument
         if maximum == 0:
             return _EndpointCharacters(frozenset()), True
-        endpoint, child_empty = _endpoint_literals(child, flags, trailing)
+        endpoint, child_empty = _endpoint_characters(child, flags, trailing)
         return endpoint, minimum == 0 or child_empty
     if opcode is _re_constants.ATOMIC_GROUP:
-        return _endpoint_literals(argument, flags, trailing)
+        return _endpoint_characters(argument, flags, trailing)
     return None, False
 
 
@@ -111,12 +134,12 @@ def _union_endpoints(endpoints):
     return None
 
 
-def _endpoint_literals(node, flags, trailing=False):
+def _endpoint_characters(node, flags, trailing=False):
     """Return known literals at one end of a parsed sequence."""
     endpoints = []
     operations = reversed(node) if trailing else iter(node)
     for opcode, argument in operations:
-        endpoint, can_match_empty = _operation_endpoint_literals(opcode, argument, flags, trailing)
+        endpoint, can_match_empty = _operation_endpoint_characters(opcode, argument, flags, trailing)
         if endpoint is None:
             return None, False
         endpoints.append(endpoint)
@@ -125,12 +148,12 @@ def _endpoint_literals(node, flags, trailing=False):
     return _union_endpoints(endpoints), True
 
 
-def _annotated_endpoint_literals(operations, trailing=False):
+def _annotated_endpoint_characters(operations, trailing=False):
     """Return endpoint literals for operations carrying their effective flags."""
     endpoints = []
     ordered = reversed(operations) if trailing else iter(operations)
     for opcode, argument, flags in ordered:
-        endpoint, can_match_empty = _operation_endpoint_literals(opcode, argument, flags, trailing)
+        endpoint, can_match_empty = _operation_endpoint_characters(opcode, argument, flags, trailing)
         if endpoint is None:
             return None, False
         endpoints.append(endpoint)
@@ -139,14 +162,9 @@ def _annotated_endpoint_literals(operations, trailing=False):
     return _union_endpoints(endpoints), True
 
 
-def _leading_literals(node, flags):
+def _leading_characters(node, flags):
     """Return known literal first characters with their effective flags."""
-    return _endpoint_literals(node, flags)
-
-
-def _trailing_literals(node, flags):
-    """Return known literal final characters with their effective flags."""
-    return _endpoint_literals(node, flags, trailing=True)
+    return _endpoint_characters(node, flags)
 
 
 def _literal_matches(literal, flags, candidate):
@@ -154,32 +172,59 @@ def _literal_matches(literal, flags, candidate):
     return re.fullmatch(re.escape(chr(literal)), chr(candidate), flags=flags) is not None
 
 
-def _literal_sets_overlap(left, right):
-    """Return whether two leading-literal sets accept a common character."""
+def _expression_matches(expression, candidate):
+    """Return whether one character expression accepts a concrete character."""
+    if expression.opcode is _re_constants.LITERAL:
+        return _literal_matches(expression.value, expression.flags, candidate)
+    return re.fullmatch(_CATEGORY_PATTERNS[expression.value], chr(candidate), flags=expression.flags) is not None
+
+
+def _expressions_overlap(left, right):
+    """Return whether two character expressions accept a common character."""
+    if left.opcode is _re_constants.LITERAL and right.opcode is _re_constants.LITERAL:
+        return _expression_matches(left, right.value) or _expression_matches(right, left.value)
+    if left.opcode is _re_constants.LITERAL:
+        return _expression_matches(right, left.value)
+    if right.opcode is _re_constants.LITERAL:
+        return _expression_matches(left, right.value)
+    return True
+
+
+def _expression_sets_overlap(left, right):
+    """Return whether two character-expression sets accept a common character."""
     return any(
-        _literal_matches(left_literal, left_flags, right_literal)
-        or _literal_matches(right_literal, right_flags, left_literal)
-        for left_literal, left_flags in left
-        for right_literal, right_flags in right
+        _expressions_overlap(left_expression, right_expression)
+        for left_expression in left
+        for right_expression in right
     )
 
 
-def _literal_languages_equal(left, right):
-    """Return whether two literal nodes accept the same characters."""
-    left_literal, left_flags = left
-    right_literal, right_flags = right
+def _literal_language_is_covered(literal, exclusion):
+    """Return whether an exclusion covers a literal expression's full language."""
+    if not literal.flags & re.IGNORECASE:
+        return _expression_matches(exclusion, literal.value)
+    if exclusion.opcode is not _re_constants.LITERAL or not exclusion.flags & re.IGNORECASE:
+        return False
+    language_flags = re.ASCII | re.LOCALE
     return (
-        left_flags == right_flags
-        and _literal_matches(left_literal, left_flags, right_literal)
-        and _literal_matches(right_literal, right_flags, left_literal)
+        literal.flags & language_flags == exclusion.flags & language_flags
+        and _expression_matches(literal, exclusion.value)
+        and _expression_matches(exclusion, literal.value)
     )
 
 
-def _endpoint_accepts_literal(endpoint, literal):
-    """Return whether an endpoint can accept a literal node's full language."""
+def _expression_language_is_covered(expression, exclusion):
+    """Return whether an exclusion covers one character expression."""
+    if expression.opcode is _re_constants.LITERAL:
+        return _literal_language_is_covered(expression, exclusion)
+    return expression == exclusion
+
+
+def _endpoint_accepts_expression(endpoint, expression):
+    """Return whether an endpoint can accept an expression's full language."""
     if endpoint.included is not None:
-        return _literal_sets_overlap(endpoint.included, frozenset({literal}))
-    return not any(_literal_languages_equal(literal, excluded) for excluded in endpoint.excluded)
+        return _expression_sets_overlap(endpoint.included, frozenset({expression}))
+    return not any(_expression_language_is_covered(expression, excluded) for excluded in endpoint.excluded)
 
 
 def _endpoint_sets_overlap(left, right):
@@ -187,9 +232,9 @@ def _endpoint_sets_overlap(left, right):
     if left is None or right is None:
         return True
     if left.included is not None:
-        return any(_endpoint_accepts_literal(right, literal) for literal in left.included)
+        return any(_endpoint_accepts_expression(right, expression) for expression in left.included)
     if right.included is not None:
-        return any(_endpoint_accepts_literal(left, literal) for literal in right.included)
+        return any(_endpoint_accepts_expression(left, expression) for expression in right.included)
     return True
 
 
@@ -197,7 +242,7 @@ def _branch_matches_ambiguously(branches, flags):
     """Return True unless every alternative starts with a distinct literal."""
     seen = []
     for branch in branches:
-        endpoint, empty = _leading_literals(branch, flags)
+        endpoint, empty = _leading_characters(branch, flags)
         if endpoint is None or empty or any(_endpoint_sets_overlap(endpoint, previous) for previous in seen):
             return True
         seen.append(endpoint)
@@ -209,7 +254,7 @@ def _literal_sequence(node, flags):
     sequence = []
     for opcode, argument in node:
         if opcode is _re_constants.LITERAL or opcode is _re_constants.NOT_LITERAL or opcode is _re_constants.IN:
-            endpoint, _ = _operation_endpoint_literals(opcode, argument, flags, False)
+            endpoint, _ = _operation_endpoint_characters(opcode, argument, flags, False)
             if endpoint is None:
                 return None
             sequence.append(endpoint)
@@ -312,15 +357,13 @@ def _sequence_tokens(node, flags):
     pending = []
     for opcode, argument, operation_flags in _flatten_operations(node, flags):
         if opcode in _ZERO_WIDTH_OPCODES:
-            if tokens:
-                tokens.append(_TRAILING_FAILURE)
             continue
         ambiguous_branch = opcode is _re_constants.BRANCH and _branch_matches_ambiguously(argument[1], operation_flags)
         variable_repeat = opcode in _BACKTRACKING_REPEATS and argument[0] != argument[1]
         if ambiguous_branch or variable_repeat:
             segment = [*pending, (opcode, argument, operation_flags)]
-            leading, leading_empty = _annotated_endpoint_literals(segment)
-            trailing, trailing_empty = _annotated_endpoint_literals(segment, trailing=True)
+            leading, leading_empty = _annotated_endpoint_characters(segment)
+            trailing, trailing_empty = _annotated_endpoint_characters(segment, trailing=True)
             same_string_choices = (
                 _branch_matches_same_string(argument[1], operation_flags)
                 if ambiguous_branch
@@ -336,42 +379,37 @@ def _sequence_tokens(node, flags):
 
 def _boundaries_overlap(left, right):
     """Return whether two ambiguity tokens can share a character boundary."""
-    return left.can_match_empty or right.can_match_empty or _endpoint_sets_overlap(left.trailing, right.leading)
+    return _endpoint_sets_overlap(left.trailing, right.leading)
 
 
-def _tokens_backtrack_exponentially(tokens, require_trailing_failure=False):
+def _tokens_backtrack_exponentially(tokens):
     """Return True when ambiguity tokens form an excessive overlapping run."""
-    run_length = 0
+    active_runs = []
     same_string_choices = 0
-    previous = None
-    unsafe_run = False
     for token in tokens:
-        if token is _TRAILING_FAILURE:
-            if unsafe_run:
-                return True
-            continue
         if token is _SEQUENCE_BARRIER:
-            if unsafe_run:
-                return True
-            run_length = 0
+            active_runs.clear()
             same_string_choices = 0
-            previous = None
             continue
-        run_length = run_length + 1 if previous is not None and _boundaries_overlap(previous, token) else 1
+        run_length = max(
+            (previous_length + 1 for previous, previous_length in active_runs if _boundaries_overlap(previous, token)),
+            default=1,
+        )
         same_string_choices += int(token.same_string_choices)
         if run_length > _MAX_AMBIGUOUS_RUN or same_string_choices > _MAX_AMBIGUOUS_RUN:
-            if not require_trailing_failure:
-                return True
-            unsafe_run = True
-        previous = token
+            return True
+        if token.can_match_empty:
+            active_runs.append((token, run_length))
+        else:
+            active_runs = [(token, run_length)]
     return False
 
 
-def _has_ambiguous_sequence(node, flags, require_trailing_failure=False):
+def _has_ambiguous_sequence(node, flags):
     """Return True when adjacent ambiguous expressions exceed the safe bound."""
     for opcode, argument in node:
         if opcode is _re_constants.ATOMIC_GROUP:
-            if _has_ambiguous_sequence(argument, flags, require_trailing_failure=True):
+            if _has_ambiguous_sequence(argument, flags):
                 return True
             continue
         if any(
@@ -379,9 +417,7 @@ def _has_ambiguous_sequence(node, flags, require_trailing_failure=False):
             for child, child_flags in _child_subpatterns(opcode, argument, flags)
         ):
             return True
-    return _tokens_backtrack_exponentially(
-        _sequence_tokens(node, flags), require_trailing_failure=require_trailing_failure
-    )
+    return _tokens_backtrack_exponentially(_sequence_tokens(node, flags))
 
 
 def _repeats_ambiguously(node, flags, require_trailing_failure=False):
