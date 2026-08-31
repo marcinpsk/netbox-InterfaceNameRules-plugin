@@ -33,6 +33,7 @@ _SAFE_PATTERNS = (
     "(ab){2,4}",
     r"\d{1,3}(\.\d{1,3}){3}",
     "(?:QSFP|SFP)+",
+    r"(?i)^(?-i:ab|AB)+$",
 )
 
 # Patterns whose evaluation backtracks exponentially; all must be refused.
@@ -46,6 +47,8 @@ _EXPONENTIAL_PATTERNS = (
     r"^(\w+\s?)*$",
     "((a+)+){2}",
     "(a{0,30}){0,30}",
+    r"(?i)^(ab|AB)+$",
+    r"^(?:(?i:ab)|AB)+$",
 )
 
 
@@ -196,6 +199,27 @@ class RegexFindMatchingRuleTest(TestCase):
             name_template="FourHundredGigE0/0/0/{bay_position}",
         )
         self.assertIsNone(find_matching_rule(self.sfp_10g, None, None))
+
+    def test_unsafe_pattern_written_without_validation_is_not_evaluated(self):
+        """A legacy unsafe row is skipped in favor of the next matching rule."""
+        fallback = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern=r"(?i)^abab$",
+            name_template="fallback/{bay_position}",
+        )
+        unsafe = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="unused",
+            name_template="unsafe/{bay_position}",
+        )
+        InterfaceNameRule.objects.filter(pk=unsafe.pk).update(module_type_pattern=r"(?i)^(ab|AB)+$")
+        module_type = ModuleType.objects.create(
+            manufacturer=self.sfp_lr4.manufacturer,
+            model="abab",
+            part_number="CASE-OVERLAP",
+        )
+
+        self.assertEqual(find_matching_rule(module_type, None, None), fallback)
 
     def test_exact_takes_priority_over_regex(self):
         """Exact FK match is preferred over regex pattern match."""

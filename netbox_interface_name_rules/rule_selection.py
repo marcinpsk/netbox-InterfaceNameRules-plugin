@@ -3,11 +3,13 @@
 """Select an enabled interface-name rule for a module context."""
 
 import contextlib
-import re
 import threading
 
+from django.core.exceptions import ValidationError
 from django.db.models import Aggregate, F, TextField, Value
 from django.db.models.functions import Cast, Coalesce, Concat, Length
+
+from .regex_safety import compile_module_type_pattern
 
 # Publish each loaded rule set as one new dictionary. Concurrent readers then see
 # one complete version rather than a mixture of cache entries from two versions.
@@ -44,10 +46,10 @@ def pinned_rule_cache():
 
 
 def _compile_pattern(pattern):
-    """Compile a pattern once, or return None when it is invalid."""
+    """Compile a safe pattern once, or return None when it is invalid or unsafe."""
     try:
-        return re.compile(pattern)
-    except re.error:
+        return compile_module_type_pattern(pattern)
+    except ValidationError:
         return None
 
 

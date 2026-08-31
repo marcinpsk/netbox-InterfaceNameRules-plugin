@@ -137,10 +137,10 @@ class RuleTestForm(forms.Form):
             if not module_type_pattern:
                 self.add_error("module_type_pattern", "A regex pattern is required when regex mode is enabled.")
             else:
-                from .models import _validate_module_type_pattern
+                from .regex_safety import compile_module_type_pattern
 
                 try:
-                    _validate_module_type_pattern(module_type_pattern)
+                    compile_module_type_pattern(module_type_pattern)
                 except ValidationError as exc:
                     for field, messages in exc.message_dict.items():
                         self.add_error(field, messages)

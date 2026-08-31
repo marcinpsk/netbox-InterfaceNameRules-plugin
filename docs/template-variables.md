@@ -184,9 +184,10 @@ a `parent_name_template` set instead offers each such family for conversion on *
 Preview & Apply**, where the operator confirms it per family; a blank parent template offers
 nothing, because a flat family's ch-0 interface is the base and has nowhere else to go.
 
-Every family is preflighted by performing the conversion inside a transaction that is rolled back,
-so the verdict carries NetBox's own reason for refusing it — a cabled sibling, an occupied parent
-name, a missing sibling — and a refused family is never half converted.
+Missing members are rejected locally before a conversion transaction starts. Every other family is
+preflighted by performing the conversion inside a transaction that is rolled back, so the verdict
+carries NetBox's own reason for refusing it, such as a cabled sibling or an occupied parent name.
+A refused family is never half converted.
 
 Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
 link and `mark_connected`, and becomes the parent. Its interface VRF, IP addresses, FHRP group assignments,
