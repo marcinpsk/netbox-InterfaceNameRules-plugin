@@ -26,6 +26,13 @@ def _conversion_sentences():
     return [sentence for sentence in " ".join(section.lower().split()).split(". ") if sentence]
 
 
+def _example_conversion_sentences():
+    """Return the conversion example as lowercased, whitespace-collapsed sentences."""
+    guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text()
+    section = guide.split("### Converting a flat family (NetBox 4.7+)", 1)[1].split("What the conversion does", 1)[0]
+    return [sentence for sentence in " ".join(section.lower().split()).split(". ") if sentence]
+
+
 class ConversionDocumentationTest(unittest.TestCase):
     """Keep the conversion preflight description consistent with its implementation."""
 
@@ -45,6 +52,20 @@ class ConversionDocumentationTest(unittest.TestCase):
 
     def test_no_preflight_reason_is_credited_to_netbox(self):
         for sentence in _conversion_sentences():
+            if "netbox" not in sentence:
+                continue
+            for reason in _PREFLIGHT_REASONS:
+                with self.subTest(reason=reason, sentence=sentence):
+                    self.assertNotIn(reason, sentence)
+
+    def test_example_separates_plugin_preflight_from_netbox_rejection(self):
+        sentences = _example_conversion_sentences()
+        local = " ".join(s for s in sentences if "preflight" in s or "locally" in s)
+
+        for reason in _PREFLIGHT_REASONS:
+            with self.subTest(reason=reason):
+                self.assertIn(reason, local)
+        for sentence in sentences:
             if "netbox" not in sentence:
                 continue
             for reason in _PREFLIGHT_REASONS:

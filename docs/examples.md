@@ -176,14 +176,16 @@ disabled rule converts nothing, on this page or in the background job.
 
 Conversion is only ever performed from that page, by an operator who confirmed
 it: **Apply** renames, it never rewrites a family. Each family gets its own
-verdict before anything is written. A family the plugin can already refuse from
-what it knows, such as a module that no longer carries the whole family, is reported
-without touching a row; every other verdict comes from performing the whole
-conversion inside a transaction that is rolled back again, so a family NetBox
-would reject is reported with NetBox's own reason (a cabled sibling, an occupied
-parent name, a sibling already channelized, a sibling that is already a channel
-of another parent) instead of being half converted. Selecting
-a blocked family converts the others and skips that one.
+verdict before anything is written. The plugin rejects missing members locally
+before a conversion transaction starts. Its local preflight also refuses a stale
+family, an occupied parent name, a sibling that already belongs to another channel
+family, and a cabled sibling. Each of those verdicts is the plugin's own, and no
+row is written. Only a family that passes preflight reaches NetBox's own rules.
+The plugin runs that rewrite inside a transaction and rolls it back when NetBox
+refuses a row or a name collides, so the verdict then carries NetBox's own reason.
+A preview rolls back a successful rewrite the same way. The plugin never half
+converts a refused family. Selecting a blocked family converts the others and
+skips that one.
 
 What the conversion does to the ch-0 row, per family:
 
