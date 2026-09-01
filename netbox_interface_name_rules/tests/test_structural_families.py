@@ -150,9 +150,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            family_names.reconcile_after_parent_cascade(
-                "et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),), child._state.db
-            )
+            family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
 
         self.assertTrue(callbacks, "no deferred reconciliation was registered")
@@ -163,9 +161,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            family_names.reconcile_after_parent_cascade(
-                "et-0/0/3", "et-0/0/3", ((child.pk, 1, "et-0/0/3:1"),), child._state.db
-            )
+            family_names.reconcile_after_parent_cascade("et-0/0/3", "et-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         self.assertEqual(callbacks, [])
 
@@ -173,9 +169,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("ge-0/0/3-1")
 
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            family_names.reconcile_after_parent_cascade(
-                "et-0/0/3", "xe-0/0/3", ((child.pk, 1, "ge-0/0/3-1"),), child._state.db
-            )
+            family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "ge-0/0/3-1"),))
 
         self.assertEqual(callbacks, [])
 
@@ -183,9 +177,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.captureOnCommitCallbacks(execute=True):
-            family_names.reconcile_after_parent_cascade(
-                "et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),), child._state.db
-            )
+            family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         child.refresh_from_db()
         self.assertEqual(child.name, "et-0/0/3:1")
@@ -195,9 +187,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             with self.captureOnCommitCallbacks(execute=True):
-                family_names.reconcile_after_parent_cascade(
-                    "et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),), child._state.db
-                )
+                family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
                 self._cascade(child, "someone-else-renamed-it")
 
         child.refresh_from_db()
@@ -208,9 +198,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.assertLogs(PLUGIN_LOGGER, level="ERROR"), self.captureOnCommitCallbacks(execute=True):
-            family_names.reconcile_after_parent_cascade(
-                "et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),), child._state.db
-            )
+            family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
             occupant = self._interface("et-0/0/3:1")
 
@@ -227,7 +215,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         )
 
         with CaptureQueriesContext(connection) as queries:
-            family_names.restore_deferred_channel_names(reconciliations, children[0]._state.db)
+            family_names.restore_deferred_channel_names(reconciliations)
 
         locking = [query["sql"] for query in queries.captured_queries if "FOR UPDATE" in query["sql"]]
         self.assertEqual(len(locking), 1, locking)
@@ -247,7 +235,6 @@ class DeferredChannelNameReconciliationTest(TestCase):
             with self.assertRaisesMessage(IntegrityError, "injected deferred database failure"):
                 family_names.restore_deferred_channel_names(
                     ((interface.pk, "final-name", "cascade-name"),),
-                    interface._state.db,
                 )
 
 

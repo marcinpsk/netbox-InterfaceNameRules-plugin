@@ -29,7 +29,7 @@ PARENT_BLOCKED_REASON = "family parent was blocked"
 
 def _lock_family(plan: InstalledFamilyPlan):
     """Lock and return the current family rows in stable primary-key order."""
-    queryset = Interface.objects.using(plan.db_alias)
+    queryset = Interface.objects
     if plan.parent_pk is None:
         queryset = queryset.filter(pk__in=plan.member_pks)
     else:  # pragma: no cover - requires channelization support
@@ -60,7 +60,7 @@ def _blocked_member(member, reason):
     return _member_outcome(member, FamilyStatus.BLOCKED, reason)
 
 
-def _rename_member(member, interface, db_alias):
+def _rename_member(member, interface):
     """Apply one planned name inside a savepoint and return its explicit outcome."""
     target_name = member.target_name
     if target_name is None:
@@ -71,7 +71,7 @@ def _rename_member(member, interface, db_alias):
         return _blocked_member(member, member.reason)
     if target_name == interface.name:
         return _member_outcome(member, FamilyStatus.UNCHANGED)
-    if name_is_taken(interface.device_id, target_name, db_alias, exclude_pk=interface.pk):
+    if name_is_taken(interface.device_id, target_name, exclude_pk=interface.pk):
         logger.warning(
             "Interface name %r already exists on device %s; skipping rename of %r to %r.",
             target_name,
@@ -83,10 +83,10 @@ def _rename_member(member, interface, db_alias):
 
     previous_name = interface.name
     try:
-        with transaction.atomic(using=db_alias):
+        with transaction.atomic():
             interface.name = target_name
             interface.full_clean()
-            interface.save(using=db_alias)
+            interface.save()
     except ValidationError as error:
         interface.name = previous_name
         logger.warning("NetBox rejected rename of %r to %r: %s", previous_name, target_name, error)
@@ -134,13 +134,13 @@ def _preserve_names_across_parent_cascade(plan, member_outcomes):  # pragma: no 
         for member in plan.members
         if member.role == MemberRole.CHANNEL
     )
-    reconcile_after_parent_cascade(parent_member.snapshot.name, parent_member.target_name, channels, plan.db_alias)
+    reconcile_after_parent_cascade(parent_member.snapshot.name, parent_member.target_name, channels)
 
 
 def _execute_channelized_members(plan, live_by_pk):  # pragma: no cover - requires channelization support
     """Execute a channelized family after its parent succeeds."""
     parent_member = next(member for member in plan.members if member.role == MemberRole.PARENT)
-    parent_outcome = _rename_member(parent_member, live_by_pk[parent_member.snapshot.pk], plan.db_alias)
+    parent_outcome = _rename_member(parent_member, live_by_pk[parent_member.snapshot.pk])
     if parent_outcome.status == FamilyStatus.BLOCKED:
         return (
             parent_outcome,
@@ -153,7 +153,7 @@ def _execute_channelized_members(plan, live_by_pk):  # pragma: no cover - requir
     return (
         parent_outcome,
         *(
-            _rename_member(member, live_by_pk[member.snapshot.pk], plan.db_alias)
+            _rename_member(member, live_by_pk[member.snapshot.pk])
             for member in plan.members
             if member.role != MemberRole.PARENT
         ),
@@ -163,7 +163,7 @@ def _execute_channelized_members(plan, live_by_pk):  # pragma: no cover - requir
 def _execute_members(plan, live_by_pk):
     """Execute members while enforcing parent-first family semantics."""
     if plan.parent_pk is None:
-        return tuple(_rename_member(member, live_by_pk[member.snapshot.pk], plan.db_alias) for member in plan.members)
+        return tuple(_rename_member(member, live_by_pk[member.snapshot.pk]) for member in plan.members)
     return _execute_channelized_members(plan, live_by_pk)  # pragma: no cover - channelization only
 
 
@@ -180,7 +180,7 @@ def _stale_outcome(plan: InstalledFamilyPlan) -> FamilyOutcome:
 
 def execute_installed_plan(plan: InstalledFamilyPlan) -> FamilyOutcome:
     """Execute one family plan in its own transaction."""
-    with transaction.atomic(using=plan.db_alias):
+    with transaction.atomic():
         interfaces = _lock_family(plan)
         if _is_stale(plan, interfaces):
             return _stale_outcome(plan)

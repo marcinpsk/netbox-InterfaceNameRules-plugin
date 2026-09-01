@@ -699,7 +699,6 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             topology=FamilyTopology.FLAT,
             device_id=self.device.pk,
             module_id=self.module.pk,
-            db_alias=flat.db_alias,
             members=(PlannedMember(flat.base, "installed-target", MemberRole.FLAT_MEMBER),),
         )
         structural = StructuralFamilyPlan(
@@ -707,7 +706,6 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             device_id=self.device.pk,
             module_id=self.module.pk,
             module_type_id=self.module_type.pk,
-            db_alias=flat.db_alias,
             base=flat.base,
             parent_target_name="parent-target",
             channel_count=0,

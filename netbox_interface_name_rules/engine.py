@@ -257,9 +257,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     variables = build_variables(module_bay, device=module.device)
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
-    interfaces = list(
-        Interface.objects.using(family_ops.module_db_alias(module)).filter(module_id=module.pk).order_by("pk")
-    )
+    interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
     planned = family_ops.plan_module_families(
         module,
         rule,

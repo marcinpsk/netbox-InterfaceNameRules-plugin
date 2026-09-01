@@ -76,7 +76,6 @@ class InstalledFamilyPlan:
     topology: FamilyTopology
     device_id: int
     module_id: int | None
-    db_alias: str
     members: tuple[PlannedMember, ...]
     parent_pk: int | None = None
     precondition_status: FamilyStatus | None = None
@@ -122,7 +121,6 @@ class StructuralFamilyPlan:
     device_id: int
     module_id: int
     module_type_id: int
-    db_alias: str
     base: InterfaceSnapshot
     parent_target_name: str
     channel_count: int
@@ -153,7 +151,6 @@ class FlatCreationPlan:
     family_id: str
     device_id: int
     module_id: int
-    db_alias: str
     base: InterfaceSnapshot
     target_names: tuple[str, ...]
     precondition_status: FamilyStatus | None = None
@@ -286,7 +283,6 @@ class ConversionPlan:  # pragma: no cover - requires channelization support
     family_id: str
     device_id: int
     module_id: int
-    db_alias: str
     base: InterfaceSnapshot
     parent_target_name: str
     channel_names: tuple[str, ...]

@@ -14,11 +14,9 @@ COLLISION_REASON = "target name is already in use"
 INTERFACE_NAME_CONSTRAINT = "dcim_interface_unique_device_name"
 
 
-def name_is_taken(device_id, target_name, db_alias, exclude_pk) -> bool:
+def name_is_taken(device_id, target_name, exclude_pk) -> bool:
     """Return whether an interface other than *exclude_pk* already owns *target_name* on the device."""
-    return (
-        Interface.objects.using(db_alias).filter(device_id=device_id, name=target_name).exclude(pk=exclude_pk).exists()
-    )
+    return Interface.objects.filter(device_id=device_id, name=target_name).exclude(pk=exclude_pk).exists()
 
 
 def is_name_collision(error: IntegrityError) -> bool:
@@ -28,16 +26,12 @@ def is_name_collision(error: IntegrityError) -> bool:
     return getattr(diagnostics, "constraint_name", None) == INTERFACE_NAME_CONSTRAINT
 
 
-def restore_deferred_channel_names(reconciliations, db_alias):
+def restore_deferred_channel_names(reconciliations):
     """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
     child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
-    with transaction.atomic(using=db_alias):
+    with transaction.atomic():
         children = (
-            Interface.objects.using(db_alias)
-            .select_for_update(of=("self",))
-            .select_related("device")
-            .order_by("pk")
-            .in_bulk(child_pks)
+            Interface.objects.select_for_update(of=("self",)).select_related("device").order_by("pk").in_bulk(child_pks)
         )
         for child_pk, final_name, cascade_name in reconciliations:
             child = children.get(child_pk)
@@ -53,10 +47,10 @@ def restore_deferred_channel_names(reconciliations, db_alias):
                 continue
             previous_name = child.name
             try:
-                with transaction.atomic(using=db_alias):
+                with transaction.atomic():
                     child.name = final_name
                     child.full_clean()
-                    child.save(using=db_alias)
+                    child.save()
             except ValidationError:
                 child.name = previous_name
                 logger.exception(
@@ -76,7 +70,7 @@ def restore_deferred_channel_names(reconciliations, db_alias):
                 )
 
 
-def reconcile_after_parent_cascade(parent_before, parent_after, channels, db_alias):
+def reconcile_after_parent_cascade(parent_before, parent_after, channels):
     """Schedule restoration of the channel names NetBox's deferred parent cascade will overwrite.
 
     *channels* carries ``(child_pk, channel_id, final_name)`` for every channel the caller settled.
@@ -91,7 +85,4 @@ def reconcile_after_parent_cascade(parent_before, parent_after, channels, db_ali
     )
     if not reconciliations:
         return
-    transaction.on_commit(
-        lambda: restore_deferred_channel_names(reconciliations, db_alias),
-        using=db_alias,
-    )
+    transaction.on_commit(lambda: restore_deferred_channel_names(reconciliations))

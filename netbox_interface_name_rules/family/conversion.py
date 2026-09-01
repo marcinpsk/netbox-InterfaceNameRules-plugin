@@ -39,7 +39,6 @@ from .installed import (
     flat_family_bases,
     interfaces_by_module,
     is_plain_interface,
-    module_db_alias,
 )
 from .names import COLLISION_REASON, is_name_collision, name_is_taken
 from .targets import builds_channelized_family, channelized_family_names
@@ -68,7 +67,7 @@ def conversion_offered(rule) -> bool:
 
 
 def _conversion_plan(
-    module, db_alias, parent_name, channel_names, rows, channelization_supported
+    module, parent_name, channel_names, rows, channelization_supported
 ):  # pragma: no cover - channelization only
     """Build one immutable conversion plan from the rows a module carries for one family."""
     base, *siblings = rows
@@ -76,7 +75,6 @@ def _conversion_plan(
         family_id=f"conversion:{base.pk}",
         device_id=module.device_id,
         module_id=module.pk,
-        db_alias=db_alias,
         base=InterfaceSnapshot.from_interface(base),
         parent_target_name=parent_name,
         channel_names=channel_names,
@@ -122,7 +120,6 @@ def plan_module_conversions(
     virtual-chassis renumber converts to the parent an apply would give it; the channels keep the
     names they already carry, because converting retypes those rows in place.
     """
-    db_alias = module_db_alias(module)
     catalog = TemplateNames(module)
     by_name = {interface.name: interface for interface in interfaces}
     channelization_supported = supports_channelization()
@@ -141,7 +138,6 @@ def plan_module_conversions(
         plans.append(
             _conversion_plan(
                 module,
-                db_alias,
                 parent_name,
                 channel_names,
                 rows,
@@ -220,8 +216,7 @@ def _locked_family(plan):  # pragma: no cover - requires channelization support
     return {
         interface.pk: interface
         for interface in (
-            Interface.objects.using(plan.db_alias)
-            .select_for_update(of=("self",))  # module is nullable, so locking the join is refused
+            Interface.objects.select_for_update(of=("self",))  # module is nullable, so locking the join is refused
             .select_related("device", "module")
             .filter(pk__in=plan.member_pks)
             .order_by("pk")
@@ -241,7 +236,7 @@ def _blocking_reason(plan, live) -> str:  # pragma: no cover - requires channeli
     Only what upstream cannot decide for us is checked here; everything else is left to
     ``full_clean()`` on each prospective row, which inherits upstream's rules as they grow.
     """
-    if name_is_taken(plan.device_id, plan.parent_target_name, plan.db_alias, exclude_pk=plan.base.pk):
+    if name_is_taken(plan.device_id, plan.parent_target_name, exclude_pk=plan.base.pk):
         return f"the parent name {plan.parent_target_name!r} is already taken on this device"
     for member in plan.siblings:
         sibling = live[member.snapshot.pk]
@@ -266,16 +261,16 @@ def _carry_assignments(plan, base, channel):  # pragma: no cover - requires chan
     each row is locked first: an edit landing between the read and the save would otherwise be
     overwritten by the values this transaction started with.
     """
-    addresses = base.ip_addresses.using(plan.db_alias).select_for_update().order_by("pk")
+    addresses = base.ip_addresses.select_for_update().order_by("pk")
     for address in addresses:
         address.assigned_object = channel
         address.full_clean()
-        address.save(using=plan.db_alias)
-    assignments = base.fhrp_group_assignments.using(plan.db_alias).select_for_update().order_by("pk")
+        address.save()
+    assignments = base.fhrp_group_assignments.select_for_update().order_by("pk")
     for assignment in assignments:
         assignment.interface = channel
         assignment.full_clean()
-        assignment.save(using=plan.db_alias)
+        assignment.save()
 
 
 def _split_base(plan, base):  # pragma: no cover - requires channelization support
@@ -304,7 +299,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     base.untagged_vlan = None
     base.vrf = None
     _validate_or_block(base, "parent")
-    base.save(using=plan.db_alias)  # BaseInterface.save() drops the tagged VLANs of a row that no longer tags
+    base.save()  # BaseInterface.save() drops the tagged VLANs of a row that no longer tags
     base.tags.clear()
 
     channel = Interface(
@@ -319,7 +314,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
         **carried,
     )
     _validate_or_block(channel, "channel")
-    channel.save(using=plan.db_alias)
+    channel.save()
     channel.tagged_vlans.set(tagged_vlans)
     channel.tags.set(tags)
     _carry_assignments(plan, base, channel)
@@ -341,7 +336,7 @@ def _rewrite(plan, live):  # pragma: no cover - requires channelization support
         sibling.parent = base
         sibling.channel_id = member.channel_id
         _validate_or_block(sibling, "channel")
-        sibling.save(using=plan.db_alias)
+        sibling.save()
         members.append(MemberOutcome(sibling.pk, sibling.name, sibling.name, FamilyStatus.CHANGED))
     return tuple(members)
 
@@ -353,7 +348,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
     rewrite back, so a family is never half converted and a scan writes nothing at all.
     """
     try:
-        with transaction.atomic(using=plan.db_alias):
+        with transaction.atomic():
             live = _locked_family(plan)
             if _is_stale(plan, live):
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON)
@@ -362,7 +357,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
                 return _refused(plan, FamilyStatus.BLOCKED, reason)
             members = _rewrite(plan, live)
             if not commit:
-                transaction.set_rollback(True, using=plan.db_alias)
+                transaction.set_rollback(True)
     except ValidationError as error:
         return _refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
     except IntegrityError as error:

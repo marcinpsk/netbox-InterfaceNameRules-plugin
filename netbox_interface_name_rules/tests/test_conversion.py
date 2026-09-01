@@ -190,7 +190,7 @@ class ConversionVerdictTest(ConversionTestCase):
         ) as set_rollback:
             self._verdicts()
 
-        set_rollback.assert_called_once_with(True, using=self.module._state.db)
+        set_rollback.assert_called_once_with(True)
         self._assert_still_flat(self.module, "3")
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), pks)
 
