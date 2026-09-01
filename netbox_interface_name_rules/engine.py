@@ -272,7 +272,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
     leftover = planned.leftover
 
-    outcomes = family_ops.execute_module_families(rule, module, [*installed, *leftover])
+    outcomes = family_ops.execute_module_families([*installed, *leftover])
     renamed = sum(outcome.changed_count for outcome in outcomes)
     blocked = [
         member for outcome in outcomes for member in outcome.members if member.status == family_ops.FamilyStatus.BLOCKED

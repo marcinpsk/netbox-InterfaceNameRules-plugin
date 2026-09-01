@@ -262,8 +262,8 @@ class BulkApplyContinuesPastOneBlockedFamilyTest(BulkTestCase):
         self.assertEqual(len(outcome.skipped_members), 1)
         self.assertEqual(outcome.skipped_members[0].target_name, "xe-0/0/1:0")
 
-    def test_an_unexpected_family_failure_is_logged_and_the_batch_continues(self):
-        """The boundary keeps going: one family's failure is visible, never the batch's end."""
+    def test_an_unexpected_family_failure_reaches_the_operation_boundary(self):
+        """An unexpected executor error is not a family verdict, so it reaches the caller."""
         from netbox_interface_name_rules.family import batch
 
         execute = batch.execute_family_plan
@@ -275,15 +275,12 @@ class BulkApplyContinuesPastOneBlockedFamilyTest(BulkTestCase):
 
         with (
             patch.object(batch, "execute_family_plan", side_effect=fail_on_the_first_module),
-            self.assertLogs("netbox_interface_name_rules.family.batch", level="ERROR"),
+            self.assertRaisesMessage(ValueError, "family boom"),
         ):
-            outcome = apply_rule_to_existing(self.rule)
+            apply_rule_to_existing(self.rule)
 
         self.assertEqual(self._names(self.modules[0]), ["1"])
-        self.assertEqual(self._names(self.modules[1]), ["xe-0/0/2:0", "xe-0/0/2:1", "xe-0/0/2:2", "xe-0/0/2:3"])
-        self.assertEqual(outcome.changed_count, 4)
-        self.assertEqual([family.status for family in outcome.families], [FamilyStatus.FAILED, FamilyStatus.CHANGED])
-        self.assertEqual([member.target_name for member in outcome.skipped_members], ["xe-0/0/1:0"])
+        self.assertEqual(self._names(self.modules[1]), ["2"])
 
     def test_an_unrelated_integrity_failure_reaches_the_operation_boundary(self):
         def reject_interface_update(execute, sql, params, many, context):

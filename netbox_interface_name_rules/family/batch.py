@@ -10,8 +10,6 @@ each module type's templates are read once for the whole batch.
 import logging
 from dataclasses import dataclass
 
-from django.core.exceptions import ValidationError
-
 from ..naming import build_variables
 from .domain import (
     FamilyOutcome,
@@ -169,53 +167,16 @@ def _selected(plans, selected_pks):
     return [plan for plan in plans if selected_pks.intersection(_selection_pks(plan))]
 
 
-def execute_module_families(rule, module, plans):
-    """Execute each planned family in order, keeping the ones after a failure."""
-    return [_execute(rule, module, plan) for plan in plans]
-
-
-def _failed_members(plan, reason):
-    """Return failed member facts for the live rows an executor left unchanged."""
-    return tuple(
-        MemberOutcome(
-            interface_pk=member.snapshot.pk,
-            current_name=member.snapshot.name,
-            target_name=member.target_name,
-            status=FamilyStatus.FAILED,
-            reason=reason,
-        )
-        for member in plan.live_members
-    )
-
-
-def _failed_outcome(plan, error):
-    """Represent an executor exception without dropping the planned family from the batch."""
-    reason = f"family execution failed: {error}"
-    return FamilyOutcome(
-        family_id=plan.family_id,
-        topology=plan.topology,
-        status=FamilyStatus.FAILED,
-        members=_failed_members(plan, reason),
-        reason=reason,
-    )
-
-
-def _execute(rule, module, plan):
-    """Execute one family, logging (never raising) so the batch keeps its later families."""
-    try:
-        return execute_family_plan(plan)
-    except (ValueError, ValidationError) as error:
-        logger.exception(
-            "Failed to apply rule '%s' to a family on module '%s' (id=%s); skipping.", rule, module, module.pk
-        )
-        return _failed_outcome(plan, error)
+def execute_module_families(plans):
+    """Execute each planned family in order."""
+    return [execute_family_plan(plan) for plan in plans]
 
 
 def _apply_module(rule, module, interfaces, selected_pks):
     """Plan and execute every selected family on one module."""
     variables = build_variables(module.module_bay, device=module.device)
     plans = _selected(plan_module_families(module, rule, variables, interfaces).plans, selected_pks)
-    return execute_module_families(rule, module, plans)
+    return execute_module_families(plans)
 
 
 def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> BatchOutcome:

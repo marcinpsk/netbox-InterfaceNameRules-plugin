@@ -1181,11 +1181,11 @@ class TwoLevelNestedBayTest(TestCase):
 
 
 class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
-    """A family that fails unexpectedly is logged and skipped; the batch keeps its later families."""
+    """An unexpected executor failure reaches the caller, and committed families stay committed."""
 
     @staticmethod
     def _failing_after_the_first_family():
-        """Return an executor that runs the first family for real and fails on every later one."""
+        """Return an executor that runs the first family for real and fails on the next one."""
         from netbox_interface_name_rules.family import batch
 
         execute = batch.execute_family_plan
@@ -1209,17 +1209,19 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
         iface1 = Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
-        with patch(
-            "netbox_interface_name_rules.family.batch.execute_family_plan",
-            side_effect=self._failing_after_the_first_family(),
+        with (
+            patch(
+                "netbox_interface_name_rules.family.batch.execute_family_plan",
+                side_effect=self._failing_after_the_first_family(),
+            ),
+            self.assertRaises(ValueError),
         ):
-            count = apply_rule_to_existing(rule)
+            apply_rule_to_existing(rule)
 
-        self.assertEqual(count.changed_count, 1)
         iface0.refresh_from_db()
         iface1.refresh_from_db()
-        self.assertEqual(iface0.name, "et-0/0/0")  # first was renamed
-        self.assertEqual(iface1.name, "1")  # second was skipped
+        self.assertEqual(iface0.name, "et-0/0/0")  # first family had already committed
+        self.assertEqual(iface1.name, "1")  # second never ran
 
     def test_a_failing_breakout_family_leaves_the_earlier_module_built(self):
         rule = InterfaceNameRule.objects.create(
@@ -1233,15 +1235,17 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
-        with patch(
-            "netbox_interface_name_rules.family.batch.execute_family_plan",
-            side_effect=self._failing_after_the_first_family(),
+        with (
+            patch(
+                "netbox_interface_name_rules.family.batch.execute_family_plan",
+                side_effect=self._failing_after_the_first_family(),
+            ),
+            self.assertRaises(ValueError),
         ):
-            count = apply_rule_to_existing(rule)
+            apply_rule_to_existing(rule)
 
-        self.assertEqual(count.changed_count, 2)
         iface0.refresh_from_db()
-        self.assertEqual(iface0.name, "xe-0/0/0:0")
+        self.assertEqual(iface0.name, "xe-0/0/0:0")  # first family had already committed
         self.assertEqual(Interface.objects.get(module=module1).name, "1")
 
 
