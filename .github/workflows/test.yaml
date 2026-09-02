@@ -26,7 +26,7 @@ jobs:
       max-parallel: 6
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        netbox-version: ["v4.3.7", "v4.5.3", "v4.6.5"]
+        netbox-version: ["v4.3.7", "v4.5.3", "v4.7.0"]
         exclude:
           - python-version: "3.14"
             netbox-version: "v4.3.7"  # strawberry-graphql incompatible with Python 3.14 on this NetBox version
@@ -36,8 +36,7 @@ jobs:
           - python-version: "3.13"
             netbox-version: "main"
             experimental: true
-          # Channelized interfaces (NetBox 4.7) live on the feature branch until they merge into
-          # main, at which point this cell is redundant and goes away. Non-blocking, same reason.
+          # The feature branch carries the next minor release. Non-blocking, same reason.
           - python-version: "3.13"
             netbox-version: "feature"
             experimental: true
@@ -124,10 +123,13 @@ jobs:
           COVERAGE_RCFILE: pyproject.toml
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
-          EXPECT_NETBOX_CHANNELIZATION: ${{ matrix.netbox-version == 'feature' && '1' || '' }}
-          # Moving branches can change query plans upstream. Record their counts in this disposable
-          # checkout so these cells report plugin compatibility failures instead of baseline drift.
-          UPDATE_QUERY_COUNTS: ${{ matrix.experimental && '1' || '' }}
+          EXPECT_NETBOX_CHANNELIZATION: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
+          # A query count belongs to one NetBox release, and the baseline file holds one value per
+          # key. The top supported version is the only leg that asserts it. Every other cell records
+          # its count in this disposable checkout, so it reports plugin compatibility failures
+          # instead of baseline drift. Bumping the top version means editing the matrix above, the
+          # two conditions here, and tests/query_counts.json together.
+          UPDATE_QUERY_COUNTS: ${{ matrix.netbox-version != 'v4.7.0' && '1' || '' }}
         run: |
           pytest -n auto netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
             -o pythonpath=../netbox/netbox
