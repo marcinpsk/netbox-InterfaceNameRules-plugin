@@ -7,7 +7,8 @@ from django.db import migrations
 
 logger = logging.getLogger(__name__)
 
-_UNICODE_SHORTHANDS = frozenset("dDsSwW")
+_NARROWING_SHORTHANDS = frozenset("dsw")
+_BREAKING_SHORTHANDS = frozenset("DSW")
 _POSIX_CLASSES = frozenset(
     {
         "alnum",
@@ -49,23 +50,49 @@ def _counted_repeat_uses_different_semantics(pattern, opening_index):
     return not lower or (len(lower) > 1 and lower.startswith("0")) or (len(upper) > 1 and upper.startswith("0"))
 
 
-def _re2_differences(pattern):
-    """Return whether *pattern* can match different text under RE2, and whether it only narrows to ASCII.
+def _escaped_shorthand_re2_differences(shorthand, in_character_class, character_class_is_negated):
+    """Classify one escaped shorthand by its match direction under RE2."""
+    if shorthand in _NARROWING_SHORTHANDS:
+        breaks = in_character_class and character_class_is_negated
+        return breaks, not breaks
+    if shorthand in _BREAKING_SHORTHANDS:
+        narrows = in_character_class and character_class_is_negated
+        return not narrows, narrows
+    breaks = shorthand in "bB" and not in_character_class
+    return breaks, False
 
-    A narrowing construct drops Unicode matches that RE2 reads as ASCII, so it can skip a rename.
+
+def _case_insensitive_re2_differences(case_insensitive, has_negated_character_class):
+    """Classify case-insensitive matching by whether the pattern also negates a character class."""
+    return (
+        case_insensitive and has_negated_character_class,
+        case_insensitive and not has_negated_character_class,
+    )
+
+
+def _re2_differences(pattern):
+    """Return whether *pattern* can match different text under RE2, and whether it only narrows matching.
+
+    A narrowing construct drops Unicode matches under RE2, so it can skip a rename.
     A breaking construct can match text Python never matched, so it can rename the wrong interface.
     """
     breaks = False
     narrows = False
+    case_insensitive = False
+    has_negated_character_class = False
     in_character_class = False
     character_class_has_content = False
+    character_class_is_negated = False
     index = 0
     while index < len(pattern):
         character = pattern[index]
         if character == "\\" and index + 1 < len(pattern):
             shorthand = pattern[index + 1]
-            if shorthand in _UNICODE_SHORTHANDS or (shorthand in "bB" and not in_character_class):
-                narrows = True
+            escape_breaks, escape_narrows = _escaped_shorthand_re2_differences(
+                shorthand, in_character_class, character_class_is_negated
+            )
+            breaks = breaks or escape_breaks
+            narrows = narrows or escape_narrows
             character_class_has_content = character_class_has_content or in_character_class
             index += 2
             continue
@@ -78,11 +105,15 @@ def _re2_differences(pattern):
                         breaks = True
             if character == "]" and character_class_has_content:
                 in_character_class = False
-            elif character != "^" or character_class_has_content:
+            elif character == "^" and not character_class_has_content and not character_class_is_negated:
+                character_class_is_negated = True
+                has_negated_character_class = True
+            else:
                 character_class_has_content = True
         elif character == "[":
             in_character_class = True
             character_class_has_content = False
+            character_class_is_negated = False
         elif character == "{" and _counted_repeat_uses_different_semantics(pattern, index):
             breaks = True
         elif pattern.startswith("(?", index):
@@ -92,9 +123,10 @@ def _re2_differences(pattern):
             flag_spec = pattern[index + 2 : flags_end]
             enabled_flags = flag_spec.split("-", 1)[0]
             if flags_end < len(pattern) and pattern[flags_end] in ":)" and "i" in enabled_flags:
-                narrows = True
+                case_insensitive = True
         index += 1
-    return breaks, narrows
+    case_breaks, case_narrows = _case_insensitive_re2_differences(case_insensitive, has_negated_character_class)
+    return breaks or case_breaks, narrows or case_narrows
 
 
 def _uses_different_re2_semantics(pattern):
@@ -103,7 +135,7 @@ def _uses_different_re2_semantics(pattern):
 
 
 def _narrows_to_ascii(pattern):
-    """Return whether RE2 reads this pattern as ASCII where Python read it as Unicode."""
+    """Return whether RE2 can only drop matches from this pattern."""
     return _re2_differences(pattern)[1]
 
 
@@ -135,9 +167,9 @@ def validate_re2_patterns(apps, schema_editor):
         label = "ID" if len(narrowed_ids) == 1 else "IDs"
         identifiers = ", ".join(str(pk) for pk in narrowed_ids)
         logger.warning(
-            "RE2 reads \\d, \\s, \\w and \\b as ASCII for InterfaceNameRule %s: %s. "
-            "These rules keep matching ASCII interface names. They no longer match a non-ASCII digit "
-            "or letter. Write an RE2 Unicode property such as \\p{L} where a rule must still match one.",
+            "RE2 narrows Unicode matching for InterfaceNameRule %s: %s. It reads \\d, \\s and \\w as ASCII, "
+            "and handles some Unicode case folds more narrowly. These rules can skip a non-ASCII match. "
+            "Write an RE2 Unicode property such as \\p{L} where a rule must still match one.",
             label,
             identifiers,
         )
