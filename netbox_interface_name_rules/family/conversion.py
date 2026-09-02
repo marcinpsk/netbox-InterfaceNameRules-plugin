@@ -253,7 +253,7 @@ def _blocking_reason(plan, live) -> str:  # pragma: no cover - requires channeli
     return ""
 
 
-def _carry_assignments(plan, base, channel):  # pragma: no cover - requires channelization support
+def _carry_assignments(base, channel):  # pragma: no cover - requires channelization support
     """Move the ch-0 row's addresses and first-hop groups onto the channel that took its name.
 
     Saved one row at a time so each carried object is validated, and recorded in the changelog,
@@ -317,7 +317,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     channel.save()
     channel.tagged_vlans.set(tagged_vlans)
     channel.tags.set(tags)
-    _carry_assignments(plan, base, channel)
+    _carry_assignments(base, channel)
     return channel
 
 
