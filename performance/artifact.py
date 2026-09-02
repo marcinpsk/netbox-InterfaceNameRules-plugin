@@ -182,7 +182,7 @@ def validate_artifact(value: Any, source: str = "performance artifact") -> None:
     """Reject a performance artifact that this code cannot interpret."""
     artifact = _mapping(value, source, "artifact")
     version = _required(artifact, "schema_version", source, "artifact")
-    if version != SCHEMA_VERSION:
+    if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
         raise _invalid(source, "artifact.schema_version", f"must be {SCHEMA_VERSION}, got {version!r}")
     _string(_required(artifact, "baseline_kind", source, "artifact"), source, "artifact.baseline_kind")
     _string(_required(artifact, "generated_at", source, "artifact"), source, "artifact.generated_at")

@@ -126,6 +126,14 @@ class ArtifactValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema_version"):
             compare.validate_artifact(artifact, "before artifact")
 
+    def test_schema_version_requires_an_integer(self):
+        for version in (True, 1.0):
+            artifact = _timed_artifact(_MACHINE_TIME)
+            artifact["schema_version"] = version
+
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "schema_version"):
+                compare.validate_artifact(artifact, "before artifact")
+
     def test_a_missing_required_environment_field_is_rejected(self):
         artifact = _timed_artifact(_MACHINE_TIME)
         del artifact["environment"]["plugin_revision"]
