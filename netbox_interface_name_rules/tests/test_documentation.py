@@ -2,11 +2,16 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Test documentation statements that define plugin behavior."""
 
+import importlib
 import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
 
 
 # _blocking_reason() and the staleness check decide these before _rewrite() runs, so NetBox never sees them.
@@ -106,3 +111,40 @@ class PerformanceDocumentationTest(unittest.TestCase):
         for scenario, changes in changes_by_scenario.items():
             with self.subTest(scenario=scenario):
                 self.assertEqual(readme_changes.get(scenario.rsplit(".", 1)[-1]), sum(changes.values()))
+
+
+def _patterns_in(node):
+    """Yield every module_type_pattern value nested anywhere in a loaded YAML document."""
+    if isinstance(node, dict):
+        if isinstance(node.get("module_type_pattern"), str):
+            yield node["module_type_pattern"]
+        for value in node.values():
+            yield from _patterns_in(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _patterns_in(value)
+
+
+def _shipped_patterns():
+    """Return every module-type pattern the plugin ships or documents, by source."""
+    found = []
+    for path in sorted((_PROJECT_ROOT / "contrib").glob("*.yaml")):
+        found.extend((path.name, pattern) for pattern in _patterns_in(yaml.safe_load(path.read_text())))
+    for path in sorted((_PROJECT_ROOT / "docs").glob("*.md")):
+        for raw in re.findall(r"^\s*-?\s*module_type_pattern:\s*(.+)$", path.read_text(), re.MULTILINE):
+            value = yaml.safe_load(raw)
+            if isinstance(value, str):
+                found.append((path.name, value))
+    return found
+
+
+class ShippedPatternRe2AuditTest(unittest.TestCase):
+    """Every pattern the plugin ships or documents must survive the RE2 upgrade audit."""
+
+    def test_no_shipped_pattern_blocks_the_upgrade(self):
+        patterns = _shipped_patterns()
+
+        self.assertTrue(patterns)
+        for source, pattern in patterns:
+            with self.subTest(source=source, pattern=pattern):
+                self.assertFalse(_RE2_AUDIT._uses_different_re2_semantics(pattern))

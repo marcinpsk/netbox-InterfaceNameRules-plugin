@@ -398,11 +398,6 @@ class RegexEngineMigrationTest(TestCase):
                 name_template="Gi{vc_position}/{port}",
             )
             for pattern in (
-                r"\w+",
-                r"\d+",
-                r"\s+",
-                r"\bMóduló\b",
-                r"(?i)i",
                 r"[[:alpha:]]+",
                 r"[[:^alpha:]]+",
                 r"a{,3}",
@@ -417,6 +412,30 @@ class RegexEngineMigrationTest(TestCase):
                 self._migrate(latest)
             for rule in rules:
                 self.assertRegex(str(ctx.exception), rf"\b{rule.pk}\b")
+        finally:
+            Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
+            self._migrate(latest)
+
+    def test_upgrade_accepts_a_pattern_that_only_narrows_to_ascii(self):
+        """RE2 makes these ASCII-only, which can skip a rename but never redirect one."""
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rules = [
+            Rule.objects.create(
+                applies_to_device_interfaces=True,
+                module_type_pattern=pattern,
+                name_template="Gi{vc_position}/{port}",
+            )
+            for pattern in (r"\w+", r"\d+", r"\s+", r"\bMóduló\b", r"(?i)i", r"Gi\d+/\d+")
+        ]
+        connection.check_constraints()
+
+        try:
+            with self.assertLogs("netbox_interface_name_rules", level="WARNING") as logs:
+                self._migrate(latest)
+            for rule in rules:
+                self.assertRegex("\n".join(logs.output), rf"\b{rule.pk}\b")
         finally:
             Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
             self._migrate(latest)

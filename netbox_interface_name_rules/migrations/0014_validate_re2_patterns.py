@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 
+import logging
+
 from django.db import migrations
+
+logger = logging.getLogger(__name__)
 
 _UNICODE_SHORTHANDS = frozenset("dDsSwW")
 _POSIX_CLASSES = frozenset(
@@ -45,8 +49,14 @@ def _counted_repeat_uses_different_semantics(pattern, opening_index):
     return not lower or (len(lower) > 1 and lower.startswith("0")) or (len(upper) > 1 and upper.startswith("0"))
 
 
-def _uses_different_re2_semantics(pattern):
-    """Return whether Python and RE2 can interpret a legacy construct differently."""
+def _re2_differences(pattern):
+    """Return whether *pattern* can match different text under RE2, and whether it only narrows to ASCII.
+
+    A narrowing construct drops Unicode matches that RE2 reads as ASCII, so it can skip a rename.
+    A breaking construct can match text Python never matched, so it can rename the wrong interface.
+    """
+    breaks = False
+    narrows = False
     in_character_class = False
     character_class_has_content = False
     index = 0
@@ -55,7 +65,7 @@ def _uses_different_re2_semantics(pattern):
         if character == "\\" and index + 1 < len(pattern):
             shorthand = pattern[index + 1]
             if shorthand in _UNICODE_SHORTHANDS or (shorthand in "bB" and not in_character_class):
-                return True
+                narrows = True
             character_class_has_content = character_class_has_content or in_character_class
             index += 2
             continue
@@ -65,7 +75,7 @@ def _uses_different_re2_semantics(pattern):
                 if class_end >= 0:
                     class_name = pattern[index + 2 : class_end].removeprefix("^")
                     if class_name in _POSIX_CLASSES:
-                        return True
+                        breaks = True
             if character == "]" and character_class_has_content:
                 in_character_class = False
             elif character != "^" or character_class_has_content:
@@ -74,7 +84,7 @@ def _uses_different_re2_semantics(pattern):
             in_character_class = True
             character_class_has_content = False
         elif character == "{" and _counted_repeat_uses_different_semantics(pattern, index):
-            return True
+            breaks = True
         elif pattern.startswith("(?", index):
             flags_end = index + 2
             while flags_end < len(pattern) and pattern[flags_end] in "imsU-":
@@ -82,13 +92,23 @@ def _uses_different_re2_semantics(pattern):
             flag_spec = pattern[index + 2 : flags_end]
             enabled_flags = flag_spec.split("-", 1)[0]
             if flags_end < len(pattern) and pattern[flags_end] in ":)" and "i" in enabled_flags:
-                return True
+                narrows = True
         index += 1
-    return False
+    return breaks, narrows
+
+
+def _uses_different_re2_semantics(pattern):
+    """Return whether RE2 can match text on this pattern that Python never matched."""
+    return _re2_differences(pattern)[0]
+
+
+def _narrows_to_ascii(pattern):
+    """Return whether RE2 reads this pattern as ASCII where Python read it as Unicode."""
+    return _re2_differences(pattern)[1]
 
 
 def validate_re2_patterns(apps, schema_editor):
-    """Stop the upgrade before stored patterns can change meaning under RE2."""
+    """Stop the upgrade before stored patterns can match a different interface under RE2."""
     import re
 
     import re2
@@ -97,9 +117,13 @@ def validate_re2_patterns(apps, schema_editor):
     options.log_errors = False
     Rule = apps.get_model("netbox_interface_name_rules", "InterfaceNameRule")
     invalid_ids = []
+    narrowed_ids = []
     rules = Rule.objects.using(schema_editor.connection.alias).exclude(module_type_pattern="")
     for pk, pattern in rules.values_list("pk", "module_type_pattern").iterator():
-        if _uses_different_re2_semantics(pattern):
+        breaks, narrows = _re2_differences(pattern)
+        if narrows:
+            narrowed_ids.append(pk)
+        if breaks:
             invalid_ids.append(pk)
             continue
         try:
@@ -107,6 +131,16 @@ def validate_re2_patterns(apps, schema_editor):
             re2.compile(pattern, options=options)
         except (OverflowError, re.error, re2.error):
             invalid_ids.append(pk)
+    if narrowed_ids:
+        label = "ID" if len(narrowed_ids) == 1 else "IDs"
+        identifiers = ", ".join(str(pk) for pk in narrowed_ids)
+        logger.warning(
+            "RE2 reads \\d, \\s, \\w and \\b as ASCII for InterfaceNameRule %s: %s. "
+            "These rules keep matching ASCII interface names. They no longer match a non-ASCII digit "
+            "or letter. Write an RE2 Unicode property such as \\p{L} where a rule must still match one.",
+            label,
+            identifiers,
+        )
     if invalid_ids:
         label = "ID" if len(invalid_ids) == 1 else "IDs"
         identifiers = ", ".join(str(pk) for pk in invalid_ids)
