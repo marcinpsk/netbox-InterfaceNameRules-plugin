@@ -351,13 +351,13 @@ Juniper VCs use **0-based** member IDs. Interfaces follow the `{prefix}-{member}
 # Juniper EX — 1G access ports
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  module_type_pattern: "ge-[0-9]+/[0-9]+/[0-9]+"
   name_template: "ge-{vc_position}/0/{port}"
 
 # Juniper EX — 10G uplinks
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "xe-\\d+/\\d+/\\d+"
+  module_type_pattern: "xe-[0-9]+/[0-9]+/[0-9]+"
   name_template: "xe-{vc_position}/1/{port}"
 ```
 
@@ -374,7 +374,7 @@ Cisco stacks use **1-based** member IDs. Templates create `GigabitEthernet1/0/N`
 ```yaml
 - applies_to_device_interfaces: true
   device_type: "CISCO-C9K"
-  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  module_type_pattern: "GigabitEthernet[0-9]+/[0-9]+/[0-9]+"
   name_template: "GigabitEthernet{vc_position}/0/{port}"
 ```
 
@@ -391,7 +391,7 @@ Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device typ
 ```yaml
 - applies_to_device_interfaces: true
   device_type: "ARISTA-EOS"
-  module_type_pattern: "Ethernet\\d+/\\d+"
+  module_type_pattern: "Ethernet[0-9]+/[0-9]+"
   name_template: "Ethernet{vc_position}/{port}"
 ```
 

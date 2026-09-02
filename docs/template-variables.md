@@ -61,19 +61,19 @@ Enable **Applies to Device Interfaces** on the rule and set the **Module Type Pa
 # Cisco Catalyst 9000 stack — member 2 gets GigabitEthernet2/0/1..4
 - applies_to_device_interfaces: true
   device_type: "CISCO-C9K"
-  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  module_type_pattern: "GigabitEthernet[0-9]+/[0-9]+/[0-9]+"
   name_template: "GigabitEthernet{vc_position}/0/{port}"
 
 # Juniper EX Virtual Chassis — 0-based member IDs
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  module_type_pattern: "ge-[0-9]+/[0-9]+/[0-9]+"
   name_template: "ge-{vc_position}/0/{port}"
 
 # Arista EOS slot/port
 - applies_to_device_interfaces: true
   device_type: "ARISTA-EOS"
-  module_type_pattern: "Ethernet\\d+/\\d+"
+  module_type_pattern: "Ethernet[0-9]+/[0-9]+"
   name_template: "Ethernet{vc_position}/{port}"
 ```
 

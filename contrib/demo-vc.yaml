@@ -45,7 +45,7 @@
 # Templates: Gi0/1 .. Gi0/4  →  Gi{vc_position}/1 .. Gi{vc_position}/4
 - applies_to_device_interfaces: true
   device_type: "VC-SWITCH"
-  module_type_pattern: "Gi\\d+/\\d+"
+  module_type_pattern: "Gi[0-9]+/[0-9]+"
   name_template: "Gi{vc_position}/{port}"
   description: "Demo VC-SWITCH: rename Gi0/N device interfaces to Gi{vc_position}/N"
 
@@ -54,7 +54,7 @@
 # Juniper VCs are 0-based: member 0, member 1, ...
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  module_type_pattern: "ge-[0-9]+/[0-9]+/[0-9]+"
   name_template: "ge-{vc_position}/0/{port}"
   description: "Juniper EX VC: rename ge- access ports to ge-{vc_position}/0/{port}"
 
@@ -62,7 +62,7 @@
 # Templates: xe-0/1/0 .. xe-0/1/1  →  xe-{vc_position}/1/0 .. xe-{vc_position}/1/1
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "xe-\\d+/\\d+/\\d+"
+  module_type_pattern: "xe-[0-9]+/[0-9]+/[0-9]+"
   name_template: "xe-{vc_position}/1/{port}"
   description: "Juniper EX VC: rename xe- uplink ports to xe-{vc_position}/1/{port}"
 
@@ -71,7 +71,7 @@
 # Cisco stacks are 1-based: switch 1, switch 2, ...
 - applies_to_device_interfaces: true
   device_type: "CISCO-C9K"
-  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  module_type_pattern: "GigabitEthernet[0-9]+/[0-9]+/[0-9]+"
   name_template: "GigabitEthernet{vc_position}/0/{port}"
   description: "Cisco C9K stack: rename GigabitEthernet interfaces to GigabitEthernet{vc_position}/0/{port}"
 
@@ -80,6 +80,6 @@
 # In Arista modular/multi-chassis naming, slot maps to VC member position.
 - applies_to_device_interfaces: true
   device_type: "ARISTA-EOS"
-  module_type_pattern: "Ethernet\\d+/\\d+"
+  module_type_pattern: "Ethernet[0-9]+/[0-9]+"
   name_template: "Ethernet{vc_position}/{port}"
   description: "Arista EOS: rename Ethernet slot/port interfaces to Ethernet{vc_position}/{port}"
