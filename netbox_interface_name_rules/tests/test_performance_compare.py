@@ -99,6 +99,18 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertNotIn("never goes to disk", readme)
 
+    def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        introduction = comparison.split("## Environment", 1)[0]
+
+        self.assertIn(compare._COMPARISON_INTRO, introduction)
+        self.assertIn("SQL statement counts are deterministic for equivalent inputs", introduction)
+        self.assertIn(
+            "Cache metrics depend on PostgreSQL buffer-cache state and concurrent activity",
+            introduction,
+        )
+        self.assertNotIn("Database work is deterministic", introduction)
+
 
 class XdistWorkerCapTest(unittest.TestCase):
     """The shared host gets a bounded number of automatic pytest workers."""

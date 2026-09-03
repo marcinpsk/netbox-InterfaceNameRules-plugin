@@ -113,6 +113,61 @@ class PerformanceDocumentationTest(unittest.TestCase):
                 self.assertEqual(readme_changes.get(scenario.rsplit(".", 1)[-1]), sum(changes.values()))
 
 
+class ReviewedDocumentationContractTest(unittest.TestCase):
+    """Keep reviewed compatibility and transaction statements complete."""
+
+    def test_rule_priority_lists_every_specificity_score(self):
+        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text()
+        priority = guide.split("### Rule Priority", 1)[1].split("### RE2 Pattern Syntax", 1)[0]
+        scopes = {
+            7: (
+                "Exact module type + parent module type + device type + platform",
+                "Regex pattern + parent module type + device type + platform",
+            ),
+            6: (
+                "Exact module type + parent module type + device type",
+                "Regex pattern + parent module type + device type",
+            ),
+            5: ("Exact module type + parent module type + platform", "Regex pattern + parent module type + platform"),
+            4: ("Exact module type + parent module type", "Regex pattern + parent module type"),
+            3: ("Exact module type + device type + platform", "Regex pattern + device type + platform"),
+            2: ("Exact module type + device type", "Regex pattern + device type"),
+            1: ("Exact module type + platform", "Regex pattern + platform"),
+            0: ("Exact module type only", "Regex pattern only"),
+        }
+
+        for score, (exact_scope, regex_scope) in scopes.items():
+            with self.subTest(score=score):
+                self.assertIn(
+                    f"| {score} | {exact_scope} | {regex_scope} |",
+                    priority,
+                )
+
+    def test_transaction_adr_states_unrelated_failure_behavior(self):
+        adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text()
+
+        self.assertIn(
+            "An unrelated integrity or infrastructure failure rolls back its own family and propagates to the operation boundary.",
+            adr,
+        )
+
+    def test_re2_upgrade_guide_separates_errors_from_warnings(self):
+        guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text()
+        section = guide.split("## Run Database Migrations", 1)[1].split("## Restart NetBox", 1)[0]
+        migration = " ".join(section.split())
+
+        self.assertIn("The migration stops", migration)
+        self.assertIn("The migration warns and continues", migration)
+        self.assertIn(r"`\d`, `\s`, and `\w`", migration)
+        self.assertIn("case-insensitive matching outside a negated character class", migration)
+
+    def test_readme_badge_matches_the_supported_netbox_floor(self):
+        readme = (_PROJECT_ROOT / "README.md").read_text()
+
+        self.assertIn("NetBox-%E2%89%A54.3.0-blue", readme)
+        self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
+
+
 def _patterns_in(node):
     """Yield every module_type_pattern value nested anywhere in a loaded YAML document."""
     if isinstance(node, dict):

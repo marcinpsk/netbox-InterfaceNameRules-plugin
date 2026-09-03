@@ -642,6 +642,17 @@ class FlatFamilyCreationTest(BulkTestCase):
         self.assertEqual(outcome.status, FamilyStatus.FAILED)
         self.assertEqual(self._names(self.module), ["1"])
 
+    def test_a_zero_channel_flat_plan_fails_without_touching_the_base(self):
+        """A direct flat-family call with no target names must remain a safe no-op."""
+        self.rule.channel_count = 0
+        self.rule.save()
+
+        outcome = execute_flat_family(self._plan())
+
+        self.assertEqual(outcome.status, FamilyStatus.FAILED)
+        self.assertEqual(outcome.reason, "flat family requires at least one target name")
+        self.assertEqual(self._names(self.module), ["1"])
+
     def test_a_simple_rule_the_engine_cannot_evaluate_is_reported_as_a_failure(self):
         """A one-interface rename carries its template failure the same way a family does."""
         rule = InterfaceNameRule.objects.create(

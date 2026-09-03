@@ -248,6 +248,9 @@ def plan_flat_family(module, rule, variables, base) -> FlatCreationPlan:
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _flat_creation_plan(module, base, (base.name,), FamilyStatus.FAILED, reason)
+    if not target_names:
+        reason = "flat family requires at least one target name"
+        return _flat_creation_plan(module, base, (base.name,), FamilyStatus.FAILED, reason)
     return _flat_creation_plan(module, base, target_names)
 
 

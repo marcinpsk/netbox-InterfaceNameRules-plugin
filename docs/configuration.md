@@ -19,16 +19,24 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 
 ### Rule Priority
 
-When multiple rules could match, the most specific one wins. Exact FK matches always beat regex matches:
+When multiple rules could match, exact module type rules form the first tier.
+Regex rules form the fallback tier. Within each tier, the rule with the highest
+scope score wins. Parent module type has weight 4, device type has weight 2, and
+platform has weight 1.
 
-**Tier 1 — Exact module type match:**
-1. Module type + parent module type + device type (most specific)
-2. Module type + parent module type
-3. Module type + device type
-4. Module type only (universal)
+| Score | Exact tier | Regex tier |
+|------:|------------|------------|
+| 7 | Exact module type + parent module type + device type + platform | Regex pattern + parent module type + device type + platform |
+| 6 | Exact module type + parent module type + device type | Regex pattern + parent module type + device type |
+| 5 | Exact module type + parent module type + platform | Regex pattern + parent module type + platform |
+| 4 | Exact module type + parent module type | Regex pattern + parent module type |
+| 3 | Exact module type + device type + platform | Regex pattern + device type + platform |
+| 2 | Exact module type + device type | Regex pattern + device type |
+| 1 | Exact module type + platform | Regex pattern + platform |
+| 0 | Exact module type only | Regex pattern only |
 
-**Tier 2 — Regex pattern match (fallback, longest pattern first):**
-5–8. Same four specificity levels, but `module_type_pattern` is matched against the complete installed module type model name. When multiple patterns match at the same level, the longest pattern is preferred.
+The regex pattern matches the complete installed module type model name. When
+multiple regex patterns match at the same score, the longest pattern wins.
 
 ### RE2 Pattern Syntax
 
