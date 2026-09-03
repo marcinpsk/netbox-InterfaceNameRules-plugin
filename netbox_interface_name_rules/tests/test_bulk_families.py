@@ -428,7 +428,7 @@ class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
         self.assertEqual(self._names(module), ["et-4/0/1"])
         self.assertTrue(Interface.objects.filter(device=self.device, module=None, name="mgmt-4").exists())
 
-    def test_one_failing_module_leaves_the_others_reapplied(self):
+    def test_one_failing_module_stops_at_the_deferred_operation_boundary(self):
         modules = self._install_and_name(("1", "2"))
         real_apply = engine_module.apply_interface_name_rules
 
@@ -444,7 +444,24 @@ class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
             self._join(4)
 
         self.assertEqual(self._names(modules[0]), ["1"])
-        self.assertEqual(self._names(modules[1]), ["et-4/0/2"])
+        self.assertEqual(self._names(modules[1]), ["2"])
+
+    def test_unrelated_database_failure_reaches_the_deferred_operation_boundary(self):
+        modules = self._install_and_name(("1", "2"))
+        Device.objects.filter(pk=self.device.pk).update(virtual_chassis=self.virtual_chassis, vc_position=4)
+        self.device.refresh_from_db()
+
+        def reject_interface_update(execute, sql, params, many, context):
+            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+                raise IntegrityError("injected virtual-chassis database failure")
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(reject_interface_update):
+            with self.assertRaisesMessage(IntegrityError, "injected virtual-chassis database failure"):
+                engine_module.reapply_module_rules(self.device)
+
+        self.assertEqual(self._names(modules[0]), ["1"])
+        self.assertEqual(self._names(modules[1]), ["2"])
 
 
 class VirtualChassisReapplyCostTest(VirtualChassisReapplyTestCase):

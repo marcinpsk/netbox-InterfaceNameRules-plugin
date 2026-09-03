@@ -324,8 +324,8 @@ def reapply_module_rules(device):
     """Re-apply module rules to every module on *device* after its virtual-chassis position changed.
 
     The whole device is one batch: its modules match against one enabled-rule snapshot, and one
-    module type's interface templates are read once however many modules carry it.  A failure is
-    logged and leaves that module behind. Remaining modules continue with the new position.
+    module type's interface templates are read once however many modules carry it. An unexpected
+    failure stops the module batch and propagates to the deferred callback boundary.
 
     Returns the number of interfaces renamed across the device's modules.
     """
@@ -344,14 +344,7 @@ def reapply_module_rules(device):
         for module in modules:
             if not module.module_bay:
                 continue
-            try:
-                total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
-            except Exception:
-                logger.exception(
-                    "Failed to re-apply rules for %s in %s after a virtual-chassis change",
-                    module.module_type,
-                    module.module_bay.name,
-                )
+            total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
     return total
 
 
