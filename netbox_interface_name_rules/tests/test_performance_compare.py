@@ -111,6 +111,13 @@ class PerformancePackageTest(unittest.TestCase):
         )
         self.assertNotIn("Database work is deterministic", introduction)
 
+    def test_comparison_marks_machine_time_as_non_comparable(self):
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        machine_time = comparison.split("## Machine time", 1)[1].split("## Statement-count regressions", 1)[0]
+
+        self.assertIn(compare._MACHINE_TIME_NOTE, machine_time)
+        self.assertIn("Machine-time deltas are not baseline evidence for this comparison", machine_time)
+
 
 class XdistWorkerCapTest(unittest.TestCase):
     """The shared host gets a bounded number of automatic pytest workers."""

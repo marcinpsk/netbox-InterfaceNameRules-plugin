@@ -34,6 +34,11 @@ _COMPARISON_INTRO = (
     "is only evidence when both runs were taken on the same otherwise-idle hardware."
 )
 
+_MACHINE_TIME_NOTE = (
+    "Machine-time deltas are not baseline evidence for this comparison. This report does not "
+    "establish equivalent otherwise-idle host load, so keep the values as diagnostic observations only."
+)
+
 
 def _artifact_path(raw, must_exist):
     """Resolve *raw* inside this repository, refusing a path that points outside it."""
@@ -222,6 +227,8 @@ def main(argv):
         *database_lines,
         "",
         "## Machine time",
+        "",
+        _MACHINE_TIME_NOTE,
         "",
         *_time_table(before_scenarios, after_scenarios),
         "",
