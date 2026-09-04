@@ -303,6 +303,7 @@ def plan_prospective_families(module, rule, variables, interfaces) -> Prospectiv
     planned exactly like one it has and no row is written.  Collision checking covers the names
     described here, because a prospective plan knows only the interfaces it was given.
     """
+    interfaces = tuple(interfaces)
     roots, children = _partition(interfaces)
     families = [(root, children.get(root.name, ())) for root in roots]
     context = _creation_context(

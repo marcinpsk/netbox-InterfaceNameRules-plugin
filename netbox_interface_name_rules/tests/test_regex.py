@@ -519,6 +519,31 @@ class RegexEngineMigrationTest(TestCase):
             Rule.objects.filter(pk=rule.pk).delete()
             self._migrate(latest)
 
+    def test_upgrade_ignores_a_stale_pattern_on_an_exact_module_rule(self):
+        manufacturer = Manufacturer.objects.create(name="Exact Migration", slug="exact-migration")
+        module_type = ModuleType.objects.create(
+            manufacturer=manufacturer,
+            model="Exact Migration Module",
+            part_number="EXACT-MIGRATION",
+        )
+        latest = self._latest_migration()
+        old_state = self._migrate(self.BEFORE)
+        Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
+        rule = Rule.objects.create(
+            module_type_id=module_type.pk,
+            module_type_pattern=r"(?=Exact)Exact.*",
+            name_template="et-0/0/{bay_position}",
+        )
+        connection.check_constraints()
+
+        try:
+            new_state = self._migrate(latest)
+            migrated_rule = new_state.apps.get_model(self.APP, "InterfaceNameRule").objects.get(pk=rule.pk)
+            self.assertEqual(migrated_rule.module_type_id, module_type.pk)
+        finally:
+            Rule.objects.filter(pk=rule.pk).delete()
+            self._migrate(latest)
+
     def test_upgrade_refuses_a_stored_pattern_with_different_re2_semantics(self):
         latest = self._latest_migration()
         old_state = self._migrate(self.BEFORE)

@@ -4,6 +4,7 @@
 import logging
 
 from django.db import migrations
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,11 @@ def validate_re2_patterns(apps, schema_editor):
     Rule = apps.get_model("netbox_interface_name_rules", "InterfaceNameRule")
     invalid_ids = []
     narrowed_ids = []
-    rules = Rule.objects.using(schema_editor.connection.alias).exclude(module_type_pattern="")
+    rules = (
+        Rule.objects.using(schema_editor.connection.alias)
+        .filter(Q(module_type_is_regex=True) | Q(applies_to_device_interfaces=True))
+        .exclude(module_type_pattern="")
+    )
     for pk, pattern in rules.values_list("pk", "module_type_pattern").iterator():
         breaks, narrows = _re2_differences(pattern)
         if narrows:

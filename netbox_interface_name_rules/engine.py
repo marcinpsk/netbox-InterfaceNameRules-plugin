@@ -10,7 +10,6 @@ import logging
 from collections import defaultdict
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
 
 from . import family as family_ops
 from . import naming, rule_selection
@@ -399,7 +398,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         try:
             outcome = family_ops.execute_installed_plan(plan)
-        except (IntegrityError, ValidationError):
+        except ValidationError:
             logger.exception(
                 "Failed to apply rule %s to device interface %r on device %s; skipping.",
                 rule.pk,

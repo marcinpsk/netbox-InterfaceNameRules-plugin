@@ -149,6 +149,22 @@ class ProspectiveFlatPlanTest(ProspectivePlanTestCase):
         self.assertEqual({member.role for member in plan.members}, {MemberRole.FLAT_MEMBER})
         self.assertEqual(plan_set.predicted_names("3"), plan.target_names)
 
+    def test_a_one_shot_iterable_plans_every_interface(self):
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        interfaces = iter(describe_template_interfaces(resolved_template_names(module)))
+
+        plan_set = plan_prospective_families(
+            module,
+            self.rule,
+            build_variables(bay, device=self.device),
+            interfaces,
+        )
+
+        self.assertEqual(
+            plan_set.predicted_names("3"),
+            ("xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"),
+        )
+
     def test_a_simple_rule_plans_one_member(self):
         rule = InterfaceNameRule(module_type=self.module_type, name_template="et-0/0/{bay_position}")
         module, bay = self._install(self.module_type, "4", run_rules=False)

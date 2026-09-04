@@ -1378,8 +1378,8 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
             vc_position=1,
         )
 
-    def test_save_exception_restores_name_and_returns_zero(self):
-        """Restore the old name and return zero when an interface save fails."""
+    def test_non_collision_integrity_error_propagates_and_restores_name(self):
+        """Restore the old name and propagate an unrelated database failure."""
         from netbox_interface_name_rules.engine import apply_device_interface_rules
 
         InterfaceNameRule.objects.create(
@@ -1391,10 +1391,10 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         from django.db import IntegrityError
 
         with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
-            result = apply_device_interface_rules(self.device)
+            with self.assertRaisesMessage(IntegrityError, "disk full"):
+                apply_device_interface_rules(self.device)
 
         iface.refresh_from_db()
-        self.assertEqual(result, 0)
         self.assertEqual(iface.name, "Gi0/1")  # rolled back
 
 
