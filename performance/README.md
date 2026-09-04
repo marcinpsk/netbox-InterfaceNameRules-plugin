@@ -94,8 +94,9 @@ which sum to +2. The savepoint pair comes from the transaction the executor open
 per family. On `dcim_interface`, two new reads replace one: a read of the module's
 interfaces ordered by interface ID, and the `... WHERE id IN (...) FOR UPDATE`
 read that locks and revalidates the planned rows. The read they replace joined
-`dcim_device` and ordered by a collated name, which is why the two together cost
-less planner work than the one. The module type is now read once instead of
+`dcim_device` and ordered by a collated name. The aggregate planner costs above
+do not attribute cost to individual statements, so this report does not compare
+the planner work of those reads. The module type is now read once instead of
 twice. The plugin buys stale-plan revalidation and per-family rollback for two
 round trips and 108 bytes of WAL on a rename.
 

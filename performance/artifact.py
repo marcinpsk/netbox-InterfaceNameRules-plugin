@@ -43,9 +43,9 @@ def _required(mapping: Mapping[str, Any], key: str, source: str, path: str) -> A
 
 
 def _string(value: Any, source: str, path: str) -> str:
-    """Require one non-empty string value."""
-    if not isinstance(value, str) or not value:
-        raise _invalid(source, path, "must be a non-empty string")
+    """Require one non-blank string value."""
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid(source, path, "must be a non-blank string")
     return value
 
 

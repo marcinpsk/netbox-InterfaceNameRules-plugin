@@ -102,6 +102,11 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertNotIn("never goes to disk", readme)
 
+    def test_readme_does_not_infer_planner_cost_from_statement_counts(self):
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+
+        self.assertNotIn("less planner work", readme)
+
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
         introduction = comparison.split("## Environment", 1)[0]
@@ -189,6 +194,13 @@ class ArtifactValidationTest(unittest.TestCase):
         artifact["scenarios"][0]["database"]["totals"]["statement_calls"] = 30
 
         with self.assertRaisesRegex(ValueError, "statement_calls"):
+            compare.validate_artifact(artifact, "before artifact")
+
+    def test_whitespace_only_normalized_sql_is_rejected(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["statements"][0]["normalized_sql"] = " "
+
+        with self.assertRaisesRegex(ValueError, "normalized_sql"):
             compare.validate_artifact(artifact, "before artifact")
 
 

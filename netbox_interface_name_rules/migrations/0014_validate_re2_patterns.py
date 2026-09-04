@@ -71,6 +71,24 @@ def _case_insensitive_re2_differences(case_insensitive, has_negated_character_cl
     )
 
 
+def _inline_case_flag(pattern, opening_index, current):
+    """Return the end, scope type, and case state for one inline flag group."""
+    flags_start = opening_index + 2
+    flags_end = flags_start
+    while flags_end < len(pattern) and pattern[flags_end] in "imsU-":
+        flags_end += 1
+    if flags_end == flags_start or flags_end >= len(pattern) or pattern[flags_end] not in ":)":
+        return None
+
+    enabled, separator, disabled = pattern[flags_start:flags_end].partition("-")
+    case_insensitive = current
+    if "i" in enabled:
+        case_insensitive = True
+    if separator and "i" in disabled:
+        case_insensitive = False
+    return flags_end, pattern[flags_end] == ":", case_insensitive
+
+
 def _re2_differences(pattern):
     """Return whether *pattern* can match different text under RE2, and whether it only narrows matching.
 
@@ -79,8 +97,9 @@ def _re2_differences(pattern):
     """
     breaks = False
     narrows = False
-    case_insensitive = False
-    has_negated_character_class = False
+    has_case_insensitive_scope = False
+    has_case_insensitive_negated_character_class = False
+    case_insensitive_scopes = [False]
     in_character_class = False
     character_class_has_content = False
     character_class_is_negated = False
@@ -108,7 +127,9 @@ def _re2_differences(pattern):
                 in_character_class = False
             elif character == "^" and not character_class_has_content and not character_class_is_negated:
                 character_class_is_negated = True
-                has_negated_character_class = True
+                has_case_insensitive_negated_character_class = (
+                    has_case_insensitive_negated_character_class or case_insensitive_scopes[-1]
+                )
             else:
                 character_class_has_content = True
         elif character == "[":
@@ -117,16 +138,25 @@ def _re2_differences(pattern):
             character_class_is_negated = False
         elif character == "{" and _counted_repeat_uses_different_semantics(pattern, index):
             breaks = True
-        elif pattern.startswith("(?", index):
-            flags_end = index + 2
-            while flags_end < len(pattern) and pattern[flags_end] in "imsU-":
-                flags_end += 1
-            flag_spec = pattern[index + 2 : flags_end]
-            enabled_flags = flag_spec.split("-", 1)[0]
-            if flags_end < len(pattern) and pattern[flags_end] in ":)" and "i" in enabled_flags:
-                case_insensitive = True
+        elif character == "(":
+            inline_flag = _inline_case_flag(pattern, index, case_insensitive_scopes[-1])
+            if inline_flag is not None:
+                flags_end, is_scoped, case_insensitive = inline_flag
+                has_case_insensitive_scope = has_case_insensitive_scope or case_insensitive
+                if is_scoped:
+                    case_insensitive_scopes.append(case_insensitive)
+                else:
+                    case_insensitive_scopes[-1] = case_insensitive
+                index = flags_end + 1
+                continue
+            case_insensitive_scopes.append(case_insensitive_scopes[-1])
+        elif character == ")" and len(case_insensitive_scopes) > 1:
+            case_insensitive_scopes.pop()
         index += 1
-    case_breaks, case_narrows = _case_insensitive_re2_differences(case_insensitive, has_negated_character_class)
+    case_breaks, case_narrows = _case_insensitive_re2_differences(
+        has_case_insensitive_scope,
+        has_case_insensitive_negated_character_class,
+    )
     return breaks or case_breaks, narrows or case_narrows
 
 

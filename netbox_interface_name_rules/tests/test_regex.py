@@ -90,6 +90,7 @@ _RE2_DIFFERENTIAL_PATTERNS = {
         r"(?i)[^i]",
         r"(?i:[^i])",
         r"[^i](?i:a)",
+        r"(?i:0)[^i]",
     ),
     "neutral": (r"QSFP-.*", r"a{1,3}"),
 }
@@ -498,8 +499,10 @@ class RegexEngineMigrationTest(TestCase):
                 self.assertIsNotNone(re2.fullmatch(pattern, subject))
                 self.assertTrue(_RE2_AUDIT._uses_different_re2_semantics(pattern))
 
-    def test_case_insensitive_flag_and_negated_class_are_conservative_across_order(self):
-        self.assertTrue(_RE2_AUDIT._uses_different_re2_semantics(r"[^i](?i:a)"))
+    def test_scoped_case_insensitive_flag_does_not_affect_an_outside_negated_class(self):
+        for pattern in (r"[^i](?i:a)", r"(?i:0)[^i]"):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(_RE2_AUDIT._uses_different_re2_semantics(pattern))
 
     def test_upgrade_refuses_a_stored_pattern_outside_re2_syntax(self):
         latest = self._latest_migration()
@@ -629,7 +632,7 @@ class RegexEngineMigrationTest(TestCase):
         latest = self._latest_migration()
         old_state = self._migrate(self.BEFORE)
         Rule = old_state.apps.get_model(self.APP, "InterfaceNameRule")
-        patterns = (r"\\w+", r"a{1,3}")
+        patterns = (r"\\w+", r"a{1,3}", r"(?i:0)[^i]")
         rules = [
             Rule.objects.create(
                 applies_to_device_interfaces=True,
