@@ -513,8 +513,11 @@ class RegexEngineMigrationTest(TestCase):
         connection.check_constraints()
 
         try:
-            with self.assertRaisesRegex(RuntimeError, rf"InterfaceNameRule ID: {rule.pk}\b"):
+            with self.assertRaises(RuntimeError) as ctx:
                 self._migrate(latest)
+            message = str(ctx.exception)
+            self.assertRegex(message, rf"InterfaceNameRule ID: {rule.pk}\b")
+            self.assertIn(repr(rule.module_type_pattern), message)
         finally:
             Rule.objects.filter(pk=rule.pk).delete()
             self._migrate(latest)
@@ -579,8 +582,10 @@ class RegexEngineMigrationTest(TestCase):
         try:
             with self.assertRaises(RuntimeError) as ctx:
                 self._migrate(latest)
+            message = str(ctx.exception)
             for rule in rules:
-                self.assertRegex(str(ctx.exception), rf"\b{rule.pk}\b")
+                self.assertRegex(message, rf"\b{rule.pk}\b")
+                self.assertIn(repr(rule.module_type_pattern), message)
         finally:
             Rule.objects.filter(pk__in=[rule.pk for rule in rules]).delete()
             self._migrate(latest)

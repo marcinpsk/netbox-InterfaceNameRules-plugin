@@ -150,23 +150,23 @@ Machine-time deltas are not baseline evidence for this comparison. This report d
 
 ### Where those statements come from
 
-Each raised scenario is broken down by the table its statements touch, so the work this plugin drives can be told apart from the per-save bookkeeping NetBox does for the object types and custom fields the database happens to hold.
+Each raised scenario is broken down by statement source. Table names identify reads and writes, while transaction-control categories identify savepoint bookkeeping.
 
-| Scenario | Table | Before | After | Change |
+| Scenario | Statement source | Before | After | Change |
 | --- | --- | ---: | ---: | ---: |
-| `module.complete_model_save.plain_rename` | `RELEASE` | 3 | 4 | +1 |
-| `module.complete_model_save.plain_rename` | `SAVEPOINT` | 3 | 4 | +1 |
 | `module.complete_model_save.plain_rename` | `dcim_interface` | 8 | 9 | +1 |
 | `module.complete_model_save.plain_rename` | `dcim_moduletype` | 3 | 2 | -1 |
-| `module.direct_callback.plain_rename` | `RELEASE` | 1 | 2 | +1 |
-| `module.direct_callback.plain_rename` | `SAVEPOINT` | 1 | 2 | +1 |
+| `module.complete_model_save.plain_rename` | `transaction: RELEASE` | 3 | 4 | +1 |
+| `module.complete_model_save.plain_rename` | `transaction: SAVEPOINT` | 3 | 4 | +1 |
 | `module.direct_callback.plain_rename` | `dcim_interface` | 5 | 6 | +1 |
 | `module.direct_callback.plain_rename` | `dcim_moduletype` | 2 | 1 | -1 |
-| `module.complete_model_save.reconciliation` | `RELEASE` | 19 | 20 | +1 |
-| `module.complete_model_save.reconciliation` | `SAVEPOINT` | 19 | 20 | +1 |
+| `module.direct_callback.plain_rename` | `transaction: RELEASE` | 1 | 2 | +1 |
+| `module.direct_callback.plain_rename` | `transaction: SAVEPOINT` | 1 | 2 | +1 |
 | `module.complete_model_save.reconciliation` | `dcim_interface` | 71 | 72 | +1 |
 | `module.complete_model_save.reconciliation` | `dcim_moduletype` | 3 | 2 | -1 |
-| `module.direct_callback.reconciliation` | `RELEASE` | 17 | 18 | +1 |
-| `module.direct_callback.reconciliation` | `SAVEPOINT` | 17 | 18 | +1 |
+| `module.complete_model_save.reconciliation` | `transaction: RELEASE` | 19 | 20 | +1 |
+| `module.complete_model_save.reconciliation` | `transaction: SAVEPOINT` | 19 | 20 | +1 |
 | `module.direct_callback.reconciliation` | `dcim_interface` | 40 | 41 | +1 |
 | `module.direct_callback.reconciliation` | `dcim_moduletype` | 2 | 1 | -1 |
+| `module.direct_callback.reconciliation` | `transaction: RELEASE` | 17 | 18 | +1 |
+| `module.direct_callback.reconciliation` | `transaction: SAVEPOINT` | 17 | 18 | +1 |

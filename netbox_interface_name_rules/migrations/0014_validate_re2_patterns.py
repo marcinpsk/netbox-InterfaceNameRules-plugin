@@ -148,11 +148,11 @@ def validate_re2_patterns(apps, schema_editor):
 
     options = re2.Options()
     options.log_errors = False
-    Rule = apps.get_model("netbox_interface_name_rules", "InterfaceNameRule")
-    invalid_ids = []
+    rule_model = apps.get_model("netbox_interface_name_rules", "InterfaceNameRule")
+    invalid_patterns = []
     narrowed_ids = []
     rules = (
-        Rule.objects.using(schema_editor.connection.alias)
+        rule_model.objects.using(schema_editor.connection.alias)
         .filter(Q(module_type_is_regex=True) | Q(applies_to_device_interfaces=True))
         .exclude(module_type_pattern="")
     )
@@ -161,13 +161,13 @@ def validate_re2_patterns(apps, schema_editor):
         if narrows:
             narrowed_ids.append(pk)
         if breaks:
-            invalid_ids.append(pk)
+            invalid_patterns.append((pk, pattern))
             continue
         try:
             re.compile(pattern)
             re2.compile(pattern, options=options)
         except (OverflowError, re.error, re2.error):
-            invalid_ids.append(pk)
+            invalid_patterns.append((pk, pattern))
     if narrowed_ids:
         label = "ID" if len(narrowed_ids) == 1 else "IDs"
         identifiers = ", ".join(str(pk) for pk in narrowed_ids)
@@ -178,9 +178,9 @@ def validate_re2_patterns(apps, schema_editor):
             label,
             identifiers,
         )
-    if invalid_ids:
-        label = "ID" if len(invalid_ids) == 1 else "IDs"
-        identifiers = ", ".join(str(pk) for pk in invalid_ids)
+    if invalid_patterns:
+        label = "ID" if len(invalid_patterns) == 1 else "IDs"
+        identifiers = ", ".join(f"{pk} ({pattern!r})" for pk, pattern in invalid_patterns)
         raise RuntimeError(
             f"Stored patterns require RE2 review for InterfaceNameRule {label}: {identifiers}. "
             "Rewrite Python-specific or semantically different shared syntax with explicit RE2 syntax, then retry the migration."

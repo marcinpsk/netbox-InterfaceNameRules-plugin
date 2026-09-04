@@ -39,6 +39,8 @@ _MACHINE_TIME_NOTE = (
     "establish equivalent otherwise-idle host load, so keep the values as diagnostic observations only."
 )
 
+_TRANSACTION_CONTROL = frozenset({"BEGIN", "COMMIT", "RELEASE", "ROLLBACK", "SAVEPOINT"})
+
 
 def _artifact_path(raw, must_exist):
     """Resolve *raw* inside this repository, refusing a path that points outside it."""
@@ -51,28 +53,32 @@ def _artifact_path(raw, must_exist):
     return path
 
 
-def _statement_table(sql):
-    """Return the table a normalized statement reads or writes, for attribution."""
+def _statement_source(sql):
+    """Return the table or statement category used for attribution."""
     match = re.search(r'(?:FROM|INTO|UPDATE)\s+"([a-z_]+)"', sql)
-    return match.group(1) if match else sql.split()[0][:24]
+    if match:
+        return match.group(1)
+    keyword = sql.split()[0][:24]
+    category = "transaction" if keyword in _TRANSACTION_CONTROL else "statement"
+    return f"{category}: {keyword}"
 
 
-def _calls_by_table(scenario):
-    """Return how many statements the scenario issued against each table."""
+def _calls_by_source(scenario):
+    """Return how many statements the scenario issued for each source."""
     counts: Counter = Counter()
     for entry in scenario["database"]["statements"]:
-        counts[_statement_table(entry["normalized_sql"])] += entry["calls"]
+        counts[_statement_source(entry["normalized_sql"])] += entry["calls"]
     return counts
 
 
 def _attribution(name, before_scenario, after_scenario):
-    """Return the per-table statement deltas behind one scenario's change."""
-    before_calls, after_calls = _calls_by_table(before_scenario), _calls_by_table(after_scenario)
+    """Return the per-source statement deltas behind one scenario's change."""
+    before_calls, after_calls = _calls_by_source(before_scenario), _calls_by_source(after_scenario)
     rows = []
-    for table in sorted(set(before_calls) | set(after_calls)):
-        change = after_calls[table] - before_calls[table]
+    for source in sorted(set(before_calls) | set(after_calls)):
+        change = after_calls[source] - before_calls[source]
         if change:
-            rows.append(f"| `{name}` | `{table}` | {before_calls[table]} | {after_calls[table]} | {change:+d} |")
+            rows.append(f"| `{name}` | `{source}` | {before_calls[source]} | {after_calls[source]} | {change:+d} |")
     return rows
 
 
@@ -241,11 +247,10 @@ def main(argv):
             "",
             "### Where those statements come from",
             "",
-            "Each raised scenario is broken down by the table its statements touch, so the work this "
-            "plugin drives can be told apart from the per-save bookkeeping NetBox does for the object "
-            "types and custom fields the database happens to hold.",
+            "Each raised scenario is broken down by statement source. Table names identify reads and "
+            "writes, while transaction-control categories identify savepoint bookkeeping.",
             "",
-            "| Scenario | Table | Before | After | Change |",
+            "| Scenario | Statement source | Before | After | Change |",
             "| --- | --- | ---: | ---: | ---: |",
         ]
         for name, _label, _old, _new in regressions:

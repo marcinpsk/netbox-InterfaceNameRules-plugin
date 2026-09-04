@@ -147,20 +147,20 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
             source,
             f"{path}.database.totals",
         )
+        statement_calls = _non_negative_integer(
+            _required(totals, "statement_calls", source, f"{path}.database.totals"),
+            source,
+            f"{path}.database.totals.statement_calls",
+        )
         for field, _label in DATABASE_METRICS:
-            if field == "statement_calls":
-                _non_negative_integer(
-                    _required(totals, field, source, f"{path}.database.totals"),
-                    source,
-                    f"{path}.database.totals.{field}",
-                )
-            elif field in totals:
+            if field != "statement_calls" and field in totals:
                 _finite_number(totals[field], source, f"{path}.database.totals.{field}")
         statements = _list(
             _required(database, "statements", source, f"{path}.database"),
             source,
             f"{path}.database.statements",
         )
+        statement_entry_calls = 0
         for statement_index, statement_value in enumerate(statements):
             statement_path = f"{path}.database.statements[{statement_index}]"
             statement = _mapping(statement_value, source, statement_path)
@@ -169,10 +169,16 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
                 source,
                 f"{statement_path}.normalized_sql",
             )
-            _non_negative_integer(
+            statement_entry_calls += _non_negative_integer(
                 _required(statement, "calls", source, statement_path),
                 source,
                 f"{statement_path}.calls",
+            )
+        if statement_entry_calls != statement_calls:
+            raise _invalid(
+                source,
+                f"{path}.database.totals.statement_calls",
+                f"must equal the statement-entry call sum {statement_entry_calls}",
             )
 
         _validate_machine_time(_required(scenario, "machine_time", source, path), source, f"{path}.machine_time")

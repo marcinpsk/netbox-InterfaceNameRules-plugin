@@ -42,7 +42,10 @@ def _timed_artifact(machine_time):
         {
             "name": "module.direct_callback.plain_rename",
             "layer": "direct_callback",
-            "database": {"statements": [], "totals": {"statement_calls": 31}},
+            "database": {
+                "statements": [{"normalized_sql": 'SELECT * FROM "dcim_interface"', "calls": 31}],
+                "totals": {"statement_calls": 31},
+            },
             "machine_time": machine_time,
         }
     ]
@@ -181,6 +184,13 @@ class ArtifactValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "calls"):
             compare.validate_artifact(artifact, "before artifact")
 
+    def test_statement_call_total_must_match_the_statement_entries(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["totals"]["statement_calls"] = 30
+
+        with self.assertRaisesRegex(ValueError, "statement_calls"):
+            compare.validate_artifact(artifact, "before artifact")
+
 
 class TimeTableTest(unittest.TestCase):
     """A comparison must not invent machine time that a run did not measure."""
@@ -258,6 +268,31 @@ class DatabaseTableTest(unittest.TestCase):
         )
 
         self.assertEqual(regressions, [(before_scenario["name"], "SQL calls", 31, 32)])
+
+
+class StatementAttributionTest(unittest.TestCase):
+    """Statement attribution distinguishes tables from transaction control."""
+
+    def test_transaction_control_is_not_labeled_as_a_table(self):
+        before = {"database": {"statements": []}}
+        after = {
+            "database": {
+                "statements": [
+                    {"normalized_sql": 'SELECT * FROM "dcim_interface"', "calls": 1},
+                    {"normalized_sql": 'SAVEPOINT "s1_x1"', "calls": 1},
+                ]
+            }
+        }
+
+        rows = compare._attribution("scenario", before, after)
+
+        self.assertEqual(
+            rows,
+            [
+                "| `scenario` | `dcim_interface` | 0 | 1 | +1 |",
+                "| `scenario` | `transaction: SAVEPOINT` | 0 | 1 | +1 |",
+            ],
+        )
 
 
 class EnvironmentTableTest(unittest.TestCase):

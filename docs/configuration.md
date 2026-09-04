@@ -9,7 +9,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off) |
-| Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name (required when Regex Mode is on) |
+| Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name, or a family parent interface's current name when Device Interface Rules is enabled |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter) |
 | Device Type | No | Restrict to devices of this type |
@@ -35,8 +35,10 @@ platform has weight 1.
 | 1 | Exact module type + platform | Regex pattern + platform |
 | 0 | Exact module type only | Regex pattern only |
 
-The regex pattern matches the complete installed module type model name. When
-multiple regex patterns match at the same score, the longest pattern wins.
+For module rules, the regex pattern matches the complete installed module type
+model name. For device-interface rules, it matches each family parent
+interface's current name. When multiple regex patterns match at the same score, the
+longest pattern wins.
 
 ### RE2 Pattern Syntax
 

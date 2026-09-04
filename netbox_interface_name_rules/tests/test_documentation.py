@@ -7,6 +7,7 @@ import re
 import unittest
 from pathlib import Path
 
+import re2
 import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -160,6 +161,17 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("The migration warns and continues", migration)
         self.assertIn(r"`\d`, `\s`, and `\w`", migration)
         self.assertIn("case-insensitive matching outside a negated character class", migration)
+        self.assertIn("Django records the warning-only migration as applied", migration)
+        self.assertIn("Do not rerun the completed migration", migration)
+        self.assertIn("If the migration stops", migration)
+        self.assertIn("run the migration again", migration)
+
+    def test_configuration_names_both_pattern_matching_contexts(self):
+        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text()
+        pattern_guidance = guide.split("### Rule Fields", 1)[1].split("### RE2 Pattern Syntax", 1)[0]
+
+        self.assertIn("module type model name", pattern_guidance)
+        self.assertIn("parent interface's current name", pattern_guidance)
 
     def test_readme_badge_matches_the_supported_netbox_floor(self):
         readme = (_PROJECT_ROOT / "README.md").read_text()
@@ -202,4 +214,6 @@ class ShippedPatternRe2AuditTest(unittest.TestCase):
         self.assertTrue(patterns)
         for source, pattern in patterns:
             with self.subTest(source=source, pattern=pattern):
+                re.compile(pattern)
+                re2.compile(pattern)
                 self.assertFalse(_RE2_AUDIT._uses_different_re2_semantics(pattern))
