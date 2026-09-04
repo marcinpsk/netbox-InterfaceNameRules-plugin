@@ -4,6 +4,7 @@
 
 import fnmatch
 import importlib.util
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -14,6 +15,11 @@ _COMPARE_PATH = _PROJECT_ROOT / "performance" / "compare.py"
 _spec = importlib.util.spec_from_file_location("performance_compare", _COMPARE_PATH)
 compare = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(compare)
+
+
+def _unwrapped(text):
+    """Return *text* with hard line wrapping collapsed, so assertions match across line breaks."""
+    return re.sub(r"\s+", " ", text)
 
 
 def _artifact(planner_settings, load=None):
@@ -106,6 +112,10 @@ class PerformancePackageTest(unittest.TestCase):
         readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
 
         self.assertNotIn("less planner work", readme)
+        self.assertIn(
+            "so this report does not compare the planner work of those reads",
+            _unwrapped(readme),
+        )
 
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
