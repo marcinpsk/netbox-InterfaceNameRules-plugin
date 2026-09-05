@@ -3,6 +3,7 @@
 """Integration tests for the lower-level rule-selection seam."""
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -68,13 +69,21 @@ class RuleSelectionTest(TestCase):
         self.assertEqual(selected, parent_scoped)
 
     def test_a_device_interface_rule_is_never_selected_for_a_module(self):
-        """The DB check constraint permits regex mode on a device-interface row, so filter it here.
+        """Module selection skips device-interface rules, and the row that used to leak cannot exist.
 
-        ``clean()`` forces ``module_type_is_regex`` off, but ``objects.create()`` never runs it.
+        ``clean()`` forces ``module_type_is_regex`` off and ``objects.create()`` never runs it, so
+        the check constraint is what keeps that combination out of the table.
         """
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.create(
+                applies_to_device_interfaces=True,
+                module_type_is_regex=True,
+                module_type_pattern="SELECTOR-.*",
+                name_template="leaked{vc_position}",
+            )
+
         InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True,
-            module_type_is_regex=True,
             module_type_pattern="SELECTOR-.*",
             name_template="leaked{vc_position}",
         )

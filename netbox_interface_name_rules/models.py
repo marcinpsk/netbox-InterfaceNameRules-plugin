@@ -343,7 +343,11 @@ class InterfaceNameRule(NetBoxModel):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(applies_to_device_interfaces=True, module_type__isnull=True)
+                    models.Q(
+                        applies_to_device_interfaces=True,
+                        module_type__isnull=True,
+                        module_type_is_regex=False,
+                    )
                     | models.Q(
                         applies_to_device_interfaces=False,
                         module_type_is_regex=True,
@@ -357,6 +361,19 @@ class InterfaceNameRule(NetBoxModel):
                     )
                 ),
                 name="interfacenamerule_module_type_mode_check",
+            ),
+            models.CheckConstraint(
+                # Every implication _validate_breakout_topology() enforces, written as ~P | Q.
+                condition=(
+                    (
+                        models.Q(applies_to_device_interfaces=False)
+                        | ~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED)
+                    )
+                    & (models.Q(applies_to_device_interfaces=False) | models.Q(parent_name_template=""))
+                    & (models.Q(parent_name_template="") | models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED))
+                    & (~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED) | ~models.Q(channel_count=0))
+                ),
+                name="interfacenamerule_breakout_topology_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],

@@ -24,7 +24,7 @@ from dcim.choices import InterfaceModeChoices
 from dcim.models import Cable, Interface, Module
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils.html import escape
@@ -208,12 +208,12 @@ class ConversionVerdictTest(ConversionTestCase):
 
         self.assertEqual(self._verdicts(), ())
 
-    def test_a_rule_without_channels_offers_no_conversion(self):
-        """No channel count means no family to identify — there is nothing to convert against."""
+    def test_a_channelized_rule_cannot_store_zero_channels(self):
+        """No channel count means no family to identify, so the database refuses the combination."""
         self.rule.channel_count = 0
-        self.rule.save()
 
-        self.assertEqual(self._verdicts(), ())
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.rule.save()
 
     def test_a_port_the_rule_never_touched_is_not_a_conversion_candidate(self):
         """A raw port is an ordinary apply, not a conversion: no flat family exists on it yet."""

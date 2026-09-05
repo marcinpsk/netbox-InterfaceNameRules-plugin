@@ -134,8 +134,8 @@ def _get_enabled_rules():
     cache = _RULE_CACHE
     version = _enabled_rules_version()
     if cache["version"] != version:
-        # Device-interface rows reuse module_type_pattern as an interface-name filter, and the DB
-        # check constraint lets one carry module_type_is_regex, so keep them out of module selection.
+        # Device-interface rows reuse module_type_pattern as an interface-name filter, so they are
+        # never module rules and never enter module selection.
         rules = list(
             InterfaceNameRule.objects.filter(enabled=True, applies_to_device_interfaces=False).order_by(
                 "module_type__model", "pk"
