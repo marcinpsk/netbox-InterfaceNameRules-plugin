@@ -166,6 +166,14 @@ class ArtifactValidationTest(unittest.TestCase):
     def test_the_current_artifact_shape_is_accepted(self):
         compare.validate_artifact(_timed_artifact(_MACHINE_TIME), "before artifact")
 
+    def test_an_artifact_with_no_scenarios_is_rejected(self):
+        """An empty run would otherwise render header-only tables and report no regressions."""
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"] = []
+
+        with self.assertRaisesRegex(ValueError, "scenarios"):
+            compare.validate_artifact(artifact, "before artifact")
+
     def test_a_newer_schema_version_is_rejected(self):
         artifact = _timed_artifact(_MACHINE_TIME)
         artifact["schema_version"] = 2

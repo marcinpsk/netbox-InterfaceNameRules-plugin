@@ -131,6 +131,8 @@ def _validate_machine_time(value: Any, source: str, path: str) -> None:
 def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
     """Validate scenario identities and the database evidence used by comparisons."""
     scenarios = _list(_required(artifact, "scenarios", source, "artifact"), source, "scenarios")
+    if not scenarios:
+        raise _invalid(source, "scenarios", "must contain at least one scenario")
     names: set[str] = set()
     for index, value in enumerate(scenarios):
         path = f"scenarios[{index}]"
