@@ -45,6 +45,9 @@ services:
 
   postgres:
     image: postgres:18
+    # PostgreSQL 18 allocates a dynamic shared memory segment at startup and fails
+    # to start on Docker's 64MB default /dev/shm.
+    shm_size: 1gb
     command: postgres -c max_connections=200
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
