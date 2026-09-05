@@ -5,6 +5,8 @@
 These tests create real DB objects and exercise the full engine pipeline.
 """
 
+import threading
+
 from dcim.models import (
     Device,
     DeviceRole,
@@ -684,8 +686,22 @@ class FindMatchingRuleCachingTest(TestCase):
                 "pinned memo aliases the shared cache memo instead of holding a private copy",
             )
 
-            # An unpinned thread clearing the shared memo at the cap must not disturb the pinned batch.
-            rule_selection._RULE_CACHE["memo"].clear()
+            # An unpinned thread clearing the shared memo at the cap must not disturb the pinned
+            # batch. _pin is a threading.local, so the worker holds no pin of its own. The target is
+            # a plain dict.clear(), so the worker touches no ORM and needs no connection.
+            clear = threading.Thread(target=rule_selection._RULE_CACHE["memo"].clear)
+            clear.start()
+            clear.join()
+
+            # Retention lives in the private copy. Asserting the shared memo is empty would prove
+            # nothing: pinned writes never reach it, so it is already {} before the clear.
+            self.assertTrue(rule_selection._pin.memo, "the pinned batch lost its warmed entries")
+
+            # Poison the shared memo for the same signature. A primed lookup that read the shared
+            # memo instead of its private copy would return the decoy rather than recomputing, so
+            # this is what separates "the copy was used" from "the answer was recomputed".
+            decoy = InterfaceNameRule(name_template="decoy-must-not-be-returned")
+            rule_selection._RULE_CACHE["memo"].update(dict.fromkeys(rule_selection._pin.memo, decoy))
             self.assertEqual(
                 find_matching_rule(self.module_type, None, self.device_type),
                 rule,
