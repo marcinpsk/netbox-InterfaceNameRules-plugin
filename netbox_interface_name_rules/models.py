@@ -137,7 +137,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         default="",
         verbose_name="Module Type Pattern",
-        help_text="RE2 pattern to match the complete module type model name (e.g. 'QSFP-DD-400G-.*').",
+        help_text=(
+            "RE2 pattern matched against the complete module type model name (e.g. 'QSFP-DD-400G-.*'). "
+            "With Applies to Device Interfaces enabled it filters the complete interface name instead."
+        ),
     )
     module_type_is_regex = models.BooleanField(
         default=False,

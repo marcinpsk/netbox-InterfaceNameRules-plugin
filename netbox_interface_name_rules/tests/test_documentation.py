@@ -173,6 +173,16 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("module type model name", pattern_guidance)
         self.assertIn("parent interface's current name", pattern_guidance)
 
+    def test_pattern_help_text_names_both_matching_contexts(self):
+        """The field is a module-type matcher for module rules and a name filter for device rules."""
+        from netbox_interface_name_rules.models import InterfaceNameRule
+
+        help_text = InterfaceNameRule._meta.get_field("module_type_pattern").help_text
+
+        self.assertIn("module type model name", help_text)
+        self.assertIn("interface name", help_text)
+        self.assertIn("Applies to Device Interfaces", help_text)
+
     def test_readme_badge_matches_the_supported_netbox_floor(self):
         readme = (_PROJECT_ROOT / "README.md").read_text()
 
