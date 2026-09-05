@@ -25,12 +25,17 @@ jobs:
       fail-fast: false
       max-parallel: 6
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-        netbox-version: ["v4.3.7", "v4.5.3", "v4.7.0"]
-        exclude:
-          - python-version: "3.14"
-            netbox-version: "v4.3.7"  # strawberry-graphql incompatible with Python 3.14 on this NetBox version
+        # One Python per NetBox release rather than the cross-product. NetBox is the axis that
+        # changes the models and API this plugin binds to; the plugin itself is pure Python and
+        # Django ORM, and no Python-axis cell has ever caught a plugin bug here. Each supported
+        # Python is still exercised once, oldest against oldest and newest against newest.
         include:
+          - python-version: "3.12"
+            netbox-version: "v4.3.7"
+          - python-version: "3.13"
+            netbox-version: "v4.5.3"
+          - python-version: "3.14"
+            netbox-version: "v4.7.0"
           # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
           # for reasons that are not ours, so this must not gate a PR.
           - python-version: "3.13"
@@ -127,15 +132,15 @@ jobs:
           # A query count belongs to one NetBox release, and the baseline file holds one value per
           # key. The top supported version is the only leg that asserts it. Every other cell records
           # its count in this disposable checkout, so it reports plugin compatibility failures
-          # instead of baseline drift. Bumping the top version means editing the matrix above, the
-          # two conditions here, and tests/query_counts.json together.
+          # instead of baseline drift. Bumping the top version means editing the matrix above, this
+          # condition, and tests/query_counts.json together.
           UPDATE_QUERY_COUNTS: ${{ matrix.netbox-version != 'v4.7.0' && '1' || '' }}
         run: |
           pytest -n auto netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
             -o pythonpath=../netbox/netbox
 
       - name: Generate coverage report
-        if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
+        if: matrix.netbox-version == 'v4.5.3'
         working-directory: netbox-InterfaceNameRules-plugin
         env:
           COVERAGE_RCFILE: pyproject.toml
@@ -146,7 +151,7 @@ jobs:
           coverage xml -o ../coverage-report/coverage.xml
 
       - name: Upload coverage report
-        if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
+        if: matrix.netbox-version == 'v4.5.3'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-report
@@ -154,7 +159,7 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12' && matrix.netbox-version == 'v4.5.3'
+        if: matrix.netbox-version == 'v4.5.3'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           files: coverage-report/coverage.xml
