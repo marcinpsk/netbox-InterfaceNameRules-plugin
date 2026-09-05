@@ -117,6 +117,16 @@ class PerformancePackageTest(unittest.TestCase):
             _unwrapped(readme),
         )
 
+    def test_readme_scopes_the_zero_shared_reads_claim_to_the_after_run(self):
+        """The before run recorded one shared read, so the unscoped claim would be false."""
+        readme = _unwrapped((_PROJECT_ROOT / "performance" / "README.md").read_text())
+
+        self.assertNotIn("No shared-buffer reads were observed in any direct-callback scenario.", readme)
+        self.assertIn(
+            "No shared-buffer reads were observed in any direct-callback scenario after the refactor",
+            readme,
+        )
+
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
         introduction = comparison.split("## Environment", 1)[0]

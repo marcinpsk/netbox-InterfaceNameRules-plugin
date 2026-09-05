@@ -86,7 +86,8 @@ Count the statements, but read the work. The direct-callback database and proces
 | `vc.reapply_1` | -2.7% | -6.6% | +13.5% | +6.7% |
 | `vc.reapply_8` | -5.9% | -18.6% | -7.2% | -4.0% |
 
-No shared-buffer reads were observed in any direct-callback scenario.
+No shared-buffer reads were observed in any direct-callback scenario after the refactor. The before
+run recorded one shared read, in `structural_creation`.
 
 The net change of two statements has four sources: `transaction: SAVEPOINT` (+1),
 `transaction: RELEASE` (+1), `dcim_interface` (+1) and `dcim_moduletype` (-1),
