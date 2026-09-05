@@ -38,6 +38,7 @@ from netbox_interface_name_rules.family import (
     execute_installed_plan_set,
     plan_installed_families,
 )
+from netbox_interface_name_rules.family.execution import _lock_family
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import evaluate_name_template
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
@@ -46,6 +47,22 @@ CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
 PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
 PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
 REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces"
+
+
+class RejectNthInterfaceUpdate:
+    """Fail the *nth* interface UPDATE so earlier successful writes must also roll back."""
+
+    def __init__(self, message, nth=2):
+        self.message = message
+        self.nth = nth
+        self.seen = 0
+
+    def __call__(self, execute, sql, params, many, context):
+        if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+            self.seen += 1
+            if self.seen == self.nth:
+                raise IntegrityError(self.message)
+        return execute(sql, params, many, context)
 
 
 class InstalledFlatFamilyPlanningTest(TestCase):
@@ -144,6 +161,19 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         )
         return replace(plan_set, plans=plans)
 
+    def test_lock_family_reads_every_member_under_the_lock(self):
+        """The rows handed to the executor must be the locked rows, not a second unlocked read."""
+        _module, plan_set = self._current_family_plan()
+        plan = plan_set.plans[0]
+
+        with CaptureQueriesContext(connection) as queries:
+            locked = _lock_family(plan)
+
+        self.assertEqual({interface.pk for interface in locked}, set(plan.member_pks))
+        reads = [query["sql"] for query in queries.captured_queries if 'FROM "dcim_interface"' in query["sql"]]
+        self.assertTrue(reads)
+        self.assertTrue(all("FOR UPDATE" in sql for sql in reads))
+
     def test_current_flat_family_execution_locks_and_renames_every_member(self):
         module, plan_set = self._current_family_plan()
         plan_set = self._retarget(plan_set, "renamed")
@@ -165,14 +195,13 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         module, plan_set = self._current_family_plan()
         plan_set = self._retarget(plan_set, "renamed")
 
-        def reject_interface_update(execute, sql, params, many, context):
-            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
-                raise IntegrityError("injected current-family database failure")
-            return execute(sql, params, many, context)
+        reject_second_update = RejectNthInterfaceUpdate("injected current-family database failure")
 
-        with connection.execute_wrapper(reject_interface_update):
+        with connection.execute_wrapper(reject_second_update):
             with self.assertRaisesMessage(IntegrityError, "injected current-family database failure"):
                 execute_installed_plan_set(plan_set)
+
+        self.assertEqual(reject_second_update.seen, 2)
 
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
@@ -399,14 +428,13 @@ class InstalledFlatFamilyPlanningTest(TestCase):
     def test_unrelated_integrity_failure_propagates_and_rolls_back_the_family(self):
         module, plan_set = self._historical_family_plan()
 
-        def reject_interface_update(execute, sql, params, many, context):
-            if sql.lstrip().startswith('UPDATE "dcim_interface"'):
-                raise IntegrityError("injected non-uniqueness database failure")
-            return execute(sql, params, many, context)
+        reject_second_update = RejectNthInterfaceUpdate("injected non-uniqueness database failure")
 
-        with connection.execute_wrapper(reject_interface_update):
+        with connection.execute_wrapper(reject_second_update):
             with self.assertRaisesMessage(IntegrityError, "injected non-uniqueness database failure"):
                 execute_installed_plan_set(plan_set)
+
+        self.assertEqual(reject_second_update.seen, 2)
 
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
