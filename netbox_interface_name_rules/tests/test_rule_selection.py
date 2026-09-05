@@ -67,6 +67,20 @@ class RuleSelectionTest(TestCase):
         self.assertEqual(device_and_platform_scoped.specificity_score, 1003)
         self.assertEqual(selected, parent_scoped)
 
+    def test_a_device_interface_rule_is_never_selected_for_a_module(self):
+        """The DB check constraint permits regex mode on a device-interface row, so filter it here.
+
+        ``clean()`` forces ``module_type_is_regex`` off, but ``objects.create()`` never runs it.
+        """
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_is_regex=True,
+            module_type_pattern="SELECTOR-.*",
+            name_template="leaked{vc_position}",
+        )
+
+        self.assertIsNone(find_matching_rule(self.module_type, None, self.device_type))
+
     def test_candidate_order_descends_by_specificity_score(self):
         """Candidate order is the scope weighting of specificity_score, counted down from 7 to 0."""
         candidates = _build_candidates("parent", "device", "platform")

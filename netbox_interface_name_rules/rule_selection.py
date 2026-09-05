@@ -134,7 +134,13 @@ def _get_enabled_rules():
     cache = _RULE_CACHE
     version = _enabled_rules_version()
     if cache["version"] != version:
-        rules = list(InterfaceNameRule.objects.filter(enabled=True).order_by("module_type__model", "pk"))
+        # Device-interface rows reuse module_type_pattern as an interface-name filter, and the DB
+        # check constraint lets one carry module_type_is_regex, so keep them out of module selection.
+        rules = list(
+            InterfaceNameRule.objects.filter(enabled=True, applies_to_device_interfaces=False).order_by(
+                "module_type__model", "pk"
+            )
+        )
         exact = tuple(rule for rule in rules if not rule.module_type_is_regex)
         regex_rules = sorted(
             (rule for rule in rules if rule.module_type_is_regex),
