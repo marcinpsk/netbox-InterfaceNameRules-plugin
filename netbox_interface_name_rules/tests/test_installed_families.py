@@ -718,15 +718,20 @@ class InstalledChannelizedFamilyTest(TestCase):
         ModuleBay.objects.create(device=self.device, name="Bay 7", position="7")
         module, bay = self._raw_module("7")
         parent = Interface.objects.get(module=module, name="7")
-        Interface.objects.create(
+        virtual = Interface.objects.create(
             device=self.device,
             module=module,
             name="7.100",
             type=InterfaceTypeChoices.TYPE_VIRTUAL,
             parent=parent,
         )
+        plan_set = self._plan(module, bay)
+        plan = plan_set.plans[0]
 
-        result = execute_installed_plan_set(self._plan(module, bay))
+        self.assertNotIn(virtual.pk, plan.member_pks)
+        self.assertEqual({interface.pk for interface in _lock_family(plan)}, set(plan.member_pks))
+
+        result = execute_installed_plan_set(plan_set)
 
         self.assertEqual(result.families[0].status, FamilyStatus.CHANGED)
         self.assertEqual(
