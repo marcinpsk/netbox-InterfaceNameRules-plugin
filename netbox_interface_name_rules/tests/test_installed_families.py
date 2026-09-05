@@ -236,11 +236,10 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         self.assertEqual(replanned.plans, ())
 
     def test_simple_rule_has_no_flat_family_plan(self):
-        module = Module.objects.create(
-            device=self.device,
-            module_bay=self.bay,
-            module_type=self.module_type,
-        )
+        # Plan the complete family first. Without it the module holds only the raw base interface,
+        # which yields no plans on its own, so the assertion would pass at any channel_count.
+        module, planned = self._current_family_plan()
+        self.assertEqual(len(planned.plans), 1)
         self.rule.channel_count = 0
 
         plan_set = plan_installed_families(
