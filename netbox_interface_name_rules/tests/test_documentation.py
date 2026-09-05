@@ -171,7 +171,10 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         pattern_guidance = guide.split("### Rule Fields", 1)[1].split("### RE2 Pattern Syntax", 1)[0]
 
         self.assertIn("module type model name", pattern_guidance)
-        self.assertIn("parent interface's current name", pattern_guidance)
+        # Device-interface rules match any device interface, including a standalone one such as
+        # mgmt0; saying "family parent" would send an operator to the wrong scope.
+        self.assertIn("device interface's current name", pattern_guidance)
+        self.assertNotIn("family parent", pattern_guidance)
 
     def test_pattern_help_text_names_both_matching_contexts(self):
         """The field is a module-type matcher for module rules and a name filter for device rules."""

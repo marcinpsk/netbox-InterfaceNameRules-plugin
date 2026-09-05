@@ -377,7 +377,7 @@ def _device_interface_rules(device):
 
 
 def _matches_device_interface(rule, interface):
-    """Return whether one device-interface rule matches one family parent."""
+    """Return whether one device-interface rule matches one device interface."""
     if not rule.module_type_pattern:
         return True
     try:
