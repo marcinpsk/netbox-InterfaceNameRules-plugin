@@ -26,6 +26,7 @@ from netbox_interface_name_rules.family import (
     execute_structural_family,
     install_channelized_family,
     plan_structural_family,
+    structural,
 )
 from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -318,6 +319,36 @@ class StructuralFamilyPlanTest(StructuralFamilyTestCase):
 
         self.assertEqual(outcome.status, FamilyStatus.STALE)
         self.assertEqual(self._names(module), [])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
+    """The collision scan runs under the base row lock, so it must not scale with the family."""
+
+    PREFIX = "StructScan"
+
+    def test_the_collision_scan_costs_one_query_for_the_whole_family(self):
+        _module, _bay, plan = self._plan()
+
+        with CaptureQueriesContext(connection) as queries:
+            taken = structural._first_taken_name(plan)
+
+        self.assertIsNone(taken)
+        self.assertEqual(len(plan.target_names), 5)
+        self.assertEqual(len(queries.captured_queries), 1, queries.captured_queries)
+
+    def test_the_scan_reports_the_first_taken_name_in_plan_order(self):
+        _module, _bay, plan = self._plan()
+        Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
+
+        self.assertEqual(structural._first_taken_name(plan), "xe-0/0/3:1")
+
+    def test_the_base_row_never_counts_as_a_collision(self):
+        _module, _bay, plan = self._plan()
+        Interface.objects.filter(pk=plan.base.pk).update(name=plan.target_names[0])
+
+        self.assertIsNone(structural._first_taken_name(plan))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

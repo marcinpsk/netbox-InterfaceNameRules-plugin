@@ -121,11 +121,16 @@ def _locked_base(plan):
 
 
 def _first_taken_name(plan):  # pragma: no cover - requires channelization support
-    """Return the first planned name another interface on the device already owns, or None."""
-    for target_name in plan.target_names:
-        if name_is_taken(plan.device_id, target_name, exclude_pk=plan.base.pk):
-            return target_name
-    return None
+    """Return the first planned name another interface on the device already owns, or None.
+
+    One query, because the caller holds the base row lock while this runs.
+    """
+    taken = set(
+        Interface.objects.filter(device_id=plan.device_id, name__in=plan.target_names)
+        .exclude(pk=plan.base.pk)
+        .values_list("name", flat=True)
+    )
+    return next((name for name in plan.target_names if name in taken), None)
 
 
 def _create_channels(plan, parent):  # pragma: no cover - requires channelization support
