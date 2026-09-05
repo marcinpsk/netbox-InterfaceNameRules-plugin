@@ -685,6 +685,27 @@ class InstalledChannelizedFamilyTest(TestCase):
             ["5", "5:1", "5:3"],
         )
 
+    def test_virtual_subinterface_under_the_parent_does_not_block_the_family(self):
+        """A virtual child carries no channel, so it is not a family member and must not stall it."""
+        ModuleBay.objects.create(device=self.device, name="Bay 7", position="7")
+        module, bay = self._raw_module("7")
+        parent = Interface.objects.get(module=module, name="7")
+        Interface.objects.create(
+            device=self.device,
+            module=module,
+            name="7.100",
+            type=InterfaceTypeChoices.TYPE_VIRTUAL,
+            parent=parent,
+        )
+
+        result = execute_installed_plan_set(self._plan(module, bay))
+
+        self.assertEqual(result.families[0].status, FamilyStatus.CHANGED)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["7", "7.100", "xe-0/0/7:0", "xe-0/0/7:2"],
+        )
+
     def test_blocked_child_leaves_only_that_child_unchanged(self):
         Interface.objects.create(device=self.device, name="xe-0/0/6:2", type=PLAIN_TYPE)
         module, bay = self._raw_module("6")

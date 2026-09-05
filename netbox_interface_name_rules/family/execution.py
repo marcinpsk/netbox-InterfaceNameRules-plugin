@@ -33,7 +33,8 @@ def _lock_family(plan: InstalledFamilyPlan):
     if plan.parent_pk is None:
         queryset = queryset.filter(pk__in=plan.member_pks)
     else:  # pragma: no cover - requires channelization support
-        queryset = queryset.filter(Q(pk=plan.parent_pk) | Q(parent_id=plan.parent_pk))
+        # Only channels are family members; a virtual subinterface may also parent here.
+        queryset = queryset.filter(Q(pk=plan.parent_pk) | Q(parent_id=plan.parent_pk, channel_id__isnull=False))
     return list(queryset.select_for_update().order_by("pk"))
 
 
