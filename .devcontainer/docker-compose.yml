@@ -48,7 +48,9 @@ services:
     # PostgreSQL 18 allocates a dynamic shared memory segment at startup and fails
     # to start on Docker's 64MB default /dev/shm.
     shm_size: 1gb
-    command: postgres -c max_connections=200
+    # Parallel test runs open a connection per worker per test database, and this
+    # postgres serves several test databases at once.
+    command: postgres -c max_connections=800
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
