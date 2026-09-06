@@ -5,9 +5,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/.devcontainer/docker-compose.yml"
+# shellcheck source=.devcontainer/scripts/tests/lib.sh
+source "$(dirname "$0")/lib.sh"
+compose_file_args "$REPO_ROOT"
 
-config="$(docker compose -f "$COMPOSE_FILE" config)"
+config="$(docker compose "${COMPOSE_FILES[@]}" config)"
 
 ip_range="$(sed -n 's/^[[:space:]]*ip_range:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<< "$config")"
 if [ -z "$ip_range" ]; then
