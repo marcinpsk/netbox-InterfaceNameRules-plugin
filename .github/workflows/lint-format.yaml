@@ -41,4 +41,5 @@ jobs:
       - name: Run devcontainer script tests
         run: |
           bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
+          bash .devcontainer/scripts/tests/test-ca-environment.sh
           bash .devcontainer/scripts/tests/test-network-pins.sh

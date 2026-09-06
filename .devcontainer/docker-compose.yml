@@ -31,9 +31,11 @@ services:
       https_proxy: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
       no_proxy: ${NO_PROXY:-}
-      REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
-      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
-      CURL_CA_BUNDLE: ${CURL_CA_BUNDLE:-}
+      # setup.sh installs any ca-bundle.crt into this store, so a host path here
+      # would only name a file the container cannot open.
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      CURL_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
     depends_on:
       postgres:
         condition: service_healthy
