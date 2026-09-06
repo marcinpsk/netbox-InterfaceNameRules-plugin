@@ -94,3 +94,6 @@ networks:
       config:
         # Pinned to avoid Docker auto-assigning 172.30.x.x
         - subnet: "172.28.200.0/24"
+          # Dynamic assignment stays above .128 so no unpinned service (e.g. a local
+          # override) can take the static postgres/redis addresses setup.sh uses.
+          ip_range: "172.28.200.128/25"
