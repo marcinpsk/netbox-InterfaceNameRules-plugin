@@ -92,16 +92,10 @@ class PerformancePackageTest(unittest.TestCase):
             if line.startswith("|")
         ]
         direct_reads = [row for row in rows if ".direct_callback." in row[0] and row[1] == "Shared reads"]
-        structural_save = next(
-            row
-            for row in rows
-            if row[0] == "module.complete_model_save.structural_creation" and row[1] == "Shared reads"
-        )
 
         self.assertEqual(len(direct_reads), 7)
         self.assertEqual({row[0] for row in direct_reads}, expected_scenarios)
         self.assertEqual({row[3] for row in direct_reads}, {"0"})
-        self.assertEqual(structural_save[3], "1")
 
     def test_readme_does_not_equate_shared_reads_with_all_disk_io(self):
         readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
@@ -117,15 +111,28 @@ class PerformancePackageTest(unittest.TestCase):
             _unwrapped(readme),
         )
 
-    def test_readme_scopes_the_zero_shared_reads_claim_to_the_after_run(self):
-        """The before run recorded one shared read, so the unscoped claim would be false."""
+    def test_readme_shared_read_claim_matches_the_comparison(self):
+        """Read the recorded shared reads rather than pinning what one pair of runs happened to show."""
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        before_reads = after_reads = 0
+        for line in comparison.splitlines():
+            cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
+            if len(cells) == 6 and cells[1] == "Shared reads" and ".direct_callback." in cells[0]:
+                before_reads += int(cells[2])
+                after_reads += int(cells[3])
         readme = _unwrapped((_PROJECT_ROOT / "performance" / "README.md").read_text())
 
         self.assertNotIn("No shared-buffer reads were observed in any direct-callback scenario.", readme)
-        self.assertIn(
-            "No shared-buffer reads were observed in any direct-callback scenario after the refactor",
-            readme,
-        )
+        scoped_claim = "No shared-buffer reads were observed in any direct-callback scenario after the refactor"
+        if after_reads:
+            self.assertNotIn(scoped_claim, readme)
+        else:
+            self.assertIn(scoped_claim, readme)
+        before_claim = "the before run recorded none either"
+        if before_reads:
+            self.assertNotIn(before_claim, readme)
+        else:
+            self.assertIn(before_claim, readme)
 
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()

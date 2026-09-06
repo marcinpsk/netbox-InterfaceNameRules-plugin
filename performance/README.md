@@ -79,30 +79,30 @@ The refactor moves the committed callback's database work as follows:
 | Scenario | Before | After | Change |
 | --- | ---: | ---: | ---: |
 | `no_matching_rule` | 7 | 7 | 0 |
-| `plain_rename` | 36 | 38 | +2 |
-| `structural_creation` | 113 | 113 | 0 |
-| `existing_family` | 254 | 168 | -86 |
-| `reconciliation` | 255 | 257 | +2 |
-| `vc.reapply_1` | 37 | 36 | -1 |
-| `vc.reapply_8` | 254 | 239 | -15 |
+| `plain_rename` | 41 | 43 | +2 |
+| `structural_creation` | 118 | 114 | -4 |
+| `existing_family` | 291 | 193 | -98 |
+| `reconciliation` | 300 | 302 | +2 |
+| `vc.reapply_1` | 46 | 45 | -1 |
+| `vc.reapply_8` | 326 | 311 | -15 |
 
-One scenario improves substantially: naming a module into a family that already exists costs 86
-fewer statements, a third of the callback's work. Virtual-chassis reapplication is slightly cheaper.
-Two scenarios cost two statements more.
+One scenario improves substantially: naming a module into a family that already exists costs 98
+fewer statements, a third of the callback's work. Structural creation costs four fewer and
+virtual-chassis reapplication is slightly cheaper. Two scenarios cost two statements more.
 
 Count the statements, but read the work. The direct-callback database and process-CPU changes are:
 
 | Scenario | SQL calls | Planner cost | Shared hits | CPU median |
 | --- | ---: | ---: | ---: | ---: |
-| `plain_rename` | +5.6% | +3.1% | -46.0% | -9.1% |
-| `structural_creation` | 0.0% | -23.3% | -29.6% | -3.1% |
-| `existing_family` | -33.9% | -59.9% | -41.2% | -34.2% |
-| `reconciliation` | +0.8% | +2.4% | +35.8% | +3.1% |
-| `vc.reapply_1` | -2.7% | -6.6% | +13.5% | +6.7% |
-| `vc.reapply_8` | -5.9% | -18.6% | -7.2% | -4.0% |
+| `plain_rename` | +4.9% | +4.6% | -2.5% | +6.3% |
+| `structural_creation` | -3.4% | +9.4% | -2.1% | -0.4% |
+| `existing_family` | -33.7% | -52.9% | -33.1% | -36.4% |
+| `reconciliation` | +0.7% | -5.1% | -16.4% | +0.0% |
+| `vc.reapply_1` | -2.2% | -9.1% | -9.7% | -1.6% |
+| `vc.reapply_8` | -4.6% | -5.9% | -5.2% | -10.7% |
 
-No shared-buffer reads were observed in any direct-callback scenario after the refactor. The before
-run recorded one shared read, in `structural_creation`.
+No shared-buffer reads were observed in any direct-callback scenario after the refactor, and the
+before run recorded none either. Both runs read every page they needed from the buffer cache.
 
 The net change of two statements has four sources: `transaction: SAVEPOINT` (+1),
 `transaction: RELEASE` (+1), `dcim_interface` (+1) and `dcim_moduletype` (-1),
@@ -126,7 +126,7 @@ equals its direct-callback delta, which says the changed statement count belongs
 statements either way.
 
 Both runs recorded 15 machine-time samples after 3 warmups on the same hardware. Process CPU
-supports the large existing-family improvement: its median falls 34.2%. The smaller changes are
-diagnostic, not pass/fail limits. Host load was not comparable: the before run moved from 25.02 to
-9.59, and the after run moved from 9.24 to 16.28. Treat wall time, especially p95, as contextual
-evidence and use the deterministic SQL profile as the verdict.
+supports the large existing-family improvement: its median falls 36.4%. The smaller changes are
+diagnostic, not pass/fail limits. Both runs were taken on an otherwise-idle host: the before run
+moved from a 1-minute load of 1.10 to 1.18, and the after run from 1.23 to 0.99. Wall time,
+especially p95, stays contextual evidence, and the deterministic SQL profile carries the verdict.

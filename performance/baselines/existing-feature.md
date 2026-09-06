@@ -5,29 +5,29 @@ Machine-time values are evidence for a same-hardware before/after comparison. Th
 
 This run measured machine time. Statement counts are reproducible and carry the verdict.
 
-Host load averaged 25.02 over the minute before the run and 9.59 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
+Host load averaged 1.10 over the minute before the run and 1.18 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
 
 | Scenario | Layer | SQL calls | Planner cost | Shared hits | Wall median (ms) | Wall p95 (ms) | CPU median (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `module.complete_model_save.no_matching_rule` | complete_model_save | 77 | 1268.440 | 435 | 205.417 | 275.813 | 134.672 |
-| `module.direct_callback.no_matching_rule` | direct_callback | 7 | 13.440 | 13 | 22.119 | 36.044 | 15.709 |
-| `module.complete_model_save.plain_rename` | complete_model_save | 106 | 1620.800 | 438 | 266.112 | 356.490 | 170.104 |
-| `module.direct_callback.plain_rename` | direct_callback | 36 | 325.070 | 215 | 95.032 | 111.400 | 63.090 |
-| `module.complete_model_save.structural_creation` | complete_model_save | 183 | 2552.290 | 814 | 430.604 | 554.378 | 270.455 |
-| `module.direct_callback.structural_creation` | direct_callback | 113 | 1446.050 | 706 | 235.461 | 262.178 | 164.085 |
-| `module.complete_model_save.existing_family` | complete_model_save | 436 | 6291.550 | 1987 | 828.146 | 1008.849 | 593.035 |
-| `module.direct_callback.existing_family` | direct_callback | 254 | 3500.530 | 1146 | 493.059 | 541.989 | 351.462 |
-| `module.complete_model_save.reconciliation` | complete_model_save | 437 | 6098.280 | 2156 | 806.415 | 887.028 | 582.722 |
-| `module.direct_callback.reconciliation` | direct_callback | 255 | 3200.990 | 944 | 471.063 | 511.525 | 330.303 |
-| `vc.complete_model_save.reapply_1` | complete_model_save | 62 | 607.180 | 326 | 125.342 | 143.462 | 88.441 |
-| `vc.direct_callback.reapply_1` | direct_callback | 37 | 339.110 | 155 | 85.037 | 91.612 | 59.026 |
-| `vc.complete_model_save.reapply_8` | complete_model_save | 279 | 2654.980 | 1061 | 572.069 | 629.913 | 391.765 |
-| `vc.direct_callback.reapply_8` | direct_callback | 254 | 2575.540 | 1033 | 518.475 | 553.082 | 359.993 |
+| `module.complete_model_save.no_matching_rule` | complete_model_save | 78 | 1348.730 | 247 | 74.488 | 76.885 | 54.842 |
+| `module.direct_callback.no_matching_rule` | direct_callback | 7 | 8.440 | 8 | 7.530 | 7.997 | 6.204 |
+| `module.complete_model_save.plain_rename` | complete_model_save | 112 | 1572.980 | 440 | 104.465 | 107.136 | 76.347 |
+| `module.direct_callback.plain_rename` | direct_callback | 41 | 330.710 | 198 | 37.350 | 38.733 | 27.665 |
+| `module.complete_model_save.structural_creation` | complete_model_save | 189 | 2540.110 | 760 | 160.520 | 164.478 | 120.184 |
+| `module.direct_callback.structural_creation` | direct_callback | 118 | 1297.150 | 522 | 93.559 | 96.036 | 71.385 |
+| `module.complete_model_save.existing_family` | complete_model_save | 479 | 5962.130 | 1839 | 384.855 | 409.510 | 288.975 |
+| `module.direct_callback.existing_family` | direct_callback | 291 | 3429.840 | 890 | 233.832 | 272.521 | 171.181 |
+| `module.complete_model_save.reconciliation` | complete_model_save | 488 | 5996.030 | 1989 | 386.922 | 401.208 | 290.820 |
+| `module.direct_callback.reconciliation` | direct_callback | 300 | 3582.700 | 1143 | 229.007 | 262.925 | 172.063 |
+| `vc.complete_model_save.reapply_1` | complete_model_save | 71 | 619.550 | 347 | 62.709 | 67.104 | 45.891 |
+| `vc.direct_callback.reapply_1` | direct_callback | 46 | 379.930 | 237 | 45.110 | 46.600 | 33.323 |
+| `vc.complete_model_save.reapply_8` | complete_model_save | 351 | 3114.000 | 1348 | 300.257 | 347.974 | 220.210 |
+| `vc.direct_callback.reapply_8` | direct_callback | 326 | 2763.340 | 1118 | 284.321 | 319.978 | 208.560 |
 
-Plugin revision: `ccadd0bb5b2852ff81f2747769d61746254173e1`
+Plugin revision: `8e409a7aded1307bb70f1c99aa6163fde4d26008`
 
-NetBox revision: `ab9bd6f5b69a4d359fcb20dcbf6280af39fc77d6`
+NetBox revision: `netboxcommunity/netbox@sha256:a2cdf00fab61d2ae37e4f987adaa403fad5c4049a63bc960768b7bbf804e2cb6`
 
-PostgreSQL: `18.3 (Debian 18.3-1.pgdg13+1)`
+PostgreSQL: `18.4 (Debian 18.4-1.pgdg13+1)`
 
 Samples per scenario: `15`
