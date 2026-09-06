@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 #
-# Isolated test-database settings shim.
+# Isolated test settings shim.
 #
 # Django names the test database ``test_<DB_NAME>`` (here: ``test_netbox``), so two
 # ``manage.py test`` runs in the same devcontainer collide on a single test DB and
@@ -22,3 +22,10 @@ from netbox.settings import *  # noqa: F401,F403
 _name = _os.environ.get("TEST_DB_NAME")
 if _name:
     DATABASES["default"].setdefault("TEST", {})["NAME"] = _name  # noqa: F405
+
+# NetBox writes the search cache inline only when no RQ worker serves the queue, so
+# ``TEST_REDIS_DB`` moves the queues off the database the devcontainer's worker holds.
+_redis_db = _os.environ.get("TEST_REDIS_DB")
+if _redis_db:
+    for _queue in RQ_QUEUES.values():  # noqa: F405
+        _queue["DB"] = int(_redis_db)
