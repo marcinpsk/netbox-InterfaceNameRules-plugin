@@ -24,8 +24,10 @@ changes the SQL profile between identical saves. The runner checks this conditio
 `TEST_REDIS_DB` moves the queues to their own Redis database, which is what makes the run possible
 beside a devcontainer worker that holds the shared one.
 
-The command below records a measured run with the retained configuration of 15 timing samples and
-3 warmups per scenario.
+Run the block below from this plugin checkout. Every `$PWD` in it is expanded before the final
+`cd`, so starting anywhere else points the output and the settings path at the wrong repository. It
+records a measured run with the retained configuration of 15 timing samples and 3 warmups per
+scenario.
 
 ```bash
 export PYTHONPATH="/path/to/measured/checkout:$PWD/.devcontainer/config"
