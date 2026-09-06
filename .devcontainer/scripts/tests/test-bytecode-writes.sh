@@ -5,11 +5,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/.devcontainer/docker-compose.yml"
+# shellcheck source=.devcontainer/scripts/tests/lib.sh
+source "$(dirname "$0")/lib.sh"
+compose_file_args "$REPO_ROOT"
 
 # The container runs as root and mounts the host checkout, so any bytecode Python caches lands in
 # the developer's tree owned by root. Those files can block `git worktree remove` and host tooling.
-docker compose -f "$COMPOSE_FILE" config --format json | python3 -c "
+docker compose "${COMPOSE_FILES[@]}" config --format json | python3 -c "
 import json
 import sys
 

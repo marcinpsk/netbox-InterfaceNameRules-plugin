@@ -5,12 +5,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/.devcontainer/docker-compose.yml"
+# shellcheck source=.devcontainer/scripts/tests/lib.sh
+source "$(dirname "$0")/lib.sh"
+compose_file_args "$REPO_ROOT"
 
 if [ -n "${NETWORK_PINS_CONFIG:-}" ]; then
   config="$(cat -- "$NETWORK_PINS_CONFIG")"
 else
-  config="$(docker compose -f "$COMPOSE_FILE" config)"
+  config="$(docker compose "${COMPOSE_FILES[@]}" config)"
 fi
 
 mapfile -t ranges < <(sed -n 's/^[[:space:]]*ip_range:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<< "$config")
