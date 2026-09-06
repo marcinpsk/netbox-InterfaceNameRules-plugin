@@ -65,3 +65,6 @@ site/
 
 # Brainstorming / design specs (local only, not for version control)
 docs/superpowers/
+
+# Playwright MCP output (local only)
+.playwright-mcp/
