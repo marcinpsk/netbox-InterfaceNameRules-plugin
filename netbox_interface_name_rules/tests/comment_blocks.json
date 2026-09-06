@@ -1,0 +1,306 @@
+{
+  "engine.py": [
+    [
+      "# A channelized parent is its own base: its channels are separate rows, so the name needs no",
+      1
+    ],
+    [
+      "# All interfaces already have the names the rule would produce \u2014 flag as",
+      1
+    ],
+    [
+      "# An earlier flat apply leaves N sibling interfaces where NetBox 4.7+ models a channelized parent",
+      1
+    ],
+    [
+      "# Only the cheap half of the guard, so a rule that offers no conversion never reads its modules;",
+      1
+    ],
+    [
+      "# Sort Python-side: specificity_score descending, then module_type_pattern length",
+      1
+    ],
+    [
+      "# The guard runs while it can still see every claimed row, before two of them that intend",
+      1
+    ]
+  ],
+  "family/batch.py": [
+    [
+      "# A member left with the name it had for a reason the operator can act on.  An unsupported topology",
+      1
+    ]
+  ],
+  "family/installed.py": [
+    [
+      "# A device rule never builds a family, so its channel count says nothing about this one: the",
+      1
+    ]
+  ],
+  "family/structural.py": [
+    [
+      "# A flat family is N sibling interfaces on one module: the base takes the first name and the rest",
+      1
+    ]
+  ],
+  "forms.py": [
+    [
+      "# Blank first choice: a bulk edit posts every rendered field, so without a \"no change\" option a",
+      1
+    ],
+    [
+      "# FK fields must declare to_field_name explicitly so YAML/CSV can reference",
+      1
+    ]
+  ],
+  "graphql/filters.py": [
+    [
+      "# Degrade only when the module is genuinely absent (or one of its parents). Any other",
+      1
+    ],
+    [
+      "# strawberry-graphql-django renamed FilterLookup to StrFilterLookup in 0.86; NetBox 4.5",
+      1
+    ]
+  ],
+  "models.py": [
+    [
+      "# Django accepts any iterable. Reading a generator here would leave Django an empty",
+      1
+    ],
+    [
+      "# Override inherited tags to avoid reverse accessor clash when co-installed",
+      1
+    ],
+    [
+      "# The implications _validate_breakout_topology() enforces over enum and integer",
+      1
+    ]
+  ],
+  "rule_selection.py": [
+    [
+      "# A single dictionary read cannot race with another thread's memo clear between",
+      1
+    ],
+    [
+      "# Device-interface rows reuse module_type_pattern as an interface-name filter, so they are",
+      1
+    ],
+    [
+      "# Publish each loaded rule set as one new dictionary. Concurrent readers then see",
+      1
+    ],
+    [
+      "# These fields can change either matching or the selected rule's output. The row",
+      1
+    ]
+  ],
+  "signals.py": [
+    [
+      "#   Module.save()",
+      1
+    ],
+    [
+      "# Adding a pre_save on Interface would be a no-op for the normal install",
+      1
+    ],
+    [
+      "# NetBox's Module.save() creates interfaces via bulk_create() which bypasses",
+      1
+    ],
+    [
+      "# When a Device's vc_position or virtual_chassis changes, any module-attached",
+      1
+    ],
+    [
+      "# When netbox-librenms-plugin is installed it exposes a Signal that asks",
+      1
+    ]
+  ],
+  "tests/parallel.py": [
+    [
+      "# A stock Redis server serves databases 0 to 15. The devcontainer's own rqworker holds the first",
+      1
+    ]
+  ],
+  "tests/test_channelization.py": [
+    [
+      "# A second family whose template does not feed the current name back in, so \"already correctly",
+      1
+    ],
+    [
+      "# A standalone interface alongside the family, so \"families counted once\" stays distinguishable",
+      1
+    ]
+  ],
+  "tests/test_conversion.py": [
+    [
+      "# The scan orders modules by bay, so the cap has to land on exactly the families blocked above.",
+      1
+    ]
+  ],
+  "tests/test_device_rules.py": [
+    [
+      "# Derive the over-length name from the live field limit so the test still exercises the",
+      1
+    ],
+    [
+      "# assertLogs asserts the warning branch actually fired \u2014 without it, \"no rule matched\" would",
+      1
+    ]
+  ],
+  "tests/test_documentation.py": [
+    [
+      "# Device-interface rules match any device interface, including a standalone one such as",
+      1
+    ]
+  ],
+  "tests/test_e2e.py": [
+    [
+      "# Bay with numeric position \u2014 interface template creates \"5\",",
+      1
+    ],
+    [
+      "# The interface was created with the bay position as name",
+      1
+    ]
+  ],
+  "tests/test_engine_advanced.py": [
+    [
+      "# Create with the final correct name (so the rule renames nothing for it)",
+      1
+    ],
+    [
+      "# The name the rule would produce for \"Gi0/2\" (vc_position=1, port=2) is already taken",
+      1
+    ],
+    [
+      "# force_reapply=True: base \"xe-0/0/0\" is matched (via last segment \"0\" in raw_names),",
+      1
+    ],
+    [
+      "# force_reapply=True: base \"xe-2/0/0\" is matched (last segment \"0\" in raw_names),",
+      1
+    ]
+  ],
+  "tests/test_installed_families.py": [
+    [
+      "# Plan the complete family first. Without it the module holds only the raw base interface,",
+      1
+    ]
+  ],
+  "tests/test_isolated_test_settings.py": [
+    [
+      "# Hand the child this interpreter's own import path. NetBox lives in a different place in",
+      1
+    ],
+    [
+      "# Read the settings module named on the command line, so the shim can be compared with the",
+      1
+    ],
+    [
+      "# The suite's own settings module reaches the child through these, and Django would load it",
+      1
+    ]
+  ],
+  "tests/test_module_boundaries.py": [
+    [
+      "# The family package does not export the template-name helpers the engine needs, so the engine",
+      1
+    ]
+  ],
+  "tests/test_rule_validation_agreement.py": [
+    [
+      "# These rows predate the constraints, so they must reach the table the way they did then:",
+      1
+    ]
+  ],
+  "tests/test_rules.py": [
+    [
+      "# A genuine second thread. _pin is thread-local, so this worker must see depth 0 \u2014 it never",
+      1
+    ],
+    [
+      "# An unpinned thread clearing the shared memo at the cap must not disturb the pinned",
+      1
+    ],
+    [
+      "# And the eviction actually fired: the final size is below the number of distinct contexts,",
+      1
+    ],
+    [
+      "# Bulk .update() writes the column directly \u2014 no .save(), so auto_now/last_updated is NOT",
+      1
+    ],
+    [
+      "# Check the bound after EVERY insert, not just once at the end. The memo size must never",
+      1
+    ],
+    [
+      "# Forge a one-rule set whose name_template embeds r1's trailing columns, a row separator, and",
+      1
+    ],
+    [
+      "# Inside the pin, the first lookup primes the set (one query) and the rest reuse it: a loop of",
+      1
+    ],
+    [
+      "# Null the scope FK the way a SET_NULL cascade / bulk .update() does: a straight UPDATE that",
+      1
+    ],
+    [
+      "# Poison the shared memo for the same signature. A primed lookup that read the shared",
+      1
+    ],
+    [
+      "# Retention lives in the private copy. Asserting the shared memo is empty would prove",
+      1
+    ],
+    [
+      "# Swap device_type between the two rules via bulk .update(): SUM(device_type) is unchanged",
+      1
+    ],
+    [
+      "# These tests mutate rule_selection's module-level _RULE_CACHE / _pin, which TestCase does",
+      1
+    ],
+    [
+      "# This test deliberately rebinds the module global from another thread; restore a clean",
+      1
+    ],
+    [
+      "# Two device-level rules (module_type=None \u2192 every FK column renders ''). Distinct patterns keep",
+      1
+    ],
+    [
+      "# the fingerprint's own filter predicate (filter(enabled=True)) \u2014 toggling it adds/removes",
+      1
+    ]
+  ],
+  "tests/test_standard_views.py": [
+    [
+      "# breakout_mode stays flat here: bulk edit runs full_clean(), and the channelized topology",
+      1
+    ]
+  ],
+  "tests/test_vc_drift.py": [
+    [
+      "# Every fixture spelling a name NetBox resolved from the token needs the release that resolves it:",
+      1
+    ],
+    [
+      "# One token template plus a plain one whose interface an earlier rename moved onto the",
+      1
+    ]
+  ],
+  "views.py": [
+    [
+      "# Skip duplicate detection when the user lacks view permission \u2014 we cannot",
+      1
+    ],
+    [
+      "# instance is intentionally omitted: InterfaceNameRule does not",
+      1
+    ]
+  ]
+}
