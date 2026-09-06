@@ -104,5 +104,7 @@ jobs:
         env:
           NETBOX_CONFIGURATION: netbox.configuration
           PYTHONPATH: ${{ github.workspace }}/netbox/netbox
+          TEST_DB_NAME: test_netbox_interface_name_rules_main_ci
+          TEST_REDIS_HOST: localhost
         run: |
-          pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox
+          pytest -n auto netbox_interface_name_rules --no-cov -o pythonpath=../netbox/netbox

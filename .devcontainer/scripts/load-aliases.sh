@@ -119,14 +119,20 @@ netbox-shell() {
   cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && python manage.py shell
 }
 
+# Run the plugin suite with pytest, the runner CI uses. The settings module gives each xdist
+# worker private PostgreSQL and Redis databases, so concurrent suites in the shared devcontainer
+# do not collide. Override the targets with TEST_DB_NAME=... / TEST_REDIS_HOST=... .
 netbox-test() {
-  cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && python manage.py test netbox_interface_name_rules "$@"
+  cd "$PLUGIN_DIR" && source /opt/netbox/venv/bin/activate && \
+    TEST_DB_NAME="${TEST_DB_NAME:-test_netbox_interface_name_rules}" \
+    TEST_REDIS_HOST="${TEST_REDIS_HOST:-redis}" \
+    pytest netbox_interface_name_rules "$@"
 }
 
-# Run tests on a per-session ISOLATED test database, so concurrent suites in the
-# shared devcontainer don't collide on test_netbox (which corrupts migrations and
-# can leave lock-holding zombie connections). Pass the app(s) + any test flags,
-# e.g.  netbox-test-isolated netbox_nso_plugin --keepdb
+# Run a Django-runner suite on an isolated test database. The plugin's own suite runs under
+# pytest via netbox-test; this stays for the performance runner and for other apps.
+# Sharing test_netbox corrupts migrations and can leave lock-holding zombie connections.
+# Pass the app(s) + any test flags, e.g.  netbox-test-isolated netbox_nso_plugin --keepdb
 # Override the DB name with TEST_DB_NAME=...; otherwise it's derived from the first
 # app argument (a stable name so --keepdb can reuse it).
 netbox-test-isolated() {

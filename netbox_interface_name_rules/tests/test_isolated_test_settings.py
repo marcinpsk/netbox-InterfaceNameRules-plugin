@@ -31,9 +31,22 @@ print(json.dumps({
 class IsolatedTestSettingsTest(TestCase):
     """Assemble the shim the way Django does and read back what it isolated."""
 
+    # The suite's own settings module reaches the child through these, and Django would load it
+    # lazily instead of the module under test.
+    _SUITE_VARIABLES = (
+        "DJANGO_SETTINGS_MODULE",
+        "PYTEST_XDIST_WORKER",
+        "REDIS_HOST",
+        "REDIS_CACHE_HOST",
+        "REDIS_DATABASE",
+        "REDIS_CACHE_DATABASE",
+    )
+
     def _load(self, module, environment):
         """Import *module* in a clean interpreter and return the settings it produced."""
         env = {**os.environ, **environment}
+        for key in self._SUITE_VARIABLES:
+            env.pop(key, None)
         for key, value in environment.items():
             if value is None:
                 env.pop(key, None)
@@ -45,8 +58,10 @@ class IsolatedTestSettingsTest(TestCase):
             env=env,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
         )
+        # Report the child's own error: a CalledProcessError would hide why the import failed.
+        assert completed.returncode == 0, f"{module} failed to import:\n{completed.stderr[-2000:]}"
         return json.loads(completed.stdout.strip().splitlines()[-1])
 
     def test_it_isolates_the_task_queue_redis_database(self):
