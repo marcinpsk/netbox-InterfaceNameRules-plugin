@@ -107,12 +107,21 @@ def _format(value):
     return f"{int(value)}"
 
 
+def _displayed(value):
+    """Return *value* at the precision the table prints it with."""
+    if isinstance(value, float) and not value.is_integer():
+        return round(value, 2)
+    return value
+
+
 def _comparison_cells(before, after, before_unavailable, after_unavailable):
     """Return rendered comparison cells for one optional metric."""
     if before is None or after is None:
         before_value = before_unavailable if before is None else _format(before)
         after_value = after_unavailable if after is None else _format(after)
         return before_value, after_value, "n/a", "n/a"
+    # Derive the change from the printed endpoints, so a reader can reproduce it from the row.
+    before, after = _displayed(before), _displayed(after)
     change, percent = _delta(before, after)
     share = "n/a" if percent is None else f"{percent:+.1f}%"
     return _format(before), _format(after), _format(change), share
