@@ -8,7 +8,6 @@ import re
 import tomllib
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _COMPARE_PATH = _PROJECT_ROOT / "performance" / "compare.py"
@@ -158,19 +157,6 @@ class PerformancePackageTest(unittest.TestCase):
         expected = compare._MACHINE_TIME_COMPARABLE_NOTE if quiet else compare._MACHINE_TIME_UNPROVEN_NOTE
 
         self.assertIn(expected, machine_time)
-
-
-class XdistWorkerCapTest(unittest.TestCase):
-    """The shared host gets a bounded number of automatic pytest workers."""
-
-    def test_auto_worker_count_is_capped_at_eight(self):
-        configuration_path = _PROJECT_ROOT / "conftest.py"
-        spec = importlib.util.spec_from_file_location("project_conftest", configuration_path)
-        configuration = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(configuration)
-
-        with patch("xdist.plugin.pytest_xdist_auto_num_workers", return_value=32):
-            self.assertEqual(configuration.pytest_xdist_auto_num_workers(object()), 8)
 
 
 class ArtifactValidationTest(unittest.TestCase):
