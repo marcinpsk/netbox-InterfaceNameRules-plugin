@@ -14,7 +14,6 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("netbox_interface_name_rules", "0006_alter_interfacenamerule_options"),
-        ("dcim", "0001_initial"),
     ]
 
     operations = [

@@ -5,6 +5,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+# shellcheck source=.devcontainer/scripts/tests/lib.sh
+source "$(dirname "$0")/lib.sh"
+compose_file_args "$REPO_ROOT"
 CONTAINER_CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 HOST_CA_BUNDLE="/host-only/ca.pem"
 
@@ -12,7 +15,7 @@ config="$({
   REQUESTS_CA_BUNDLE="$HOST_CA_BUNDLE" \
   SSL_CERT_FILE="$HOST_CA_BUNDLE" \
   CURL_CA_BUNDLE="$HOST_CA_BUNDLE" \
-    docker compose -f "$REPO_ROOT/.devcontainer/docker-compose.yml" config
+    docker compose "${COMPOSE_FILES[@]}" config
 })"
 
 # Compare the rendered value as a string. A grep pattern would read every "." in a certificate

@@ -13,7 +13,6 @@ from django.core.exceptions import ValidationError
 
 from . import family as family_ops
 from . import naming, rule_selection
-from .family import targets as family_targets
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 
@@ -630,7 +629,7 @@ def _preview_plans(rule, plan_set) -> list:
     if installed:  # pragma: no cover - requires a NetBox that models channelization
         return installed
     creations = [plan for plan in plan_set.plans if plan.base_name is not None]
-    kept = family_targets.one_family_per_name_set([(plan.base_name, plan.target_names) for plan in creations])
+    kept = family_ops.one_family_per_name_set([(plan.base_name, plan.target_names) for plan in creations])
     return [creations[index] for index in kept]
 
 

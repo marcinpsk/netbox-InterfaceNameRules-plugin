@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 
 from dcim.models import (
     Device,
-    DeviceRole,
     DeviceType,
     Interface,
     Manufacturer,
@@ -16,7 +15,6 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
-    Site,
     VirtualChassis,
 )
 from django.test import TestCase
@@ -30,6 +28,7 @@ from netbox_interface_name_rules.signals import (
     on_module_pre_save,
     on_module_saved,
 )
+from netbox_interface_name_rules.tests.helpers import make_device, make_placement
 
 _librenms_available = importlib.util.find_spec("netbox_librenms_plugin") is not None
 
@@ -48,9 +47,7 @@ class SignalModuleHandlerTest(TestCase):
         )
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="SigBay 0", position="0")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="SigBay 1", position="1")
-        role = DeviceRole.objects.create(name="SigRole", slug="sigrole")
-        site = Site.objects.create(name="SigSite", slug="sigsite")
-        cls.device = Device.objects.create(name="sig-test-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("Sig", cls.device_type, name="sig-test-01")
         cls.bay0 = ModuleBay.objects.get(device=cls.device, name="SigBay 0")
         cls.bay1 = ModuleBay.objects.get(device=cls.device, name="SigBay 1")
 
@@ -159,15 +156,14 @@ class SignalDeviceHandlerTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="SigDev-SFP", part_number="SigDev-SFP"
         )
-        role = DeviceRole.objects.create(name="SigDevRole", slug="sigdevrole")
-        site = Site.objects.create(name="SigDevSite", slug="sigdevsite")
+        placement = make_placement("SigDev")
 
         cls.vc = VirtualChassis.objects.create(name="sigdev-vc")
         cls.device = Device.objects.create(
             name="sigdev-sw1",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=cls.vc,
             vc_position=1,
         )
@@ -287,14 +283,13 @@ class SignalDeviceHandlerTest(TestCase):
         """_apply_rules_for_device_deferred with device having no modules runs without error."""
         manufacturer = Manufacturer.objects.create(name="SigDevMfg2", slug="sigdevmfg2")
         dt = DeviceType.objects.create(manufacturer=manufacturer, model="SD2-Switch", slug="sd2-switch")
-        role = DeviceRole.objects.create(name="SD2Role", slug="sd2role")
-        site = Site.objects.create(name="SD2Site", slug="sd2site")
+        placement = make_placement("SD2")
         vc = VirtualChassis.objects.create(name="sd2-vc")
         device_no_modules = Device.objects.create(
             name="sd2-sw-nomod",
             device_type=dt,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=vc,
             vc_position=2,
         )
@@ -315,14 +310,13 @@ class SignalExceptionPathsTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="SigX-Dev", slug="sigx-dev")
         cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="SigX-SFP", part_number="SigX-SFP")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="SigXBay 0", position="0")
-        role = DeviceRole.objects.create(name="SigXRole", slug="sigxrole")
-        site = Site.objects.create(name="SigXSite", slug="sigxsite")
+        placement = make_placement("SigX")
         cls.vc = VirtualChassis.objects.create(name="sigx-vc")
         cls.device = Device.objects.create(
             name="sigx-sw1",
             device_type=cls.device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=cls.vc,
             vc_position=1,
         )
@@ -401,14 +395,13 @@ class SignalModuleNullBayPathTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="NullBay-SFP", part_number="NullBay-SFP"
         )
-        role = DeviceRole.objects.create(name="NullBayRole", slug="nullbayrole")
-        site = Site.objects.create(name="NullBaySite", slug="nullbaysite")
+        placement = make_placement("NullBay")
         vc = VirtualChassis.objects.create(name="nullbay-vc")
         cls.device = Device.objects.create(
             name="nullbay-sw1",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=vc,
             vc_position=1,
         )
@@ -465,14 +458,13 @@ class SignalOuterModuleLoopExceptionTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="OuterX-SFP", part_number="OuterX-SFP"
         )
-        role = DeviceRole.objects.create(name="OuterXRole", slug="outerxrole")
-        site = Site.objects.create(name="OuterXSite", slug="outerxsite")
+        placement = make_placement("OuterX")
         vc = VirtualChassis.objects.create(name="outerx-vc")
         cls.device = Device.objects.create(
             name="outerx-sw1",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=vc,
             vc_position=1,
         )
@@ -518,9 +510,7 @@ class ModuleDeletionCascadeTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="DelCas-SFP", part_number="DelCas-SFP"
         )
-        role = DeviceRole.objects.create(name="DelCasRole", slug="delcasrole")
-        site = Site.objects.create(name="DelCasSite", slug="delcassite")
-        cls.device = Device.objects.create(name="delcas-sw1", device_type=device_type, role=role, site=site)
+        cls.device = make_device("DelCas", device_type, name="delcas-sw1")
         cls.bay = ModuleBay.objects.get(device=cls.device, name="DCBay 0")
 
     def test_interfaces_deleted_when_module_removed(self):
@@ -556,9 +546,7 @@ class ModulePreSaveExceptionLoggingTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="PSL-Dev", slug="psl-dev")
         cls.module_type = ModuleType.objects.create(manufacturer=mfg, model="PSL-SFP", part_number="PSL-SFP")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Bay 0", position="0")
-        role = DeviceRole.objects.create(name="PSLRole", slug="pslrole")
-        site = Site.objects.create(name="PSLSite", slug="pslsite")
-        cls.device = Device.objects.create(name="psl-dev-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("PSL", cls.device_type, name="psl-dev-01")
         cls.bay = ModuleBay.objects.get(device=cls.device, name="Bay 0")
 
     def test_pre_save_db_error_logs_warning(self):
@@ -594,9 +582,7 @@ class LibrenmsPredictReceiverTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="PRED-Dev", slug="pred-dev")
         cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="PRED-SFP", part_number="PRED-SFP")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="PredBay 0", position="c9")
-        role = DeviceRole.objects.create(name="PredRole", slug="predrole")
-        site = Site.objects.create(name="PredSite", slug="predsite")
-        cls.device = Device.objects.create(name="pred-test-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("Pred", cls.device_type, name="pred-test-01")
         cls.bay = ModuleBay.objects.get(device=cls.device, name="PredBay 0")
 
     @skipUnless(_librenms_available, "netbox_librenms_plugin not installed")

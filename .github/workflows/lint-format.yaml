@@ -43,3 +43,4 @@ jobs:
           bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
           bash .devcontainer/scripts/tests/test-ca-environment.sh
           bash .devcontainer/scripts/tests/test-network-pins.sh
+          bash .devcontainer/scripts/tests/test-bytecode-writes.sh

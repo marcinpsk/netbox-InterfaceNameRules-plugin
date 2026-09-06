@@ -126,6 +126,8 @@ jobs:
           NETBOX_CONFIGURATION: netbox.configuration
           PYTHONPATH: ${{ github.workspace }}/netbox/netbox
           COVERAGE_RCFILE: pyproject.toml
+          TEST_DB_NAME: test_netbox_interface_name_rules_ci
+          TEST_REDIS_HOST: localhost
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
           EXPECT_NETBOX_CHANNELIZATION: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
@@ -136,8 +138,7 @@ jobs:
           # condition, and tests/query_counts.json together.
           UPDATE_QUERY_COUNTS: ${{ matrix.netbox-version != 'v4.7.0' && '1' || '' }}
         run: |
-          pytest -n auto netbox_interface_name_rules --cov=netbox_interface_name_rules --cov-report=term-missing \
-            -o pythonpath=../netbox/netbox
+          pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox
 
       - name: Generate coverage report
         if: matrix.netbox-version == 'v4.5.3'
