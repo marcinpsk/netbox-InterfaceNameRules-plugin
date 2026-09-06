@@ -15,14 +15,19 @@ config="$({
     docker compose -f "$REPO_ROOT/.devcontainer/docker-compose.yml" config
 })"
 
+# Compare the rendered value as a string. A grep pattern would read every "." in a certificate
+# path as a wildcard, so a wrong path such as ca-certificatesXcrt would satisfy the check.
 for variable in REQUESTS_CA_BUNDLE SSL_CERT_FILE CURL_CA_BUNDLE; do
-  if ! grep -q "^[[:space:]]*$variable: $CONTAINER_CA_BUNDLE$" <<< "$config"; then
-    echo "FAIL: $variable does not use the container trust store" >&2
+  value="$(awk -v key="$variable:" '$1 == key { print $2; exit }' <<< "$config")"
+  value="${value%\"}"
+  value="${value#\"}"
+  if [ "$value" != "$CONTAINER_CA_BUNDLE" ]; then
+    echo "FAIL: $variable is '$value', not the container trust store $CONTAINER_CA_BUNDLE" >&2
     exit 1
   fi
 done
 
-if grep -q "$HOST_CA_BUNDLE" <<< "$config"; then
+if grep -qF "$HOST_CA_BUNDLE" <<< "$config"; then
   echo "FAIL: a host CA path leaked into the container configuration" >&2
   exit 1
 fi
