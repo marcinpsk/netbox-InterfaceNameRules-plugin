@@ -35,7 +35,6 @@ from django.urls import reverse
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.engine import (
-    _VERSION_COLUMNS,
     apply_interface_name_rules,
     apply_rule_to_existing,
     find_interfaces_for_rule,
@@ -46,6 +45,7 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
 from netbox_interface_name_rules.models import InterfaceNameRule, _references_channel
+from netbox_interface_name_rules.rule_selection import _VERSION_COLUMNS
 from netbox_interface_name_rules.tests.test_channelization import (
     PARENT_TYPE,
     PLUGIN_LOGGER,
@@ -1063,7 +1063,7 @@ class ChannelizedModeWithoutSupportTest(ChannelizationTestCase):
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 0)
+        self.assertEqual(built.changed_count, 0)
         self.assertEqual(self._names(module), ["3"])
         self.assertTrue(any("channelized" in line.lower() for line in logs.output), logs.output)
 

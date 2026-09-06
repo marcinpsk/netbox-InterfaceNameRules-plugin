@@ -9,7 +9,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off) |
-| Module Type Pattern | Conditional | Regex pattern matched against module type model name via `re.fullmatch()` (required when Regex Mode is on) |
+| Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name, or a device interface's current name when Device Interface Rules is enabled |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter) |
 | Device Type | No | Restrict to devices of this type |
@@ -19,16 +19,37 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 
 ### Rule Priority
 
-When multiple rules could match, the most specific one wins. Exact FK matches always beat regex matches:
+When multiple rules could match, exact module type rules form the first tier.
+Regex rules form the fallback tier. Within each tier, the rule with the highest
+scope score wins. Parent module type has weight 4, device type has weight 2, and
+platform has weight 1.
 
-**Tier 1 — Exact module type match:**
-1. Module type + parent module type + device type (most specific)
-2. Module type + parent module type
-3. Module type + device type
-4. Module type only (universal)
+| Score | Exact tier | Regex tier |
+|------:|------------|------------|
+| 7 | Exact module type + parent module type + device type + platform | Regex pattern + parent module type + device type + platform |
+| 6 | Exact module type + parent module type + device type | Regex pattern + parent module type + device type |
+| 5 | Exact module type + parent module type + platform | Regex pattern + parent module type + platform |
+| 4 | Exact module type + parent module type | Regex pattern + parent module type |
+| 3 | Exact module type + device type + platform | Regex pattern + device type + platform |
+| 2 | Exact module type + device type | Regex pattern + device type |
+| 1 | Exact module type + platform | Regex pattern + platform |
+| 0 | Exact module type only | Regex pattern only |
 
-**Tier 2 — Regex pattern match (fallback, longest pattern first):**
-5–8. Same four specificity levels, but `module_type_pattern` is matched via `re.fullmatch()` against the installed module type's model name. When multiple patterns match at the same level, the longest pattern is preferred.
+For module rules, the regex pattern matches the complete installed module type
+model name. For device-interface rules, it matches each device
+interface's current name, including a standalone interface such as `mgmt0`. A channel
+subinterface is never matched on its own; it follows the parent whose family a rule wins.
+When multiple regex patterns match at the same score, the longest pattern wins.
+
+### RE2 Pattern Syntax
+
+The plugin compiles and executes every stored rule pattern with
+[RE2](https://github.com/google/re2/wiki/syntax). RE2 guarantees bounded memory
+use and linear matching time. It does not support Python-only features that
+require backtracking, including lookaround, backreferences, and atomic groups.
+Use `\z` instead of Python's `\Z` end-of-text escape. The `\d`, `\s`, and `\w`
+classes match ASCII characters. Use an RE2 Unicode property such as `\p{L}` when
+the rule must match Unicode letters.
 
 ## NetBox Module Interface Templates
 

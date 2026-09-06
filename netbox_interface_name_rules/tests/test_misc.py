@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Tests for jobs, model properties, and API serializer edge-cases."""
+"""Tests for jobs, model properties, family contracts, and API serializer edge-cases."""
 
+from typing import get_args, get_type_hints
 from unittest.mock import MagicMock, patch
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
@@ -9,6 +10,21 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+
+
+class FamilyTargetContractTest(TestCase):
+    """The target contract describes values the planners can produce."""
+
+    def test_channel_targets_allow_an_unresolved_name(self):
+        """Lockstep naming can leave one channel unresolved without invalidating the tuple."""
+        from netbox_interface_name_rules.family.targets import FamilyTargets
+
+        channels = get_type_hints(FamilyTargets)["channels"]
+        channel_pair = get_args(channels)[0]
+        target_name = get_args(channel_pair)[0]
+
+        self.assertIn(type(None), get_args(target_name))
+
 
 # ---------------------------------------------------------------------------
 # jobs.py
@@ -262,12 +278,11 @@ class ModelCleanDeviceIfaceTest(TestCase):
         rule.clean()
         self.assertFalse(rule.module_type_is_regex)
 
-    def test_exact_rule_with_redos_pattern_fails(self):
-        """Regex rule with ReDoS-prone pattern (nested quantifiers) fails validation."""
-        # "(ab)+*" has ")+*" which triggers the nested-quantifier guard
+    def test_exact_rule_with_python_only_pattern_fails(self):
+        """A regex rule using syntax outside RE2 fails validation."""
         rule = InterfaceNameRule(
             module_type_is_regex=True,
-            module_type_pattern="(ab)+*",
+            module_type_pattern=r"(?=QSFP)QSFP-.*",
             name_template="port{bay_position}",
         )
         with self.assertRaises(ValidationError) as ctx:
@@ -484,13 +499,9 @@ class RuleTestFormValidationTest(TestCase):
         form.is_valid()
         self.assertIn("module_type_pattern", form.errors)
 
-    def test_regex_mode_redos_pattern_adds_error(self):
-        """RuleTestForm.clean() adds error when pattern contains nested quantifiers (line 125).
-
-        (a)+? compiles OK (valid lazy quantifier syntax) but triggers the ReDoS guard
-        because )+? matches \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
-        """
-        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": "(a)+?"})
+    def test_regex_mode_python_only_pattern_adds_error(self):
+        """RuleTestForm.clean() adds an error when RE2 does not support the pattern."""
+        form = self._make_form({"module_type_is_regex": True, "module_type_pattern": r"(?=QSFP)QSFP-.*"})
         form.is_valid()
         self.assertIn("module_type_pattern", form.errors)
 
@@ -661,30 +672,6 @@ class ModelSpecificityLabelScopeTest(TestCase):
         self.assertIn("parent", label)
         self.assertIn("device", label)
         self.assertIn("platform", label)
-
-
-# ---------------------------------------------------------------------------
-# models.py — _validate_module_type_pattern ReDoS guard (line 29)
-# ---------------------------------------------------------------------------
-
-
-class ModelValidatePatternReDoSTest(TestCase):
-    """Test _validate_module_type_pattern raises for valid-but-ReDoS-prone patterns."""
-
-    def test_valid_regex_with_nested_quantifiers_raises(self):
-        """A valid regex with nested quantifiers e.g. (a)+? raises ValidationError (line 29).
-
-        (a)+? compiles without error but contains )+? which matches
-        \\)\\s*[\\+\\*\\?]\\s*[\\+\\*\\?] in _REDOS_PATTERN.
-        """
-        from django.core.exceptions import ValidationError
-
-        from netbox_interface_name_rules.models import _validate_module_type_pattern
-
-        with self.assertRaises(ValidationError) as ctx:
-            _validate_module_type_pattern("(a)+?")
-        self.assertIn("module_type_pattern", ctx.exception.message_dict)
-        self.assertIn("nested quantifiers", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

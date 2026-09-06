@@ -24,7 +24,9 @@ keywords = [
     "transceiver",
     "automation",
 ]
-dependencies = []
+dependencies = [
+    "google-re2>=1.1.20251105",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -56,6 +58,7 @@ dev = [
     "pytest",
     "pytest-django",
     "pytest-cov>=6.0",
+    "pytest-xdist>=3.8",
     "python-semantic-release",
     "django>=5.1,<7.0",
 ]
@@ -65,7 +68,9 @@ docs = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["/opt/netbox/netbox"]
+pythonpath = ["/opt/netbox/netbox", "."]
+DJANGO_SETTINGS_MODULE = "netbox.settings"
+addopts = "-n auto --dist loadscope"
 
 [tool.ruff]
 line-length = 120

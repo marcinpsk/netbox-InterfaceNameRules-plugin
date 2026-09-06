@@ -5,6 +5,8 @@
 These tests create real DB objects and exercise the full engine pipeline.
 """
 
+import threading
+
 from dcim.models import (
     Device,
     DeviceRole,
@@ -293,16 +295,16 @@ class FindMatchingRuleCachingTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=mfr, model="C-DEV", slug="c-dev")
 
     def setUp(self):
-        # These tests mutate find_matching_rule()'s module-level _RULE_CACHE / _pin, which TestCase does
+        # These tests mutate rule_selection's module-level _RULE_CACHE / _pin, which TestCase does
         # NOT roll back (only the DB is). Reset them before each method so the class is order-independent
         # and a stale snapshot from a prior method can't be reused for a same-content rule set.
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
-        engine._RULE_CACHE.update({"version": None, "exact": (), "regex": (), "memo": {}})
-        engine._pin.depth = 0
-        engine._pin.primed = False
+        rule_selection._RULE_CACHE.update({"version": None, "exact": (), "regex": (), "memo": {}})
+        rule_selection._pin.depth = 0
+        rule_selection._pin.primed = False
         for attr in ("exact", "regex", "memo"):
-            engine._pin.__dict__.pop(attr, None)
+            rule_selection._pin.__dict__.pop(attr, None)
 
     def test_repeated_calls_do_not_re_query_rules(self):
         """A second identical call issues at most the cheap fingerprint query — no per-candidate lookups."""
@@ -320,23 +322,23 @@ class FindMatchingRuleCachingTest(TestCase):
 
     def test_memoized_result_is_not_recomputed(self):
         """A repeat call with the same context returns the memoized rule without re-running tier matching."""
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="port{bay_position}")
         first = find_matching_rule(self.module_type, None, self.device_type)  # warm, populates the memo
 
         calls = []
-        real_find_exact = engine._find_exact_match
+        real_find_exact = rule_selection._find_exact_match
 
         def counting_find_exact(*args, **kwargs):
             calls.append(1)
             return real_find_exact(*args, **kwargs)
 
-        engine._find_exact_match = counting_find_exact
+        rule_selection._find_exact_match = counting_find_exact
         try:
             second = find_matching_rule(self.module_type, None, self.device_type)
         finally:
-            engine._find_exact_match = real_find_exact
+            rule_selection._find_exact_match = real_find_exact
 
         self.assertEqual(second, first)
         self.assertEqual(calls, [], "second call must be served from the memo, not re-matched")
@@ -424,7 +426,7 @@ class FindMatchingRuleCachingTest(TestCase):
         A Sum()-based fingerprint collides here (the summed ids are identical after the swap, count
         and last_updated unchanged); the per-row, pk-anchored content hash distinguishes them.
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         mfr = Manufacturer.objects.create(name="SwapMfg", slug="swapmfg")
         mt_a = ModuleType.objects.create(manufacturer=mfr, model="SWAP-A", part_number="SWAP-A")
@@ -434,12 +436,12 @@ class FindMatchingRuleCachingTest(TestCase):
         rule_a = InterfaceNameRule.objects.create(module_type=mt_a, device_type=dt_x, name_template="a{bay_position}")
         rule_b = InterfaceNameRule.objects.create(module_type=mt_b, device_type=dt_y, name_template="b{bay_position}")
 
-        before = engine._enabled_rules_version()
+        before = rule_selection._enabled_rules_version()
         # Swap device_type between the two rules via bulk .update(): SUM(device_type) is unchanged
         # (x+y == y+x), count unchanged, last_updated unbumped. Only the per-rule pairing differs.
         InterfaceNameRule.objects.filter(pk=rule_a.pk).update(device_type=dt_y)
         InterfaceNameRule.objects.filter(pk=rule_b.pk).update(device_type=dt_x)
-        after = engine._enabled_rules_version()
+        after = rule_selection._enabled_rules_version()
 
         self.assertNotEqual(before, after, "fingerprint collided on a compensating FK swap (Sum-aggregate weakness)")
 
@@ -467,7 +469,7 @@ class FindMatchingRuleCachingTest(TestCase):
 
     def test_find_exact_match_loads_rules_on_demand(self):
         """_find_exact_match loads the rule set itself when called without preloaded rules (direct-caller path)."""
-        from netbox_interface_name_rules.engine import _find_exact_match
+        from netbox_interface_name_rules.rule_selection import _find_exact_match
 
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
         # No exact_rules argument → the function loads them via _get_enabled_rules() rather than a passed-in set.
@@ -475,10 +477,10 @@ class FindMatchingRuleCachingTest(TestCase):
 
     def test_memo_is_bounded(self):
         """The per-version memo is capped, so it can't grow without bound under a stable rule set."""
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
-        original_max = engine._MEMO_MAX
-        engine._MEMO_MAX = 2
+        original_max = rule_selection._MEMO_MAX
+        rule_selection._MEMO_MAX = 2
         try:
             mfr = Manufacturer.objects.create(name="MemoMfg", slug="memomfg")
             module_types = [
@@ -492,20 +494,20 @@ class FindMatchingRuleCachingTest(TestCase):
                 # would slip past an end-of-loop `<=` snapshot (which only sees the post-clear size) but
                 # trips here on the very insert that crosses the cap.
                 self.assertLessEqual(
-                    len(engine._RULE_CACHE["memo"]),
-                    engine._MEMO_MAX,
+                    len(rule_selection._RULE_CACHE["memo"]),
+                    rule_selection._MEMO_MAX,
                     f"memo exceeded the cap mid-insertion after {i} contexts",
                 )
 
             # And the eviction actually fired: the final size is below the number of distinct contexts,
             # so the test isn't vacuously green on a memo that simply never reached the cap.
             self.assertLess(
-                len(engine._RULE_CACHE["memo"]),
+                len(rule_selection._RULE_CACHE["memo"]),
                 len(module_types),
                 "memo never evicted — the cap was never exercised",
             )
         finally:
-            engine._MEMO_MAX = original_max
+            rule_selection._MEMO_MAX = original_max
 
     def test_pinned_rule_cache_skips_per_call_fingerprint(self):
         """Inside pinned_rule_cache() the per-call fingerprint query is elided; outside it still runs."""
@@ -560,7 +562,7 @@ class FindMatchingRuleCachingTest(TestCase):
         """
         import threading
 
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
         from netbox_interface_name_rules.engine import pinned_rule_cache
 
         universal = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
@@ -572,8 +574,13 @@ class FindMatchingRuleCachingTest(TestCase):
             # inherits the main thread's active pin. It then publishes a different rule-set version the
             # way _get_enabled_rules() does: one atomic rebind of the module global. (No DB access — a
             # separate thread has its own connection and cannot see this TestCase's uncommitted rows.)
-            worker_pin_depth.append(getattr(engine._pin, "depth", 0))
-            engine._RULE_CACHE = {"version": "concurrent-reload-other-version", "exact": (), "regex": (), "memo": {}}
+            worker_pin_depth.append(getattr(rule_selection._pin, "depth", 0))
+            rule_selection._RULE_CACHE = {
+                "version": "concurrent-reload-other-version",
+                "exact": (),
+                "regex": (),
+                "memo": {},
+            }
 
         try:
             with pinned_rule_cache():
@@ -586,7 +593,7 @@ class FindMatchingRuleCachingTest(TestCase):
                 # The worker did not inherit our pin — proves _pin is per-thread, not a shared global.
                 self.assertEqual(worker_pin_depth, [0], "pin leaked across threads — _pin is not thread-local")
                 # ...and its reload really did replace the shared cache.
-                self.assertEqual(engine._RULE_CACHE["version"], "concurrent-reload-other-version")
+                self.assertEqual(rule_selection._RULE_CACHE["version"], "concurrent-reload-other-version")
 
                 # Still inside the pin: must serve the snapshot captured at entry, not the worker's reload.
                 self.assertEqual(
@@ -597,7 +604,7 @@ class FindMatchingRuleCachingTest(TestCase):
         finally:
             # This test deliberately rebinds the module global from another thread; restore a clean
             # sentinel so the simulated reload can't leak into sibling tests even if setUp() is weakened.
-            engine._RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
+            rule_selection._RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
     def test_reload_publishes_a_fresh_cache_dict_atomically(self):
         """A version change rebinds _RULE_CACHE to a new dict instead of mutating the old one in place.
@@ -607,12 +614,12 @@ class FindMatchingRuleCachingTest(TestCase):
         with memo from V2. We assert the published dict is a *new object* and that a reference captured
         before the reload is left untouched — the in-place mutation the previous code did would fail both.
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="a{bay_position}")
         find_matching_rule(self.module_type, None, self.device_type)  # prime version 1
 
-        snap = engine._RULE_CACHE
+        snap = rule_selection._RULE_CACHE
         snap_version = snap["version"]
         snap_exact = snap["exact"]
 
@@ -623,7 +630,9 @@ class FindMatchingRuleCachingTest(TestCase):
         find_matching_rule(self.module_type, None, self.device_type)  # reload to version 2
 
         self.assertIsNot(
-            engine._RULE_CACHE, snap, "reload mutated the cache dict in place instead of publishing a new one"
+            rule_selection._RULE_CACHE,
+            snap,
+            "reload mutated the cache dict in place instead of publishing a new one",
         )
         self.assertEqual(snap["version"], snap_version, "a reload mutated a previously-published cache dict")
         self.assertEqual(snap["exact"], snap_exact, "the captured exact snapshot changed under a concurrent reload")
@@ -638,7 +647,7 @@ class FindMatchingRuleCachingTest(TestCase):
         itself, then assert find_matching_rule still returns the rule. The sentinel ``.get()`` read is a
         single atomic lookup, so it never performs the separate membership test the race needs.
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
         self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), rule)  # warm the memo
@@ -652,7 +661,7 @@ class FindMatchingRuleCachingTest(TestCase):
                 return present
 
         # Same version → no reload; the racing memo is what find_matching_rule reads next.
-        engine._RULE_CACHE["memo"] = _RacingMemo(engine._RULE_CACHE["memo"])
+        rule_selection._RULE_CACHE["memo"] = _RacingMemo(rule_selection._RULE_CACHE["memo"])
 
         self.assertEqual(
             find_matching_rule(self.module_type, None, self.device_type),
@@ -663,7 +672,7 @@ class FindMatchingRuleCachingTest(TestCase):
     def test_pinned_block_uses_a_private_memo_copy(self):
         """A pinned batch gets its own memo copy, so another thread clearing the shared memo can't
         evict the batch's warmed entries (or wedge a KeyError) mid-loop."""
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
         from netbox_interface_name_rules.engine import pinned_rule_cache
 
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
@@ -672,13 +681,27 @@ class FindMatchingRuleCachingTest(TestCase):
             find_matching_rule(self.module_type, None, self.device_type)  # primes + memoizes into the copy
 
             self.assertIsNot(
-                engine._pin.memo,
-                engine._RULE_CACHE["memo"],
+                rule_selection._pin.memo,
+                rule_selection._RULE_CACHE["memo"],
                 "pinned memo aliases the shared cache memo instead of holding a private copy",
             )
 
-            # An unpinned thread clearing the shared memo at the cap must not disturb the pinned batch.
-            engine._RULE_CACHE["memo"].clear()
+            # An unpinned thread clearing the shared memo at the cap must not disturb the pinned
+            # batch. _pin is a threading.local, so the worker holds no pin of its own. The target is
+            # a plain dict.clear(), so the worker touches no ORM and needs no connection.
+            clear = threading.Thread(target=rule_selection._RULE_CACHE["memo"].clear)
+            clear.start()
+            clear.join()
+
+            # Retention lives in the private copy. Asserting the shared memo is empty would prove
+            # nothing: pinned writes never reach it, so it is already {} before the clear.
+            self.assertTrue(rule_selection._pin.memo, "the pinned batch lost its warmed entries")
+
+            # Poison the shared memo for the same signature. A primed lookup that read the shared
+            # memo instead of its private copy would return the decoy rather than recomputing, so
+            # this is what separates "the copy was used" from "the answer was recomputed".
+            decoy = InterfaceNameRule(name_template="decoy-must-not-be-returned")
+            rule_selection._RULE_CACHE["memo"].update(dict.fromkeys(rule_selection._pin.memo, decoy))
             self.assertEqual(
                 find_matching_rule(self.module_type, None, self.device_type),
                 rule,
@@ -693,7 +716,7 @@ class FindMatchingRuleCachingTest(TestCase):
         encoding produced for a two-rule set — two distinct rule sets hashing the same, silently missing
         a cache invalidation. Length-prefixed fields make the encoding self-delimiting, so they differ.
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         field_sep, row_sep = "\x1f", "\x1e"
 
@@ -706,7 +729,7 @@ class FindMatchingRuleCachingTest(TestCase):
         r2 = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, module_type_pattern="p2", name_template="b"
         )
-        fp_two_rules = engine._enabled_rules_version()
+        fp_two_rules = rule_selection._enabled_rules_version()
 
         # Forge a one-rule set whose name_template embeds r1's trailing columns, a row separator, and
         # r2's columns up to its name_template. Column order: id, module_type_id, is_regex, pattern,
@@ -716,7 +739,7 @@ class FindMatchingRuleCachingTest(TestCase):
         forged_name_template = field_sep.join(["a", "0", "0", "true"]) + row_sep + r2_cells_through_name
         InterfaceNameRule.objects.filter(pk=r2.pk).delete()
         InterfaceNameRule.objects.filter(pk=r1.pk).update(name_template=forged_name_template)
-        fp_forged_one_rule = engine._enabled_rules_version()
+        fp_forged_one_rule = rule_selection._enabled_rules_version()
 
         self.assertNotEqual(
             fp_two_rules,
@@ -731,14 +754,14 @@ class EnabledRuleFingerprintColumnsTest(TestCase):
     def test_version_columns_account_for_every_concrete_column(self):
         """Every concrete InterfaceNameRule column must be fingerprinted or deliberately excluded.
 
-        The enabled-rule fingerprint (engine._enabled_rules_version) hashes exactly
-        engine._VERSION_COLUMNS. If a future field that affects matching is added to the model but not
+        The enabled-rule fingerprint (rule_selection._enabled_rules_version) hashes exactly
+        rule_selection._VERSION_COLUMNS. If a future field that affects matching is added to the model but not
         to that hand-maintained tuple, edits to it won't change the fingerprint and find_matching_rule
         will keep serving a stale cached rule. This guard fails the moment a new concrete column appears
         that hasn't been consciously classified — forcing the author to either add it to _VERSION_COLUMNS
         (so the cache invalidates on its edits) or list it below with a reason it can't affect a match.
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
         from netbox_interface_name_rules.models import InterfaceNameRule
 
         # Columns intentionally NOT in the fingerprint, each with the reason it cannot change a match:
@@ -756,11 +779,11 @@ class EnabledRuleFingerprintColumnsTest(TestCase):
             for f in InterfaceNameRule._meta.get_fields()
             if getattr(f, "concrete", False) and not f.many_to_many and f.column
         }
-        classified = set(engine._VERSION_COLUMNS) | excluded
+        classified = set(rule_selection._VERSION_COLUMNS) | excluded
         self.assertEqual(
             concrete_columns,
             classified,
             "InterfaceNameRule has concrete columns that are neither fingerprinted nor excluded. "
-            "Classify each: add match-affecting columns to engine._VERSION_COLUMNS so the rule cache "
+            "Classify each: add match-affecting columns to rule_selection._VERSION_COLUMNS so the rule cache "
             "invalidates when they change, or add audit/notes columns to this test's `excluded` set.",
         )

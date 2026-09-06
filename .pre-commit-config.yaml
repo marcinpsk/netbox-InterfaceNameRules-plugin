@@ -20,6 +20,12 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
+  # GitHub Actions security audit. The lint workflow runs this same hook.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+      - id: zizmor
+
   # Python code quality
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.0

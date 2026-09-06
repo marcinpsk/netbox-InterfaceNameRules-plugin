@@ -11,8 +11,8 @@ from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
+from .regex_safety import compile_module_type_pattern
 
-_REDOS_PATTERN = re.compile(r"(\+\*|\*\+|\?\?|\)\s*[\+\*\?]\s*[\+\*\?]|\)\s*\{[^{}]+\}\s*[\+\*\?])")
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
@@ -64,20 +64,7 @@ def _has_unbalanced_braces(template):
     return depth != 0
 
 
-def _validate_module_type_pattern(pattern):
-    """Compile *pattern* and check for ReDoS-prone constructs.
-
-    Raises ``ValidationError`` targeting ``module_type_pattern`` if the
-    pattern is syntactically invalid or contains nested quantifiers.
-    Called from ``InterfaceNameRule.clean()`` to avoid duplicating the same
-    try/except + ReDoS guard in each branch.
-    """
-    try:
-        re.compile(pattern)
-    except re.error as e:
-        raise ValidationError({"module_type_pattern": f"Invalid regex pattern: {e}"})
-    if _REDOS_PATTERN.search(pattern):
-        raise ValidationError({"module_type_pattern": "Pattern contains potentially unsafe nested quantifiers."})
+_TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
 
 
 def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):
@@ -131,7 +118,7 @@ class InterfaceNameRule(NetBoxModel):
 
     Module type matching supports two modes:
       - Exact: FK reference to a specific ModuleType (default)
-      - Regex: Pattern matched against ModuleType.model via re.fullmatch()
+      - Regex: RE2 pattern matched against the complete ModuleType.model value
 
     Scoping fields (all optional):
       - parent_module_type: match only when installed inside this module type
@@ -153,8 +140,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         default="",
         verbose_name="Module Type Pattern",
-        help_text="Regex pattern to match module type model name (e.g. 'QSFP-DD-400G-.*'). "
-        "Uses Python re.fullmatch() — pattern must match the entire model name.",
+        help_text=(
+            "RE2 pattern matched against the complete module type model name (e.g. 'QSFP-DD-400G-.*'). "
+            "With Applies to Device Interfaces enabled it filters the complete interface name instead."
+        ),
     )
     module_type_is_regex = models.BooleanField(
         default=False,
@@ -256,7 +245,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
-                _validate_module_type_pattern(self.module_type_pattern)
+                compile_module_type_pattern(self.module_type_pattern)
             # Force regex mode off — module_type_is_regex has no meaning here
             self.module_type_is_regex = False
         elif self.module_type_is_regex:
@@ -264,7 +253,7 @@ class InterfaceNameRule(NetBoxModel):
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
                 raise ValidationError({"module_type": "Cannot set both module type FK and regex pattern. Choose one."})
-            _validate_module_type_pattern(self.module_type_pattern)
+            compile_module_type_pattern(self.module_type_pattern)
         else:
             # Clear any stale pattern so it does not persist when switching modes
             self.module_type_pattern = ""
@@ -357,7 +346,11 @@ class InterfaceNameRule(NetBoxModel):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(applies_to_device_interfaces=True, module_type__isnull=True)
+                    models.Q(
+                        applies_to_device_interfaces=True,
+                        module_type__isnull=True,
+                        module_type_is_regex=False,
+                    )
                     | models.Q(
                         applies_to_device_interfaces=False,
                         module_type_is_regex=True,
@@ -371,6 +364,20 @@ class InterfaceNameRule(NetBoxModel):
                     )
                 ),
                 name="interfacenamerule_module_type_mode_check",
+            ),
+            models.CheckConstraint(
+                # The implications _validate_breakout_topology() enforces over enum and integer
+                # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
+                condition=(
+                    (
+                        models.Q(applies_to_device_interfaces=False)
+                        | ~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED)
+                    )
+                    & (models.Q(applies_to_device_interfaces=False) | models.Q(parent_name_template=""))
+                    & (models.Q(parent_name_template="") | models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED))
+                    & (~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED) | ~models.Q(channel_count=0))
+                ),
+                name="interfacenamerule_breakout_topology_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
@@ -391,6 +398,23 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_unique_device_iface",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            # Django accepts any iterable. Reading a generator here would leave Django an empty
+            # one, and it skips the write when update_fields is empty.
+            update_fields = frozenset(update_fields)
+            kwargs["update_fields"] = update_fields
+        if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
+            _validate_breakout_topology(
+                self.breakout_mode,
+                self.channel_count,
+                self.parent_name_template,
+                self.applies_to_device_interfaces,
+            )
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         if self.module_type_is_regex:

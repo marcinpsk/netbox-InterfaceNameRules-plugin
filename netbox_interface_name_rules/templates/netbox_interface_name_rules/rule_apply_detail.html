@@ -259,9 +259,9 @@
             </td>
             <td>
               {% if verdict.convertible %}
-                <span class="badge text-bg-success">Convertible</span>
+                <span class="badge text-bg-success">{{ verdict.status_label }}</span>
               {% else %}
-                <span class="badge text-bg-danger">Blocked</span>
+                <span class="badge text-bg-danger">{{ verdict.status_label }}</span>
               {% endif %}
             </td>
           </tr>
@@ -280,16 +280,20 @@
     </table>
   </div>
   {% if can_apply %}
-    <div class="card-footer">
-      <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
-              onclick="return confirm('Convert the selected flat families to the channelized topology?')">
-        <i class="mdi mdi-call-split me-1"></i>Convert Selected
-      </button>
-      <button type="submit" name="action" value="convert_background" class="btn btn-outline-warning"
-              onclick="return confirm('Enqueue a background job to convert ALL convertible families of this rule?')">
-        <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
-      </button>
-    </div>
+    {% if conversions_available or conversions_have_more %}
+      <div class="card-footer">
+        {% if conversions_available %}
+          <button type="submit" name="action" value="convert" class="btn btn-warning me-2"
+                  onclick="return confirm('Convert the selected flat families to the channelized topology?')">
+            <i class="mdi mdi-call-split me-1"></i>Convert Selected
+          </button>
+        {% endif %}
+        <button type="submit" name="action" value="convert_background" class="btn btn-outline-warning"
+                onclick="return confirm('Enqueue a background job to convert ALL convertible families of this rule?')">
+          <i class="mdi mdi-server me-1"></i>Convert as Background Job (all)
+        </button>
+      </div>
+    {% endif %}
   {% else %}
     <div class="card-footer text-muted">
       <i class="mdi mdi-lock me-1"></i>You do not have permission to apply interface changes.

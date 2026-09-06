@@ -6,7 +6,7 @@
 [![Coverage](https://img.shields.io/endpoint?url=https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/coverage/badge.json)](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/coverage/)
 [![License](https://img.shields.io/github/license/marcinpsk/netbox-InterfaceNameRules-plugin)](LICENSE)
 [![Python](https://img.shields.io/pypi/pyversions/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
-[![NetBox](https://img.shields.io/badge/NetBox-%E2%89%A54.2.0-blue)](https://github.com/netbox-community/netbox)
+[![NetBox](https://img.shields.io/badge/NetBox-%E2%89%A54.3.0-blue)](https://github.com/netbox-community/netbox)
 [![Contributors](https://img.shields.io/github/contributors/marcinpsk/netbox-InterfaceNameRules-plugin)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/graphs/contributors)
 [![REUSE status](https://api.reuse.software/badge/github.com/marcinpsk/netbox-InterfaceNameRules-plugin)](https://api.reuse.software/info/github.com/marcinpsk/netbox-InterfaceNameRules-plugin)
 
@@ -70,7 +70,7 @@ See the [full configuration guide](https://marcinpsk.github.io/netbox-InterfaceN
 
 ## Compatibility
 
-- NetBox ≥ 4.3.0 (CI tests 4.3, 4.5, 4.6, plus NetBox `main` as a non-blocking early warning)
+- NetBox ≥ 4.3.0 (CI tests 4.3, 4.5, 4.7, plus NetBox `main` and `feature` as non-blocking early warnings)
 - Python ≥ 3.12
 
 ## License

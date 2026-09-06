@@ -61,19 +61,19 @@ Enable **Applies to Device Interfaces** on the rule and set the **Module Type Pa
 # Cisco Catalyst 9000 stack — member 2 gets GigabitEthernet2/0/1..4
 - applies_to_device_interfaces: true
   device_type: "CISCO-C9K"
-  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  module_type_pattern: "GigabitEthernet[0-9]+/[0-9]+/[0-9]+"
   name_template: "GigabitEthernet{vc_position}/0/{port}"
 
 # Juniper EX Virtual Chassis — 0-based member IDs
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  module_type_pattern: "ge-[0-9]+/[0-9]+/[0-9]+"
   name_template: "ge-{vc_position}/0/{port}"
 
 # Arista EOS slot/port
 - applies_to_device_interfaces: true
   device_type: "ARISTA-EOS"
-  module_type_pattern: "Ethernet\\d+/\\d+"
+  module_type_pattern: "Ethernet[0-9]+/[0-9]+"
   name_template: "Ethernet{vc_position}/{port}"
 ```
 
@@ -184,19 +184,23 @@ a `parent_name_template` set instead offers each such family for conversion on *
 Preview & Apply**, where the operator confirms it per family; a blank parent template offers
 nothing, because a flat family's ch-0 interface is the base and has nowhere else to go.
 
-Every family is preflighted by performing the conversion inside a transaction that is rolled back,
-so the verdict carries NetBox's own reason for refusing it — a cabled sibling, an occupied parent
-name, a missing sibling — and a refused family is never half converted.
+The plugin rejects missing members locally before a conversion transaction starts. Its local
+preflight also refuses a stale family, an occupied parent name, a sibling that already belongs to
+another channel family, and a cabled sibling. Each of those verdicts is the plugin's own, and no
+row is written. Only a family that passes preflight reaches NetBox's own rules. The plugin runs
+that rewrite inside a transaction and rolls it back when NetBox refuses a row or a name collides,
+so the verdict then carries NetBox's own reason. A preview rolls back a successful rewrite the same
+way. The plugin never half converts a refused family.
 
 Converting keeps the physical row: the ch-0 interface keeps its interface ID, cable, type, module
-link and `mark_connected`, and becomes the parent. Its IP addresses, FHRP group assignments,
+link and `mark_connected`, and becomes the parent. Its interface VRF, IP addresses, FHRP group assignments,
 untagged/tagged VLANs, 802.1Q mode, MTU, description and tags move to a newly created channel 1
 interface that takes over its name; custom field values are copied to it. The remaining siblings are
 retyped in place, keeping their own interface IDs. Automation keyed on the ch-0 interface ID
-addresses the parent afterwards, not the channel that carries its name.
+addresses the parent afterward, not the channel that carries its name.
 
-On NetBox 4.6 and older no family is offered and conversion reports that this release cannot model
-channels.
+On a NetBox release that cannot model channels, each flat family is shown as unsupported without a
+conversion action, and direct conversion reports the same explicit family outcome.
 
 A family installed by a rule that uses `{base}` carries the raw name it was named with, which on a
 module type using the `{vc_position}` template token may predate a chassis position change (see

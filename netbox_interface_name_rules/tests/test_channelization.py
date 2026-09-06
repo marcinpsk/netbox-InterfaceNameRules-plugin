@@ -35,11 +35,13 @@ from netbox_interface_name_rules.engine import (
     apply_device_interface_rules,
     apply_interface_name_rules,
     apply_rule_to_existing,
+    build_variables,
     find_interfaces_for_rule,
     has_applicable_interfaces,
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan_set, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 # Resolved defensively so this module still imports on NetBox releases without channelization.
@@ -345,7 +347,7 @@ class ChannelizedBreakoutRuleTest(ChannelizationTestCase):
         self.assertEqual(results[0]["current_name"], "3")
         self.assertEqual(results[0]["new_names"], ["3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"])
         self.assertEqual(
-            [(detail["role"], detail["channel_id"]) for detail in results[0]["name_details"]],
+            [(detail.role, detail.channel_id) for detail in results[0]["name_details"]],
             [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
         )
 
@@ -400,17 +402,20 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
 
         self.assertEqual(family["new_names"], ["et-3", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
         self.assertEqual(
-            family["name_details"],
+            [(detail.name, detail.role, detail.channel_id) for detail in family["name_details"]],
             [
-                {"name": "et-3", "role": "parent", "channel_id": None},
-                {"name": "et-3:1", "role": "channel", "channel_id": 1},
-                {"name": "et-3:2", "role": "channel", "channel_id": 2},
-                {"name": "et-3:3", "role": "channel", "channel_id": 3},
-                {"name": "et-3:4", "role": "channel", "channel_id": 4},
+                ("et-3", "parent", None),
+                ("et-3:1", "channel", 1),
+                ("et-3:2", "channel", 2),
+                ("et-3:3", "channel", 3),
+                ("et-3:4", "channel", 4),
             ],
         )
         self.assertEqual(family["interface"], self._parent(family["module"]))
-        self.assertEqual(standalone["name_details"], [{"name": "et-3-mgmt", "role": "interface", "channel_id": None}])
+        self.assertEqual(
+            [(detail.name, detail.role, detail.channel_id) for detail in standalone["name_details"]],
+            [("et-3-mgmt", "interface", None)],
+        )
 
     def test_has_applicable_interfaces_ignores_a_renamed_family(self):
         """Children must not keep the rule looking 'applicable' after the family is correctly named."""
@@ -424,12 +429,11 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
     def test_apply_rule_to_existing_renames_family_without_conflicts(self):
         """A retroactive apply renames the family through its parent, so no child fights another for a name."""
         module, _ = self._install(self.module_type, "3", run_rules=False)
-        conflicts: list = []
 
-        count = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        outcome = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(count, 6)
-        self.assertEqual(conflicts, [])
+        self.assertEqual(outcome.changed_count, 6)
+        self.assertEqual(outcome.skipped_members, ())
         self.assertEqual(self._names(module), ["et-3", "et-3-mgmt", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
         # The rename went through the family, so the structure it hangs on is still intact.
         parent = self._parent(module)
@@ -441,9 +445,9 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         module, _ = self._install(self.module_type, "3", run_rules=False)
         parent = self._parent(module)
 
-        count = apply_rule_to_existing(self.rule, interface_ids=[parent.pk])
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[parent.pk])
 
-        self.assertEqual(count, 5)
+        self.assertEqual(outcome.changed_count, 5)
         self.assertEqual(self._names(module), ["3-mgmt", "et-3", "et-3:1", "et-3:2", "et-3:3", "et-3:4"])
 
     def test_apply_rule_to_existing_ignores_a_child_only_selection(self):
@@ -451,9 +455,9 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
         module, _ = self._install(self.module_type, "3", run_rules=False)
         child = self._child(module, 1)
 
-        count = apply_rule_to_existing(self.rule, interface_ids=[child.pk])
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[child.pk])
 
-        self.assertEqual(count, 0)
+        self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(self._names(module), ["3", "3-mgmt", "3:1", "3:2", "3:3", "3:4"])
 
 
@@ -484,6 +488,20 @@ class ChannelizedDeviceRuleTest(TestCase):
     def test_children_follow_parent_and_are_not_matched_independently(self):
         """Matched independently every child would compute the parent's name; following it keeps them distinct."""
         InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="eth{vc_position}")
+
+        renamed = apply_device_interface_rules(self.device)
+
+        self.assertEqual(renamed, 5)
+        self.assertEqual(self._names(), ["eth1", "eth1:1", "eth1:2", "eth1:3", "eth1:4"])
+
+    def test_a_channel_count_on_a_device_rule_does_not_block_the_family(self):
+        """A device rule never builds a family, so a channel count on one says nothing about this one."""
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="eth{vc_position}",
+            channel_count=2,
+            channel_start=0,
+        )
 
         renamed = apply_device_interface_rules(self.device)
 
@@ -643,6 +661,11 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
     def setUpTestData(cls):
         manufacturer, cls.device = _build_device("ChanErr", ["4"])
         cls.module_type = _channelized_module_type(manufacturer, "ChanErr-QSFP")
+        InterfaceTemplate.objects.create(
+            module_type=cls.module_type,
+            name="mgmt-{module}",
+            type=PLAIN_TYPE,
+        )
         # Valid for channel 0, divides by zero from channel 1 on.
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -655,10 +678,18 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
         """Every child name is computed before the first save, so one bad channel aborts the family."""
         module, bay = self._install(self.module_type, "4", run_rules=False)
 
+        plan_set = plan_installed_families(module, self.rule, build_variables(bay, device=self.device))
+        outcome = execute_installed_plan_set(plan_set)
+
         renamed = apply_interface_name_rules(module, bay)
 
+        self.assertEqual(outcome.families[0].status, FamilyStatus.FAILED)
+        self.assertEqual(
+            {member.status for member in outcome.families[0].members},
+            {FamilyStatus.FAILED},
+        )
         self.assertEqual(renamed, 0)
-        self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4"])
+        self.assertEqual(self._names(module), ["4", "4:1", "4:2", "4:3", "4:4", "mgmt-4"])
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

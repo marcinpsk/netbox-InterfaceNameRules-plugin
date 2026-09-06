@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for advanced engine functions: find_interfaces_for_rule, apply_rule_to_existing,
-has_applicable_interfaces, _find_channel_base, _matching_moduletype_pks, build_variables edges."""
+has_applicable_interfaces, _matching_moduletype_pks, build_variables edges."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from dcim.models import (
@@ -24,7 +25,6 @@ from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
     _extract_trailing_digits,
-    _find_channel_base,
     _matching_moduletype_pks,
     apply_interface_name_rules,
     apply_rule_to_existing,
@@ -33,6 +33,8 @@ from netbox_interface_name_rules.engine import (
     find_interfaces_for_rule,
     has_applicable_interfaces,
 )
+from netbox_interface_name_rules.family import FamilyStatus
+from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 
@@ -214,7 +216,7 @@ class FindInterfacesForRuleTest(EngineAdvancedFixtures):
 
     def test_template_error_shown_in_new_names(self):
         """A template that raises ValueError produces '<error: ...>' in new_names."""
-        # {vc_position} is undefined for a non-VC device → ValueError at eval time
+        # {vc_position} is undefined for a non-VC device, so evaluation raises ValueError.
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-{vc_position}/0/{bay_position}",
@@ -255,7 +257,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
             name_template="et-0/0/{bay_position}",
         )
         result = apply_rule_to_existing(rule, interface_ids=[])
-        self.assertEqual(result, 0)
+        self.assertEqual(result.changed_count, 0)
 
     def test_disabled_rule_returns_zero(self):
         """Disabled rule returns 0 immediately."""
@@ -267,7 +269,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
         result = apply_rule_to_existing(rule)
-        self.assertEqual(result, 0)
+        self.assertEqual(result.changed_count, 0)
         # Verify interface name is unchanged
         iface.refresh_from_db()
         self.assertEqual(iface.name, "0")
@@ -282,7 +284,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
         result = apply_rule_to_existing(rule)
-        self.assertEqual(result, 1)
+        self.assertEqual(result.changed_count, 1)
         iface.refresh_from_db()
         self.assertEqual(iface.name, "et-0/0/0")
 
@@ -298,14 +300,14 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         iface1 = Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
         result = apply_rule_to_existing(rule, interface_ids=[iface0.pk])
-        self.assertEqual(result, 1)
+        self.assertEqual(result.changed_count, 1)
         iface0.refresh_from_db()
         iface1.refresh_from_db()
         self.assertEqual(iface0.name, "et-0/0/0")
         self.assertEqual(iface1.name, "1")  # untouched
 
     def test_channel_rule_applies_once_per_module(self):
-        """Channel rule calls _apply_rule_to_interface once per module, not per interface."""
+        """A channel rule plans one family per module, not one per interface."""
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -316,7 +318,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
         result = apply_rule_to_existing(rule)
-        self.assertEqual(result, 4)
+        self.assertEqual(result.changed_count, 4)
         names = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
         self.assertEqual(names, ["xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"])
 
@@ -332,7 +334,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
         result = apply_rule_to_existing(rule, limit=1)
-        self.assertEqual(result, 1)
+        self.assertEqual(result.changed_count, 1)
 
     def test_regex_rule_applies_to_matching_module_types(self):
         """Regex rule's module_qs includes all matching module types."""
@@ -345,7 +347,7 @@ class ApplyRuleToExistingTest(EngineAdvancedFixtures):
         iface = Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         result = apply_rule_to_existing(rule)
-        self.assertEqual(result, 1)
+        self.assertEqual(result.changed_count, 1)
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Hu0/0/0/0")
 
@@ -412,45 +414,47 @@ class MatchingModuleTypePksTest(TestCase):
             _matching_moduletype_pks("[invalid(")
 
 
-class FindChannelBaseTest(EngineAdvancedFixtures):
-    """Test _find_channel_base chooses the right interface for channel rules."""
+class ChannelFamilyBaseTest(EngineAdvancedFixtures):
+    """Two bases that intend one family's names build it once, through the base that already names it."""
 
-    def test_prefers_already_renamed_ch0_interface(self):
-        """_find_channel_base prefers an interface already named as channel 0."""
-        rule = InterfaceNameRule.objects.create(
+    def _breakout_rule(self):
+        """Return a four-channel flat breakout rule whose names ignore the base."""
+        return InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
             channel_count=4,
             channel_start=0,
         )
+
+    def test_a_half_built_family_is_completed_through_its_own_first_member(self):
+        """The interface already named channel 0 owns the family; the raw port is left where it is."""
+        rule = self._breakout_rule()
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # One interface is already the ch=0 name, another is still raw
-        iface_ch0 = Interface.objects.create(
-            device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp"
-        )
-        iface_raw = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
-        variables = build_variables(self.bay0)
-        ifaces = sorted([iface_ch0, iface_raw], key=lambda i: i.name)
-        result = _find_channel_base(rule, ifaces, variables)
-        self.assertEqual(result, iface_ch0)
+        outcome = apply_rule_to_existing(rule)
 
-    def test_falls_back_to_first_interface_alphabetically(self):
-        """When no interface matches ch=0, returns first alphabetically (via caller-sorted list)."""
-        rule = InterfaceNameRule.objects.create(
-            module_type=self.module_type,
-            name_template="xe-0/0/{bay_position}:{channel}",
-            channel_count=4,
-            channel_start=0,
+        self.assertEqual(outcome.changed_count, 3)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["0", "xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"],
         )
+
+    def test_with_no_member_named_yet_the_first_port_builds_the_family(self):
+        """Nothing names the family, so its first candidate in module order builds it."""
+        rule = self._breakout_rule()
         module = Module.objects.create(device=self.device, module_bay=self.bay1, module_type=self.module_type)
-        iface_a = Interface.objects.create(device=self.device, module=module, name="1", type="10gbase-x-sfpp")
-        iface_b = Interface.objects.create(device=self.device, module=module, name="2", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="1", type="10gbase-x-sfpp")
+        Interface.objects.create(device=self.device, module=module, name="2", type="10gbase-x-sfpp")
 
-        variables = build_variables(self.bay1)
-        ifaces = sorted([iface_a, iface_b], key=lambda i: i.name)
-        result = _find_channel_base(rule, ifaces, variables)
-        self.assertEqual(result, iface_a)
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(outcome.changed_count, 4)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["2", "xe-0/0/1:0", "xe-0/0/1:1", "xe-0/0/1:2", "xe-0/0/1:3"],
+        )
 
 
 class BuildVariablesEdgesTest(TestCase):
@@ -545,7 +549,7 @@ class EvaluateNameTemplateEdgesTest(TestCase):
             evaluate_name_template("{1 + }", {})
 
     def test_unsafe_ast_node_rejected(self):
-        """AST node not in allowlist (e.g., Name lookup — not a call) raises ValueError."""
+        """The arithmetic evaluator rejects a name lookup before it can execute."""
         with self.assertRaises(ValueError):
             evaluate_name_template("{__import__}", {})
 
@@ -672,7 +676,7 @@ class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
             name_template="et-0/0/{bay_position}",
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Create with the final correct name (so _apply_rule_to_interface returns 0 for it)
+        # Create with the final correct name (so the rule renames nothing for it)
         # But the name "et-0/0/0" is NOT in raw_names (raw = "0"), so this won't trigger deprecated.
         # Instead, set force_reapply so it's in unrenamed but produces 0 renames.
         iface = Interface.objects.create(device=self.device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
@@ -695,12 +699,12 @@ class EngineEvaluateTemplateUnsafeASTTest(TestCase):
     """Test evaluate_name_template raises for unsafe AST node types (defense-in-depth)."""
 
     def test_unsafe_ast_node_raises_valueerror(self):
-        """An exponent expression passes the char guard but fails the AST allowlist.
+        """An exponent expression passes the character guard but fails the AST evaluator.
 
         ``{2**3}`` is built only from characters the guard regex permits
-        (digits and ``*``), so it slips past the cheap char check — but
-        ``ast.parse`` yields a ``Pow`` node, which is not in the arithmetic
-        allowlist, so the AST walk raises ValueError for real (no mock needed).
+        (digits and ``*``), so it slips past the cheap character check. The
+        parser yields a ``Pow`` node, which the recursive arithmetic
+        evaluator rejects with ValueError.
         """
         from netbox_interface_name_rules.engine import evaluate_name_template
 
@@ -709,12 +713,12 @@ class EngineEvaluateTemplateUnsafeASTTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _find_regex_match re.error path (lines 355-356)
+# rule_selection.py, invalid regex path
 # ---------------------------------------------------------------------------
 
 
 class EngineFindRegexMatchErrorTest(TestCase):
-    """Test that _find_regex_match silently skips rules with invalid regex patterns."""
+    """Test that rule selection silently skips stored patterns RE2 cannot compile."""
 
     @classmethod
     def setUpTestData(cls):
@@ -734,14 +738,13 @@ class EngineFindRegexMatchErrorTest(TestCase):
         cls.bad_regex_rule.save()
 
     def test_invalid_regex_pattern_is_skipped_not_raised(self):
-        """_find_regex_match silently skips rules whose module_type_pattern is not valid regex.
+        """_find_regex_match silently skips rules whose module_type_pattern is not valid RE2.
 
         The bad-pattern rule is inserted directly via save() to bypass clean()
-        validation. _find_regex_match wraps re.fullmatch in a try/except re.error
-        so an invalid pattern just moves on to the next candidate instead of
-        propagating the exception to the caller (lines 355-356).
+        validation. Rule loading compiles through the RE2 seam, so an invalid
+        pattern moves on to the next candidate instead of propagating.
         """
-        from netbox_interface_name_rules.engine import _find_regex_match
+        from netbox_interface_name_rules.rule_selection import _find_regex_match
 
         candidates = [(None, None, None)]
         result = _find_regex_match("RegX-GOOD", candidates)
@@ -769,7 +772,7 @@ class EngineHasApplicableExceptionTest(TestCase):
         A rule with an invalid ``module_type_pattern`` (inserted via save() to
         bypass clean() validation) makes ``_matching_moduletype_pks`` raise a
         real ValueError inside ``find_interfaces_for_rule``; has_applicable_interfaces
-        catches (ValueError, re.error) and returns False — no mock required.
+        catches ValueError and returns False. No mock is required.
         """
         from netbox_interface_name_rules.engine import has_applicable_interfaces
 
@@ -787,12 +790,12 @@ class EngineHasApplicableExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _find_channel_base ValueError path (lines 535-536)
+# engine.py: a breakout rule whose family names cannot be evaluated
 # ---------------------------------------------------------------------------
 
 
-class EngineFindChannelBaseValueErrorTest(TestCase):
-    """Test _find_channel_base skips ValueError from template evaluation (lines 535-536)."""
+class BreakoutTemplateValueErrorTest(TestCase):
+    """A breakout template that cannot be evaluated leaves every candidate base where it is."""
 
     @classmethod
     def setUpTestData(cls):
@@ -807,30 +810,29 @@ class EngineFindChannelBaseValueErrorTest(TestCase):
         cls.device = Device.objects.create(name="chanx-dev-01", device_type=cls.device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="CXBay 0")
 
-    def test_find_channel_base_valueerror_skips_to_fallback(self):
-        """_find_channel_base catches a real template ValueError and falls back to ifaces[0].
-
-        ``{undefined_var}`` is not in the variable dict, so evaluate_name_template
-        raises ValueError for every interface; _find_channel_base swallows each one
-        and returns the first interface as the base — no mock required.
-        """
-        from netbox_interface_name_rules.engine import _find_channel_base
-
-        rule = InterfaceNameRule(
+    def test_an_unevaluable_template_builds_nothing_and_renames_nothing(self):
+        """``{undefined_var}`` is not a naming variable, so every family reports the failure."""
+        rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
-            name_template="{undefined_var}:{channel}",  # undefined_var → real ValueError on eval
+            name_template="{undefined_var}:{channel}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        iface0 = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
-        iface1 = Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
-        ifaces = [iface0, iface1]
-        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
 
-        result = _find_channel_base(rule, ifaces, variables)
-        # Falls back to ifaces[0] after ValueError on every interface
-        self.assertEqual(result, iface0)
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            {member.status for member in outcome.skipped_members},
+            {FamilyStatus.FAILED},
+        )
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["Eth0", "Eth1"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -913,7 +915,7 @@ class EngineApplyRuleToExistingEdgeCasesTest(TestCase):
         # Module with NO interfaces
         Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         count = apply_rule_to_existing(rule)
-        self.assertEqual(count, 0)
+        self.assertEqual(count.changed_count, 0)
 
     def test_channel_rule_id_set_filters_base(self):
         """Channel rule with id_set skips when base_iface.pk not in id_set (line 753)."""
@@ -929,7 +931,7 @@ class EngineApplyRuleToExistingEdgeCasesTest(TestCase):
         iface = Interface.objects.create(device=self.device, module=module, name="Eth99", type="100gbase-x-qsfp28")
         # Pass an id_set that does NOT include iface.pk
         count = apply_rule_to_existing(rule, interface_ids=[iface.pk + 9999])
-        self.assertEqual(count, 0)
+        self.assertEqual(count.changed_count, 0)
         # Interface should be unchanged
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Eth99")
@@ -1003,12 +1005,12 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _channel_rule_entry ValueError path (lines 618-619)
+# engine.py: preview of a breakout rule whose template cannot be evaluated
 # ---------------------------------------------------------------------------
 
 
-class EngineChannelRuleEntryValueErrorTest(TestCase):
-    """Test _channel_rule_entry handles ValueError from template evaluation (lines 618-619)."""
+class PreviewTemplateErrorTest(TestCase):
+    """A breakout rule the preview cannot evaluate reports the error instead of a name."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1023,42 +1025,32 @@ class EngineChannelRuleEntryValueErrorTest(TestCase):
         cls.device = Device.objects.create(name="chrulex-dev-01", device_type=device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="CRBay 0")
 
-    def test_valueerror_in_template_sets_error_name(self):
-        """_channel_rule_entry stores an ``<error: …>`` placeholder when the template can't be evaluated.
-
-        A template referencing an undefined variable raises ValueError in
-        evaluate_name_template for real (no mock), so the loop that builds
-        expected_names catches it and collapses to a single error-placeholder
-        entry (lines 618-619). The result dict is returned because the
-        placeholder is not in existing_names.
-        """
-        from netbox_interface_name_rules.engine import _channel_rule_entry
-
-        rule = InterfaceNameRule(
+    def test_an_unevaluable_template_previews_one_error_placeholder(self):
+        """An undefined variable raises for real, so the family previews as a single placeholder."""
+        rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
-            name_template="{base}:{channel}:{undefined_var}",  # undefined_var → real ValueError on eval
+            name_template="{base}:{channel}:{undefined_var}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
-        variables = {"bay_position": "0", "slot": "0", "sfp_slot": "0"}
+        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
 
-        result = _channel_rule_entry(rule, module, [iface], variables)
+        results, total = find_interfaces_for_rule(rule)
 
-        # The ValueError collapses expected_names to one "<error: …>" placeholder.
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result["new_names"]), 1)
-        self.assertTrue(result["new_names"][0].startswith("<error:"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0]["new_names"]), 1)
+        self.assertTrue(results[0]["new_names"][0].startswith("<error:"))
+        self.assertEqual(total, 1)
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _process_channel_module with empty ifaces (line 640)
+# engine.py: preview of a module that carries no interfaces
 # ---------------------------------------------------------------------------
 
 
-class EngineProcessChannelModuleEmptyIfacesTest(TestCase):
-    """Test _process_channel_module returns early when ifaces is empty (line 640)."""
+class PreviewEmptyModuleTest(TestCase):
+    """A module with no interfaces contributes nothing to a breakout preview."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1071,43 +1063,25 @@ class EngineProcessChannelModuleEmptyIfacesTest(TestCase):
         cls.device = Device.objects.create(name="pcme-dev-01", device_type=device_type, role=role, site=site)
         cls.bay = ModuleBay.objects.get(device=cls.device, name="PEBay 0")
 
-    def test_empty_ifaces_returns_zero_checked_false(self):
-        """_process_channel_module returns (0, False) for an empty ifaces list (line 640).
-
-        Driven entirely with real ORM objects: a real channel rule, a real module
-        with no interfaces, and the real module queryset the rule would scan.
-        """
-        from netbox_interface_name_rules.engine import _build_module_qs, _process_channel_module
-
+    def test_a_module_without_interfaces_previews_nothing(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="{base}:{channel}",
             channel_count=2,
             channel_start=0,
         )
-        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        module_qs = _build_module_qs(rule)
+        Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
 
-        result = _process_channel_module(
-            rule=rule,
-            module=module,
-            ifaces=[],
-            variables=build_variables(self.bay),
-            limit=None,
-            results=[],
-            module_qs=module_qs,
-            processed_pks={module.pk},
-        )
-        self.assertEqual(result, (0, False))
+        self.assertEqual(find_interfaces_for_rule(rule), ([], 0))
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _process_channel_module limit reached (line 645)
+# engine.py: preview stops at the batch limit
 # ---------------------------------------------------------------------------
 
 
-class EngineProcessChannelModuleLimitTest(TestCase):
-    """Test _process_channel_module stops when limit is reached (line 645)."""
+class PreviewLimitTest(TestCase):
+    """The preview stops once it has collected as many changed families as the limit allows."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1116,46 +1090,28 @@ class EngineProcessChannelModuleLimitTest(TestCase):
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="ChLim-SFP", part_number="ChLim-SFP"
         )
-        ModuleBayTemplate.objects.create(device_type=device_type, name="CLBay 0", position="0")
+        for position in ("0", "1"):
+            ModuleBayTemplate.objects.create(device_type=device_type, name=f"CLBay {position}", position=position)
         role = DeviceRole.objects.create(name="ChLimRole", slug="chlimrole")
         site = Site.objects.create(name="ChLimSite", slug="chlimsite")
         cls.device = Device.objects.create(name="chlim-dev-01", device_type=device_type, role=role, site=site)
-        cls.bay = ModuleBay.objects.get(device=cls.device, name="CLBay 0")
 
-    def test_limit_reached_returns_true(self):
-        """_process_channel_module returns should_stop=True when the result limit is hit.
-
-        Real objects throughout: the module's interface needs renaming, so
-        _channel_rule_entry appends an entry that brings ``results`` to ``limit=1``,
-        triggering the early-stop path (line 644-645). The real module queryset
-        (with this module already in processed_pks) contributes no extra remaining
-        work to count.
-        """
-        from netbox_interface_name_rules.engine import _build_module_qs, _process_channel_module
-
+    def test_the_scan_stops_at_the_limit_and_still_counts_what_is_left(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="{base}:{channel}",
             channel_count=2,
             channel_start=0,
         )
-        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        for position in ("0", "1"):
+            bay = ModuleBay.objects.get(device=self.device, name=f"CLBay {position}")
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
+            Interface.objects.create(device=self.device, module=module, name=f"Eth{position}", type="100gbase-x-qsfp28")
 
-        results = []
-        _checked, should_stop = _process_channel_module(
-            rule=rule,
-            module=module,
-            ifaces=[iface],
-            variables=build_variables(self.bay),
-            limit=1,  # limit=1 means stop after first result
-            results=results,
-            module_qs=_build_module_qs(rule),
-            processed_pks={module.pk},
-        )
-        # The entry was added and limit=1 reached, so should_stop is True.
-        self.assertTrue(should_stop)
+        results, total = find_interfaces_for_rule(rule, limit=1)
+
         self.assertEqual(len(results), 1)
+        self.assertEqual(total, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -1225,17 +1181,25 @@ class TwoLevelNestedBayTest(TestCase):
 
 
 class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
-    """Test that exception from _apply_rule_to_interface is caught per-interface.
+    """An unexpected executor failure reaches the caller, and committed families stay committed."""
 
-    The first interface is successfully renamed; the second raises an exception
-    that is swallowed by the loop (lines 773-780).  apply_rule_to_existing
-    must not propagate the exception and must return the count from successful calls.
-    """
+    @staticmethod
+    def _failing_after_the_first_family():
+        """Return an executor that runs the first family for real and fails on the next one."""
+        from netbox_interface_name_rules.family import batch
 
-    def test_exception_on_second_call_is_swallowed(self):
-        """Second _apply_rule_to_interface failure is logged; first rename still counted."""
-        from netbox_interface_name_rules.engine import _apply_rule_to_interface as _real_fn
+        execute = batch.execute_family_plan
+        calls = [0]
 
+        def _side_effect(plan):
+            calls[0] += 1
+            if calls[0] >= 2:
+                raise ValueError("forced failure on the second family")
+            return execute(plan)
+
+        return _side_effect
+
+    def test_a_failing_plain_rename_leaves_the_earlier_module_renamed(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="et-0/0/{bay_position}",
@@ -1245,27 +1209,21 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
         iface1 = Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
-        call_count = [0]
+        with (
+            patch(
+                "netbox_interface_name_rules.family.batch.execute_family_plan",
+                side_effect=self._failing_after_the_first_family(),
+            ),
+            self.assertRaises(ValueError),
+        ):
+            apply_rule_to_existing(rule)
 
-        def _side_effect(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise ValueError("forced failure on second call")
-            return _real_fn(*args, **kwargs)
-
-        with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
-            count = apply_rule_to_existing(rule)
-
-        self.assertEqual(count, 1)
         iface0.refresh_from_db()
         iface1.refresh_from_db()
-        self.assertEqual(iface0.name, "et-0/0/0")  # first was renamed
-        self.assertEqual(iface1.name, "1")  # second was skipped
+        self.assertEqual(iface0.name, "et-0/0/0")  # first family had already committed
+        self.assertEqual(iface1.name, "1")  # second never ran
 
-    def test_exception_on_channel_call_is_swallowed(self):
-        """Exception inside the channel-rule branch (lines 756-764) is logged and loop continues."""
-        from netbox_interface_name_rules.engine import _apply_rule_to_interface as _real_fn
-
+    def test_a_failing_breakout_family_leaves_the_earlier_module_built(self):
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -1277,21 +1235,18 @@ class ApplyRuleExceptionInLoopTest(EngineAdvancedFixtures):
         iface0 = Interface.objects.create(device=self.device, module=module0, name="0", type="10gbase-x-sfpp")
         Interface.objects.create(device=self.device, module=module1, name="1", type="10gbase-x-sfpp")
 
-        call_count = [0]
+        with (
+            patch(
+                "netbox_interface_name_rules.family.batch.execute_family_plan",
+                side_effect=self._failing_after_the_first_family(),
+            ),
+            self.assertRaises(ValueError),
+        ):
+            apply_rule_to_existing(rule)
 
-        def _side_effect(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise ValueError("forced channel failure")
-            return _real_fn(*args, **kwargs)
-
-        with patch("netbox_interface_name_rules.engine._apply_rule_to_interface", side_effect=_side_effect):
-            count = apply_rule_to_existing(rule)
-
-        # First module produced channels; second raised and was skipped
-        self.assertGreaterEqual(count, 1)
         iface0.refresh_from_db()
-        self.assertEqual(iface0.name, "xe-0/0/0:0")
+        self.assertEqual(iface0.name, "xe-0/0/0:0")  # first family had already committed
+        self.assertEqual(Interface.objects.get(module=module1).name, "1")
 
 
 # ---------------------------------------------------------------------------
@@ -1400,12 +1355,12 @@ class FlagDeprecatedExceptionTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — DB save exception rollback in _try_rename_device_interface (lines 159-168)
+# Device interface save exception rollback
 # ---------------------------------------------------------------------------
 
 
 class DeviceInterfaceSaveExceptionTest(TestCase):
-    """Test _try_rename_device_interface rolls back name on iface.save() failure (lines 159-168)."""
+    """Test the device rule path rolls back the name when an interface save fails."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1423,11 +1378,11 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
             vc_position=1,
         )
 
-    def test_save_exception_restores_name_and_returns_false(self):
-        """When iface.save() raises, name is rolled back to old_name and False returned (lines 159-168)."""
-        from netbox_interface_name_rules.engine import _try_rename_device_interface
+    def test_non_collision_integrity_error_propagates_and_restores_name(self):
+        """Restore the old name and propagate an unrelated database failure."""
+        from netbox_interface_name_rules.engine import apply_device_interface_rules
 
-        rule = InterfaceNameRule.objects.create(
+        InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True,
             name_template="xe-{vc_position}/{port}",
         )
@@ -1436,9 +1391,10 @@ class DeviceInterfaceSaveExceptionTest(TestCase):
         from django.db import IntegrityError
 
         with patch.object(Interface, "save", side_effect=IntegrityError("disk full")):
-            result = _try_rename_device_interface(rule, iface, "1", self.device, set())
+            with self.assertRaisesMessage(IntegrityError, "disk full"):
+                apply_device_interface_rules(self.device)
 
-        self.assertFalse(result)
+        iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi0/1")  # rolled back
 
 
@@ -1546,26 +1502,6 @@ class RegexTiebreakerTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _find_channel_base with empty interface list
-# ---------------------------------------------------------------------------
-
-
-class FindChannelBaseEmptyIfacesTest(TestCase):
-    """Test _find_channel_base handles empty interface list gracefully."""
-
-    def test_empty_ifaces_returns_none(self):
-        """_find_channel_base returns None when ifaces is empty."""
-        rule = InterfaceNameRule(
-            name_template="port{bay_position}:{channel}",
-            channel_start=0,
-            channel_count=2,
-        )
-        variables = {"bay_position": "0", "bay_position_num": "0", "slot": "0"}
-        result = _find_channel_base(rule, [], variables)
-        self.assertIsNone(result)
-
-
-# ---------------------------------------------------------------------------
 # engine.py — find_interfaces_for_rule uses set for processed_pks
 # ---------------------------------------------------------------------------
 
@@ -1597,18 +1533,18 @@ class FindInterfacesProcessedPksTest(EngineAdvancedFixtures):
 
 
 class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
-    """Test that _apply_rule_to_interface rolls back on mid-breakout failure."""
+    """The install path writes a breakout family whole or not at all."""
 
     def test_partial_breakout_rolls_back(self):
         """If channel 2 fails validation, channels 0–1 are rolled back too."""
-        rule = InterfaceNameRule.objects.create(
+        InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="Hu0/0/0/{bay_position}:{channel}",
             channel_count=4,
             channel_start=0,
         )
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        iface = Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         original_full_clean = Interface.full_clean
         call_count = [0]
@@ -1621,18 +1557,11 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
                 raise ValidationError("simulated failure")
             return original_full_clean(self_iface, *args, **kwargs)
 
-        from netbox_interface_name_rules.engine import _apply_rule_to_interface
-
-        variables = build_variables(module.module_bay, device=module.device)
-        variables["base"] = iface.name
-
-        from django.core.exceptions import ValidationError
-
         with patch.object(Interface, "full_clean", failing_full_clean):
-            with self.assertRaises(ValidationError):
-                _apply_rule_to_interface(rule, iface, variables, module)
+            renamed = apply_interface_name_rules(module, module.module_bay)
 
-        # Transaction rolled back — only the original interface remains
+        # The transaction rolled back. Only the original interface remains with its original name.
+        self.assertEqual(renamed, 0)
         iface_names = list(Interface.objects.filter(module=module).values_list("name", flat=True))
         self.assertEqual(iface_names, ["0"])
 
@@ -1796,7 +1725,7 @@ class NameCollisionTest(EngineAdvancedFixtures):
         self.assertFalse(rule.tags.filter(slug="potentially-deprecated").exists())
 
     def test_apply_rule_to_existing_records_conflict_and_continues(self):
-        """A taken target name is recorded in *conflicts* and skipped; the batch keeps going."""
+        """A taken target name is reported as a skipped member; the batch keeps going."""
         rule = InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="et-0/0/{bay_position}",
@@ -1805,12 +1734,10 @@ class NameCollisionTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
-        conflicts: list = []
-        count = apply_rule_to_existing(rule, conflicts=conflicts)
+        count = apply_rule_to_existing(rule)
 
-        self.assertEqual(count, 0)
-        self.assertEqual(len(conflicts), 1)
-        self.assertEqual(conflicts[0]["attempted_name"], "et-0/0/0")
+        self.assertEqual(count.changed_count, 0)
+        self.assertEqual([member.target_name for member in count.skipped_members], ["et-0/0/0"])
         iface.refresh_from_db()
         self.assertEqual(iface.name, "0")
 
@@ -1841,11 +1768,9 @@ class NameCollisionTest(EngineAdvancedFixtures):
         """A post-check save race on one interface is logged + skipped; the rest still rename.
 
         The collision pre-check closes the common case, but a concurrent insert can
-        still win between the check and the save — a true race we cannot reproduce
-        deterministically, so the IntegrityError is injected on the first save only
-        (everything else is a real rule / real interfaces / the real install path).
-        Without the per-interface guard in apply_interface_name_rules this exception
-        propagates and aborts the whole batch.
+        still win between the check and the save, a true race we cannot reproduce
+        deterministically. The first save injects the PostgreSQL constraint diagnostic
+        that identifies this race. Everything else uses the real install path.
         """
         from django.db import IntegrityError
 
@@ -1863,7 +1788,9 @@ class NameCollisionTest(EngineAdvancedFixtures):
         def flaky_save(self_iface, *args, **kwargs):
             calls["n"] += 1
             if calls["n"] == 1:  # first interface loses the race
-                raise IntegrityError("duplicate key value violates unique constraint")
+                cause = Exception("duplicate key value violates unique constraint")
+                cause.diag = SimpleNamespace(constraint_name=INTERFACE_NAME_CONSTRAINT)
+                raise IntegrityError("duplicate key value violates unique constraint") from cause
             return real_save(self_iface, *args, **kwargs)
 
         with patch.object(Interface, "save", flaky_save):
@@ -1891,8 +1818,7 @@ class NameCollisionTest(EngineAdvancedFixtures):
         first = apply_interface_name_rules(module, self.bay0)
         self.assertEqual(first, 4)
 
-        conflicts: list = []
-        second = apply_rule_to_existing(rule, conflicts=conflicts)
-        self.assertEqual(second, 0)
-        self.assertEqual(conflicts, [])  # its own existing channels are NOT conflicts
+        second = apply_rule_to_existing(rule)
+        self.assertEqual(second.changed_count, 0)
+        self.assertEqual(second.skipped_members, ())  # its own existing channels are NOT conflicts
         self.assertEqual(Interface.objects.filter(module=module).count(), 4)

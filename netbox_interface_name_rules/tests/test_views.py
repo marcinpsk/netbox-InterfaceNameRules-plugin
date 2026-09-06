@@ -206,7 +206,7 @@ class RuleApplyDetailViewTest(ViewTestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.context["preview"]), 1)  # apply preview survives
-        self.assertEqual(response.context["conversions"], [])
+        self.assertEqual(response.context["conversions"], ())
         msgs = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any("conversion" in m.lower() for m in msgs), msgs)
 
