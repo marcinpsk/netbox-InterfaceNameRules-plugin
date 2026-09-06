@@ -4,22 +4,34 @@ The performance runner records the current implementation before an interface-fa
 uses real NetBox models, signals, committed callbacks, and PostgreSQL. It is not part of default test
 discovery or CI.
 
-Start in this plugin checkout, and use a fixed NetBox `feature` source checkout that supports
-channelized interfaces. Use the same NetBox revision, PostgreSQL version, planner settings, sample
-counts, and hardware for the after-run. NetBox `main` does not contain the channelization feature
-while its development takes place on `feature`.
+Run against a NetBox that supports channelized interfaces. Release 4.7.0 ships the feature, so a
+source checkout of the NetBox `feature` branch is no longer needed. Use the same NetBox revision,
+PostgreSQL version, planner settings, sample counts, and hardware for both sides of a comparison.
+
+`PYTHONPATH` decides which plugin checkout is measured. Put the checkout root first, ahead of any
+editable install: it supplies both the `netbox_interface_name_rules` package under measurement and
+the `performance` package the runner imports. Measure a before and an after side by pointing the
+same runner at two checkouts, one per side.
+
+The runner lives on the refactor branch, so a before-run against a revision that predates it needs
+the runner copied into that checkout. `git archive <runner-revision> performance
+netbox_interface_name_rules/tests/signal_performance.py | tar -x -C <before-checkout>` does that
+without changing the plugin source under measurement.
 
 Point NetBox's task queue at an isolated Redis database with no live RQ workers. NetBox chooses
 between queued and inline search-cache writes based on worker availability. Mixing those paths
 changes the SQL profile between identical saves. The runner checks this condition before it starts.
+`TEST_REDIS_DB` moves the queues to their own Redis database, which is what makes the run possible
+beside a devcontainer worker that holds the shared one.
 
 The command below records a measured run with the retained configuration of 15 timing samples and
 3 warmups per scenario.
 
 ```bash
-export PYTHONPATH="$PWD/.devcontainer/config"
+export PYTHONPATH="/path/to/measured/checkout:$PWD/.devcontainer/config"
 export TEST_DB_NAME="inr_performance_74"
-export INTERFACE_FAMILY_PERFORMANCE_SOURCE_REVISION="$(git rev-parse HEAD)"
+export TEST_REDIS_DB="9"
+export INTERFACE_FAMILY_PERFORMANCE_SOURCE_REVISION="$(git -C /path/to/measured/checkout rev-parse HEAD)"
 export NETBOX_PERFORMANCE_SOURCE_REVISION="$(git -C /path/to/netbox rev-parse HEAD)"
 export INTERFACE_FAMILY_PERFORMANCE_OUTPUT="$PWD/performance/baselines/existing-feature.json"
 export INTERFACE_FAMILY_PERFORMANCE_SAMPLES="15"
@@ -33,6 +45,9 @@ python manage.py test \
   --verbosity=2 \
   --noinput
 ```
+
+Set `NETBOX_PERFORMANCE_SOURCE_REVISION` to the container image digest when NetBox does not run
+from a Git checkout. The runner refuses to start without a value for it.
 
 The temporary JSON artifact contains normalized statements, PostgreSQL plans, rows and loops, buffer
 and WAL work, fixture sizes, planner settings, and raw wall and process CPU samples. Do not retain it
