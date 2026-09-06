@@ -24,6 +24,9 @@ services:
       SUPERUSER_EMAIL: ${SUPERUSER_EMAIL:-admin@example.com}
       SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:-admin}
       SKIP_SUPERUSER: ${SKIP_SUPERUSER:-false}
+      # The container is root and mounts the host checkout, so cached bytecode lands there owned
+      # by root. `-p no:cacheprovider` does not prevent it.
+      PYTHONDONTWRITEBYTECODE: "1"
       # Proxy settings (optional)
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
