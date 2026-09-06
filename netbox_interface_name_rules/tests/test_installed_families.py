@@ -9,7 +9,6 @@ from unittest.mock import patch
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import (
     Device,
-    DeviceRole,
     DeviceType,
     Interface,
     InterfaceTemplate,
@@ -18,7 +17,6 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
-    Site,
     VirtualChassis,
 )
 from django.db import IntegrityError, connection
@@ -41,6 +39,7 @@ from netbox_interface_name_rules.family import (
 from netbox_interface_name_rules.family.execution import _lock_family
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import evaluate_name_template
+from netbox_interface_name_rules.tests.helpers import make_placement
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
@@ -87,13 +86,12 @@ class InstalledFlatFamilyPlanningTest(TestCase):
             name="{module}",
             type="100gbase-x-qsfp28",
         )
-        role = DeviceRole.objects.create(name="FamilyPlanRole", slug="family-plan-role")
-        site = Site.objects.create(name="FamilyPlanSite", slug="family-plan-site")
+        placement = make_placement("FamilyPlan")
         cls.device = Device.objects.create(
             name="family-plan-device-01",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
         )
         cls.bay = ModuleBay.objects.get(device=cls.device, name="Bay 7")
         cls.rule = InterfaceNameRule.objects.create(
@@ -640,13 +638,12 @@ class InstalledChannelizedFamilyTest(TestCase):
                 parent=parent,
                 channel_id=channel_id,
             )
-        role = DeviceRole.objects.create(name="InstalledChanRole", slug="installed-chan-role")
-        site = Site.objects.create(name="InstalledChanSite", slug="installed-chan-site")
+        placement = make_placement("InstalledChan")
         cls.device = Device.objects.create(
             name="installed-chan-device-01",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
         )
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,

@@ -4,20 +4,19 @@
 
 from dcim.models import (
     Device,
-    DeviceRole,
     DeviceType,
     Manufacturer,
     Module,
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
-    Site,
     VirtualChassis,
 )
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables, evaluate_name_template
+from netbox_interface_name_rules.tests.helpers import make_placement
 
 
 class NamingTest(TestCase):
@@ -37,14 +36,13 @@ class NamingTest(TestCase):
             model="NAMING-SFP",
             part_number="NAMING-SFP",
         )
-        role = DeviceRole.objects.create(name="NamingRole", slug="naming-role")
-        site = Site.objects.create(name="NamingSite", slug="naming-site")
+        placement = make_placement("Naming")
         virtual_chassis = VirtualChassis.objects.create(name="naming-vc")
         cls.device = Device.objects.create(
             name="naming-device-01",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=virtual_chassis,
             vc_position=3,
         )

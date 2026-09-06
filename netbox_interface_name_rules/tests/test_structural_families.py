@@ -10,7 +10,7 @@ the active NetBox release can hold it.
 
 from unittest import skipIf, skipUnless
 
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import DeviceType, Interface, Manufacturer
 from django.db import IntegrityError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -30,6 +30,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_device
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
 from netbox_interface_name_rules.tests.test_channelization import (
@@ -134,9 +135,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def setUpTestData(cls):
         manufacturer = Manufacturer.objects.create(name="ReconMfg", slug="recon-mfg")
         device_type = DeviceType.objects.create(manufacturer=manufacturer, model="RECON-DEVICE", slug="recon-device")
-        role = DeviceRole.objects.create(name="ReconRole", slug="recon-role")
-        site = Site.objects.create(name="ReconSite", slug="recon-site")
-        cls.device = Device.objects.create(name="recon-device-01", device_type=device_type, role=role, site=site)
+        cls.device = make_device("Recon", device_type, name="recon-device-01")
 
     def _interface(self, name):
         """Create one plain interface on the shared device."""
