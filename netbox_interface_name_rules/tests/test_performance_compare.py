@@ -146,12 +146,18 @@ class PerformancePackageTest(unittest.TestCase):
         )
         self.assertNotIn("Database work is deterministic", introduction)
 
-    def test_comparison_marks_machine_time_as_non_comparable(self):
+    def test_comparison_machine_time_note_matches_the_load_it_reports(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        environment = comparison.split("## Environment", 1)[1].split("## Database work", 1)[0]
         machine_time = comparison.split("## Machine time", 1)[1].split("## Statement-count regressions", 1)[0]
+        load_row = next(row for row in environment.splitlines() if row.startswith("| host load"))
+        samples = [float(value) for value in re.findall(r"\d+\.\d+", load_row)]
 
-        self.assertIn(compare._MACHINE_TIME_NOTE, machine_time)
-        self.assertIn("Machine-time deltas are not baseline evidence for this comparison", machine_time)
+        self.assertEqual(len(samples), 4)
+        quiet = max(samples) < compare._COMPARABLE_ONE_MINUTE_LOAD
+        expected = compare._MACHINE_TIME_COMPARABLE_NOTE if quiet else compare._MACHINE_TIME_UNPROVEN_NOTE
+
+        self.assertIn(expected, machine_time)
 
 
 class XdistWorkerCapTest(unittest.TestCase):
@@ -381,3 +387,39 @@ class EnvironmentTableTest(unittest.TestCase):
         row = self._load_row(_artifact(settings, None), _artifact(settings, quiet))
 
         self.assertEqual(row, "| host load (1 min, start to end) | `not recorded` | `0.50 to 0.90` |")
+
+
+class MachineTimeNoteTest(unittest.TestCase):
+    """The machine-time note follows the 1-minute load both runs recorded."""
+
+    def _note(self, before_load, after_load):
+        settings = {"work_mem": "4MB"}
+        return compare._machine_time_note(_artifact(settings, before_load), _artifact(settings, after_load))
+
+    def test_runs_under_the_ceiling_are_called_comparable(self):
+        before = {"started": {"one_minute": 1.10}, "finished": {"one_minute": 1.18}}
+        after = {"started": {"one_minute": 1.23}, "finished": {"one_minute": 0.99}}
+
+        note = self._note(before, after)
+
+        self.assertEqual(note, compare._MACHINE_TIME_COMPARABLE_NOTE)
+        self.assertIn("1-minute load stayed below 2.00", _unwrapped(note))
+
+    def test_one_busy_sample_withholds_the_claim(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        busy = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 7.25}}
+
+        self.assertEqual(self._note(quiet, busy), compare._MACHINE_TIME_UNPROVEN_NOTE)
+        self.assertEqual(self._note(busy, quiet), compare._MACHINE_TIME_UNPROVEN_NOTE)
+
+    def test_the_ceiling_itself_is_too_busy(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        at_ceiling = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 2.0}}
+
+        self.assertEqual(self._note(quiet, at_ceiling), compare._MACHINE_TIME_UNPROVEN_NOTE)
+
+    def test_unrecorded_load_withholds_the_claim(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+
+        self.assertEqual(self._note(None, quiet), compare._MACHINE_TIME_UNPROVEN_NOTE)
+        self.assertEqual(self._note(quiet, None), compare._MACHINE_TIME_UNPROVEN_NOTE)

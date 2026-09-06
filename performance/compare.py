@@ -34,7 +34,14 @@ _COMPARISON_INTRO = (
     "is only evidence when both runs were taken on the same otherwise-idle hardware."
 )
 
-_MACHINE_TIME_NOTE = (
+_COMPARABLE_ONE_MINUTE_LOAD = 2.0
+
+_MACHINE_TIME_COMPARABLE_NOTE = (
+    f"Every recorded 1-minute load stayed below {_COMPARABLE_ONE_MINUTE_LOAD:.2f} on both sides, so "
+    "machine-time deltas are comparable observations. Statement counts remain the deterministic evidence."
+)
+
+_MACHINE_TIME_UNPROVEN_NOTE = (
     "Machine-time deltas are not baseline evidence for this comparison. This report does not "
     "establish equivalent otherwise-idle host load, so keep the values as diagnostic observations only."
 )
@@ -188,12 +195,33 @@ def _time_table(before, after):
     return lines
 
 
-def _load_span(artifact):
-    """Return the run-queue length a run started and finished under."""
+def _one_minute_loads(artifact):
+    """Return the 1-minute run-queue samples a run recorded, or None when it recorded none."""
     load = artifact["environment"].get("host_load")
     if not load:
+        return None
+    return tuple(load[phase]["one_minute"] for phase in ("started", "finished"))
+
+
+def _load_span(artifact):
+    """Return the run-queue length a run started and finished under."""
+    recorded = _one_minute_loads(artifact)
+    if recorded is None:
         return "not recorded"
-    return f"{load['started']['one_minute']:.2f} to {load['finished']['one_minute']:.2f}"
+    return f"{recorded[0]:.2f} to {recorded[1]:.2f}"
+
+
+def _machine_time_note(before, after):
+    """Return the machine-time note the recorded 1-minute load supports."""
+    samples = []
+    for artifact in (before, after):
+        recorded = _one_minute_loads(artifact)
+        if recorded is None:
+            return _MACHINE_TIME_UNPROVEN_NOTE
+        samples.extend(recorded)
+    if max(samples) >= _COMPARABLE_ONE_MINUTE_LOAD:
+        return _MACHINE_TIME_UNPROVEN_NOTE
+    return _MACHINE_TIME_COMPARABLE_NOTE
 
 
 def _environment_table(before, after):
@@ -243,7 +271,7 @@ def main(argv):
         "",
         "## Machine time",
         "",
-        _MACHINE_TIME_NOTE,
+        _machine_time_note(before, after),
         "",
         *_time_table(before_scenarios, after_scenarios),
         "",

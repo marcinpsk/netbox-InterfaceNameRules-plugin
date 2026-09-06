@@ -67,6 +67,11 @@ performance.
 `performance/compare.py BEFORE.json AFTER.json OUT.md` writes a readable comparison of database
 work and machine time, and breaks down by statement source any scenario whose statement count rose.
 
+The report calls machine time comparable only when every recorded 1-minute load average, at the
+start and the end of both runs, stayed below 2.00. A busier run, or one that recorded no load, keeps
+the values as diagnostic observations. The rule reads the 1-minute average alone, so it does not see
+background work that had already ended when a run started.
+
 Set `INTERFACE_FAMILY_PERFORMANCE_KIND` to name what a run measured, such as `family_package` for
 an after run. It labels the artifact and titles its summary.
 
