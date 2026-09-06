@@ -5,21 +5,19 @@
 from unittest.mock import ANY, MagicMock, patch
 
 from dcim.models import (
-    Device,
-    DeviceRole,
     DeviceType,
     Interface,
     Manufacturer,
     Module,
     ModuleBay,
     ModuleType,
-    Site,
 )
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_device
 
 User = get_user_model()
 
@@ -187,9 +185,7 @@ class RuleApplyDetailViewTest(ViewTestBase):
         """A bug in the conversion scan must not blank the unrelated apply preview."""
         from django.contrib.messages import get_messages
 
-        role = DeviceRole.objects.create(name="SplitRole", slug="splitrole")
-        site = Site.objects.create(name="SplitSite", slug="splitsite")
-        device = Device.objects.create(name="split-dev-01", device_type=self.device_type, role=role, site=site)
+        device = make_device("Split", self.device_type, name="split-dev-01")
         bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
         module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
         Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
@@ -539,9 +535,7 @@ class RuleApplyDetailViewPostTest(ViewTestBase2):
         from django.contrib.messages import get_messages
 
         # cls.rule matches module_type VIEW-SFP on device_type VIEW-Dev → "et-0/0/{bay_position}".
-        role = DeviceRole.objects.create(name="ApplyRole", slug="applyrole")
-        site = Site.objects.create(name="ApplySite", slug="applysite")
-        device = Device.objects.create(name="apply-dev-01", device_type=self.device_type, role=role, site=site)
+        device = make_device("Apply", self.device_type, name="apply-dev-01")
         bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
         module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
         iface = Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
