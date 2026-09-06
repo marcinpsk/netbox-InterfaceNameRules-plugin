@@ -87,6 +87,66 @@ class RuleValidationAgreementTest(TestCase):
             ),
         ]
 
+    def template_grammar_combinations(self):
+        """Return the parent-template rejections a check constraint cannot express."""
+        return [
+            (
+                "parent template naming the channel",
+                {
+                    "module_type": self.module_type,
+                    "breakout_mode": BreakoutModeChoices.CHANNELIZED,
+                    "channel_count": 4,
+                    "parent_name_template": "et-0/0/{bay_position}:{channel}",
+                    "name_template": "xe-0/0/{bay_position}:{channel}",
+                },
+            ),
+            (
+                "parent template with unbalanced braces",
+                {
+                    "module_type": self.module_type,
+                    "breakout_mode": BreakoutModeChoices.CHANNELIZED,
+                    "channel_count": 4,
+                    "parent_name_template": "et-0/0/{bay_position",
+                    "name_template": "xe-0/0/{bay_position}:{channel}",
+                },
+            ),
+        ]
+
+    def test_clean_refuses_every_template_grammar_combination(self):
+        """clean() rejects both parent-template shapes."""
+        for label, fields in self.template_grammar_combinations():
+            with self.subTest(label):
+                with self.assertRaises(ValidationError):
+                    InterfaceNameRule(**fields).clean()
+
+    def test_the_write_path_refuses_every_template_grammar_combination(self):
+        """save() must refuse what no check constraint can express, so a plain create cannot store it."""
+        for label, fields in self.template_grammar_combinations():
+            with self.subTest(label):
+                with self.assertRaises(ValidationError), transaction.atomic():
+                    InterfaceNameRule.objects.create(**fields)
+                self.assertFalse(
+                    InterfaceNameRule.objects.filter(parent_name_template=fields["parent_name_template"]).exists()
+                )
+
+    def test_saving_an_unrelated_field_skips_the_topology_check(self):
+        """A targeted update_fields save must not re-validate columns it does not write."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=4,
+            parent_name_template="et-0/0/{bay_position}",
+        )
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(parent_name_template="et-0/0/{bay_position")
+        rule.refresh_from_db()
+        rule.enabled = False
+
+        rule.save(update_fields=["enabled"])
+
+        rule.refresh_from_db()
+        self.assertFalse(rule.enabled)
+
     def test_clean_refuses_or_rewrites_every_combination(self):
         """clean() must never leave one of these rules as the caller wrote it."""
         for label, fields in self.invalid_combinations():
@@ -102,11 +162,11 @@ class RuleValidationAgreementTest(TestCase):
                 self.assertTrue(rewritten, f"clean() accepted {label} unchanged")
 
     def test_the_database_refuses_every_combination(self):
-        """A queryset write skips clean(), so the constraints must refuse the same rules."""
+        """bulk_create() skips both clean() and save(), so the constraints must refuse the same rules."""
         for label, fields in self.invalid_combinations():
             with self.subTest(label):
                 with self.assertRaises(IntegrityError), transaction.atomic():
-                    InterfaceNameRule.objects.create(**fields)
+                    InterfaceNameRule.objects.bulk_create([InterfaceNameRule(**fields)])
 
     def test_a_valid_rule_of_each_shape_still_saves(self):
         """The constraints must not refuse the rules the plugin is built to store."""
@@ -160,21 +220,27 @@ class RuleNormalizationMigrationTest(TestCase):
         migration = self._set_constraints(enabled=False)
         manufacturer = Manufacturer.objects.create(name="MigMfg", slug="migmfg")
         module_type = ModuleType.objects.create(manufacturer=manufacturer, model="MIG-QSFP", part_number="MIG-QSFP")
-        device_rule = InterfaceNameRule.objects.create(
-            applies_to_device_interfaces=True,
-            module_type_is_regex=True,
-            module_type_pattern="Gi.*",
-            breakout_mode=BreakoutModeChoices.CHANNELIZED,
-            channel_count=4,
-            parent_name_template="et-0/0/{port}",
-            name_template="Gi{vc_position}/{port}",
-        )
-        channelless = InterfaceNameRule.objects.create(
-            module_type=module_type,
-            breakout_mode=BreakoutModeChoices.CHANNELIZED,
-            channel_count=0,
-            parent_name_template="et-0/0/{bay_position}",
-            name_template="xe-0/0/{bay_position}:{channel}",
+        # These rows predate the constraints, so they must reach the table the way they did then:
+        # bulk_create() skips both clean() and save().
+        device_rule, channelless = InterfaceNameRule.objects.bulk_create(
+            [
+                InterfaceNameRule(
+                    applies_to_device_interfaces=True,
+                    module_type_is_regex=True,
+                    module_type_pattern="Gi.*",
+                    breakout_mode=BreakoutModeChoices.CHANNELIZED,
+                    channel_count=4,
+                    parent_name_template="et-0/0/{port}",
+                    name_template="Gi{vc_position}/{port}",
+                ),
+                InterfaceNameRule(
+                    module_type=module_type,
+                    breakout_mode=BreakoutModeChoices.CHANNELIZED,
+                    channel_count=0,
+                    parent_name_template="et-0/0/{bay_position}",
+                    name_template="xe-0/0/{bay_position}:{channel}",
+                ),
+            ]
         )
 
         migration.normalize_invalid_rules(global_apps, None)

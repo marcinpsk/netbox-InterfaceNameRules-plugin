@@ -64,6 +64,9 @@ def _has_unbalanced_braces(template):
     return depth != 0
 
 
+_TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
+
+
 def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):
     """Check that the mode, the channel count and the parent template describe one topology.
 
@@ -363,7 +366,8 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.CheckConstraint(
-                # Every implication _validate_breakout_topology() enforces, written as ~P | Q.
+                # The implications _validate_breakout_topology() enforces over enum and integer
+                # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
                 condition=(
                     (
                         models.Q(applies_to_device_interfaces=False)
@@ -394,6 +398,18 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_unique_device_iface",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
+            _validate_breakout_topology(
+                self.breakout_mode,
+                self.channel_count,
+                self.parent_name_template,
+                self.applies_to_device_interfaces,
+            )
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         if self.module_type_is_regex:
