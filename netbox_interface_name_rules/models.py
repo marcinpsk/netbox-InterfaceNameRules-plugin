@@ -402,6 +402,11 @@ class InterfaceNameRule(NetBoxModel):
     def save(self, *args, **kwargs):
         """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
         update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            # Django accepts any iterable. Reading a generator here would leave Django an empty
+            # one, and it skips the write when update_fields is empty.
+            update_fields = frozenset(update_fields)
+            kwargs["update_fields"] = update_fields
         if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
             _validate_breakout_topology(
                 self.breakout_mode,

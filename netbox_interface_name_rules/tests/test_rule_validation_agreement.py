@@ -147,6 +147,20 @@ class RuleValidationAgreementTest(TestCase):
         rule.refresh_from_db()
         self.assertFalse(rule.enabled)
 
+    def test_a_generator_update_fields_still_writes_its_column(self):
+        """The topology check must not consume update_fields, which would make Django skip the save."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}",
+            description="before",
+        )
+        rule.description = "after"
+
+        rule.save(update_fields=(name for name in ["description"]))
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.description, "after")
+
     def test_clean_refuses_or_rewrites_every_combination(self):
         """clean() must never leave one of these rules as the caller wrote it."""
         for label, fields in self.invalid_combinations():
