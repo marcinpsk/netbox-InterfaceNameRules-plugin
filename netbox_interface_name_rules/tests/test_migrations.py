@@ -20,8 +20,13 @@ class MigrationGraphTest(SimpleTestCase):
         self.assertIn((APP_LABEL, "0001_initial"), loader.graph.nodes)
 
     def test_every_cross_app_dependency_exists_on_disk(self):
-        """Name the offending dependency directly, rather than through a graph error."""
-        loader = MigrationLoader(None, replace_migrations=False)
+        """Report every offending dependency, not just the one the graph happens to reach first.
+
+        Building the graph raises on the first dangling node, so a tree with two of these shows the
+        second only after the first is fixed. `load=False` reads the migrations off disk without it.
+        """
+        loader = MigrationLoader(None, load=False)
+        loader.load_disk()
         available = set(loader.disk_migrations)
 
         missing = [
