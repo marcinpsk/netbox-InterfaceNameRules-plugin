@@ -8,6 +8,7 @@ that imports a submodule instead binds itself to an internal layout the package 
 
 import ast
 import pathlib
+import tempfile
 
 from django.test import SimpleTestCase
 
@@ -32,6 +33,13 @@ def _family_submodule_imports(path: pathlib.Path) -> set[str]:
     tree = ast.parse(path.read_text())
     found = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            # `import netbox_interface_name_rules.family.batch` binds the same internal layout.
+            for alias in node.names:
+                imported = alias.name.removeprefix("netbox_interface_name_rules.")
+                if imported.startswith(f"{FAMILY_PACKAGE}."):
+                    found.add(imported.split(".", 1)[1])
+            continue
         if not isinstance(node, ast.ImportFrom) or node.module is None:
             continue
         module = node.module.removeprefix("netbox_interface_name_rules.")
@@ -61,6 +69,17 @@ class FamilySeamTest(SimpleTestCase):
             set(),
             "Import these through `netbox_interface_name_rules.family`, or export them from it.",
         )
+
+    def test_a_direct_import_statement_reaches_past_the_seam_too(self):
+        """`import netbox_interface_name_rules.family.batch` binds the layout as a `from` import does."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "import netbox_interface_name_rules.family.batch\n"
+                "import netbox_interface_name_rules.family.conversion as conversion\n"
+            )
+
+            self.assertEqual(_family_submodule_imports(path), {"batch", "conversion"})
 
     def test_every_permitted_import_still_exists(self):
         """A permit that nothing uses any more must be removed, not left to grant something later."""

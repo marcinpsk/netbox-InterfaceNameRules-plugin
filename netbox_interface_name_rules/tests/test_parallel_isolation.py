@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from netbox_interface_name_rules.tests.parallel import (
+    _REDIS_SLOT_COUNT,
     MAX_PARALLEL_WORKERS,
     RESERVED_REDIS_DATABASES,
     isolated_redis_databases,
@@ -57,8 +58,8 @@ def _run_empty_pytest(*arguments, timeout=180):
 def test_a_worker_gets_one_database_and_two_redis_databases():
     assert isolated_test_database_name("test_inr", "gw3") == "test_inr_gw3"
     assert isolated_redis_databases("gw3") == (
-        RESERVED_REDIS_DATABASES + 3,
-        RESERVED_REDIS_DATABASES + 3 + MAX_PARALLEL_WORKERS,
+        RESERVED_REDIS_DATABASES + 4,
+        RESERVED_REDIS_DATABASES + 4 + _REDIS_SLOT_COUNT,
     )
 
 
@@ -80,16 +81,27 @@ def test_every_worker_pair_is_distinct():
     assert len(set(assigned)) == len(assigned)
 
 
+def test_a_serial_run_never_shares_a_redis_pair_with_a_worker():
+    """A serial session and an xdist worker on one Redis host must not share queues or cache."""
+    pairs = [
+        isolated_redis_databases(None),
+        *(isolated_redis_databases(f"gw{number}") for number in range(MAX_PARALLEL_WORKERS)),
+    ]
+    assigned = [database for pair in pairs for database in pair]
+
+    assert len(set(assigned)) == len(assigned)
+
+
 def test_a_serial_run_also_avoids_the_live_databases():
     assert isolated_test_database_name("test_inr", None) == "test_inr"
-    assert isolated_redis_databases(None) == (RESERVED_REDIS_DATABASES, RESERVED_REDIS_DATABASES + MAX_PARALLEL_WORKERS)
+    assert isolated_redis_databases(None) == (RESERVED_REDIS_DATABASES, RESERVED_REDIS_DATABASES + _REDIS_SLOT_COUNT)
 
 
 def test_database_name_stays_within_the_postgresql_limit():
-    database_name = isolated_test_database_name(f"test_{'x' * 70}", "gw6")
+    database_name = isolated_test_database_name(f"test_{'x' * 70}", "gw5")
 
     assert len(database_name) == 63
-    assert database_name.endswith("_gw6")
+    assert database_name.endswith("_gw5")
 
 
 def test_a_worker_above_the_ceiling_is_rejected():

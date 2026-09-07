@@ -15,6 +15,7 @@ nor join two blocks. Migrations are excluded, matching the ruff `per-file-ignore
 
 import json
 import pathlib
+import tempfile
 import tokenize
 from collections import Counter
 
@@ -50,8 +51,8 @@ def _own_line_comments(path):
     return found
 
 
-def _block_first_lines(path):
-    """Yield the first line of every run of two or more consecutive whole-line comments."""
+def _blocks(path):
+    """Yield every run of two or more consecutive whole-line comments, joined line by line."""
     comments = _own_line_comments(path)
     for row in sorted(comments):
         if row - 1 in comments:
@@ -60,7 +61,7 @@ def _block_first_lines(path):
         while row + length in comments:
             length += 1
         if length > 1:
-            yield comments[row]
+            yield "\n".join(comments[row + offset] for offset in range(length))
 
 
 def blocks_in_package():
@@ -69,9 +70,9 @@ def blocks_in_package():
     for path in sorted(PACKAGE.rglob("*.py")):
         if "migrations" in path.parts:
             continue
-        first_lines = list(_block_first_lines(path))
-        if first_lines:
-            found[str(path.relative_to(PACKAGE))] = sorted(Counter(first_lines).items())
+        blocks = list(_blocks(path))
+        if blocks:
+            found[str(path.relative_to(PACKAGE))] = sorted(Counter(blocks).items())
     return found
 
 
@@ -95,3 +96,11 @@ class CommentStyleTest(SimpleTestCase):
             [],
             "Move the explanation to the commit message and keep one line, or record the block.",
         )
+
+    def test_a_block_key_covers_every_line_of_the_run(self):
+        """The key holds the whole run, so a later line cannot change without a baseline update."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("# first line\n# second line\nvalue = 1\n")
+
+            self.assertEqual(list(_blocks(path)), ["# first line\n# second line"])

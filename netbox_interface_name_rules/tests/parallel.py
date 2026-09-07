@@ -5,20 +5,20 @@
 import re
 
 # A stock Redis server serves databases 0 to 15. The devcontainer's own rqworker holds the first
-# two, so the worker ceiling is what the rest divides into at two databases per worker.
+# two, so the rest divides into slots of one task and one cache database.
 REDIS_DATABASE_COUNT = 16
 RESERVED_REDIS_DATABASES = 2
 
-MAX_PARALLEL_WORKERS = (REDIS_DATABASE_COUNT - RESERVED_REDIS_DATABASES) // 2
+_REDIS_SLOT_COUNT = (REDIS_DATABASE_COUNT - RESERVED_REDIS_DATABASES) // 2
+# Slot 0 belongs to a serial run, so the worker ceiling is one below the slot count.
+MAX_PARALLEL_WORKERS = _REDIS_SLOT_COUNT - 1
 
 _POSTGRES_NAME_LIMIT = 63
 _WORKER_ID_PATTERN = re.compile(r"gw(?P<number>\d+)")
 
 
-def _worker_number(worker_id: str | None) -> int:
-    """Return the ordinal of *worker_id*, or 0 for a run that starts no xdist worker."""
-    if worker_id is None:
-        return 0
+def _worker_number(worker_id: str) -> int:
+    """Return the ordinal of *worker_id*."""
     match = _WORKER_ID_PATTERN.fullmatch(worker_id)
     if match is None:
         raise ValueError(f"Unsupported pytest worker ID: {worker_id!r}.")
@@ -35,6 +35,11 @@ def isolated_test_database_name(base_name: str, worker_id: str | None) -> str:
 
 
 def isolated_redis_databases(worker_id: str | None) -> tuple[int, int]:
-    """Return the private task and cache Redis databases for one pytest worker."""
-    tasks = RESERVED_REDIS_DATABASES + _worker_number(worker_id)
-    return tasks, tasks + MAX_PARALLEL_WORKERS
+    """Return the private task and cache Redis databases for one pytest worker.
+
+    A serial run takes slot 0, so ``pytest -n 0`` never shares queues or cache entries with an
+    xdist worker running against the same Redis host.
+    """
+    slot = 0 if worker_id is None else _worker_number(worker_id) + 1
+    tasks = RESERVED_REDIS_DATABASES + slot
+    return tasks, tasks + _REDIS_SLOT_COUNT
