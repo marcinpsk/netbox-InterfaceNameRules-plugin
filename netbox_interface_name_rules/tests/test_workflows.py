@@ -34,8 +34,9 @@ def _configured_addopts():
 def _required_distributions(*command_lines):
     """Return the pytest plugins the options in *command_lines* require."""
     text = " ".join(command_lines)
+    # An option ends at whitespace, at `=`, or at end of input; `--cov-report` is not `--cov`.
     return {
-        owner for option, owner in _OPTION_OWNERS.items() if re.search(rf"(?<!\S){re.escape(option)}(?!\S|=)", text)
+        owner for option, owner in _OPTION_OWNERS.items() if re.search(rf"(?<!\S){re.escape(option)}(?=[\s=]|$)", text)
     }
 
 
@@ -47,6 +48,26 @@ def _workflows_running_pytest():
         if re.search(r"^\s*(?:-\s*)?(?:uv run [^\n]*)?pytest\b", text, re.MULTILINE):
             found[path.name] = text
     return found
+
+
+class RequiredDistributionTest(SimpleTestCase):
+    """The option scan reads every spelling pytest accepts, including `--option=value`."""
+
+    def test_a_long_option_with_a_value_is_recognised(self):
+        """`addopts` uses `--cov=package`, so missing this form would disarm the whole check."""
+        self.assertEqual(_required_distributions("--cov=netbox_interface_name_rules"), {"pytest-cov"})
+        self.assertEqual(_required_distributions("--dist=loadscope"), {"pytest-xdist"})
+
+    def test_a_separated_value_is_recognised(self):
+        self.assertEqual(_required_distributions("--dist loadscope"), {"pytest-xdist"})
+        self.assertEqual(_required_distributions("-n auto"), {"pytest-xdist"})
+
+    def test_a_longer_option_that_merely_starts_the_same_is_not_a_match(self):
+        """`--cov-report` alone registers nothing; only `--cov` and `--no-cov` do."""
+        self.assertEqual(_required_distributions("--cov-report=term-missing"), set())
+
+    def test_the_configured_addopts_require_both_plugins(self):
+        self.assertEqual(_required_distributions(_configured_addopts()), {"pytest-cov", "pytest-xdist"})
 
 
 class WorkflowPytestPluginTest(SimpleTestCase):
