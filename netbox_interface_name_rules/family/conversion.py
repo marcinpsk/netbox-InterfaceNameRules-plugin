@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 STALE_REASON = "the flat family changed after it was scanned"
 INCOMPLETE_REASON = "this module carries no complete flat family"
 UNSUPPORTED_REASON = "this NetBox release cannot model channelized interfaces"
+TEMPLATE_ERROR_REASON = "the parent name template does not resolve for this module"
 
 
 def conversion_offered(rule) -> bool:
@@ -134,7 +135,18 @@ def plan_module_conversions(
         if rows is None or rows[0].pk in claimed:
             continue
         claimed.add(rows[0].pk)
-        parent_name, _channels = channelized_family_names(rule, base_name, variables)
+        try:
+            parent_name, _channels = channelized_family_names(rule, base_name, variables)
+        except (TypeError, ValueError) as exc:
+            # One family that cannot resolve must not lose the outcome the batch already accumulated.
+            plans.append(
+                replace(
+                    _conversion_plan(module, "", channel_names, rows, channelization_supported),
+                    precondition_status=FamilyStatus.FAILED,
+                    precondition_reason=f"{TEMPLATE_ERROR_REASON}: {exc}",
+                )
+            )
+            continue
         plans.append(
             _conversion_plan(
                 module,

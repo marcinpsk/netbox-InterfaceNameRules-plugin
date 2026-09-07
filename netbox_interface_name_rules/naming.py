@@ -16,6 +16,8 @@ _UNARY_OPERATORS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
+# A `str.format` field left over after substitution: a known name followed by `!conv` or `:spec`.
+_FORMAT_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\s*(?:![rsa]|:[^{}]*)$")
 
 
 def _evaluate_arithmetic(node):
@@ -120,6 +122,10 @@ def build_variables(module_bay, device=None):
 def evaluate_name_template(template: str, variables: dict) -> str:
     """Evaluate a name template with variable substitution and safe arithmetic.
 
+    A brace group holds either a documented variable name or an arithmetic expression over the
+    substituted values. This is not ``str.format``: braces nest for arithmetic, and ``str.format``
+    conversions (``!r``) and format specifications (``:>2``) are not part of the language.
+
     Variables are substituted before remaining brace-enclosed arithmetic is
     evaluated. True division is not allowed. Arithmetic results are converted
     to integers so interface names contain whole numbers.
@@ -133,6 +139,11 @@ def evaluate_name_template(template: str, variables: dict) -> str:
 
     def _eval_expr(match):
         expr = match.group(1).strip()
+        if _FORMAT_FIELD_RE.fullmatch(expr):
+            raise ValueError(
+                f"Name templates take a variable or an arithmetic expression, not str.format "
+                f"conversions and format specifications: {{{expr}}}"
+            )
         if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
             raise ValueError(f"Unsafe expression in name template: {expr}")
         try:

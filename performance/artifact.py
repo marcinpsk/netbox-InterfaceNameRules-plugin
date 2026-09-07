@@ -14,6 +14,8 @@ DATABASE_METRICS = (
     ("shared_read_blocks", "Shared reads"),
     ("wal_bytes", "WAL bytes"),
 )
+# PostgreSQL reports these as integer counters and the producer writes them through int().
+INTEGER_DATABASE_METRICS = frozenset({"statement_calls", "shared_hit_blocks", "shared_read_blocks", "wal_bytes"})
 
 
 def _invalid(source: str, path: str, expectation: str) -> ValueError:
@@ -119,8 +121,12 @@ def _validate_machine_time(value: Any, source: str, path: str) -> None:
         source,
         f"{path}.process_cpu",
     )
-    for field in ("median_ms", "p95_ms"):
-        _finite_number(_required(wall, field, source, f"{path}.wall"), source, f"{path}.wall.{field}")
+    wall_values = {
+        field: _finite_number(_required(wall, field, source, f"{path}.wall"), source, f"{path}.wall.{field}")
+        for field in ("median_ms", "p95_ms")
+    }
+    if wall_values["p95_ms"] < wall_values["median_ms"]:
+        raise _invalid(source, f"{path}.wall.p95_ms", f"must be at least the median {wall_values['median_ms']}")
     _finite_number(
         _required(process_cpu, "median_ms", source, f"{path}.process_cpu"),
         source,
@@ -155,8 +161,10 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
             f"{path}.database.totals.statement_calls",
         )
         for field, _label in DATABASE_METRICS:
-            if field != "statement_calls" and field in totals:
-                _finite_number(totals[field], source, f"{path}.database.totals.{field}")
+            if field == "statement_calls" or field not in totals:
+                continue
+            check = _non_negative_integer if field in INTEGER_DATABASE_METRICS else _finite_number
+            check(totals[field], source, f"{path}.database.totals.{field}")
         statements = _list(
             _required(database, "statements", source, f"{path}.database"),
             source,

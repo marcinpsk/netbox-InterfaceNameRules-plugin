@@ -201,6 +201,16 @@ class ConversionVerdictTest(ConversionTestCase):
 
         self.assertEqual(self._verdicts(), ())
 
+    def test_a_parent_template_that_cannot_resolve_refuses_only_its_family(self):
+        """An unresolved variable must not escape planning: the scan still returns, marked failed."""
+        self._switch_to_channelized(parent_name_template="et-{vc_position}/0/{bay_position}")
+
+        verdicts = self._verdicts()
+
+        self.assertEqual(len(verdicts), 1)
+        self.assertFalse(verdicts[0].convertible)
+        self.assertIn("vc_position", verdicts[0].reason)
+
     def test_a_flat_rule_offers_no_conversion(self):
         """The rule still describes the flat topology, so its families are not the wrong shape."""
         self.rule.breakout_mode = FLAT

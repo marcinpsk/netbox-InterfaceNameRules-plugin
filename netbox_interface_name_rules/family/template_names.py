@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Resolve current and historical NetBox interface-template names."""
+"""Resolve current and historical NetBox interface-template names.
+
+The refetch and template queries here use the default manager, and the block cache is keyed by
+primary key alone. Both hold because NetBox configures one database alias and no router.
+"""
 
 import contextlib
 import copy

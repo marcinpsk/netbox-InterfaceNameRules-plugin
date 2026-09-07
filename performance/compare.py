@@ -196,11 +196,15 @@ def _time_table(before, after):
 
 
 def _one_minute_loads(artifact):
-    """Return the 1-minute run-queue samples a run recorded, or None when it recorded none."""
+    """Return the 1-minute run-queue samples a run recorded, or None when it recorded none.
+
+    Samples come back at the precision the report prints, so the note can never claim a load the
+    table displays as the ceiling stayed below it.
+    """
     load = artifact["environment"].get("host_load")
     if not load:
         return None
-    return tuple(load[phase]["one_minute"] for phase in ("started", "finished"))
+    return tuple(round(load[phase]["one_minute"], 2) for phase in ("started", "finished"))
 
 
 def _load_span(artifact):

@@ -107,7 +107,9 @@ class InterfaceNameRule(NetBoxModel):
     the correct interface name, such as converter offset (CVR-X2-SFP)
     or breakout transceivers (QSFP+ 4x10G).
 
-    The name_template uses Python str.format() syntax with these variables:
+    The name_template substitutes these variables, then evaluates any brace group left over
+    as integer arithmetic. It is not str.format: conversions and format specifications are
+    not part of the language.
       {slot}               - Slot number from parent module bay position
       {bay_position}       - Position of the bay this module is installed into
       {bay_position_num}   - Numeric suffix of bay position (e.g., "swp1" → "1")

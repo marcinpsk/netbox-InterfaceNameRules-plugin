@@ -173,6 +173,37 @@ class XdistWorkerCapTest(unittest.TestCase):
             self.assertEqual(configuration.pytest_xdist_auto_num_workers(object()), 8)
 
 
+class PlanIdentityTest(unittest.TestCase):
+    """Equivalent plans group together, so runtime statistics must stay out of the identity."""
+
+    @staticmethod
+    def _identity_shape(plan):
+        spec = importlib.util.spec_from_file_location(
+            "interface_family_signal_performance",
+            _PROJECT_ROOT / "netbox_interface_name_rules" / "tests" / "signal_performance.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module._plan_identity_shape(plan)
+
+    def test_runtime_counters_never_reach_the_plan_identity(self):
+        """Two runs of one plan differ in rows, loops and buffers; they must still be one entry."""
+        structure = {"Node Type": "Seq Scan", "Relation Name": "dcim_interface", "Plan Rows": 4, "Total Cost": 1.5}
+        cold = {
+            **structure,
+            "Actual Rows": 4,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 0,
+            "Shared Read Blocks": 12,
+            "WAL Bytes": 480,
+            "Temp Read Blocks": 3,
+        }
+        warm = {**structure, "Actual Rows": 9, "Actual Loops": 2, "Shared Hit Blocks": 12, "WAL Bytes": 0}
+
+        self.assertEqual(self._identity_shape({"Plan": cold}), self._identity_shape({"Plan": warm}))
+        self.assertEqual(self._identity_shape({"Plan": cold}), {"Plan": structure})
+
+
 class ArtifactValidationTest(unittest.TestCase):
     """The comparison refuses an artifact it cannot interpret completely."""
 
@@ -236,6 +267,32 @@ class ArtifactValidationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "statement_calls"):
             compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_p95_below_the_median_is_rejected(self):
+        """A percentile can never fall below the median, so the artifact carries invalid timing."""
+        artifact = _timed_artifact({"wall": {"median_ms": 10.0, "p95_ms": 9.0}, "process_cpu": {"median_ms": 1.0}})
+
+        with self.assertRaisesRegex(ValueError, "p95_ms"):
+            compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_fractional_postgresql_counter_is_rejected(self):
+        """The producer writes these as int(); a fraction cannot have come from a real run."""
+        for field in ("shared_hit_blocks", "shared_read_blocks", "wal_bytes"):
+            artifact = _timed_artifact(_MACHINE_TIME)
+            artifact["scenarios"][0]["database"]["totals"][field] = 0.5
+
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ValueError, f"{field} must be a non-negative integer"),
+            ):
+                compare.validate_artifact(artifact, "before artifact")
+
+    def test_a_fractional_planner_cost_is_still_accepted(self):
+        """Only the counters are integral; the planner cost is a float by construction."""
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"]["totals"]["planner_total_cost"] = 12.5
+
+        compare.validate_artifact(artifact, "before artifact")
 
     def test_whitespace_only_normalized_sql_is_rejected(self):
         artifact = _timed_artifact(_MACHINE_TIME)
@@ -395,6 +452,14 @@ class MachineTimeNoteTest(unittest.TestCase):
     def _note(self, before_load, after_load):
         settings = {"work_mem": "4MB"}
         return compare._machine_time_note(_artifact(settings, before_load), _artifact(settings, after_load))
+
+    def test_a_load_that_displays_as_the_ceiling_withholds_the_claim(self):
+        """1.999 prints as 2.00, so the note must not claim every load stayed below 2.00."""
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        boundary = {"started": {"one_minute": 1.999}, "finished": {"one_minute": 0.9}}
+
+        self.assertEqual(self._note(boundary, quiet), compare._MACHINE_TIME_UNPROVEN_NOTE)
+        self.assertEqual(compare._load_span(_artifact({"work_mem": "4MB"}, boundary)), "2.00 to 0.90")
 
     def test_runs_under_the_ceiling_are_called_comparable(self):
         before = {"started": {"one_minute": 1.10}, "finished": {"one_minute": 1.18}}

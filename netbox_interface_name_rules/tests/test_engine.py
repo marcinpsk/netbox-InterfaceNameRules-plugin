@@ -80,6 +80,14 @@ class EvaluateNameTemplateTest(TestCase):
                 {},
             )
 
+    def test_a_format_spec_field_names_the_unsupported_construct(self):
+        """The template language is substitution plus arithmetic, so `str.format` fields must say so."""
+        for template in ("Ethernet{channel:>2}", "Ethernet{channel!r}"):
+            with self.subTest(template=template), self.assertRaises(ValueError) as raised:
+                evaluate_name_template(template, {"channel": "1"})
+
+            self.assertIn("conversions and format specifications", str(raised.exception))
+
     def test_division_expression(self):
         result = evaluate_name_template(
             "port{10 // 3}",
