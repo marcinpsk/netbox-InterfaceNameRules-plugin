@@ -81,7 +81,12 @@ addopts = "-n auto --dist loadscope --reuse-db --cov=netbox_interface_name_rules
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "D", "C901", "I", "RET", "UP"]
+select = [
+    "E", "F", "W", "D", "C901", "I", "RET", "UP",
+    "A", "ASYNC", "B", "BLE", "C4", "DJ", "DTZ", "ERA", "EXE", "FLY", "FURB", "G",
+    "ICN", "INP", "INT", "ISC", "LOG", "N", "PERF", "PGH", "PIE", "PLC", "PLE", "PLW",
+    "PTH", "Q", "RSE", "RUF", "S", "SIM", "SLOT", "T10", "T20", "TC", "TRY", "YTT",
+]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "F403",   # star imports
@@ -93,19 +98,36 @@ ignore = [
     "D107",   # missing docstring in __init__
     "D203",   # 1 blank line before class docstring (conflicts with D211)
     "D213",   # multi-line summary second line (conflicts with D212)
+    "PLC0415",  # lazy imports are deliberate: Django app loading order
+    "TRY003",   # the message in a raise is the operator wording
+    "RUF012",   # Django Meta and table class attributes are a framework convention
 ]
+
+# `×` in breakout notation (4×25G) and `–` in prose are deliberate, not homoglyphs.
+allowed-confusables = ["×", "–"]
 
 [tool.ruff.lint.mccabe]
 # Flag errors (`C901`) whenever the complexity level exceeds 15.
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-"*/migrations/*.py" = ["D"]
-"*/tests/*.py" = ["D"]
-".devcontainer/**" = ["D"]
-".devcontainer/scripts/test-e2e.py" = ["C901"]
+"**/__init__.py" = ["F401"]
+"**/migrations/*.py" = ["D"]
+"**/tests/*.py" = ["D", "N806", "S101", "S105", "S106", "S603", "S607", "SIM117", "B018", "PTH", "T20"]
+# Confusable characters are the fixture under test, not a mistake.
+"**/tests/test_regex.py" = ["RUF001"]
+# The module header draws the signal call graph; an inline noqa would break the
+# comment-block baseline in test_comment_style.py.
+"netbox_interface_name_rules/signals.py" = ["ERA001"]
+# Dev-only scripts: settings modules are loaded by path, not imported as a package.
+".devcontainer/**" = [
+    "D", "B904", "BLE001", "INP001", "PTH", "S101", "S105", "S108", "S110", "S310",
+    "S603", "S607", "T20", "TRY301",
+]
 ".devcontainer/scripts/load-sample-data.py" = ["C901"]
+".devcontainer/scripts/test-e2e.py" = ["C901"]
+"performance/**" = ["T20"]
+"scripts/**" = ["T20", "S101"]
 
 [tool.coverage.run]
 source = ["netbox_interface_name_rules"]

@@ -24,7 +24,7 @@ class InterfaceNameRulesConfig(PluginConfig):
     def ready(self):
         """Connect signal handlers after all apps are loaded."""
         super().ready()
-        from . import signals  # noqa: F401 — registers post_save handler
+        from . import signals  # registers the post_save handler
 
 
 config = InterfaceNameRulesConfig
