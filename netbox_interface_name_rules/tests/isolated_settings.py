@@ -24,22 +24,22 @@ os.environ["REDIS_DATABASE"] = str(_tasks_database)
 os.environ["REDIS_CACHE_DATABASE"] = str(_cache_database)
 os.environ.setdefault("NETBOX_CONFIGURATION", "netbox_interface_name_rules.tests.netbox_configuration")
 
-from netbox.settings import *  # noqa: E402, F403
+from netbox.settings import *  # noqa: E402
 
 _database_name = os.environ.get("TEST_DB_NAME", "")
 if not _database_name.startswith("test_"):
     raise ValueError("TEST_DB_NAME must be set and must start with 'test_'.")
 
 # The worker suffix is applied in the conftest fixture, after xdist resolves the worker identity.
-DATABASES["default"].setdefault("TEST", {})["NAME"] = _database_name  # noqa: F405
+DATABASES["default"].setdefault("TEST", {})["NAME"] = _database_name
 
 # Set here, not only through the environment: a configuration module that ignores it must not win.
-for _queue in RQ_QUEUES.values():  # noqa: F405
+for _queue in RQ_QUEUES.values():
     _queue["HOST"] = _redis_host
     _queue["DB"] = _tasks_database
 
-CACHES["default"]["LOCATION"] = isolated_cache_location(  # noqa: F405
-    CACHES["default"]["LOCATION"],  # noqa: F405
+CACHES["default"]["LOCATION"] = isolated_cache_location(
+    CACHES["default"]["LOCATION"],
     _redis_host,
     _cache_database,
 )

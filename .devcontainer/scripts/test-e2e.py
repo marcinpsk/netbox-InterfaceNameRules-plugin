@@ -22,6 +22,7 @@ Tests:
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -114,10 +115,8 @@ def _poll_for_text(page, base_url: str, path: str, text: str, timeout: float = 8
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         page.goto(f"{base_url}{path}")
-        try:
+        with contextlib.suppress(Exception):
             page.wait_for_load_state("networkidle", timeout=3000)
-        except Exception:
-            pass
         if page.locator(f"text={text}").count() > 0:
             return True
         time.sleep(0.5)
@@ -240,10 +239,9 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 found = False
                 while time.monotonic() < deadline:
                     page.goto(f"{base_url}/dcim/devices/{DEVICE_ID}/interfaces/")
-                    try:
+                    # A networkidle timeout is fine; proceed to check the locator.
+                    with contextlib.suppress(Exception):
                         page.wait_for_load_state("networkidle", timeout=3000)
-                    except Exception:
-                        pass  # timeout is fine; proceed to check locator
                     if page.locator(f"text={expected_iface}").count() > 0:
                         found = True
                         break
@@ -415,14 +413,12 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             except Exception as e:
                 fail("VC: position change signal", e)
                 # Ensure vc_position is restored even on failure
-                try:
+                with contextlib.suppress(Exception):
                     _api_patch(
                         f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/",
                         {"vc_position": 1},
                         api_headers,
                     )
-                except Exception:
-                    pass
 
             # ── Test: module type change → signal re-renames interface ───────
             try:
@@ -664,14 +660,12 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             except Exception as e:
                 fail("VC: re-membership signal", e)
                 # Ensure vc-stack-2 is restored to VC at position 2 even on failure
-                try:
+                with contextlib.suppress(Exception):
                     _api_patch(
                         f"{base_url}/api/dcim/devices/{VC_DEVICE_ID_2}/",
                         {"virtual_chassis": VC_CHASSIS_ID, "vc_position": 2},
                         api_headers,
                     )
-                except Exception:
-                    pass
             finally:
                 # Clean up vc-stack-2 modules
                 try:
@@ -722,7 +716,7 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                     _stale = json.loads(resp.read())
                 for _s in _stale.get("results", []):
                     if _s.get("module") is None:
-                        try:
+                        with contextlib.suppress(Exception):
                             _no_proxy_opener.open(
                                 urllib.request.Request(
                                     f"{base_url}/api/dcim/interfaces/{_s['id']}/",
@@ -731,8 +725,6 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                                 ),
                                 timeout=API_TIMEOUT,
                             )
-                        except Exception:
-                            pass
 
                 # Create a device-level interface on vc-stack-1 (module=None)
                 _iface_payload = json.dumps({"device": VC_DEVICE_ID, "name": "Gi0/1", "type": "1000base-t"}).encode()
@@ -789,10 +781,8 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
             except Exception as e:
                 fail("VC: device-level interface rename", e)
                 # Ensure vc_position is restored on failure
-                try:
+                with contextlib.suppress(Exception):
                     _api_patch(f"{base_url}/api/dcim/devices/{VC_DEVICE_ID}/", {"vc_position": 1}, api_headers)
-                except Exception:
-                    pass
             finally:
                 # Clean up: delete the test interface and rule
                 for _url, _item_id in [
@@ -801,13 +791,11 @@ def run_tests(base_url: str) -> tuple[list[str], list[tuple[str, str]]]:
                 ]:
                     if _item_id is None:
                         continue
-                    try:
+                    with contextlib.suppress(Exception):
                         _no_proxy_opener.open(
                             urllib.request.Request(f"{_url}{_item_id}/", headers=api_headers, method="DELETE"),
                             timeout=API_TIMEOUT,
                         )
-                    except Exception:
-                        pass
 
             print("\n  [cleanup] removing VC test module and rule...")
 
