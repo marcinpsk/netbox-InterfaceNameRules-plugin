@@ -15,6 +15,7 @@ from netbox_interface_name_rules.tests.parallel import (
     _REDIS_SLOT_COUNT,
     MAX_PARALLEL_WORKERS,
     RESERVED_REDIS_DATABASES,
+    isolated_cache_location,
     isolated_redis_databases,
     isolated_test_database_name,
 )
@@ -95,6 +96,13 @@ def test_a_serial_run_never_shares_a_redis_pair_with_a_worker():
 def test_a_serial_run_also_avoids_the_live_databases():
     assert isolated_test_database_name("test_inr", None) == "test_inr"
     assert isolated_redis_databases(None) == (RESERVED_REDIS_DATABASES, RESERVED_REDIS_DATABASES + _REDIS_SLOT_COUNT)
+
+
+def test_the_cache_location_keeps_everything_but_the_host_and_database():
+    """Rewriting the URL must not drop the port, the scheme or the credentials a deployment sets."""
+    assert isolated_cache_location("redis://localhost:6379/1", "redis", 11) == "redis://redis:6379/11"
+    assert isolated_cache_location("rediss://user:pw@old:6380/1", "new", 4) == "rediss://user:pw@new:6380/4"
+    assert isolated_cache_location("redis://localhost/1", "redis", 9) == "redis://redis/9"
 
 
 def test_database_name_stays_within_the_postgresql_limit():

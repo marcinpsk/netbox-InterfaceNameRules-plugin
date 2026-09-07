@@ -9,7 +9,7 @@ of Redis databases and a private PostgreSQL database instead of the defaults.
 
 import os
 
-from netbox_interface_name_rules.tests.parallel import isolated_redis_databases
+from netbox_interface_name_rules.tests.parallel import isolated_cache_location, isolated_redis_databases
 
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER")
 _tasks_database, _cache_database = isolated_redis_databases(_worker_id)
@@ -32,3 +32,14 @@ if not _database_name.startswith("test_"):
 
 # The worker suffix is applied in the conftest fixture, after xdist resolves the worker identity.
 DATABASES["default"].setdefault("TEST", {})["NAME"] = _database_name  # noqa: F405
+
+# Set here, not only through the environment: a configuration module that ignores it must not win.
+for _queue in RQ_QUEUES.values():  # noqa: F405
+    _queue["HOST"] = _redis_host
+    _queue["DB"] = _tasks_database
+
+CACHES["default"]["LOCATION"] = isolated_cache_location(  # noqa: F405
+    CACHES["default"]["LOCATION"],  # noqa: F405
+    _redis_host,
+    _cache_database,
+)

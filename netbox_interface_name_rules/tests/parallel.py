@@ -3,6 +3,7 @@
 """Isolation helpers for parallel pytest workers."""
 
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 # A stock Redis server serves databases 0 to 15. The devcontainer's own rqworker holds the first
 # two, so the rest divides into slots of one task and one cache database.
@@ -32,6 +33,14 @@ def isolated_test_database_name(base_name: str, worker_id: str | None) -> str:
     """Return a PostgreSQL-safe test database name for one pytest worker."""
     suffix = f"_{worker_id}" if worker_id else ""
     return f"{base_name[: _POSTGRES_NAME_LIMIT - len(suffix)]}{suffix}"
+
+
+def isolated_cache_location(location: str, host: str, database: int) -> str:
+    """Return *location* pointed at *host* and *database*, keeping scheme, credentials and port."""
+    parsed = urlsplit(location)
+    netloc = f"{parsed.username}:{parsed.password}@" if parsed.username or parsed.password else ""
+    netloc += host if parsed.port is None else f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, f"/{database}", parsed.query, parsed.fragment))
 
 
 def isolated_redis_databases(worker_id: str | None) -> tuple[int, int]:
