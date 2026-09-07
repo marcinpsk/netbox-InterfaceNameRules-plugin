@@ -38,6 +38,11 @@ jobs:
       - name: Audit the workflows
         run: pre-commit run --all-files zizmor
 
+      - name: Check the release configuration
+        run: |
+          uv pip install --system --only-binary=:all: python-semantic-release==10.6.2
+          python .github/scripts/check_release_config.py
+
       - name: Run devcontainer script tests
         run: |
           bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
