@@ -183,7 +183,10 @@ class PlanIdentityTest(unittest.TestCase):
             _PROJECT_ROOT / "netbox_interface_name_rules" / "tests" / "signal_performance.py",
         )
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except ImportError as exc:  # the harness needs the NetBox release it measures
+            raise unittest.SkipTest(f"the performance harness does not import here: {exc}") from exc
         return module._plan_identity_shape(plan)
 
     def test_runtime_counters_never_reach_the_plan_identity(self):
