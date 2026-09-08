@@ -62,12 +62,13 @@ committed callback. Direct-callback scenarios isolate the deferred callback for 
 the complete model-save scenarios first when deciding whether the refactor changed production-path
 performance.
 
-Two limits apply to both sides of every comparison equally, so they do not affect a delta:
+Two measurement conditions apply to both sides of every comparison:
 
-- The complete model-save scenarios run the committed callback through
-  `captureOnCommitCallbacks(execute=True)`, which fires the callback without committing the test
-  case's enclosing transaction. The callback therefore reads rows production would have committed
-  first. Absolute statement counts carry this difference; the before/after delta does not.
+- The complete model-save scenarios use `TransactionTestCase` and explicit `transaction.atomic()`
+  blocks. Leaving each block commits the model save and runs the deferred callback against committed
+  rows. Absolute statement counts include the callback SQL and transaction bookkeeping captured
+  around this boundary. Production transaction boundaries can differ, so compare before/after runs
+  with the same harness.
 - `auto_explain` stays loaded on the connection while the machine-time samples are taken.
   `auto_explain.log_min_duration = -1` suppresses plan logging, but the module's executor hooks
   remain installed, so wall and process-CPU numbers include that fixed overhead. This is one more
