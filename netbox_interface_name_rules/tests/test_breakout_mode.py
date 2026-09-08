@@ -57,7 +57,7 @@ from netbox_interface_name_rules.views import RulePreview
 FLAT = "flat"
 CHANNELIZED = "channelized"
 
-TEST_PASSWORD = "testpass123"  # test credential only
+TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 User = get_user_model()
 
