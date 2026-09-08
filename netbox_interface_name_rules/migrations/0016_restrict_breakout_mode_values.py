@@ -4,6 +4,16 @@
 
 from django.db import migrations, models
 
+FLAT = "flat"
+CHANNELIZED = "channelized"
+
+
+def normalize_breakout_modes(apps, schema_editor):
+    """Replace unsupported stored breakout modes before validating the constraint."""
+    rule_model = apps.get_model("netbox_interface_name_rules", "InterfaceNameRule")
+    rules = rule_model.objects.using(schema_editor.connection.alias)
+    rules.exclude(breakout_mode__in=(FLAT, CHANNELIZED)).update(breakout_mode=FLAT)
+
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -11,6 +21,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(normalize_breakout_modes, migrations.RunPython.noop),
         migrations.RemoveConstraint(
             model_name="interfacenamerule",
             name="interfacenamerule_breakout_topology_check",

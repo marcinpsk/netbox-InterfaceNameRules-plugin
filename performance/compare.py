@@ -259,7 +259,9 @@ def main(argv):
     validate_artifact(before, argv[1])
     validate_artifact(after, argv[2])
     destination = _artifact_path(argv[3], must_exist=False)
-    if destination in (before_path, after_path):
+    if destination in (before_path, after_path) or (
+        destination.exists() and any(destination.samefile(path) for path in (before_path, after_path))
+    ):
         raise SystemExit("The destination must differ from both input artifacts")
     before_scenarios, after_scenarios = _scenarios(before), _scenarios(after)
 

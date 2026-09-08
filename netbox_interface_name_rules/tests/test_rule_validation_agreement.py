@@ -13,7 +13,7 @@ from pathlib import Path
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, migrations, transaction
 from django.test import TestCase, override_settings
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -249,6 +249,11 @@ class RuleNormalizationMigrationTest(TestCase):
                 imports = []
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):
+                        self.assertEqual(
+                            node.level,
+                            0,
+                            f"{migration.name} uses a relative import; migrations must not use relative imports",
+                        )
                         imports.append(node.module)
                     elif isinstance(node, ast.Import):
                         imports.extend(alias.name for alias in node.names)
@@ -280,6 +285,27 @@ class RuleNormalizationMigrationTest(TestCase):
                     sql = constraint.remove_sql(InterfaceNameRule, connection.schema_editor())
                 cursor.execute(str(sql))
         return migration
+
+    def test_it_repairs_unsupported_breakout_modes_before_adding_the_constraint(self):
+        self._set_constraints(enabled=False)
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="Gi{vc_position}/{port}",
+            breakout_mode="bogus",
+        )
+        migration = import_module("netbox_interface_name_rules.migrations.0016_restrict_breakout_mode_values")
+        with override_settings(DATABASE_ROUTERS=[RefuseImplicitMigrationDatabase()]):
+            for operation in migration.Migration.operations:
+                if isinstance(operation, migrations.RunPython):
+                    operation.code(global_apps, connection.schema_editor())
+                elif isinstance(operation, migrations.AddConstraint):
+                    rule.refresh_from_db(using=connection.alias)
+                    self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                        cursor.execute(
+                            str(operation.constraint.create_sql(InterfaceNameRule, connection.schema_editor()))
+                        )
 
     def test_it_repairs_every_row_the_constraints_now_refuse(self):
         migration = self._set_constraints(enabled=False)

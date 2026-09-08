@@ -248,6 +248,21 @@ class ComparisonDestinationTest(unittest.TestCase):
                     self.assertEqual(before.read_text(), contents)
                     self.assertEqual(after.read_text(), contents)
 
+    def test_main_refuses_a_hard_link_to_either_input(self):
+        for target in ("before.json", "after.json"):
+            with self.subTest(target=target), TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+                root = Path(directory)
+                before, after = root / "before.json", root / "after.json"
+                contents = json.dumps(_timed_artifact(_MACHINE_TIME)).encode()
+                before.write_bytes(contents)
+                after.write_bytes(contents)
+                destination = root / "report.md"
+                destination.hardlink_to(root / target)
+                with self.assertRaisesRegex(SystemExit, "destination.*input"):
+                    compare.main(["compare.py", str(before), str(after), str(destination)])
+                self.assertEqual(before.read_bytes(), contents)
+                self.assertEqual(after.read_bytes(), contents)
+
 
 class ArtifactValidationTest(unittest.TestCase):
     """The comparison refuses an artifact it cannot interpret completely."""
