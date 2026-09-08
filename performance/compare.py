@@ -252,11 +252,15 @@ def main(argv):
     """Write the comparison of two artifacts to a Markdown file."""
     if len(argv) != 4:
         raise SystemExit(__doc__)
-    before = json.loads(_artifact_path(argv[1], must_exist=True).read_text())
-    after = json.loads(_artifact_path(argv[2], must_exist=True).read_text())
+    before_path = _artifact_path(argv[1], must_exist=True)
+    before = json.loads(before_path.read_text())
+    after_path = _artifact_path(argv[2], must_exist=True)
+    after = json.loads(after_path.read_text())
     validate_artifact(before, argv[1])
     validate_artifact(after, argv[2])
     destination = _artifact_path(argv[3], must_exist=False)
+    if destination in (before_path, after_path):
+        raise SystemExit("The destination must differ from both input artifacts")
     before_scenarios, after_scenarios = _scenarios(before), _scenarios(after)
 
     database_lines, regressions = _database_table(before_scenarios, after_scenarios)

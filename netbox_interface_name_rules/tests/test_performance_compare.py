@@ -4,10 +4,12 @@
 
 import fnmatch
 import importlib.util
+import json
 import re
 import tomllib
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -205,6 +207,46 @@ class PlanIdentityTest(unittest.TestCase):
 
         self.assertEqual(self._identity_shape({"Plan": cold}), self._identity_shape({"Plan": warm}))
         self.assertEqual(self._identity_shape({"Plan": cold}), {"Plan": structure})
+
+
+class ComparisonDestinationTest(unittest.TestCase):
+    def test_main_validates_inputs_before_the_destination(self):
+        with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+            before, after = Path(directory) / "before.json", Path(directory) / "after.json"
+            before.write_text(json.dumps(_timed_artifact(_MACHINE_TIME)))
+            after.write_text(json.dumps(_artifact({})))
+            with self.assertRaisesRegex(ValueError, "scenarios"):
+                compare.main(["compare.py", str(before), str(after), str(before)])
+
+    def test_main_writes_a_separate_report(self):
+        with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+            root = Path(directory)
+            before, after, destination = root / "before.json", root / "after.json", root / "report.md"
+            contents = json.dumps(_timed_artifact(_MACHINE_TIME))
+            before.write_text(contents)
+            after.write_text(contents)
+            compare.main(["compare.py", str(before), str(after), str(destination)])
+            self.assertIn("# Automatic naming performance comparison", destination.read_text())
+            self.assertEqual(before.read_text(), contents)
+            self.assertEqual(after.read_text(), contents)
+
+    def test_main_refuses_to_overwrite_either_input(self):
+        for target in ("before.json", "after.json"):
+            for symlink in (False, True):
+                with self.subTest(target=target, symlink=symlink), TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+                    root = Path(directory)
+                    before, after = root / "before.json", root / "after.json"
+                    contents = json.dumps(_timed_artifact(_MACHINE_TIME))
+                    before.write_text(contents)
+                    after.write_text(contents)
+                    destination = root / target
+                    if symlink:
+                        destination = root / "report.md"
+                        destination.symlink_to(root / target)
+                    with self.assertRaisesRegex(SystemExit, "destination.*input"):
+                        compare.main(["compare.py", str(before), str(after), str(destination)])
+                    self.assertEqual(before.read_text(), contents)
+                    self.assertEqual(after.read_text(), contents)
 
 
 class ArtifactValidationTest(unittest.TestCase):
