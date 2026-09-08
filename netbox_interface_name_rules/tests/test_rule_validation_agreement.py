@@ -6,13 +6,15 @@ Every combination below is one clean() rejects or silently rewrites. A queryset 
 clean(), so each one must also be unable to reach the table.
 """
 
+import ast
 from importlib import import_module
+from pathlib import Path
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -182,6 +184,22 @@ class RuleValidationAgreementTest(TestCase):
                 with self.assertRaises(IntegrityError), transaction.atomic():
                     InterfaceNameRule.objects.bulk_create([InterfaceNameRule(**fields)])
 
+    def test_save_refuses_an_unknown_breakout_mode(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.create(
+                module_type=self.module_type,
+                name_template="xe-0/0/{bay_position}",
+                breakout_mode="bogus",
+            )
+
+    def test_queryset_update_refuses_an_unknown_breakout_mode(self):
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}",
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.filter(pk=rule.pk).update(breakout_mode="bogus")
+
     def test_a_valid_rule_of_each_shape_still_saves(self):
         """The constraints must not refuse the rules the plugin is built to store."""
         InterfaceNameRule.objects.create(
@@ -205,6 +223,16 @@ class RuleValidationAgreementTest(TestCase):
         self.assertEqual(InterfaceNameRule.objects.count(), 3)
 
 
+class RefuseImplicitMigrationDatabase:
+    """Refuse migration queries that do not select a database explicitly."""
+
+    def db_for_read(self, model, **hints):
+        raise AssertionError("Migration must select the schema editor database")
+
+    def db_for_write(self, model, **hints):
+        raise AssertionError("Migration must select the schema editor database")
+
+
 class RuleNormalizationMigrationTest(TestCase):
     """The 0015 data migration must repair the rows that predate its constraints."""
 
@@ -212,6 +240,29 @@ class RuleNormalizationMigrationTest(TestCase):
         "interfacenamerule_module_type_mode_check",
         "interfacenamerule_breakout_topology_check",
     )
+
+    def test_migrations_have_no_live_application_imports(self):
+        migrations = Path(__file__).resolve().parents[1] / "migrations"
+        for migration in sorted(migrations.rglob("*.py")):
+            with self.subTest(migration=migration.name):
+                tree = ast.parse(migration.read_text())
+                imports = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        imports.append(node.module)
+                    elif isinstance(node, ast.Import):
+                        imports.extend(alias.name for alias in node.names)
+                self.assertFalse(
+                    [name for name in imports if name and name.startswith("netbox_interface_name_rules")],
+                    f"{migration.name} imports live application code",
+                )
+
+    def test_router_refuses_queries_without_an_explicit_database(self):
+        with override_settings(DATABASE_ROUTERS=[RefuseImplicitMigrationDatabase()]):
+            with self.assertRaisesMessage(AssertionError, "Migration must select the schema editor database"):
+                InterfaceNameRule.objects.exists()
+            with self.assertRaisesMessage(AssertionError, "Migration must select the schema editor database"):
+                InterfaceNameRule.objects.filter(pk=-1).update(enabled=False)
 
     def _set_constraints(self, enabled):
         """Drop or restore the check constraints inside this test's transaction."""
@@ -257,7 +308,8 @@ class RuleNormalizationMigrationTest(TestCase):
             ]
         )
 
-        migration.normalize_invalid_rules(global_apps, None)
+        with override_settings(DATABASE_ROUTERS=[RefuseImplicitMigrationDatabase()]):
+            migration.normalize_invalid_rules(global_apps, connection.schema_editor())
 
         device_rule.refresh_from_db()
         channelless.refresh_from_db()

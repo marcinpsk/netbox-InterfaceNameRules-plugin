@@ -371,7 +371,8 @@ class InterfaceNameRule(NetBoxModel):
                 # The implications _validate_breakout_topology() enforces over enum and integer
                 # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
                 condition=(
-                    (
+                    models.Q(breakout_mode__in=[BreakoutModeChoices.FLAT, BreakoutModeChoices.CHANNELIZED])
+                    & (
                         models.Q(applies_to_device_interfaces=False)
                         | ~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED)
                     )
