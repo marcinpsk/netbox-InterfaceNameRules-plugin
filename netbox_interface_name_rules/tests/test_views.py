@@ -21,7 +21,7 @@ from netbox_interface_name_rules.tests.helpers import make_device
 
 User = get_user_model()
 
-TEST_PASSWORD = "testpass123"
+TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 
 class ViewTestBase(TestCase):

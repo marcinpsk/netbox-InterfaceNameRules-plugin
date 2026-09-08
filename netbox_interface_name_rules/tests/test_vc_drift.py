@@ -72,7 +72,7 @@ CHANNELIZED = BreakoutModeChoices.CHANNELIZED
 
 # Every fixture spelling a name NetBox resolved from the token needs the release that resolves it:
 # on 4.5 and older the token stays literal in the interface name and the drift cannot even occur.
-REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"
+REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.
 
 
 def _token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TYPE):

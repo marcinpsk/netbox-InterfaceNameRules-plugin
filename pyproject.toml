@@ -117,7 +117,7 @@ max-complexity = 15
 "netbox_interface_name_rules/{__init__,choices,filters,forms,models,tables,views}.py" = ["RUF012"]
 # Serializer Meta fields are a framework contract.
 "netbox_interface_name_rules/api/serializers.py" = ["RUF012"]
-"**/tests/*.py" = ["D", "N806", "S101", "S105", "S106", "S603", "S607", "SIM117", "B018", "PTH", "T20"]
+"**/tests/*.py" = ["D", "N806", "S101", "SIM117", "B018", "PTH", "T20"]
 # Confusable characters are the fixture under test, not a mistake.
 "**/tests/test_regex.py" = ["RUF001"]
 # The module header draws the signal call graph; an inline noqa would break the
@@ -125,7 +125,7 @@ max-complexity = 15
 "netbox_interface_name_rules/signals.py" = ["ERA001"]
 # Dev-only scripts: settings modules are loaded by path, not imported as a package.
 ".devcontainer/**" = [
-    "D", "B904", "BLE001", "INP001", "PTH", "S101", "S105", "S108", "S110", "S310",
+    "D", "B904", "BLE001", "INP001", "PTH", "S101", "S105", "S110", "S310",
     "S603", "S607", "T20", "TRY301",
 ]
 ".devcontainer/scripts/load-sample-data.py" = ["C901"]

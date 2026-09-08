@@ -508,8 +508,8 @@ def _auto_explain_notices():
 
 def _git_revision(path: Path) -> str | None:
     """Return the source revision for a checkout, if the checkout metadata is present."""
-    result = subprocess.run(
-        ["git", "-C", str(path), "rev-parse", "HEAD"],
+    result = subprocess.run(  # noqa: S603 - Fixed git arguments inspect a local checkout.
+        ["git", "-C", str(path), "rev-parse", "HEAD"],  # noqa: S607 - Use git from the test environment PATH.
         check=False,
         capture_output=True,
         text=True,
