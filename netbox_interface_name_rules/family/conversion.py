@@ -139,13 +139,14 @@ def plan_module_conversions(
             parent_name, _channels = channelized_family_names(rule, base_name, variables)
         except (TypeError, ValueError) as exc:
             # One family that cannot resolve must not lose the outcome the batch already accumulated.
-            plans.append(
-                replace(
-                    _conversion_plan(module, "", channel_names, rows, channelization_supported),
+            plan = _conversion_plan(module, "", channel_names, rows, channelization_supported)
+            if channelization_supported:
+                plan = replace(
+                    plan,
                     precondition_status=FamilyStatus.FAILED,
                     precondition_reason=f"{TEMPLATE_ERROR_REASON}: {exc}",
                 )
-            )
+            plans.append(plan)
             continue
         plans.append(
             _conversion_plan(

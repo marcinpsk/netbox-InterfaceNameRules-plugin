@@ -244,6 +244,20 @@ class ConversionVerdictTest(ConversionTestCase):
 
         self.assertEqual(self._verdicts(), ())
 
+    def test_template_error_preserves_unsupported_status(self):
+        self._switch_to_channelized(parent_name_template="et-{vc_position}/0/{bay_position}")
+        with patch("netbox_interface_name_rules.family.conversion.supports_channelization", return_value=False):
+            plans = plan_module_conversions(
+                self.module,
+                self.rule,
+                build_variables(self.bay, device=self.device),
+                list(Interface.objects.filter(module=self.module)),
+            )
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0].precondition_status, FamilyStatus.UNSUPPORTED)
+        self.assertIn("cannot model channelized interfaces", plans[0].precondition_reason)
+
     def test_an_unsupported_release_reports_the_family_explicitly(self):
         """Capability refusal is a family result, not an empty scan or batch."""
         base = self._iface("xe-0/0/3:0")
