@@ -38,7 +38,11 @@ def isolated_test_database_name(base_name: str, worker_id: str | None) -> str:
 def isolated_cache_location(location: str, host: str, database: int) -> str:
     """Return *location* pointed at *host* and *database*, keeping scheme, credentials and port."""
     parsed = urlsplit(location)
-    netloc = f"{parsed.username}:{parsed.password}@" if parsed.username or parsed.password else ""
+    netloc = parsed.username or ""
+    if parsed.password is not None:
+        netloc += f":{parsed.password}"
+    if parsed.username is not None:
+        netloc += "@"
     netloc += host if parsed.port is None else f"{host}:{parsed.port}"
     return urlunsplit((parsed.scheme, netloc, f"/{database}", parsed.query, parsed.fragment))
 

@@ -102,6 +102,10 @@ def test_the_cache_location_keeps_everything_but_the_host_and_database():
     """Rewriting the URL must not drop the port, the scheme or the credentials a deployment sets."""
     assert isolated_cache_location("redis://localhost:6379/1", "redis", 11) == "redis://redis:6379/11"
     assert isolated_cache_location("rediss://user:pw@old:6380/1", "new", 4) == "rediss://user:pw@new:6380/4"
+    assert isolated_cache_location("redis://user@old:6380/1", "new", 4) == "redis://user@new:6380/4"
+    assert isolated_cache_location("redis://:pw@old:6380/1", "new", 4) == "redis://:pw@new:6380/4"
+    assert isolated_cache_location("redis://us%40er@old:6380/1", "new", 4) == "redis://us%40er@new:6380/4"
+    assert isolated_cache_location("rediss://user:p%3Aw@old:6380/1", "new", 4) == "rediss://user:p%3Aw@new:6380/4"
     assert isolated_cache_location("redis://localhost/1", "redis", 9) == "redis://redis/9"
 
 
