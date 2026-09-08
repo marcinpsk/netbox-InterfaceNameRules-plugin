@@ -13,6 +13,7 @@ Everything runs against real module installs, so the structure under test is the
 instantiation and validation produce.  Mode-independent behaviour lives in test_breakout_mode.py.
 """
 
+from typing import ClassVar
 from unittest import skipUnless
 
 from dcim.models import Interface
@@ -315,7 +316,7 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
             channel_start=0,
         )
 
-    FLAT_NAMES = ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+    FLAT_NAMES: ClassVar[list[str]] = ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
 
     def setUp(self):
         """Install the flat family the way an earlier apply would have left it."""
@@ -387,7 +388,7 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
             channel_start=0,
         )
 
-    FLAT_NAMES = ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+    FLAT_NAMES: ClassVar[list[str]] = ["xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
 
     def setUp(self):
         """Install the flat family, then switch the rule to a channelized one with new names."""
@@ -536,7 +537,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
             channel_start=0,
         )
 
-    FAMILY_NAMES = ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+    FAMILY_NAMES: ClassVar[list[str]] = ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
 
     def setUp(self):
         """Install the raw module and log in for the view-level preview."""

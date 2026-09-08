@@ -9,6 +9,8 @@ whatever the installed NetBox expects, so a convention change upstream surfaces 
 Behaviour unique to this plugin (test/apply/toggle/duplicate) is covered in test_views.py.
 """
 
+from typing import ClassVar
+
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.test import SimpleTestCase
 from utilities.testing import APIViewTestCases, ViewTestCases
@@ -198,7 +200,7 @@ class InterfaceNameRuleAPIViewTestCase(APIViewTestCases.APIViewTestCase):
     """REST API: get, list, create, update, delete, their bulk forms, OPTIONS, brief mode and GraphQL."""
 
     model = InterfaceNameRule
-    brief_fields = ["description", "display", "id", "name_template", "url"]
+    brief_fields: ClassVar[list[str]] = ["description", "display", "id", "name_template", "url"]
     # Plugin API routes are namespaced under plugins-api, not the bare app label.
     view_namespace = "plugins-api:netbox_interface_name_rules"
 

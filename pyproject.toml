@@ -100,7 +100,6 @@ ignore = [
     "D213",   # multi-line summary second line (conflicts with D212)
     "PLC0415",  # lazy imports are deliberate: Django app loading order
     "TRY003",   # the message in a raise is the operator wording
-    "RUF012",   # Django Meta and table class attributes are a framework convention
 ]
 
 # `×` in breakout notation (4×25G) and `–` in prose are deliberate, not homoglyphs.
@@ -112,7 +111,12 @@ max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
-"**/migrations/*.py" = ["D"]
+# Django migrations declare mutable dependencies and operations.
+"**/migrations/*.py" = ["D", "RUF012"]
+# NetBox and Django contracts use mutable class attributes.
+"netbox_interface_name_rules/{__init__,choices,filters,forms,models,tables,views}.py" = ["RUF012"]
+# Serializer Meta fields are a framework contract.
+"netbox_interface_name_rules/api/serializers.py" = ["RUF012"]
 "**/tests/*.py" = ["D", "N806", "S101", "S105", "S106", "S603", "S607", "SIM117", "B018", "PTH", "T20"]
 # Confusable characters are the fixture under test, not a mistake.
 "**/tests/test_regex.py" = ["RUF001"]
