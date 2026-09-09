@@ -134,6 +134,8 @@ max-complexity = 15
 "scripts/**" = ["T20", "S101"]
 # A console check: its printed report is what CI reads.
 ".github/scripts/**" = ["T20"]
+# The guard under test is a shell script, so running it is the test.
+"netbox_interface_name_rules/tests/test_network_pin_guard.py" = ["S603", "S607"]
 
 [tool.coverage.run]
 source = ["netbox_interface_name_rules"]
