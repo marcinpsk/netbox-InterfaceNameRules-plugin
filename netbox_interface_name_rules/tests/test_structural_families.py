@@ -345,7 +345,7 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
 
     def test_the_base_row_never_counts_as_a_collision(self):
         _module, _bay, plan = self._plan()
-        Interface.objects.filter(pk=plan.base.pk).update(name=plan.target_names[0])
+        rename_out_of_band(Interface.objects.get(pk=plan.base.pk), plan.target_names[0])
 
         self.assertIsNone(structural._first_taken_name(plan))
 
