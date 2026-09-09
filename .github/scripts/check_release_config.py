@@ -79,7 +79,12 @@ def _check_parser_options(table: dict, parser_name: str, unknown: list[str]) -> 
 def main() -> int:
     """Check the pyproject named on the command line, or the one in the working directory."""
     pyproject = Path(sys.argv[1] if len(sys.argv) > 1 else "pyproject.toml")
-    config = tomllib.loads(pyproject.read_text())["tool"]["semantic_release"]
+    with pyproject.open("rb") as handle:
+        document = tomllib.load(handle)
+    try:
+        config = document["tool"]["semantic_release"]
+    except KeyError as exc:
+        raise SystemExit(f"{pyproject}: no [tool.semantic_release] table") from exc
 
     unknown: list[str] = []
     parser_options = config.get("commit_parser_options", {})

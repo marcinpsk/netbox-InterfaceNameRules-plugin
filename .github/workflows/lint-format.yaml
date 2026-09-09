@@ -42,6 +42,25 @@ jobs:
         run: |
           uv pip install --system --only-binary=:all: python-semantic-release==10.6.2
           python .github/scripts/check_release_config.py
+          fixtures="$(mktemp -d)"
+          trap 'rm -rf "$fixtures"' EXIT
+          cat > "$fixtures/missing.toml" <<'EOF'
+          [project]
+          name = "café"
+          EOF
+          cat > "$fixtures/bogus.toml" <<'EOF'
+          [tool.semantic_release]
+          bogus = true
+          EOF
+          if LC_ALL=C PYTHONUTF8=0 PYTHONCOERCECLOCALE=0 python .github/scripts/check_release_config.py "$fixtures/missing.toml" > "$fixtures/output" 2>&1; then
+            echo "FAIL: accepted a missing release table" >&2
+            exit 1
+          fi
+          grep -F 'no [tool.semantic_release] table' "$fixtures/output"
+          if python .github/scripts/check_release_config.py "$fixtures/bogus.toml"; then
+            echo "FAIL: accepted an unknown release key" >&2
+            exit 1
+          fi
 
       - name: Run devcontainer script tests
         run: |
