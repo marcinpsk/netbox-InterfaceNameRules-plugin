@@ -81,10 +81,16 @@ def main() -> int:
     pyproject = Path(sys.argv[1] if len(sys.argv) > 1 else "pyproject.toml")
     with pyproject.open("rb") as handle:
         document = tomllib.load(handle)
-    try:
-        config = document["tool"]["semantic_release"]
-    except KeyError as exc:
-        raise SystemExit(f"{pyproject}: no [tool.semantic_release] table") from exc
+    tool = document.get("tool")
+    if "tool" not in document:
+        raise SystemExit(f"{pyproject}: no [tool.semantic_release] table")
+    if not isinstance(tool, Mapping):
+        raise SystemExit(f"{pyproject}: [tool] must be a table")
+    if "semantic_release" not in tool:
+        raise SystemExit(f"{pyproject}: no [tool.semantic_release] table")
+    config = tool["semantic_release"]
+    if not isinstance(config, Mapping):
+        raise SystemExit(f"{pyproject}: [tool.semantic_release] must be a table")
 
     unknown: list[str] = []
     parser_options = config.get("commit_parser_options", {})
