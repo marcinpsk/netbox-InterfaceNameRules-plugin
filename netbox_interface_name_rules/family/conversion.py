@@ -126,7 +126,7 @@ def plan_module_conversions(
     channelization_supported = supports_channelization()
     plans = []
     claimed = set()
-    for base_name, source_base in flat_family_bases(rule, variables, interfaces, catalog):
+    for base_name, source_base in flat_family_bases(module, rule, variables, interfaces, catalog):
         names = family_names_for(rule, variables, base_name, source_base)
         if names is None:
             continue
