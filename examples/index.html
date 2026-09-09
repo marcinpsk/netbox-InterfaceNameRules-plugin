@@ -1323,12 +1323,16 @@ name there is nowhere for the ch-0 interface to go and nothing is offered. A
 disabled rule converts nothing, on this page or in the background job.</p>
 <p>Conversion is only ever performed from that page, by an operator who confirmed
 it: <strong>Apply</strong> renames, it never rewrites a family. Each family gets its own
-verdict before anything is written, produced by performing the whole conversion
-inside a transaction that is rolled back again — so a family that NetBox would
-reject is reported with NetBox's own reason (a cabled sibling, an occupied
-parent name, a missing sibling, a sibling already channelized, a sibling that is
-already a channel of another parent) instead of being half converted. Selecting
-a blocked family converts the others and skips that one.</p>
+verdict before anything is written. The plugin rejects missing members locally
+before a conversion transaction starts. Its local preflight also refuses a stale
+family, an occupied parent name, a sibling that already belongs to another channel
+family, and a cabled sibling. Each of those verdicts is the plugin's own, and no
+row is written. Only a family that passes preflight reaches NetBox's own rules.
+The plugin runs that rewrite inside a transaction and rolls it back when NetBox
+refuses a row or a name collides, so the verdict then carries NetBox's own reason.
+A preview rolls back a successful rewrite the same way. The plugin never half
+converts a refused family. Selecting a blocked family converts the others and
+skips that one.</p>
 <p>What the conversion does to the ch-0 row, per family:</p>
 <table>
 <thead>
@@ -1340,13 +1344,13 @@ a blocked family converts the others and skips that one.</p>
 <tbody>
 <tr>
 <td>cable, interface type, module link, <code>mark_connected</code></td>
-<td>IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags</td>
+<td>interface VRF, IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags</td>
 </tr>
 </tbody>
 </table>
 <p>Custom field values are copied to the channel rather than moved, because they
 can describe either the port or the link. The remaining siblings are retyped in
-place, so their own addresses, descriptions and tags — and their interface IDs —
+place, so their own addresses, descriptions, tags, and interface IDs
 survive.</p>
 <p>The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
 <strong>parent</strong>. Automation, saved filters or external systems keyed on that ID will
@@ -1357,7 +1361,9 @@ the page pays that cost per family it lists. It therefore lists at most
 and says so when more are waiting, and it refuses a confirmation naming more than
 that many rather than converting part of it. <strong>Convert as Background Job</strong> runs
 every convertible family of the rule and is not capped.</p>
-<p>On NetBox 4.6 and older no family is offered and no conversion section is shown.</p>
+<p>On a NetBox release that cannot model channelized interfaces, each installed flat family is shown as
+unsupported without a conversion checkbox. A direct conversion request returns the same explicit
+unsupported family outcome and changes no row.</p>
 <h3 id="partial-breakout-repair">Partial breakout repair</h3>
 <p>If a device was provisioned partially (e.g. only 2 of 4 channels were created
 manually), run <strong>Apply Rules → Preview &amp; Apply</strong> for the matching rule. The
@@ -1505,13 +1511,13 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Juniper EX — 1G access ports</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">"JNP-EX-VC"</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"ge-\\d+/\\d+/\\d+"</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"ge-[0-9]+/[0-9]+/[0-9]+"</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"ge-{vc_position}/0/{port}"</span>
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Juniper EX — 10G uplinks</span>
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">"JNP-EX-VC"</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"xe-\\d+/\\d+/\\d+"</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"xe-[0-9]+/[0-9]+/[0-9]+"</span>
 <a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"xe-{vc_position}/1/{port}"</span>
 </code></pre></div>
 <p><strong>jnp-vc-2</strong> at VC position 1 — interfaces renamed <code>ge-0/0/N</code> → <code>ge-1/0/N</code>, <code>xe-0/1/N</code> → <code>xe-1/1/N</code>:</p>
@@ -1521,7 +1527,7 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 <p>Cisco stacks use <strong>1-based</strong> member IDs. Templates create <code>GigabitEthernet1/0/N</code>; on joining the stack at position 2, ports become <code>GigabitEthernet2/0/N</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">"CISCO-C9K"</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"GigabitEthernet\\d+/\\d+/\\d+"</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"GigabitEthernet[0-9]+/[0-9]+/[0-9]+"</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"GigabitEthernet{vc_position}/0/{port}"</span>
 </code></pre></div>
 <p><strong>cisco-sw-2</strong> at VC position 2 — interfaces renamed <code>GigabitEthernet1/0/N</code> → <code>GigabitEthernet2/0/N</code>:</p>
@@ -1531,7 +1537,7 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 <p>Arista modular/multi-chassis naming uses <code>Ethernet{slot}/{port}</code>. The device type creates templates <code>Ethernet1/1</code> … <code>Ethernet1/N</code>; at VC position 2 they become <code>Ethernet2/1</code> … <code>Ethernet2/N</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">device_type</span><span class="p">:</span><span class="w"> </span><span class="s">"ARISTA-EOS"</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"Ethernet\\d+/\\d+"</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"Ethernet[0-9]+/[0-9]+"</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"Ethernet{vc_position}/{port}"</span>
 </code></pre></div>
 <p><strong>arista-sw-2</strong> at VC position 2 — interfaces renamed <code>Ethernet1/N</code> → <code>Ethernet2/N</code>:</p>

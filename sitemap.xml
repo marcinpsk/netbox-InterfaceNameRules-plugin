@@ -2,30 +2,78 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/changelog/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/configuration/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/contributing/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/examples/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/installation/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
     </url>
     <url>
          <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/template-variables/</loc>
-         <lastmod>2026-08-22</lastmod>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0001-interface-family-operation-atomicity/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0002-revalidate-family-plans-before-execution/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0003-profile-database-work-on-the-signal-path/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0004-use-immutable-family-plan-boundaries/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0005-execute-each-family-in-its-own-transaction/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0006-make-engine-a-family-facade/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0007-report-an-unsupported-topology-as-a-family-outcome/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0008-plan-prediction-and-preview-prospectively/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0009-apply-a-rule-batch-family-by-family/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0010-convert-flat-families-through-conversion-plans/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0011-contract-the-engine-to-a-family-facade/</loc>
+         <lastmod>2026-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0012-execute-stored-rule-patterns-with-re2/</loc>
+         <lastmod>2026-09-09</lastmod>
     </url>
 </urlset>

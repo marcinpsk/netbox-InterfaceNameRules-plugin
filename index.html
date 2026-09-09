@@ -678,7 +678,7 @@ automatically apply renaming rules based on configurable templates.</p>
 <li><strong>Template variables</strong> — <code>{slot}</code>, <code>{bay_position}</code>, <code>{bay_position_num}</code>, <code>{channel}</code>, etc.</li>
 <li><strong>Arithmetic expressions</strong> — <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></li>
 <li><strong>Breakout support</strong> — create multiple channel interfaces from a single port</li>
-<li><strong>Regex pattern matching</strong> — match module types by regex pattern (e.g., <code>QSFP-DD-400G-.*</code>) to cover entire product families with a single rule; exact FK match takes priority over regex</li>
+<li><strong>Bounded regex pattern matching</strong> — match module types with RE2 patterns (e.g., <code>QSFP-DD-400G-.*</code>) to cover entire product families with a single rule; exact FK match takes priority over regex</li>
 <li><strong>Scoping</strong> — rules can target specific device types, parent module types, platforms, or be universal</li>
 <li><strong>Build Rule tester</strong> — interactive form to preview name output and test against installed interfaces before saving</li>
 <li><strong>Apply Rules</strong> — batch rename existing interfaces with live preview and background job support</li>

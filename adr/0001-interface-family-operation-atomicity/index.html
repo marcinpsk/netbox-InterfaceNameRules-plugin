@@ -8,31 +8,27 @@
       
       
       
-        <link rel="canonical" href="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/installation/">
+        <link rel="canonical" href="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0001-interface-family-operation-atomicity/">
       
       
-        <link rel="prev" href="..">
-      
-      
-        <link rel="next" href="../configuration/">
       
       
         
       
       
-      <link rel="icon" href="../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>Installation - NetBox Interface Name Rules</title>
+        <title>Separate structural atomicity from partial rename handling - NetBox Interface Name Rules</title>
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -51,7 +47,7 @@
       
     
     
-    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -76,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#installation" class="md-skip">
+        <a href="#separate-structural-atomicity-from-partial-rename-handling" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +88,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="NetBox Interface Name Rules" class="md-header__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
+    <a href="../.." title="NetBox Interface Name Rules" class="md-header__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Installation
+              Separate structural atomicity from partial rename handling
             
           </span>
         </div>
@@ -228,7 +224,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="NetBox Interface Name Rules" class="md-nav__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
+    <a href="../.." title="NetBox Interface Name Rules" class="md-nav__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -258,7 +254,7 @@
   
   
     <li class="md-nav__item">
-      <a href=".." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -282,37 +278,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Installation
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
         
   
   
@@ -328,92 +297,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#install-from-pypi" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install from PyPI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#enable-the-plugin" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Enable the Plugin
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#run-database-migrations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Run Database Migrations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#restart-netbox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restart NetBox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verify" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verify
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -425,7 +308,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuration/" class="md-nav__link">
+      <a href="../../configuration/" class="md-nav__link">
         
   
   
@@ -452,7 +335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../template-variables/" class="md-nav__link">
+      <a href="../../template-variables/" class="md-nav__link">
         
   
   
@@ -479,7 +362,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
+      <a href="../../examples/" class="md-nav__link">
         
   
   
@@ -506,7 +389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../contributing/" class="md-nav__link">
+      <a href="../../contributing/" class="md-nav__link">
         
   
   
@@ -533,7 +416,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../changelog/" class="md-nav__link">
+      <a href="../../changelog/" class="md-nav__link">
         
   
   
@@ -573,80 +456,6 @@
     
   
   
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#install-from-pypi" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install from PyPI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#enable-the-plugin" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Enable the Plugin
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#run-database-migrations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Run Database Migrations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#restart-netbox" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restart NetBox
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verify" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verify
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
 </nav>
                   </div>
                 </div>
@@ -665,53 +474,17 @@
   
 
 
-<h1 id="installation">Installation</h1>
-<h2 id="requirements">Requirements</h2>
-<ul>
-<li>NetBox ≥ 4.3.0</li>
-<li>Python ≥ 3.12</li>
-</ul>
-<h2 id="install-from-pypi">Install from PyPI</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>netbox-interface-name-rules
-</code></pre></div>
-<h2 id="enable-the-plugin">Enable the Plugin</h2>
-<p>Add to your NetBox <code>configuration.py</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">PLUGINS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"netbox_interface_name_rules"</span><span class="p">]</span>
-</code></pre></div>
-<h2 id="run-database-migrations">Run Database Migrations</h2>
-<p>The migration audits every existing nonempty <strong>Module Type Pattern</strong> used by a
-regex module-type rule or a device-interface rule before the plugin starts
-executing stored patterns with RE2. The migration stops when RE2 cannot compile
-a pattern or could match text that Python did not match. Blocking differences
-include <code>\D</code>, <code>\S</code>, and <code>\W</code> outside negated character classes;
-<code>\d</code>, <code>\s</code>, and <code>\w</code> inside negated character classes; word boundaries; POSIX
-character classes; and Python counted repeats that RE2 would treat as literal
-text, such as <code>{,3}</code> or <code>{01}</code>. Case-insensitive matching with a negated
-character class also stops the migration. If the migration stops, rewrite the
-listed patterns, then run the migration again.</p>
-<p>The migration warns and continues when RE2 can only remove matches. This warning
-includes <code>\d</code>, <code>\s</code>, and <code>\w</code> outside negated character classes; <code>\D</code>, <code>\S</code>, and
-<code>\W</code> inside negated character classes; and case-insensitive matching outside a
-negated character class. The migration lists the affected Interface Name Rule
-IDs and does not modify any rule. Django records the warning-only migration as
-applied. Rewrite and save those patterns with explicit
-<a href="https://github.com/google/re2/wiki/syntax">RE2 syntax</a>. Do not rerun the
-completed migration. For example, use <code>[0-9]</code> for ASCII digits, <code>\p{L}</code> for
-Unicode letters, and <code>{0,3}</code> for a repeat with an omitted Python lower bound.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/netbox/netbox
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>migrate
-</code></pre></div>
-<h2 id="restart-netbox">Restart NetBox</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>systemctl<span class="w"> </span>restart<span class="w"> </span>netbox<span class="w"> </span>netbox-rq
-</code></pre></div>
-<h2 id="verify">Verify</h2>
-<p>Navigate to <strong>Plugins → Interface Name Rules</strong> in the NetBox UI.</p>
+<h1 id="separate-structural-atomicity-from-partial-rename-handling">Separate structural atomicity from partial rename handling</h1>
+<p>Each family operation owns one database transaction, which isolates it from other families and rolls back unexpected failures. Structural creation and conversion commit or roll back the complete topology together. An installed-family rename uses nested savepoints for expected member-level validation and name collisions: the parent must succeed first, but a blocked channel leaves only that channel unchanged while successful channel renames commit. This preserves useful names without permitting a partial structural topology.</p>
 
 
 
 
 
 
+
+  
+  
 
 
 
@@ -755,10 +528,10 @@ Unicode letters, and <code>{0,3}</code> for a repeat with an omitted Python lowe
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "navigation.sections"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "navigation.sections"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
