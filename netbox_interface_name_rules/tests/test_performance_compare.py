@@ -270,6 +270,76 @@ class ArtifactValidationTest(unittest.TestCase):
     def test_the_current_artifact_shape_is_accepted(self):
         compare.validate_artifact(_timed_artifact(_MACHINE_TIME), "before artifact")
 
+    def test_no_statements_accepts_a_zero_call_total(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+        artifact["scenarios"][0]["database"] = {"totals": {"statement_calls": 0}, "statements": []}
+
+        compare.validate_artifact(artifact, "input.json")
+
+    def test_database_validation_preserves_exact_diagnostics(self):
+        cases = (
+            (("database",), None, "database must be an object"),
+            (("database", "totals"), [], "database.totals must be an object"),
+            (
+                ("database", "totals", "statement_calls"),
+                True,
+                "database.totals.statement_calls must be a non-negative integer",
+            ),
+            (
+                ("database", "totals", "statement_calls"),
+                30,
+                "database.totals.statement_calls must equal the statement-entry call sum 31",
+            ),
+            (
+                ("database", "totals", "planner_total_cost"),
+                -1,
+                "database.totals.planner_total_cost must be a non-negative finite number",
+            ),
+            (
+                ("database", "totals", "shared_hit_blocks"),
+                0.5,
+                "database.totals.shared_hit_blocks must be a non-negative integer",
+            ),
+            (("database", "statements"), {}, "database.statements must be a list"),
+            (("database", "statements", 0), None, "database.statements[0] must be an object"),
+            (
+                ("database", "statements", 0, "normalized_sql"),
+                " ",
+                "database.statements[0].normalized_sql must be a non-blank string",
+            ),
+            (("database", "statements", 0, "calls"), -1, "database.statements[0].calls must be a non-negative integer"),
+        )
+        for keys, value, diagnostic in cases:
+            with self.subTest(keys=keys, value=value):
+                artifact = _timed_artifact(_MACHINE_TIME)
+                target = artifact["scenarios"][0]
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+                with self.assertRaises(ValueError) as raised:
+                    compare.validate_artifact(artifact, "input.json")
+                self.assertEqual(str(raised.exception), f"input.json: scenarios[0].{diagnostic}")
+
+    def test_missing_database_fields_preserve_exact_diagnostics(self):
+        cases = (
+            (("database",), "database"),
+            (("database", "totals"), "database.totals"),
+            (("database", "totals", "statement_calls"), "database.totals.statement_calls"),
+            (("database", "statements"), "database.statements"),
+            (("database", "statements", 0, "normalized_sql"), "database.statements[0].normalized_sql"),
+            (("database", "statements", 0, "calls"), "database.statements[0].calls"),
+        )
+        for keys, path in cases:
+            with self.subTest(path=path):
+                artifact = _timed_artifact(_MACHINE_TIME)
+                target = artifact["scenarios"][0]
+                for key in keys[:-1]:
+                    target = target[key]
+                del target[keys[-1]]
+                with self.assertRaises(ValueError) as raised:
+                    compare.validate_artifact(artifact, "input.json")
+                self.assertEqual(str(raised.exception), f"input.json: scenarios[0].{path} is required")
+
     def test_an_artifact_with_no_scenarios_is_rejected(self):
         """An empty run would otherwise render header-only tables and report no regressions."""
         artifact = _timed_artifact(_MACHINE_TIME)

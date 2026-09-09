@@ -134,6 +134,51 @@ def _validate_machine_time(value: Any, source: str, path: str) -> None:
     )
 
 
+def _validate_scenario_database(scenario: Mapping[str, Any], source: str, path: str) -> None:
+    """Validate one scenario's database totals and statement evidence."""
+    database = _mapping(_required(scenario, "database", source, path), source, f"{path}.database")
+    totals = _mapping(
+        _required(database, "totals", source, f"{path}.database"),
+        source,
+        f"{path}.database.totals",
+    )
+    statement_calls = _non_negative_integer(
+        _required(totals, "statement_calls", source, f"{path}.database.totals"),
+        source,
+        f"{path}.database.totals.statement_calls",
+    )
+    for field, _label in DATABASE_METRICS:
+        if field == "statement_calls" or field not in totals:
+            continue
+        check = _non_negative_integer if field in INTEGER_DATABASE_METRICS else _finite_number
+        check(totals[field], source, f"{path}.database.totals.{field}")
+    statements = _list(
+        _required(database, "statements", source, f"{path}.database"),
+        source,
+        f"{path}.database.statements",
+    )
+    statement_entry_calls = 0
+    for statement_index, statement_value in enumerate(statements):
+        statement_path = f"{path}.database.statements[{statement_index}]"
+        statement = _mapping(statement_value, source, statement_path)
+        _string(
+            _required(statement, "normalized_sql", source, statement_path),
+            source,
+            f"{statement_path}.normalized_sql",
+        )
+        statement_entry_calls += _non_negative_integer(
+            _required(statement, "calls", source, statement_path),
+            source,
+            f"{statement_path}.calls",
+        )
+    if statement_entry_calls != statement_calls:
+        raise _invalid(
+            source,
+            f"{path}.database.totals.statement_calls",
+            f"must equal the statement-entry call sum {statement_entry_calls}",
+        )
+
+
 def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
     """Validate scenario identities and the database evidence used by comparisons."""
     scenarios = _list(_required(artifact, "scenarios", source, "artifact"), source, "scenarios")
@@ -149,48 +194,7 @@ def _validate_scenarios(artifact: Mapping[str, Any], source: str) -> None:
         names.add(name)
         _string(_required(scenario, "layer", source, path), source, f"{path}.layer")
 
-        database = _mapping(_required(scenario, "database", source, path), source, f"{path}.database")
-        totals = _mapping(
-            _required(database, "totals", source, f"{path}.database"),
-            source,
-            f"{path}.database.totals",
-        )
-        statement_calls = _non_negative_integer(
-            _required(totals, "statement_calls", source, f"{path}.database.totals"),
-            source,
-            f"{path}.database.totals.statement_calls",
-        )
-        for field, _label in DATABASE_METRICS:
-            if field == "statement_calls" or field not in totals:
-                continue
-            check = _non_negative_integer if field in INTEGER_DATABASE_METRICS else _finite_number
-            check(totals[field], source, f"{path}.database.totals.{field}")
-        statements = _list(
-            _required(database, "statements", source, f"{path}.database"),
-            source,
-            f"{path}.database.statements",
-        )
-        statement_entry_calls = 0
-        for statement_index, statement_value in enumerate(statements):
-            statement_path = f"{path}.database.statements[{statement_index}]"
-            statement = _mapping(statement_value, source, statement_path)
-            _string(
-                _required(statement, "normalized_sql", source, statement_path),
-                source,
-                f"{statement_path}.normalized_sql",
-            )
-            statement_entry_calls += _non_negative_integer(
-                _required(statement, "calls", source, statement_path),
-                source,
-                f"{statement_path}.calls",
-            )
-        if statement_entry_calls != statement_calls:
-            raise _invalid(
-                source,
-                f"{path}.database.totals.statement_calls",
-                f"must equal the statement-entry call sum {statement_entry_calls}",
-            )
-
+        _validate_scenario_database(scenario, source, path)
         _validate_machine_time(_required(scenario, "machine_time", source, path), source, f"{path}.machine_time")
 
 
