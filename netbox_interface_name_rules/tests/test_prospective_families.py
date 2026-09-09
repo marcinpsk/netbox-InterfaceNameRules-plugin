@@ -320,8 +320,9 @@ class ProspectiveChannelizedPlanTest(ProspectivePlanTestCase):
 
         plan = plan_set.plans[0]
         self.assertEqual(plan.topology, FamilyTopology.CHANNELIZED)
-        self.assertIsNone(plan.precondition_status)
-        self.assertEqual(plan.target_names, ("5", "xe-0/0/5:0", "xe-0/0/5:1", "xe-0/0/5:2"))
+        self.assertEqual(plan.precondition_status, FamilyStatus.BLOCKED)
+        self.assertIn("missing 1", plan.precondition_reason)
+        self.assertEqual(plan.target_names, ("5", "5:1", "5:2", "5:3"))
 
     def test_a_channel_count_mismatch_blocks_the_family(self):
         module, bay = self._install(self.mismatch_type, "8", run_rules=False)

@@ -319,10 +319,10 @@ class ChannelizedBreakoutRuleTest(ChannelizationTestCase):
         self.assertEqual(self._names(module), ["e5"])
 
     def test_partial_family_gets_no_flat_siblings(self):
-        """A partially populated family renames the children it has and creates nothing for the rest."""
+        """An incomplete family keeps its names and creates no flat siblings."""
         module, _ = self._install(self.partial_type, "p6")
 
-        self.assertEqual(self._names(module), ["p6", "xe-0/0/p6:0", "xe-0/0/p6:1"])
+        self.assertEqual(self._names(module), ["p6", "p6:1", "p6:2"])
 
     def test_channel_count_mismatch_skips_family_with_log(self):
         """channels=8 against a channel_count=4 rule is a modelling mismatch: skip the family, log it."""

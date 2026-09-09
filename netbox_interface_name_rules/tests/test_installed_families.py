@@ -632,7 +632,7 @@ class InstalledChannelizedFamilyTest(TestCase):
             type=PARENT_TYPE,
             channels=4,
         )
-        for channel_id in (1, 3):
+        for channel_id in (1, 2, 3, 4):
             InterfaceTemplate.objects.create(
                 module_type=cls.module_type,
                 name=f"{{module}}:{channel_id}",
@@ -667,6 +667,7 @@ class InstalledChannelizedFamilyTest(TestCase):
 
     def test_incomplete_channelized_family_is_one_plan_with_only_installed_members(self):
         module, bay = self._raw_module("3")
+        Interface.objects.filter(module=module, channel_id__in=(2, 4)).delete()
 
         plan_set = self._plan(module, bay)
 
@@ -679,8 +680,11 @@ class InstalledChannelizedFamilyTest(TestCase):
         )
         self.assertEqual(
             [member.target_name for member in plan.members],
-            ["3", "xe-0/0/3:0", "xe-0/0/3:2"],
+            ["3", "3:1", "3:3"],
         )
+
+        self.assertEqual(plan.precondition_status, FamilyStatus.BLOCKED)
+        self.assertIn("missing 2", plan.precondition_reason)
 
     def test_automatic_installation_uses_locked_family_execution(self):
         bay = ModuleBay.objects.get(device=self.device, name="Bay 4")
@@ -690,7 +694,7 @@ class InstalledChannelizedFamilyTest(TestCase):
 
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["4", "xe-0/0/4:0", "xe-0/0/4:2"],
+            ["4", "xe-0/0/4:0", "xe-0/0/4:1", "xe-0/0/4:2", "xe-0/0/4:3"],
         )
         self.assertTrue(any("FOR UPDATE" in query["sql"] for query in queries.captured_queries))
 
@@ -710,7 +714,7 @@ class InstalledChannelizedFamilyTest(TestCase):
         )
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["5", "5:1", "5:3"],
+            ["5", "5:1", "5:2", "5:3", "5:4"],
         )
 
     def test_virtual_subinterface_under_the_parent_does_not_block_the_family(self):
@@ -736,7 +740,7 @@ class InstalledChannelizedFamilyTest(TestCase):
         self.assertEqual(result.families[0].status, FamilyStatus.CHANGED)
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["7", "7.100", "xe-0/0/7:0", "xe-0/0/7:2"],
+            ["7", "7.100", "xe-0/0/7:0", "xe-0/0/7:1", "xe-0/0/7:2", "xe-0/0/7:3"],
         )
 
     def test_blocked_child_leaves_only_that_child_unchanged(self):
@@ -748,9 +752,15 @@ class InstalledChannelizedFamilyTest(TestCase):
         self.assertEqual(result.families[0].status, FamilyStatus.CHANGED)
         self.assertEqual(
             [member.status for member in result.families[0].members],
-            [FamilyStatus.UNCHANGED, FamilyStatus.CHANGED, FamilyStatus.BLOCKED],
+            [
+                FamilyStatus.UNCHANGED,
+                FamilyStatus.CHANGED,
+                FamilyStatus.CHANGED,
+                FamilyStatus.BLOCKED,
+                FamilyStatus.CHANGED,
+            ],
         )
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["6", "6:3", "xe-0/0/6:0"],
+            ["6", "6:3", "xe-0/0/6:0", "xe-0/0/6:1", "xe-0/0/6:3"],
         )

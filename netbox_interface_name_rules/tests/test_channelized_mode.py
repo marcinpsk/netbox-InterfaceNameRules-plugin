@@ -22,10 +22,12 @@ from django.urls import reverse
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
+    build_variables,
     find_interfaces_for_rule,
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
@@ -465,6 +467,32 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
         module, _ = self._install(self.channelized_type, "3")
 
         self.assertEqual(self._parent(module).name, "et-0/0/3")
+
+    def test_an_incomplete_installed_family_blocks_every_rename(self):
+        module, bay = self._install(self.channelized_type, "3", run_rules=False)
+        rule = InterfaceNameRule.objects.get(module_type=self.channelized_type)
+        parent = self._parent(module)
+        self.assertEqual(parent.channels, rule.channel_count)
+        self._child(module, 4).delete()
+        original_names = self._names(module)
+
+        plans = plan_installed_families(module, rule, build_variables(bay, device=self.device))
+        self.assertEqual(len(plans.plans), 1)
+        plan = plans.plans[0]
+        outcome = execute_installed_plan(plan)
+        parent.refresh_from_db()
+        evidence = (
+            f"precondition_status={plan.precondition_status!r}, "
+            f"targets={[member.target_name for member in plan.members]!r}, "
+            f"parent_after_execution={parent.name!r}, outcome={outcome.status!r}"
+        )
+        self.assertEqual(plan.precondition_status, FamilyStatus.BLOCKED, evidence)
+        self.assertIn("missing 1", plan.precondition_reason)
+        self.assertEqual(
+            [member.target_name for member in plan.members], [member.snapshot.name for member in plan.members]
+        )
+        self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
+        self.assertEqual(self._names(module), original_names)
 
     def test_a_blocked_channel_keeps_its_old_name_after_the_parent_rename(self):
         """NetBox's deferred cascade must not move a child whose configured target is occupied."""

@@ -528,15 +528,17 @@ class BulkApplyChannelizedFamiliesTest(BulkTestCase):
         claimed = [member.interface_pk for family in outcome.families for member in family.members]
         self.assertEqual(len(claimed), len(set(claimed)))
 
-    def test_a_family_missing_a_channel_still_names_the_channels_it_has(self):
-        """A channel is named from its own channel id, so a family that lost one is still repaired."""
+    def test_a_family_missing_a_channel_blocks_every_member(self):
+        """A missing channel blocks the whole family before any member is renamed."""
         modules = self._install_families(("1",))
         Interface.objects.filter(module=modules[0], channel_id=2).delete()
 
         outcome = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(self._names(modules[0]), ["1", "xe-0/0/1:0", "xe-0/0/1:2", "xe-0/0/1:3"])
-        self.assertEqual(outcome.skipped_members, ())
+        self.assertEqual(self._names(modules[0]), ["1", "1:1", "1:3", "1:4"])
+        self.assertEqual(outcome.families[0].status, FamilyStatus.BLOCKED)
+        self.assertEqual(len(outcome.skipped_members), 4)
+        self.assertIn("missing 1", outcome.families[0].reason)
 
     def _apply_queries(self, positions):
         """Return the queries one batch runs over freshly installed families at *positions*."""

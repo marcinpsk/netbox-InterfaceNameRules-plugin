@@ -164,6 +164,14 @@ def _breakout_targets(rule, variables, parent_name, parent_channels, children): 
             status=FamilyStatus.BLOCKED,
             reason=reason,
         )
+    if len(children) < parent_channels:
+        reason = f"installed family is missing {parent_channels - len(children)} of {parent_channels} channels"
+        return FamilyTargets(
+            parent_name=parent_name,
+            channels=tuple((child_name, reason) for child_name, _channel_id in children),
+            status=FamilyStatus.BLOCKED,
+            reason=reason,
+        )
     try:
         parent_target = parent_name
         if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
