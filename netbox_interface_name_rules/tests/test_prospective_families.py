@@ -13,7 +13,13 @@ from dcim.models import Interface, InterfaceTemplate, Module
 from django.test import SimpleTestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
-from netbox_interface_name_rules.engine import build_variables, predict_rule_output, supports_channelization
+from netbox_interface_name_rules.engine import (
+    apply_rule_to_existing,
+    build_variables,
+    find_interfaces_for_rule,
+    predict_rule_output,
+    supports_channelization,
+)
 from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
@@ -30,6 +36,7 @@ from netbox_interface_name_rules.family import (
     resolved_template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
 from netbox_interface_name_rules.tests.test_channelization import (
     CHANNEL_TYPE,
@@ -452,23 +459,17 @@ class ProspectivePreviewIsNotAppliedTest(ChannelizationTestCase):
         )
 
     def test_a_rename_between_preview_and_apply_is_replanned(self):
-        from netbox_interface_name_rules.engine import apply_rule_to_existing, find_interfaces_for_rule
-
         module, _bay = self._install(self.module_type, "3", run_rules=False)
         preview, _checked = find_interfaces_for_rule(self.rule)
         self.assertEqual(preview[0]["current_name"], "3")
 
-        interface = Interface.objects.get(module=module)
-        interface.name = "renamed-by-someone-else"
-        interface.save()
+        interface = rename_out_of_band(Interface.objects.get(module=module), "renamed-by-someone-else")
 
         self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[interface.pk]).changed_count, 1)
         interface.refresh_from_db()
         self.assertEqual(interface.name, "et-0/0/3")
 
     def test_a_previewed_interface_that_disappeared_is_not_recreated(self):
-        from netbox_interface_name_rules.engine import apply_rule_to_existing, find_interfaces_for_rule
-
         module, _bay = self._install(self.module_type, "3", run_rules=False)
         preview, _checked = find_interfaces_for_rule(self.rule)
         previewed_pk = preview[0]["interface"].pk
@@ -525,8 +526,6 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
         )
 
     def test_the_preview_names_are_the_planned_names(self):
-        from netbox_interface_name_rules.engine import find_interfaces_for_rule
-
         module, bay = self._install(self.module_type, "3", run_rules=False)
         interfaces = list(Interface.objects.filter(module=module).order_by("pk"))
         plan = plan_prospective_families(
@@ -543,8 +542,6 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
         self.assertEqual([detail.role for detail in preview[0]["name_details"]], ["channel"] * 4)
 
     def test_the_preview_changes_no_interface(self):
-        from netbox_interface_name_rules.engine import find_interfaces_for_rule
-
         module, _bay = self._install(self.module_type, "3", run_rules=False)
         before = list(Interface.objects.filter(module=module).values_list("pk", "name"))
 
@@ -577,8 +574,6 @@ class PreviewFollowsTheApplyClassificationTest(ChannelizationTestCase):
 
     def test_such_a_channel_is_previewed_with_its_parent_and_never_on_its_own(self):
         """The apply path carries such a child along with its parent, so the preview must too."""
-        from netbox_interface_name_rules.engine import find_interfaces_for_rule
-
         _module, parent, _child = self._family()
 
         preview, checked = find_interfaces_for_rule(self.rule)
@@ -589,8 +584,6 @@ class PreviewFollowsTheApplyClassificationTest(ChannelizationTestCase):
 
     def test_applying_to_the_channel_alone_changes_nothing(self):
         """A previewed name always belongs to a parent, so selecting the channel is not a candidate."""
-        from netbox_interface_name_rules.engine import apply_rule_to_existing
-
         module, _parent, child = self._family()
 
         self.assertEqual(apply_rule_to_existing(self.rule, interface_ids=[child.pk]).changed_count, 0)
@@ -613,8 +606,6 @@ class PreviewReadsNoTemplatesForDerivableSuffixesTest(ChannelizationTestCase):
     def test_previewing_a_channelized_family_reads_no_interface_templates(self):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
-
-        from netbox_interface_name_rules.engine import find_interfaces_for_rule
 
         self._install(self.module_type, "3", run_rules=False)
 

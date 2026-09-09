@@ -560,8 +560,6 @@ class FindMatchingRuleCachingTest(TestCase):
         rebinding ``_RULE_CACHE`` to a fresh dict — must leave our primed snapshot untouched. A plain
         global ``_pin`` would leak the pin into the worker and pass the old same-thread test, but fail here.
         """
-        import threading
-
         from netbox_interface_name_rules import rule_selection
         from netbox_interface_name_rules.engine import pinned_rule_cache
 

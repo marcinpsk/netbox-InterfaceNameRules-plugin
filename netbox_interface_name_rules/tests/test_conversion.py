@@ -245,6 +245,7 @@ class ConversionVerdictTest(ConversionTestCase):
         self.assertEqual(self._verdicts(), ())
 
     def test_template_error_preserves_unsupported_status(self):
+        """An unsupported precondition must survive a template error."""
         self._switch_to_channelized(parent_name_template="et-{vc_position}/0/{bay_position}")
         with patch("netbox_interface_name_rules.family.conversion.supports_channelization", return_value=False):
             plans = plan_module_conversions(
