@@ -113,6 +113,15 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         result = apply_device_interface_rules(self.device1)
         self.assertEqual(result, 0)
 
+    def test_python_only_filter_written_without_validation_is_skipped(self):
+        """A legacy filter that RE2 cannot compile must not run through Python's engine."""
+        self._make_rule("Gi{vc_position}/{port}", pattern=r"(?=Gi)Gi\d+/\d+")
+        interface = self._make_interface("Gi0/1")
+
+        self.assertEqual(apply_device_interface_rules(self.device1), 0)
+        interface.refresh_from_db()
+        self.assertEqual(interface.name, "Gi0/1")
+
     # ------------------------------------------------------------------
     # Successful renames
     # ------------------------------------------------------------------
@@ -157,12 +166,12 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
 
         # assertLogs asserts the warning branch actually fired — without it, "no rule matched" would
         # also yield result==0 and a preserved name, so the test would pass without covering the path.
-        with self.assertLogs("netbox_interface_name_rules.engine", level="WARNING") as logs:
+        with self.assertLogs("netbox_interface_name_rules.family.execution", level="WARNING") as logs:
             result = apply_device_interface_rules(self.device1)
 
         self.assertEqual(result, 0)  # validation failed → nothing renamed
         self.assertTrue(
-            any("Validation failed renaming device interface" in line for line in logs.output),
+            any("NetBox rejected rename" in line for line in logs.output),
             logs.output,
         )
         iface.refresh_from_db()
@@ -250,6 +259,18 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "Gi1/1")
 
+    def test_first_matching_rule_wins_when_name_is_already_correct(self):
+        """A no-op from the first rule prevents a less specific rule from renaming the interface."""
+        self._make_rule("Gi{vc_position}/{port}", device_type=self.device_type)
+        self._make_rule("OVERWRITTEN{vc_position}/{port}")
+        iface = self._make_interface("Gi1/1")
+
+        result = apply_device_interface_rules(self.device1)
+
+        self.assertEqual(result, 0)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "Gi1/1")
+
     def test_disabled_rule_skipped(self):
         """Disabled rules are not applied."""
         InterfaceNameRule.objects.create(
@@ -309,7 +330,7 @@ class ApplyDeviceInterfaceRulesModuleTypeTest(TestCase):
 
 
 class DeviceInterfaceEdgeCaseNamesTest(TestCase):
-    """Test _try_rename_device_interface with edge-case interface names."""
+    """Test device-level rules with edge-case interface names."""
 
     @classmethod
     def setUpTestData(cls):

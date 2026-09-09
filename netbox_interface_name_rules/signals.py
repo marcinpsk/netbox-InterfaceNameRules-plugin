@@ -189,7 +189,7 @@ def _apply_rules_for_device_deferred(device_pk):
         device_pk: Primary key of the Device to re-apply rules for.
 
     """
-    from dcim.models import Device, Module
+    from dcim.models import Device
 
     try:
         device = Device.objects.select_related("virtual_chassis").get(pk=device_pk)
@@ -198,35 +198,10 @@ def _apply_rules_for_device_deferred(device_pk):
 
     total = 0
 
-    # Re-apply module interface rules
-    modules = Module.objects.filter(device=device).select_related(
-        "module_bay",
-        "module_type",
-        "device",
-        "device__device_type",
-        "device__platform",
-        "device__virtual_chassis",
-    )
     try:
-        from .engine import apply_interface_name_rules, pinned_rule_cache
+        from .engine import reapply_module_rules
 
-        # Every module on this device matches against the same enabled-rule set, so pin it for the
-        # loop: the fingerprint is read once when the first lookup primes the cache instead of once
-        # per module. Safe because the loop only renames interfaces — it never edits rules.
-        with pinned_rule_cache():
-            for module in modules:
-                module_bay = module.module_bay
-                if not module_bay:
-                    continue
-                try:
-                    renamed = apply_interface_name_rules(module, module_bay, force_reapply=True)
-                    total += renamed or 0
-                except Exception:
-                    logger.exception(
-                        "Failed to re-apply rules for %s in %s after VC change",
-                        module.module_type,
-                        module_bay.name,
-                    )
+        total += reapply_module_rules(device)
     except Exception:
         logger.exception("Failed to re-apply module rules for device %s after VC change", device_pk)
 

@@ -9,9 +9,13 @@ on:
 jobs:
   format-and-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
@@ -22,7 +26,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: uv pip install --system ruff
+        run: 'uv pip install --system --only-binary=:all: pre-commit==4.5.1 ruff==0.16.0'
 
       - name: Run Ruff linting
         run: ruff check .
@@ -30,5 +34,53 @@ jobs:
       - name: Run Ruff formatting check
         run: ruff format --check .
 
+      # Runs the pinned hook from .pre-commit-config.yaml, so the version lives in one place.
+      - name: Audit the workflows
+        run: pre-commit run --all-files zizmor
+
+      - name: Check the release configuration
+        run: |
+          uv pip install --system --only-binary=:all: python-semantic-release==10.6.2
+          python .github/scripts/check_release_config.py
+          fixtures="$(mktemp -d)"
+          trap 'rm -rf "$fixtures"' EXIT
+          cat > "$fixtures/missing.toml" <<'EOF'
+          [project]
+          name = "café"
+          EOF
+          cat > "$fixtures/bogus.toml" <<'EOF'
+          [tool.semantic_release]
+          bogus = true
+          EOF
+          cat > "$fixtures/tool-not-table.toml" <<'EOF'
+          tool = "oops"
+          EOF
+          cat > "$fixtures/release-not-table.toml" <<'EOF'
+          [tool]
+          semantic_release = "oops"
+          EOF
+          for fixture in tool-not-table release-not-table; do
+            if python .github/scripts/check_release_config.py "$fixtures/$fixture.toml" > "$fixtures/output" 2>&1; then
+              echo "FAIL: accepted $fixture" >&2
+              exit 1
+            fi
+            grep -F "$fixtures/$fixture.toml:" "$fixtures/output"
+            grep -F 'must be a table' "$fixtures/output"
+            if grep -F 'Traceback' "$fixtures/output"; then
+              echo "FAIL: traceback for $fixture" >&2
+              exit 1
+            fi
+          done
+          if LC_ALL=C PYTHONUTF8=0 PYTHONCOERCECLOCALE=0 python .github/scripts/check_release_config.py "$fixtures/missing.toml" > "$fixtures/output" 2>&1; then
+            echo "FAIL: accepted a missing release table" >&2
+            exit 1
+          fi
+          grep -F 'no [tool.semantic_release] table' "$fixtures/output"
+          if python .github/scripts/check_release_config.py "$fixtures/bogus.toml"; then
+            echo "FAIL: accepted an unknown release key" >&2
+            exit 1
+          fi
+
       - name: Run devcontainer script tests
-        run: bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh
+        run: |
+          bash .devcontainer/scripts/tests/test-debug-toolbar-patches.sh

@@ -24,6 +24,7 @@ path = [
     "README.md",
     "CONTRIBUTING.md",
     "docs/**",
+    "performance/**",
 ]
 SPDX-FileCopyrightText = "2025 Marcin Zieba <marcinpsk@gmail.com>"
 SPDX-License-Identifier = "Apache-2.0"

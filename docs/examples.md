@@ -176,22 +176,26 @@ disabled rule converts nothing, on this page or in the background job.
 
 Conversion is only ever performed from that page, by an operator who confirmed
 it: **Apply** renames, it never rewrites a family. Each family gets its own
-verdict before anything is written, produced by performing the whole conversion
-inside a transaction that is rolled back again — so a family that NetBox would
-reject is reported with NetBox's own reason (a cabled sibling, an occupied
-parent name, a missing sibling, a sibling already channelized, a sibling that is
-already a channel of another parent) instead of being half converted. Selecting
-a blocked family converts the others and skips that one.
+verdict before anything is written. The plugin rejects missing members locally
+before a conversion transaction starts. Its local preflight also refuses a stale
+family, an occupied parent name, a sibling that already belongs to another channel
+family, and a cabled sibling. Each of those verdicts is the plugin's own, and no
+row is written. Only a family that passes preflight reaches NetBox's own rules.
+The plugin runs that rewrite inside a transaction and rolls it back when NetBox
+refuses a row or a name collides, so the verdict then carries NetBox's own reason.
+A preview rolls back a successful rewrite the same way. The plugin never half
+converts a refused family. Selecting a blocked family converts the others and
+skips that one.
 
 What the conversion does to the ch-0 row, per family:
 
 | Stays on the physical row (same interface ID) | Moves to the new channel 1 interface |
 |---|---|
-| cable, interface type, module link, `mark_connected` | IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
+| cable, interface type, module link, `mark_connected` | interface VRF, IP addresses, FHRP group assignments, untagged/tagged VLANs, 802.1Q mode, MTU, description, tags |
 
 Custom field values are copied to the channel rather than moved, because they
 can describe either the port or the link. The remaining siblings are retyped in
-place, so their own addresses, descriptions and tags — and their interface IDs —
+place, so their own addresses, descriptions, tags, and interface IDs
 survive.
 
 The caveat worth reading twice: the ch-0 interface keeps its ID and becomes the
@@ -205,7 +209,9 @@ and says so when more are waiting, and it refuses a confirmation naming more tha
 that many rather than converting part of it. **Convert as Background Job** runs
 every convertible family of the rule and is not capped.
 
-On NetBox 4.6 and older no family is offered and no conversion section is shown.
+On a NetBox release that cannot model channelized interfaces, each installed flat family is shown as
+unsupported without a conversion checkbox. A direct conversion request returns the same explicit
+unsupported family outcome and changes no row.
 
 ### Partial breakout repair
 
@@ -345,13 +351,13 @@ Juniper VCs use **0-based** member IDs. Interfaces follow the `{prefix}-{member}
 # Juniper EX — 1G access ports
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "ge-\\d+/\\d+/\\d+"
+  module_type_pattern: "ge-[0-9]+/[0-9]+/[0-9]+"
   name_template: "ge-{vc_position}/0/{port}"
 
 # Juniper EX — 10G uplinks
 - applies_to_device_interfaces: true
   device_type: "JNP-EX-VC"
-  module_type_pattern: "xe-\\d+/\\d+/\\d+"
+  module_type_pattern: "xe-[0-9]+/[0-9]+/[0-9]+"
   name_template: "xe-{vc_position}/1/{port}"
 ```
 
@@ -368,7 +374,7 @@ Cisco stacks use **1-based** member IDs. Templates create `GigabitEthernet1/0/N`
 ```yaml
 - applies_to_device_interfaces: true
   device_type: "CISCO-C9K"
-  module_type_pattern: "GigabitEthernet\\d+/\\d+/\\d+"
+  module_type_pattern: "GigabitEthernet[0-9]+/[0-9]+/[0-9]+"
   name_template: "GigabitEthernet{vc_position}/0/{port}"
 ```
 
@@ -385,7 +391,7 @@ Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device typ
 ```yaml
 - applies_to_device_interfaces: true
   device_type: "ARISTA-EOS"
-  module_type_pattern: "Ethernet\\d+/\\d+"
+  module_type_pattern: "Ethernet[0-9]+/[0-9]+"
   name_template: "Ethernet{vc_position}/{port}"
 ```
 

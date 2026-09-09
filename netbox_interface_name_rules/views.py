@@ -301,7 +301,7 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .engine import evaluate_name_template
+        from .naming import evaluate_name_template
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
@@ -432,6 +432,7 @@ class RuleApplyDetailView(generic.ObjectView):
     def get(self, request, **kwargs):
         """Render a preview of all interfaces that would be renamed by this rule."""
         from .engine import find_convertible_families, find_interfaces_for_rule, supports_channelization
+        from .family import ConversionPreview
 
         rule = self.get_object(**kwargs)
         try:
@@ -447,23 +448,24 @@ class RuleApplyDetailView(generic.ObjectView):
         # A conversion-scan failure must not blank the unrelated apply preview above.
         try:
             # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
-            conversions, conversions_have_more = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+            preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
             logger.exception("Failed to compute the conversion preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute the conversion preview: {exc}")
-            conversions, conversions_have_more = [], False
+            preview_conversions = ConversionPreview(candidates=())
         except Exception as exc:
             logger.exception("Unexpected error computing the conversion preview for rule %s: %s", rule, exc)
             messages.error(request, f"Failed to compute the conversion preview: {type(exc).__name__}")
-            conversions, conversions_have_more = [], False
+            preview_conversions = ConversionPreview(candidates=())
         return render(
             request,
             self.template_name,
             {
                 "rule": rule,
                 "preview": preview,
-                "conversions": conversions,
-                "conversions_have_more": conversions_have_more,
+                "conversions": preview_conversions.candidates,
+                "conversions_available": any(candidate.convertible for candidate in preview_conversions.candidates),
+                "conversions_have_more": preview_conversions.has_more,
                 "total_checked": total_checked,
                 "batch_limit": APPLY_BATCH_LIMIT,
                 "has_more": len(preview) >= APPLY_BATCH_LIMIT,
@@ -507,16 +509,18 @@ class RuleApplyDetailView(generic.ObjectView):
                 f"Use Convert as Background Job to convert all of them.",
             )
             return
-        conflicts = []
         try:
-            count = convert_flat_families(rule, convert_ids, conflicts=conflicts)
+            outcome = convert_flat_families(rule, convert_ids)
         except Exception as e:
             logger.exception("Failed to convert families for rule %s: %s", rule, e)
             messages.error(request, f"Failed to convert families: {type(e).__name__}")
             return
-        messages.success(request, f"Converted {count} interface family(ies) to the channelized topology.")
-        if conflicts:
-            messages.warning(request, f"{len(conflicts)} family(ies) skipped — the plugin log names each one.")
+        converted = len(outcome.changed_families)
+        messages.success(request, f"Converted {converted} interface family(ies) to the channelized topology.")
+        if outcome.blocked_families:
+            messages.warning(
+                request, f"{len(outcome.blocked_families)} family(ies) skipped. The plugin log names each one."
+            )
 
     def post(self, request, **kwargs):
         """Apply or convert (foreground batch or background job) and redirect back."""
@@ -542,15 +546,12 @@ class RuleApplyDetailView(generic.ObjectView):
                 if not interface_ids:
                     messages.warning(request, "No interfaces selected; nothing was applied.")
                 else:
-                    conflicts = []
-                    count = apply_rule_to_existing(
-                        rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids, conflicts=conflicts
-                    )
-                    messages.success(request, f"Applied rule: {count} interface(s) renamed.")
-                    if conflicts:
+                    outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
+                    messages.success(request, f"Applied rule: {outcome.changed_count} interface(s) renamed.")
+                    if outcome.skipped_members:
                         messages.warning(
                             request,
-                            f"{len(conflicts)} interface(s) skipped — the plugin log names each one.",
+                            f"{len(outcome.skipped_members)} interface(s) skipped. The plugin log names each one.",
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s: %s", rule, e)

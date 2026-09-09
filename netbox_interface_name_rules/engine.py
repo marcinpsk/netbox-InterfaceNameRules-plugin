@@ -6,255 +6,53 @@ This module is imported lazily by signals.py so that model imports happen
 after Django is fully initialised.
 """
 
-import ast
-import contextlib
-import copy
 import logging
-import re
-import threading
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.db.models import Aggregate, F, TextField, Value
-from django.db.models.functions import Cast, Coalesce, Concat, Length
 
-from .choices import BreakoutModeChoices
+from . import family as family_ops
+from . import naming, rule_selection
+from .family import targets as family_targets
+from .family import template_names as family_template_names
+from .regex_safety import compile_module_type_pattern
 
 logger = logging.getLogger(__name__)
 
-# In-process cache of the enabled InterfaceNameRule set, keyed by a cheap fingerprint
-# of that set. find_matching_rule() is called once per module row when a device's
-# module-sync table is rendered, and each call used to run a DB query per scope
-# candidate per tier; loading the (small) rule set once and matching in memory removes
-# that per-row query storm. The fingerprint (see _enabled_rules_version) is re-read once
-# per call and the set reloaded only when it changes, so it self-invalidates on any
-# create/delete/edit — including raw bulk ``.update()`` of any matching field and SET_NULL
-# cascades that bypass auto_now, and across test transactions — with no signal wiring.
-# A reload publishes the new set by rebinding this name to a fresh dict in one atomic assignment
-# (see _get_enabled_rules), so a concurrent reader on another worker thread sees either the whole
-# old set or the whole new one — never exact/regex/memo torn across two versions.
-_RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
 
-# Per-version cap on the find_matching_rule memo. A long-lived worker that sees many distinct
-# (module_type, scope) contexts under a stable rule set would otherwise grow it without bound;
-# on overflow the memo is cleared wholesale and rebuilt lazily. The cap is far above the number
-# of contexts in any single module-sync render, so it never churns mid-render.
-_MEMO_MAX = 4096
-
-# Sentinel for the memo read. A single ``memo.get(sig, _MEMO_MISS)`` is one atomic dict lookup, so a
-# concurrent ``memo.clear()`` at the cap can't wedge between a membership test and the subscript the
-# way ``if sig in memo: return memo[sig]`` could — that compound read can raise a sporadic KeyError
-# under threaded workers sharing one per-version memo. A real "no rule matched" is memoized as None,
-# so the miss sentinel must be a distinct object, not None.
-_MEMO_MISS = object()
-
-# Per-thread pin depth (see pinned_rule_cache). While > 0 on the current thread, _get_enabled_rules
-# trusts the loaded set without re-reading the fingerprint, so an internal batch that wraps its loop
-# turns N per-call fingerprint queries into one. Thread-local so concurrent requests don't affect
-# each other; the depth defaults to 0, so any path that does not pin (the per-row signal handler,
-# single applies) re-reads the fingerprint on every call exactly as before.
-_pin = threading.local()
-
-
-@contextlib.contextmanager
 def pinned_rule_cache():
-    """Pin the enabled-rule set for the duration of the block, skipping the per-call fingerprint query.
-
-    find_matching_rule() normally re-reads a cheap fingerprint on every call to detect rule-set
-    changes. An internal batch that makes many lookups against an unchanging rule set — e.g.
-    _apply_rules_for_device_deferred(), which re-applies rules to every module on a device after a
-    virtual-chassis change — can wrap its loop in this context manager so the set is loaded and
-    fingerprinted once and reused for every call inside the block, turning N fingerprint queries
-    into one::
-
-        with pinned_rule_cache():
-            for module in modules:
-                apply_interface_name_rules(module, module.module_bay, force_reapply=True)
-
-    This is an INR-internal helper: only code that owns the batch loop pins, so it never becomes a
-    cross-plugin dependency. Other plugins integrate through the ``predict_module_interface_names``
-    signal, which is dispatched one row at a time — so an external caller neither can nor needs to
-    pin, and INR exposes no batch API across the plugin boundary.
-
-    Scope is explicit and per-thread: outside the block (and in any other thread/request) the normal
-    self-invalidating behaviour is unchanged, so there is no global staleness window. Nesting is
-    safe — only the outermost block manages the pin. Priming is lazy: the first find_matching_rule
-    inside the block does the one real fingerprint read + reload and captures that rule set into
-    thread-local state; the rest reuse that *snapshot* — so a block that makes no lookups does no
-    query at all, and a concurrent request reloading the shared cache on another thread cannot switch
-    this batch's rule set mid-loop. The loop may rename interfaces, but it must not edit rules: edits
-    to InterfaceNameRule made *inside* the block are not observed until it exits.
-    """
-    depth = getattr(_pin, "depth", 0)
-    _pin.depth = depth + 1
-    if depth == 0:
-        _pin.primed = False  # the first lookup inside primes the cache (lazily — an empty block stays query-free)
-    try:
-        yield
-    finally:
-        _pin.depth -= 1
-        if _pin.depth == 0:
-            # Release the per-thread snapshot so the next block re-primes from the live cache.
-            _pin.primed = False
-            for attr in ("exact", "regex", "memo"):
-                _pin.__dict__.pop(attr, None)
+    """Return the lower-level rule cache pinning context."""
+    return rule_selection.pinned_rule_cache()
 
 
-def _compile_pattern(pattern):
-    """Compile a regex *pattern* once, returning the compiled object or None for an invalid pattern.
-
-    A None result is skipped at match time, mirroring the previous per-match ``try/except re.error``
-    without recompiling the pattern on every lookup.
-    """
-    try:
-        return re.compile(pattern)
-    except re.error:
-        return None
+def find_matching_rule(module_type, parent_module_type, device_type, platform=None):
+    """Delegate rule selection while preserving the engine entry point."""
+    return rule_selection.find_matching_rule(module_type, parent_module_type, device_type, platform)
 
 
-# Rule columns that affect matching or output, in a fixed order. The enabled-set fingerprint
-# (see _enabled_rules_version) is an md5 over these for every enabled rule, so it changes on ANY
-# edit that could change a lookup result. ``description`` is excluded — it is operator notes that
-# never affect matching. ``id`` anchors each row to its identity, so a compensating swap between
-# two rules (which leaves count + column sums unchanged) still changes the hash.
-_VERSION_COLUMNS = (
-    "id",
-    "module_type_id",
-    "module_type_is_regex",
-    "module_type_pattern",
-    "parent_module_type_id",
-    "device_type_id",
-    "platform_id",
-    "name_template",
-    "parent_name_template",
-    "breakout_mode",
-    "channel_count",
-    "channel_start",
-    "applies_to_device_interfaces",
-)
+def _extract_trailing_digits(value: str) -> str:
+    """Delegate trailing-digit extraction while preserving the engine helper."""
+    return naming._extract_trailing_digits(value)
 
 
-class _Md5OrderedStringAgg(Aggregate):
-    """``md5(string_agg(<row>, <delim> ORDER BY id))`` expressed as one ORM aggregate.
-
-    Built through the ORM rather than a hand-formatted SQL string, so the table/column identifiers are
-    quoted by Django's compiler and the delimiter is a bound parameter — there is no string-interpolated
-    SQL to audit for injection. The template is ours, so it does not depend on ``StringAgg``'s Python
-    signature, which differs across the Django 5.x–6.x versions in CI. ``ORDER BY id`` makes string_agg
-    deterministic — a stable row order yields a stable hash for an unchanged set.
-    """
-
-    function = "STRING_AGG"
-    template = "MD5(%(function)s(%(expressions)s ORDER BY id))"
-    output_field = TextField()
+def _resolve_bay_position(module_bay):
+    """Delegate bay-position resolution while preserving the engine helper."""
+    return naming._resolve_bay_position(module_bay)
 
 
-def _version_row_signature():
-    """Build the per-rule text signature expression for the fingerprint.
-
-    Each matching/output column is cast to text and emitted length-prefixed as ``<char length>:<value>``.
-    That makes the row encoding self-delimiting: distinct column tuples can never serialize to the same
-    string, even if a text column (name_template / module_type_pattern) contains digits, a colon, or the
-    control characters a plain separator scheme would rely on being absent. A nullable FK is coalesced to
-    '' (length 0), so null stays distinct from any value while keeping the column's slot.
-    """
-    empty = Value("", output_field=TextField())
-    colon = Value(":", output_field=TextField())
-    parts = []
-    for column in _VERSION_COLUMNS:
-        cast = Cast(F(column), output_field=TextField())
-        value = Coalesce(cast, empty, output_field=TextField()) if column.endswith("_id") else cast
-        parts.append(Cast(Length(value), output_field=TextField()))
-        parts.append(colon)
-        parts.append(value)
-    return Concat(*parts, output_field=TextField())
+def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+    """Delegate slot resolution while preserving the engine helper."""
+    return naming._resolve_slot(module_bay, bay_position_num, parent_bay_position)
 
 
-# The signature expression is constant, so build it once and reuse it across calls.
-_ROW_SIGNATURE = _version_row_signature()
+def build_variables(module_bay, device=None):
+    """Delegate naming-variable construction while preserving the engine entry point."""
+    return naming.build_variables(module_bay, device=device)
 
 
-def _enabled_rules_version():
-    """Return a deterministic content fingerprint of the enabled-rule set.
-
-    Computed server-side as an md5 over every enabled rule's matching/output columns, row-ordered
-    by pk, so the fingerprint changes on ANY edit that could change a lookup — including a raw bulk
-    ``.update()`` of a text field (name_template / module_type_pattern) or a boolean
-    (module_type_is_regex), which an aggregate of counts/sums cannot see, and a compensating edit
-    that keeps the column sums constant. It is one query returning a single 32-char hash, so it
-    stays cheap enough to re-read on every call.
-
-    Each column is length-prefixed (see _version_row_signature), so the per-row encoding is
-    self-delimiting and rows concatenate unambiguously — distinct rule sets cannot collide even if a
-    text column contains arbitrary bytes. A nullable FK renders as the empty string (a real id never
-    does), keeping null distinct from any value. The empty set aggregates to NULL → coalesced to a
-    stable empty fingerprint, so "no enabled rules" is fixed.
-    """
-    from .models import InterfaceNameRule
-
-    return InterfaceNameRule.objects.filter(enabled=True).aggregate(
-        fingerprint=Coalesce(
-            _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
-            Value("", output_field=TextField()),
-        )
-    )["fingerprint"]
-
-
-def _get_enabled_rules():
-    """Return ``(exact_rules, regex_rules, memo)``, reloading only when the rule set changes.
-
-    ``exact_rules`` are ordered by ``(module_type__model, pk)`` to mirror the model's default
-    ordering (so an in-memory ``first match`` equals the previous ``.first()``). ``regex_rules``
-    is a tuple of ``(compiled_pattern, rule)`` pairs, pre-sorted once by ``(-pattern length, pk)``
-    and with each pattern compiled once, so the regex tier neither re-sorts nor recompiles per
-    call. ``memo`` caches find_matching_rule results for the current rule-set version.
-
-    Inside a ``pinned_rule_cache()`` block on this thread, once the set has been primed (by the first
-    lookup in the block) the fingerprint query is skipped and the snapshot captured at prime time is
-    returned — never the live ``_RULE_CACHE``, which another thread may reload mid-block.
-    """
-    global _RULE_CACHE
-
-    pinned = getattr(_pin, "depth", 0) > 0
-    if pinned and getattr(_pin, "primed", False):
-        # Serve the snapshot captured when this block primed, not the shared cache: a concurrent
-        # request on another thread may reload _RULE_CACHE to a different version while we iterate, and
-        # a pinned batch must match every item against one consistent rule set.
-        return _pin.exact, _pin.regex, _pin.memo
-
-    from .models import InterfaceNameRule
-
-    # Read the module global exactly once. A reload below publishes the new set by rebinding
-    # _RULE_CACHE to a brand-new dict (a single atomic name assignment) rather than mutating this
-    # one in place, so this local is a consistent snapshot: exact/regex/memo can never be torn
-    # across two rule-set versions even if another thread reloads between the reads at the end.
-    cache = _RULE_CACHE
-    version = _enabled_rules_version()
-    if cache["version"] != version:
-        rules = list(InterfaceNameRule.objects.filter(enabled=True).order_by("module_type__model", "pk"))
-        exact = tuple(r for r in rules if not r.module_type_is_regex)
-        regex_rules = sorted(
-            (r for r in rules if r.module_type_is_regex),
-            key=lambda r: (-len(r.module_type_pattern or ""), r.pk),
-        )
-        regex = tuple((_compile_pattern(r.module_type_pattern), r) for r in regex_rules)
-        # Publish the whole new version atomically: a reader either sees the old dict or this one,
-        # never a mix of the two. Last writer wins; a concurrent reload to the same version just
-        # rebuilds redundantly, never corrupts.
-        cache = {"version": version, "exact": exact, "regex": regex, "memo": {}}
-        _RULE_CACHE = cache
-    if pinned:
-        # Pin this thread to the freshly-resolved set for the rest of the block. The tuples are
-        # immutable and the memo is COPIED into thread-local state — not aliased — so the pinned batch
-        # neither shares nor races the global memo: another thread clearing the shared memo at the cap
-        # can't evict our warmed entries (or wedge a KeyError) mid-loop, and entries we add stay private.
-        _pin.exact = cache["exact"]
-        _pin.regex = cache["regex"]
-        _pin.memo = dict(cache["memo"])
-        _pin.primed = True
-        return _pin.exact, _pin.regex, _pin.memo
-    return cache["exact"], cache["regex"], cache["memo"]
+def evaluate_name_template(template: str, variables: dict) -> str:
+    """Delegate template evaluation while preserving the engine entry point."""
+    return naming.evaluate_name_template(template, variables)
 
 
 def _get_parent_module_type(module_bay):
@@ -271,32 +69,13 @@ def _get_parent_module_type(module_bay):
 
 
 def supports_channelization():
-    """Return True when this NetBox models channelized subinterfaces (NetBox 4.7+).
-
-    Probed from the Interface model rather than a version comparison, so a backport or a
-    development build is detected by what it actually provides.
-    """
-    from dcim.models import Interface
-    from django.core.exceptions import FieldDoesNotExist
-
-    try:
-        Interface._meta.get_field("channel_id")
-    except FieldDoesNotExist:
-        return False
-    return True  # pragma: no cover - only reachable on a NetBox that models channelization
+    """Delegate the channelization capability check while preserving the engine entry point."""
+    return family_ops.supports_channelization()
 
 
 def _vc_position_re():
-    """Return NetBox's ``{vc_position}`` template-token regex, or None on a release without the token.
-
-    Imported inside the function so the probe reads the module as it stands at call time, matching
-    ``supports_channelization()``'s style.
-    """
-    try:
-        from dcim.constants import VC_POSITION_RE
-    except ImportError:
-        return None
-    return VC_POSITION_RE  # pragma: no cover - only reachable on a NetBox that resolves the token
+    """Delegate virtual-chassis token detection to template-name resolution."""
+    return family_template_names.vc_position_re()
 
 
 def supports_vc_position_token():
@@ -306,59 +85,6 @@ def supports_vc_position_token():
     or an upstream removal is detected by what NetBox actually provides.
     """
     return _vc_position_re() is not None
-
-
-def _is_channel_child(iface):
-    """Return True when *iface* is a channel subinterface bound to a parent's channel.
-
-    Structural, not name-based: a row imported without ``full_clean()`` may carry a ``channel_id``
-    without the channel type.  ``channel_id`` does not exist before NetBox 4.7, so this is False
-    on every older release and the family paths below stay dormant there.
-    """
-    return getattr(iface, "channel_id", None) is not None
-
-
-def _is_channelized_parent(iface):
-    """Return True when *iface* declares a channel count.
-
-    A channelized parent owns a family even when no subinterface is bound yet — this, not the
-    presence of children, is what disables flat channel creation.
-    """
-    return getattr(iface, "channels", None) is not None
-
-
-def _partition_families(interfaces):
-    """Split *interfaces* into ``(bases, children_by_parent_pk)``.
-
-    Bases are the interfaces a rule may match on its own: standalone interfaces and channelized
-    parents.  Channel subinterfaces are never independent candidates — they are renamed only by
-    following their parent, so they are grouped under it instead.
-    """
-    bases = []
-    children = defaultdict(list)
-    for iface in interfaces:
-        if not _is_channel_child(iface):
-            bases.append(iface)
-            continue
-        children[iface.parent_id].append(iface)  # pragma: no cover - requires channelization support
-    for group in children.values():  # pragma: no cover - no channel children exist without support
-        group.sort(key=lambda child: child.channel_id)
-    return bases, children
-
-
-def _child_name_suffix(child_name, parent_name):  # pragma: no cover - requires channelization support
-    """Return the suffix *child_name* adds to *parent_name*, or None when it adds none.
-
-    The first character must be non-alphanumeric so ``et0``/``et01`` is never mistaken for a
-    family; the punctuation itself is free-form (``:``, ``-``, ``_`` and ``@`` all occur in the
-    wild), so it is not restricted to a fixed separator.
-    """
-    if not parent_name or not child_name.startswith(parent_name):
-        return None
-    suffix = child_name[len(parent_name) :]
-    if not suffix or suffix[0].isalnum():
-        return None
-    return suffix
 
 
 def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
@@ -422,7 +148,7 @@ def _forced_channel_bases(interfaces, raw_names, matchers, module):
     for i in interfaces:
         # A channelized parent is its own base: its channels are separate rows, so the name needs no
         # ":"-splitting to find them.
-        base = i.name if _is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        base = i.name if family_ops.is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
         forms = (base, base.rsplit("/", 1)[-1])
         if not any(form in raw_names for form in forms) and not any(
             matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
@@ -469,6 +195,31 @@ def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), 
     return _forced_channel_bases(interfaces, raw_names, matchers, module)
 
 
+def _touches_a_family(plan) -> bool:
+    """Return whether *plan* acts on a family rather than one standalone interface."""
+    if isinstance(plan, family_ops.InstalledFamilyPlan):
+        return plan.parent_pk is not None or len(plan.members) > 1
+    return True
+
+
+def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module):
+    """Return the installed families this install path should execute.
+
+    A channelized family is always executed: its parent decides the family's names, and the raw-name
+    guard describes flat rows.  A flat family is executed while the guard still claims a member of it.
+    """
+    flat = [plan for plan in plans if plan.topology == family_ops.FamilyTopology.FLAT]
+    snapshots = [member.snapshot for plan in flat for member in plan.members]
+    selected = {
+        interface.pk for interface in _collect_unrenamed(snapshots, rule, raw_names, force_reapply, matchers, module)
+    }
+    return [
+        plan
+        for plan in plans
+        if plan.topology == family_ops.FamilyTopology.CHANNELIZED or selected.intersection(plan.member_pks)
+    ]
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -480,162 +231,74 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     ``force_reapply=True`` to skip this check and re-apply rules to ALL
     module interfaces (used when vc_position or other variables change).
 
-    A channelized parent and its channel subinterfaces are processed as one family: the parent
-    decides, the children follow it (see ``_apply_rule_with_family``).
+    Every rename and every creation goes through the family package, so this path builds and names
+    exactly what retroactive apply and the preview describe.
 
     Returns:
         Number of interfaces renamed/created, or 0 if no rule matched.
 
     """
-    from dcim.models import Interface
-
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
         return 0
+    # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
+    with family_ops.pinned_template_cache():
+        return _apply_rule_to_module(rule, module, module_bay, force_reapply)
+
+
+def _apply_rule_to_module(rule, module, module_bay, force_reapply):
+    """Plan and execute every family *rule* intends on *module*; see ``apply_interface_name_rules``."""
+    from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
-    interfaces = list(Interface.objects.filter(module=module))
-
-    if not interfaces:
-        return 0
-
-    # Only bases are rule candidates; the idempotency guard therefore looks at them alone.
-    bases, children_by_parent = _partition_families(interfaces)
-    # Determine raw names NetBox assigned from templates; fall back to bay_position.
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
-    unrenamed = _collect_unrenamed(bases, rule, raw_names, force_reapply, raw.matchers, module)
+    interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
+    planned = family_ops.plan_module_families(
+        module,
+        rule,
+        variables,
+        interfaces,
+        # The guard runs while it can still see every claimed row, before two of them that intend
+        # one family are collapsed into it.
+        admit_leftover=lambda plain: _collect_unrenamed(plain, rule, raw_names, force_reapply, raw.matchers, module),
+    )
+    installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
+    leftover = planned.leftover
 
-    if not unrenamed:
-        return 0  # Already renamed (idempotent guard)
+    outcomes = family_ops.execute_module_families([*installed, *leftover])
+    renamed = sum(outcome.changed_count for outcome in outcomes)
+    blocked = [
+        member for outcome in outcomes for member in outcome.members if member.status == family_ops.FamilyStatus.BLOCKED
+    ]
+    families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    # A breakout rule on a module that has channelized families processes only those families —
-    # the same rule the preview and bulk-apply paths follow.
-    families_only = rule.channel_count > 0 and any(_is_channelized_parent(base) for base in bases)
-
-    renamed = 0
-    families_seen = families_only
-    conflicts: list = []
-    for iface in unrenamed:
-        children = children_by_parent.get(iface.pk, ())
-        if families_only and not _is_channelized_parent(iface):  # pragma: no cover - see families_only above
-            logger.debug(
-                "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
-                iface.name,
-                rule,
-            )
-            continue
-        families_seen = families_seen or bool(children) or _is_channelized_parent(iface)
-        try:
-            count = _apply_rule_with_family(rule, iface, children, variables, module, conflicts)
-        except (ValueError, ValidationError, IntegrityError):
-            # The collision pre-check closes the common case, but a concurrent
-            # insert can still win between that check and the save — surfacing
-            # here as IntegrityError/ValidationError out of the per-interface
-            # atomic block (which has already rolled back cleanly).  Log and keep
-            # going so one racing interface never aborts the whole install batch,
-            # mirroring apply_rule_to_existing().
-            logger.exception(
-                "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
-                rule,
-                iface.name,
-                iface.pk,
-            )
-            continue
-        if count is None:
-            # A structural skip (unsupported topology, channel-count mismatch) says nothing about the rule.
-            families_seen = True
-            continue
-        renamed += count
-
-    if unrenamed and renamed == 0 and not conflicts and not families_seen:
+    if leftover and renamed == 0 and not blocked and not families_seen:
         # All interfaces already have the names the rule would produce — flag as
         # potentially obsolete (e.g., newer NetBox generates correct names natively).
         # Skipped when the 0-count was caused by name collisions (a different reason
         # than a no-op rule), so a collision never mislabels the rule as deprecated.
-        # Skipped for channelized families too: a structural skip, or a family whose parent
-        # deliberately keeps its raw name, says nothing about the rule being obsolete.
+        # Skipped for families too: a structural skip, or a family whose parent deliberately
+        # keeps its raw name, says nothing about the rule being obsolete.
         _flag_rule_potentially_deprecated(rule)
 
     return renamed
 
 
-def _predicted_channel_name(rule, raw_name, variables, parents, children):  # pragma: no cover - channelized only
-    """Return the name the channel template named *raw_name* takes under *rule*."""
-    parent_name, channel_id = children[raw_name]
-    if rule.channel_count > 0:
-        if parents.get(parent_name) != rule.channel_count:
-            return raw_name  # channel-count mismatch: the apply path skips the whole family
-        channel = str(rule.channel_start + channel_id - 1)
-        return evaluate_name_template(rule.name_template, {**variables, "base": parent_name, "channel": channel})
-    # Simple rule: the channel follows its parent, keeping the suffix it adds to the parent's name.
-    parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent_name})
-    suffix = _child_name_suffix(raw_name, parent_name)
-    return raw_name if suffix is None else parent_target + suffix
-
-
-def _predicted_family_parent_name(rule, raw_name, variables, parents):  # pragma: no cover - channelized only
-    """Return the name the parent template named *raw_name* takes under *rule*.
-
-    Only a channelized rule that names its parent renames it, and only when the family's channel
-    count is the one the rule describes — the same two conditions the apply path applies.
-    """
-    if not (_is_channelized_rule(rule) and rule.parent_name_template):
-        return raw_name
-    if parents.get(raw_name) != rule.channel_count:
-        return raw_name  # channel-count mismatch: the apply path skips the whole family
-    return evaluate_name_template(rule.parent_name_template, {**variables, "base": raw_name})
-
-
-def _predicted_names(rule, raw_name, variables, parents, children, family_blocked=False):
-    """Return the names *raw_name* predicts to under *rule*.
-
-    A name the module type's templates describe as a channelized parent or channel follows its
-    family; a channelized rule on a plain name predicts the family it would build there, unless
-    *family_blocked* says the apply path refuses to build it; anything else keeps the per-name
-    prediction, expanding once per channel for a breakout rule and once for a simple one.
-    """
-    if raw_name in parents:  # pragma: no cover - requires a NetBox that models channelization
-        if rule.channel_count > 0:
-            # The rule renames the family's existing channels; only a parent template moves the parent.
-            return [_predicted_family_parent_name(rule, raw_name, variables, parents)]
-        return [evaluate_name_template(rule.name_template, {**variables, "base": raw_name})]
-    if raw_name in children:  # pragma: no cover - requires a NetBox that models channelization
-        return [_predicted_channel_name(rule, raw_name, variables, parents, children)]
-    if rule.channel_count > 0 and _is_channelized_rule(rule):
-        if family_blocked or not supports_channelization():
-            return [raw_name]  # the apply path builds nothing here
-        parent_name, channels = _channelized_family_names(rule, raw_name, variables)  # pragma: no cover - see above
-        return [parent_name, *(name for _, name in channels)]  # pragma: no cover - see above
-    vars_copy = {**variables, "base": raw_name}
-    if rule.channel_count > 0:
-        return [
-            evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
-            for ch in range(rule.channel_count)
-        ]
-    return [evaluate_name_template(rule.name_template, vars_copy)]
-
-
 def predict_rule_output(module, module_bay, raw_names):
     """Predict the names apply_interface_name_rules would produce for raw_names.
 
-    Read-only — saves and mutates nothing.  A channelized rule additionally counts the module's
-    interfaces, because the apply path refuses to convert a module that already carries a flat
-    breakout family and the prediction has to say the same.  Used by external integrations (e.g.,
+    Read-only: saves and mutates nothing.  Used by external integrations (e.g.
     netbox-librenms-plugin) that need to know the post-rename names without applying any rule.
 
-    For breakout rules (channel_count > 0), each raw name expands to
-    channel_count predicted names. For simple renames, one name in → one name
-    out. Returns raw_names unchanged when no rule matches or evaluation fails.
-
-    A name the module type's interface templates describe as part of a channelized family is
-    predicted as the apply path treats it instead: the family's channels are renamed in place, so a
-    breakout rule leaves the parent's name alone and maps each channel through its ``channel_id``
-    rather than expanding one name into a flat set.  Names no template claims keep the per-name
-    prediction, so a module type without channelized templates is unaffected.
+    The names are planned by the family module from the module type's templates, so prediction
+    describes the same families installed execution builds: a breakout rule expands one plain name
+    into the family it creates, a name the templates describe as part of a channelized family
+    follows that family instead, and a family the apply path refuses to touch predicts unchanged.
+    Returns raw_names unchanged when no rule matches.
 
     Precondition: *raw_names* are resolved by the caller at call time.  A name captured before the
     device's virtual-chassis position changed is predicted from itself, not corrected to the name
@@ -647,165 +310,51 @@ def predict_rule_output(module, module_bay, raw_names):
     if not rule:
         return list(raw_names)
 
-    variables = build_variables(module_bay, device=module.device)
-    parents, children = _template_families(module)
-    # Costs one count pair, and only where a channelized rule could otherwise predict a family.
-    family_blocked = (
-        rule.channel_count > 0
-        and _is_channelized_rule(rule)
-        and supports_channelization()
-        and _has_flat_expansion(module)
+    plan_set = family_ops.plan_prospective_families(
+        module,
+        rule,
+        build_variables(module_bay, device=module.device),
+        family_ops.describe_module_interfaces(module, raw_names),
     )
-
-    output = []
-    for raw_name in raw_names:
-        try:
-            output.extend(_predicted_names(rule, raw_name, variables, parents, children, family_blocked))
-        except (ValueError, TypeError, re.error):
-            # Template eval failed; apply path would also fail and leave the
-            # interface alone, so the predicted name is the raw name.
-            output.append(raw_name)
-
-    return output
+    return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
 
-def _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts=None):
-    """Attempt to rename a single device-level interface using *rule*.
+def reapply_module_rules(device):
+    """Re-apply module rules to every module on *device* after its virtual-chassis position changed.
 
-    Returns ``True`` if the interface was successfully renamed, ``False`` otherwise.
-    Mutates ``renamed_pks`` on success.
+    The whole device is one batch: its modules match against one enabled-rule snapshot, and one
+    module type's interface templates are read once however many modules carry it. An unexpected
+    failure stops the module batch and propagates to the deferred callback boundary.
 
-    A computed name already taken by another interface on the device is skipped
-    with a tidy WARNING (no traceback), mirroring the module-install path; pass a
-    list as *conflicts* to also collect them.  ``full_clean()`` remains the
-    backstop for the rarer cross-member (VC) uniqueness violation.
+    Returns the number of interfaces renamed across the device's modules.
     """
-    if iface.pk in renamed_pks:
-        return False  # Already renamed by a higher-priority rule
+    from dcim.models import Module
 
-    if rule.module_type_pattern:
-        try:
-            if not re.fullmatch(rule.module_type_pattern, iface.name):
-                return False
-        except re.error:
-            return False
-
-    port = iface.name.rsplit("/", 1)[-1] if "/" in iface.name else iface.name
-    variables = {"vc_position": vc_position, "base": iface.name, "port": port}
-
-    try:
-        new_name = evaluate_name_template(rule.name_template, variables)
-    except (ValueError, TypeError, re.error):
-        logger.exception(
-            "Failed to evaluate template %r for interface %s (rule %s)",
-            rule.name_template,
-            iface.name,
-            rule.pk,
+    modules = list(
+        Module.objects.filter(device=device).select_related(
+            "module_type",
+            "device__device_type",
+            "device__platform",
+            *family_template_names.BAY_CHAIN_RELATIONS,
         )
-        return False
-
-    if new_name == iface.name:
-        return False
-
-    # Pre-check device-scope name uniqueness so an expected collision is a clean
-    # WARNING + skip instead of an ERROR traceback out of full_clean().
-    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return False
-
-    old_name = iface.name
-    iface.name = new_name
-    try:
-        iface.full_clean()
-    except ValidationError as exc:
-        logger.warning(
-            "Validation failed renaming device interface %r → %r (rule %s, device %s); skipping: %s",
-            old_name,
-            new_name,
-            rule.pk,
-            device.pk,
-            exc,
-        )
-        iface.name = old_name
-        return False
-    try:
-        iface.save()
-    except (IntegrityError, ValidationError):
-        logger.exception(
-            "DB save failed for device interface %s → %s (rule %s, device %s)",
-            old_name,
-            new_name,
-            rule.pk,
-            device.pk,
-        )
-        iface.name = old_name
-        return False
-
-    renamed_pks.add(iface.pk)
-    logger.debug("Renamed device interface %s → %s (rule %s, device %s)", old_name, new_name, rule.pk, device.pk)
-    return True
+    )
+    total = 0
+    with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
+        for module in modules:
+            if not module.module_bay:
+                continue
+            total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
+    return total
 
 
-def _try_rename_device_family(rule, iface, children, vc_position, device, renamed_pks, conflicts=None):
-    """Rename a device-level interface with *rule* and carry its channel subinterfaces along.
-
-    Returns the number of interfaces renamed.  The whole family is claimed in *renamed_pks* the
-    moment its parent is renamed, so a lower-priority rule can never rename the leftovers of a
-    family a higher-priority rule already took.
-
-    Healing is best-effort here: device-level interfaces have no module template family to recover
-    a suffix from, so a child that lost its parent's prefix in an earlier run is left alone.
-    """
-    parent_before = iface.name
-    if not _try_rename_device_interface(rule, iface, vc_position, device, renamed_pks, conflicts):
-        return 0
-    count = 1
-    for child, target in _child_target_names(  # pragma: no cover - requires channelization support
-        children, parent_before, iface.name, module=None
-    ):
-        renamed_pks.add(child.pk)
-        if target is None:
-            logger.warning(
-                "Cannot derive a name for channel interface %r from parent %r; leaving it unchanged.",
-                child.name,
-                iface.name,
-            )
-            continue
-        count += _rename_for_family(child, target, device, conflicts).count
-    return count
-
-
-def apply_device_interface_rules(device):
-    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
-
-    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
-    type and platform, then renames any matching interfaces using the name_template.
-
-    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
-    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
-
-    Channel subinterfaces are not matched independently — they follow the parent whose family
-    a rule wins, so a template like ``eth{vc_position}`` cannot collapse a whole family onto
-    one name.
-
-    Returns the number of interfaces renamed.
-    """
-    from dcim.models import Interface
+def _device_interface_rules(device):
+    """Return enabled device-interface rules in matching priority order."""
+    from django.db.models import Q
 
     from .models import InterfaceNameRule
 
-    if not getattr(device, "virtual_chassis_id", None):
-        return 0  # Only rename for VC members (vc_position must be set)
-
-    if device.vc_position is None:
-        return 0  # vc_position unset (e.g. VC master before position assigned)
-
-    vc_position = str(device.vc_position)
     device_type = getattr(device, "device_type", None)
     platform = getattr(device, "platform", None)
-
-    from django.db.models import Q
-
     rules = list(
         InterfaceNameRule.objects.filter(
             applies_to_device_interfaces=True,
@@ -820,117 +369,93 @@ def apply_device_interface_rules(device):
     rules.sort(
         key=lambda r: (
             -r.specificity_score,
-            -(len(r.module_type_pattern or "") if r.applies_to_device_interfaces else 0),
+            -len(r.module_type_pattern or ""),
             r.pk,
         )
     )
+    return rules
 
+
+def _matches_device_interface(rule, interface):
+    """Return whether one device-interface rule matches one device interface."""
+    if not rule.module_type_pattern:
+        return True
+    try:
+        compiled = compile_module_type_pattern(rule.module_type_pattern)
+    except ValidationError:
+        return False
+    return compiled.fullmatch(interface.name) is not None
+
+
+def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
+    """Apply one rule to each eligible device-interface family."""
+    total = 0
+    for interface, children in families:
+        if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
+            continue
+        port = interface.name.rsplit("/", 1)[-1]
+        variables = {"vc_position": vc_position, "base": interface.name, "port": port}
+        plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
+        try:
+            outcome = family_ops.execute_installed_plan(plan)
+        except ValidationError:
+            logger.exception(
+                "Failed to apply rule %s to device interface %r on device %s; skipping.",
+                rule.pk,
+                interface.name,
+                device.pk,
+            )
+            continue
+        total += outcome.changed_count
+        if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
+            claimed_pks.update(plan.member_pks)
+    return total
+
+
+def apply_device_interface_rules(device):
+    """Rename device-level interfaces (module=None) when a device joins/changes position in a VC.
+
+    Finds all enabled rules with ``applies_to_device_interfaces=True`` that match the device's
+    type and platform, then renames any matching interfaces using the name_template.
+
+    Template variables available: ``{vc_position}``, ``{base}`` (full current name),
+    ``{port}`` (segment after the last ``/``, or the full name if no ``/`` present).
+
+    Channel subinterfaces are not matched independently. They follow the parent whose family
+    a rule wins, so a template like ``eth{vc_position}`` cannot collapse a whole family onto
+    one name.
+
+    Returns the number of interfaces renamed.
+    """
+    from dcim.models import Interface
+
+    if not getattr(device, "virtual_chassis_id", None):
+        return 0  # Only rename for VC members (vc_position must be set)
+
+    if device.vc_position is None:
+        return 0  # vc_position unset (e.g. VC master before position assigned)
+
+    vc_position = str(device.vc_position)
+    rules = _device_interface_rules(device)
     if not rules:
         return 0
 
-    interfaces = list(Interface.objects.filter(device=device, module=None))
+    interfaces = list(Interface.objects.filter(device=device, module=None).order_by("pk"))
     if not interfaces:
         return 0
 
-    bases, children_by_parent = _partition_families(interfaces)
+    families = family_ops.device_interface_families(interfaces)
+    claimed_pks: set[int] = set()
     total = 0
-    renamed_pks: set[int] = set()
     for rule in rules:
-        for iface in bases:
-            total += _try_rename_device_family(
-                rule, iface, children_by_parent.get(iface.pk, ()), vc_position, device, renamed_pks
-            )
+        total += _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
 
     return total
 
 
-# The bay chain InterfaceTemplate.resolve_name() dereferences while resolving {module}.
-_BAY_CHAIN_RELATIONS = (
-    "module_bay",
-    "module_bay__parent",
-    "module_bay__module",
-    "module_bay__module__module_bay",
-    "module_bay__module__module_bay__parent",
-    "module_bay__module__module_bay__module",
-)
-
-
-def _module_with_bay_chain(module):
-    """Re-fetch *module* with the bay chain InterfaceTemplate.resolve_name() dereferences.
-
-    Prefetches the module relationships to avoid a per-template query when resolving names.
-    """
-    from dcim.models import Module
-
-    return Module.objects.select_related(*_BAY_CHAIN_RELATIONS).get(pk=module.pk)
-
-
-# NetBox resolves {vc_position} once, at instantiation, so a raw name records the device's VC state
-# at that moment while its template keeps resolving to the current one: hence names *and* matchers.
-_RawMatcher = namedtuple("_RawMatcher", ("template_name", "resolved", "pattern"))
-_RawNames = namedtuple("_RawNames", ("names", "matchers"))
-
-# Brace-free stand-ins, so NetBox's placeholder pass, this plugin's and re.escape() all leave them be.
-_VC_SENTINEL = "InrVcPositionSentinel{}End"
-_BASE_SENTINEL = "InrBaseSentinelEnd"
-
-
-def _vc_position_alternatives(fallback):  # pragma: no cover - requires vc_position token support
-    """Return the regex branch covering every value one ``{vc_position}`` occurrence resolves to.
-
-    Any member position and the implicit ``'0'`` are digits; an explicit ``{vc_position:X}`` fallback
-    adds a branch of its own, since NetBox does not require it to be numeric.
-    """
-    if fallback is None:
-        return r"\d+"
-    return f"(?:\\d+|{re.escape(fallback)})"
-
-
-def _raw_name_pattern(tmpl, module, token_re):  # pragma: no cover - requires vc_position token support
-    """Return the matcher for every name *tmpl* has ever resolved to, or None without the token.
-
-    Each token occurrence becomes a sentinel; ``{module}`` is then resolved by NetBox's own code on a
-    shallow copy carrying that name (its VC pass no-ops on a token-free string), so no placeholder
-    resolution is reimplemented here.
-    """
-    fallbacks = []
-
-    def _mark(match):
-        fallbacks.append(match.group(1))
-        return _VC_SENTINEL.format(len(fallbacks) - 1)
-
-    marked = token_re.sub(_mark, tmpl.name)
-    if not fallbacks:
-        return None
-    stub = copy.copy(tmpl)
-    stub.name = marked
-    pattern = re.escape(stub.resolve_name(module))
-    for index, fallback in enumerate(fallbacks):
-        pattern = pattern.replace(_VC_SENTINEL.format(index), _vc_position_alternatives(fallback))
-    return _compile_pattern(pattern)
-
-
-def _raw_matchers(templates, module):
-    """Resolve *templates* against *module*: their names now, plus a matcher per token template."""
-    token_re = _vc_position_re()
-    names = set()
-    matchers = []
-    for tmpl in templates:
-        resolved = tmpl.resolve_name(module)
-        names.add(resolved)
-        pattern = None if token_re is None else _raw_name_pattern(tmpl, module, token_re)
-        if pattern is not None:
-            matchers.append(_RawMatcher(tmpl.name, resolved, pattern))  # pragma: no cover - token templates only
-    return _RawNames(names, matchers)
-
-
 def _raw_name_matchers(module):
-    """Return *module*'s raw template names and the drift matchers of its token templates."""
-    from dcim.models import InterfaceTemplate
-
-    module_fresh = _module_with_bay_chain(module)
-    templates = InterfaceTemplate.objects.filter(module_type=module_fresh.module_type)
-    return _raw_matchers(templates, module_fresh)
+    """Delegate current and historical raw name resolution."""
+    return family_template_names.raw_name_matchers(module)
 
 
 def _get_raw_interface_names(module):
@@ -939,124 +464,8 @@ def _get_raw_interface_names(module):
 
 
 def _raw_name_patterns(module):
-    """Return one compiled matcher per interface template of *module* whose name carries the token.
-
-    Empty for a module type no template of which uses ``{vc_position}``, and on every NetBox release
-    that does not resolve the token at all.
-    """
-    return [matcher.pattern for matcher in _raw_name_matchers(module).matchers]
-
-
-def _raw_names_by_module(modules):  # pragma: no cover - only the conversion scan batches names
-    """Return ``{module pk: _RawNames}`` for *modules*, in one template query for all of them.
-
-    Raw names are a property of the module type, but ``_raw_name_matchers`` costs a module refetch
-    and a template query each — a scan over a fleet would pay that per module.  *modules* must
-    already carry ``_BAY_CHAIN_RELATIONS``, since the names are resolved against them in memory.
-    """
-    from dcim.models import InterfaceTemplate
-
-    by_module_type = defaultdict(list)
-    for tmpl in InterfaceTemplate.objects.filter(module_type__in={module.module_type_id for module in modules}):
-        by_module_type[tmpl.module_type_id].append(tmpl)
-    return {module.pk: _raw_matchers(by_module_type[module.module_type_id], module) for module in modules}
-
-
-def _template_families(module):
-    """Return ``(parents, children)`` describing *module*'s channelized interface templates.
-
-    *parents* maps a channelized parent template's resolved name to its channel count; *children*
-    maps each channel template's resolved name to ``(parent_name, channel_id)``.  Both are empty
-    where nothing can be channelized, so callers keep their pre-channelization behaviour without
-    paying for a template scan.
-    """
-    if not supports_channelization():
-        return {}, {}
-    return _resolve_template_families(module)  # pragma: no cover - requires channelization support
-
-
-def _resolve_template_families(module):  # pragma: no cover - requires a NetBox that models channelization
-    """Resolve *module*'s interface templates into the channelized families they describe.
-
-    Pairing through ``InterfaceTemplate.parent`` (rather than matching against the flat set of raw
-    names) keeps ambiguous prefixes like ``xe``/``xe-0`` apart, and a channel template whose parent
-    declares no channel count is not a family at all.
-    """
-    from dcim.models import InterfaceTemplate
-
-    module_fresh = _module_with_bay_chain(module)
-    templates = list(InterfaceTemplate.objects.filter(module_type=module_fresh.module_type))
-    resolved = {tmpl.pk: tmpl.resolve_name(module_fresh) for tmpl in templates}
-    parents_by_pk = {
-        tmpl.pk: (resolved[tmpl.pk], tmpl.channels) for tmpl in templates if getattr(tmpl, "channels", None) is not None
-    }
-    children = {}
-    for tmpl in templates:
-        channel_id = getattr(tmpl, "channel_id", None)
-        parent = parents_by_pk.get(getattr(tmpl, "parent_id", None))
-        if channel_id is None or parent is None:
-            continue
-        parent_name, _channels = parent
-        children[resolved[tmpl.pk]] = (parent_name, channel_id)
-    return dict(parents_by_pk.values()), children
-
-
-def _template_channel_suffixes(module):  # pragma: no cover - requires a NetBox that models channelization
-    """Map ``channel_id`` → the set of name suffixes *module*'s interface templates give that channel.
-
-    The suffix comes from the template family itself — each channel template's resolved name minus
-    its parent template's resolved name — so a child that lost its parent's prefix in an earlier
-    partial rename can still be repaired.  A module type with several families may spell the same
-    channel differently in each (``et0:2`` vs ``sw0.2``), so the suffixes are collected per channel
-    rather than overwritten: the recovery only uses one when every family agrees on it.
-    """
-    suffixes = defaultdict(set)
-    for child_name, (parent_name, channel_id) in _template_families(module)[1].items():
-        suffix = _child_name_suffix(child_name, parent_name)
-        if suffix is not None:
-            suffixes[channel_id].add(suffix)
-    return suffixes
-
-
-def _recovered_suffix(child, suffixes):  # pragma: no cover - requires channelization support
-    """Return the template suffix for *child*'s channel, or None when it is not unambiguous.
-
-    Once a parent has been renamed there is no reliable way back from a stranded child to the family
-    it belongs to, so a channel spelled differently by two families is left alone rather than guessed.
-    """
-    candidates = suffixes.get(child.channel_id) or set()
-    if len(candidates) == 1:
-        return next(iter(candidates))
-    if candidates:
-        logger.warning(
-            "Channel %s is spelled %s by different families of this module type; "
-            "cannot recover a name for interface %r.",
-            child.channel_id,
-            sorted(candidates),
-            child.name,
-        )
-    return None
-
-
-def _child_target_names(children, parent_before, parent_after, module):
-    """Pair every child with the name it takes when its parent is renamed to *parent_after*.
-
-    The suffix is read from the child's own name against *parent_before* (the parent's name before
-    this run's rename); when the child no longer carries that prefix the suffix is recovered from
-    the module's template family instead.  A child that neither shares the prefix nor has an
-    unambiguous template pairing is returned with a None target — the engine leaves it alone rather
-    than guessing at a free-form name.
-    """
-    suffixes = None
-    targets = []
-    for child in children:  # pragma: no cover - requires channelization support
-        suffix = _child_name_suffix(child.name, parent_before)
-        if suffix is None and module is not None:
-            if suffixes is None:
-                suffixes = _template_channel_suffixes(module)
-            suffix = _recovered_suffix(child, suffixes)
-        targets.append((child, None if suffix is None else parent_after + suffix))
-    return targets
+    """Delegate historical raw-name pattern construction."""
+    return family_template_names.raw_name_patterns(module)
 
 
 def _flag_rule_potentially_deprecated(rule):
@@ -1087,708 +496,18 @@ def _flag_rule_potentially_deprecated(rule):
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
 
 
-def _scope_ids(parent_module_type, device_type, platform):
-    """Map the (parent_module_type, device_type, platform) scope objects to their FK ids.
-
-    ``None`` (no constraint) maps to ``None`` so it compares equal to a rule's unset scope FK.
-    Centralises the ``x.pk if x is not None else None`` coalescing used by both match tiers and
-    the memo key.
-    """
-    return (
-        parent_module_type.pk if parent_module_type is not None else None,
-        device_type.pk if device_type is not None else None,
-        platform.pk if platform is not None else None,
-    )
-
-
-def _rule_scope_matches(rule, scope_ids):
-    """Return True when *rule*'s (parent_module_type, device_type, platform) FKs equal *scope_ids*."""
-    pmt_id, dt_id, pl_id = scope_ids
-    return rule.parent_module_type_id == pmt_id and rule.device_type_id == dt_id and rule.platform_id == pl_id
-
-
-def _build_candidates(parent_module_type, device_type, platform) -> list:
-    """Build ordered list of (pmt, dt, pl) tuples from most to least specific.
-
-    Each argument expands to ``[value, None]`` when provided, or ``[None]``
-    when already absent.  Deduplication ensures no key appears twice (which
-    would happen when multiple inputs are None).
-    """
-    seen: set = set()
-    candidates = []
-    pmt_opts = [parent_module_type, None] if parent_module_type else [None]
-    dt_opts = [device_type, None] if device_type else [None]
-    pl_opts = [platform, None] if platform else [None]
-    for pmt in pmt_opts:
-        for dt in dt_opts:
-            for pl in pl_opts:
-                key = (pmt, dt, pl)
-                if key not in seen:
-                    seen.add(key)
-                    candidates.append(key)
-    return candidates
-
-
-def _find_exact_match(module_type, candidates, exact_rules=None):
-    """Tier 1: return the first enabled exact-FK rule in specificity order, or None.
-
-    ``exact_rules`` is the preloaded, ``(module_type__model, pk)``-ordered enabled
-    exact-rule set (the hot path passes it to avoid a DB query per call); when omitted
-    it is loaded on demand so direct callers keep working.
-    """
-    if exact_rules is None:
-        exact_rules, _, _ = _get_enabled_rules()
-
-    # module_type fixed below → the (module_type__model, pk) ordering reduces to pk, so the
-    # first matching rule equals the previous ``.filter(...).first()``.
-    scoped = [r for r in exact_rules if r.module_type_id == module_type.pk]
-    for candidate in candidates:
-        scope_ids = _scope_ids(*candidate)
-        for rule in scoped:
-            if _rule_scope_matches(rule, scope_ids):
-                return rule
-    return None
-
-
-def _find_regex_match(model_name: str, candidates, regex_rules=None):
-    """Tier 2: return the first enabled regex rule whose pattern fullmatches *model_name*, or None.
-
-    Tries candidates in specificity order; within each level longer patterns are tried first
-    (more specific).  ``regex_rules`` is the preloaded ``(compiled_pattern, rule)`` set — pre-sorted
-    by ``(-pattern length, pk)`` with each pattern compiled once (a None compile is an invalid
-    pattern, silently skipped); loaded on demand when omitted.
-    """
-    if regex_rules is None:
-        _, regex_rules, _ = _get_enabled_rules()
-
-    for candidate in candidates:
-        scope_ids = _scope_ids(*candidate)
-        for compiled, rule in regex_rules:
-            if compiled is not None and _rule_scope_matches(rule, scope_ids) and compiled.fullmatch(model_name):
-                return rule
-    return None
-
-
-def find_matching_rule(module_type, parent_module_type, device_type, platform=None):
-    """Find the most specific InterfaceNameRule matching the context.
-
-    Uses a two-tier strategy:
-      Tier 1 — Exact FK match (priority order, most specific first):
-        Iterates all combinations of (parent_module_type, device_type, platform)
-        from fully-constrained to fully-unconstrained (None = any).
-      Tier 2 — Regex pattern match (same priority order, longer patterns first):
-        Same specificity cascade, but module_type_pattern is matched via
-        re.fullmatch() against module_type.model. Patterns are iterated
-        from longest to shortest to prefer more specific patterns.
-
-    The enabled rule set is loaded once and matched in memory, and the per-context
-    result is memoized for the current rule-set version, so repeated calls (e.g. one
-    per module row in a module-sync render) don't re-query the database.
-
-    Returns the first matching rule, or None if no rule matches.
-    """
-    if module_type is None:
-        # Module rules are always keyed on a module type; both tiers dereference it
-        # (module_type.pk / .model), so there is nothing to match without one.
-        return None
-
-    exact_rules, regex_rules, memo = _get_enabled_rules()
-    # The regex tier matches against module_type.model (a live string), so the memo must key on
-    # it too — otherwise a ModuleType.model rename (same pk) would return a stale regex result.
-    sig = (module_type.pk, module_type.model, *_scope_ids(parent_module_type, device_type, platform))
-    # One atomic lookup, not `if sig in memo: return memo[sig]`: another thread sharing this per-version
-    # memo can clear it at the cap between a membership test and the subscript, raising KeyError.
-    cached = memo.get(sig, _MEMO_MISS)
-    if cached is not _MEMO_MISS:
-        return cached
-
-    candidates = _build_candidates(parent_module_type, device_type, platform)
-    result = _find_exact_match(module_type, candidates, exact_rules) or _find_regex_match(
-        module_type.model, candidates, regex_rules
-    )
-    if len(memo) >= _MEMO_MAX:
-        memo.clear()  # bound per-version memory; entries are rebuilt lazily on the next miss
-    memo[sig] = result
-    return result
-
-
-def _extract_trailing_digits(s: str) -> str:
-    r"""Return the trailing digit run of *s* without regex backtracking.
-
-    Pure O(n) string scan — eliminates the polynomial backtracking risk that
-    arises from using ``re.search(r"(\d+)$", ...)`` on strings ending in a
-    non-digit character (e.g. ``"1" * n + "x"`` would cause O(n²) steps).
-
-    Returns an empty string when *s* has no trailing digits.
-    """
-    i = len(s)
-    while i > 0 and s[i - 1].isdigit():
-        i -= 1
-    return s[i:]
-
-
-def _resolve_bay_position(module_bay):
-    """Return (bay_position, bay_position_num) from a module bay's position field.
-
-    Handles template expressions like ``{module}`` by extracting the trailing
-    digit from the bay name.  Falls back to ``"0"`` if no digit is found.
-    """
-    bay_position = module_bay.position or "0"
-    if bay_position.startswith("{"):
-        digits = _extract_trailing_digits(module_bay.name)
-        bay_position = digits if digits else "0"
-    digits = _extract_trailing_digits(bay_position)
-    bay_position_num = digits if digits else "0"
-    return bay_position, bay_position_num
-
-
-def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
-    """Return the ``slot`` variable from the module bay hierarchy.
-
-    When the bay has a parent bay, slot comes from the parent (or grandparent
-    when two levels of nesting exist).  When the bay belongs to an installed
-    module with its own bay, slot comes from that module's bay position.
-    Falls back to ``bay_position_num``.
-    """
-    if module_bay.parent:
-        parent_bay = module_bay.parent
-        if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
-            return parent_bay.parent.position or parent_bay_position
-        return parent_bay_position
-    if hasattr(module_bay, "module") and module_bay.module:
-        owner_module = module_bay.module
-        if hasattr(owner_module, "module_bay") and owner_module.module_bay:
-            return owner_module.module_bay.position or bay_position_num
-    return bay_position_num
-
-
-def build_variables(module_bay, device=None):
-    """Build template variable dict from a module bay's position context.
-
-    Extracts numeric and raw position values from the bay and its parent chain,
-    producing the variables available for name_template substitution.
-
-    Returns a dict with keys: slot, bay_position, bay_position_num,
-    parent_bay_position, sfp_slot, and optionally vc_position.
-
-    ``vc_position`` is only injected when *device* is a Virtual Chassis member
-    (device.virtual_chassis_id is set).  Templates using ``{vc_position}`` on a
-    non-VC device will raise ValueError during evaluation — this is intentional.
-    Note: Juniper VC positions start at 0, so 0 is a valid real-world value and
-    cannot be used as a "not in VC" sentinel.
-    """
-    bay_position, bay_position_num = _resolve_bay_position(module_bay)
-
-    parent_bay_position = "0"
-    if module_bay.parent:
-        parent_bay_position = module_bay.parent.position or "0"
-
-    slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
-
-    result = {
-        "slot": slot,
-        "bay_position": bay_position,
-        "bay_position_num": bay_position_num,
-        "parent_bay_position": parent_bay_position,
-        "sfp_slot": bay_position_num,
-    }
-    if (
-        device is not None
-        and getattr(device, "virtual_chassis_id", None) is not None
-        and device.vc_position is not None
-    ):
-        result["vc_position"] = str(device.vc_position)
-    return result
-
-
-def _name_exists_on_device(device, name, exclude_pk=None):
-    """Return True if another interface on *device* already uses *name*.
-
-    Pre-checks the per-device interface-name uniqueness NetBox enforces so a
-    rename/create that would collide is skipped cleanly instead of raising
-    mid-transaction.  (VC-wide uniqueness is not pre-checked here; full_clean()
-    remains the authoritative validator for that rarer cross-member case.)
-    """
-    from dcim.models import Interface
-
-    qs = Interface.objects.filter(device=device, name=name)
-    if exclude_pk is not None:
-        qs = qs.exclude(pk=exclude_pk)
-    return qs.exists()
-
-
-def _record_skip(conflicts, device, current_name, attempted_name, interface_pk=None):
-    """Append a skipped rename to *conflicts* when the caller is collecting them.
-
-    The caller has already logged why it skipped; this only lets the interactive Apply view report
-    how many renames were dropped.
-    """
-    if conflicts is not None:
-        conflicts.append(
-            {
-                "device": str(device),
-                "current_name": current_name,
-                "attempted_name": attempted_name,
-                "interface_pk": interface_pk,
-            }
-        )
-
-
-def _record_conflict(conflicts, device, current_name, attempted_name, interface_pk=None):
-    """Log a name collision at WARNING and record it as a skipped rename.
-
-    Collisions are expected during automatic renaming (module install, type
-    change, VC change) when the computed name is already taken on the device;
-    they must never abort the batch, so callers skip the rename and carry on.
-    """
-    logger.warning(
-        "Interface name %r already exists on device %s — skipping rename of %r → %r",
-        attempted_name,
-        device,
-        current_name,
-        attempted_name,
-    )
-    _record_skip(conflicts, device, current_name, attempted_name, interface_pk)
-
-
-# What a family-aware rename did, so the children can act on their parent's outcome rather than on
-# its computed target name (which says nothing about whether the parent actually took it).
-_RENAMED = "renamed"
-_UNCHANGED = "unchanged"
-_COLLISION = "collision"
-_ERROR = "error"
-
-_RenameResult = namedtuple("_RenameResult", ("target_name", "outcome", "count"))
-
-
-def _rename_in_place(iface, new_name, device, conflicts):
-    """Rename *iface* to *new_name*; return 1 if renamed, 0 if no-op or collision."""
-    if new_name == iface.name:
-        return 0
-    if _name_exists_on_device(device, new_name, exclude_pk=iface.pk):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return 0
-    iface.name = new_name
-    iface.full_clean()
-    iface.save()
-    return 1
-
-
-def _rename_for_family(iface, new_name, device, conflicts):  # pragma: no cover - requires channelization support
-    """Rename *iface* as part of a family walk, reporting the outcome instead of raising.
-
-    The save runs in its own savepoint so an unexpected failure on one member leaves the
-    surrounding transaction usable: family processing is best-effort per interface, and only a
-    failed *parent* stops the rest of its family.
-    """
-    if new_name == iface.name:
-        return _RenameResult(new_name, _UNCHANGED, 0)
-    old_name = iface.name
-    try:
-        with transaction.atomic():
-            renamed = _rename_in_place(iface, new_name, device, conflicts)
-    except (ValueError, ValidationError, IntegrityError):
-        logger.exception("Failed to rename interface %r → %r on device %s; skipping.", old_name, new_name, device)
-        iface.name = old_name
-        return _RenameResult(new_name, _ERROR, 0)
-    return _RenameResult(new_name, _RENAMED, 1) if renamed else _RenameResult(new_name, _COLLISION, 0)
-
-
-def _restore_deferred_channel_names(reconciliations, db_alias):  # pragma: no cover - channelization only
-    """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
-    from dcim.models import Interface
-
-    child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
-    with transaction.atomic(using=db_alias):
-        children = Interface.objects.using(db_alias).select_for_update().select_related("device").in_bulk(child_pks)
-        for child_pk, final_name, cascade_name in reconciliations:
-            child = children.get(child_pk)
-            if child is None or child.name == final_name:
-                continue
-            if child.name != cascade_name:
-                logger.warning(
-                    "Channel interface %s changed to unexpected name %r before deferred reconciliation; "
-                    "leaving it unchanged.",
-                    child_pk,
-                    child.name,
-                )
-                continue
-            previous_name = child.name
-            try:
-                with transaction.atomic(using=db_alias):
-                    child.name = final_name
-                    child.full_clean()
-                    child.save(using=db_alias)
-            except (ValueError, ValidationError, IntegrityError):
-                child.name = previous_name
-                logger.exception(
-                    "Failed to restore channel interface %s from NetBox's deferred name %r to %r; skipping.",
-                    child_pk,
-                    cascade_name,
-                    final_name,
-                )
-
-
-def _preserve_names_across_parent_cascade(parent, parent_before, final_names):  # pragma: no cover
-    """Run after NetBox's deferred cascade when a rule intentionally keeps old-parent child names."""
-    if parent.name == parent_before:
-        return
-
-    reconciliations = []
-    for child, final_name in final_names:
-        old_conventional_name = f"{parent_before}:{child.channel_id}"
-        cascade_name = f"{parent.name}:{child.channel_id}"
-        if final_name == old_conventional_name and final_name != cascade_name:
-            reconciliations.append((child.pk, final_name, cascade_name))
-    if not reconciliations:
-        return
-
-    reconciliations = tuple(reconciliations)
-    db_alias = parent._state.db
-    transaction.on_commit(
-        lambda: _restore_deferred_channel_names(reconciliations, db_alias),
-        using=db_alias,
-    )
-
-
-def _rename_channel_children(parent, parent_before, children, module, conflicts):  # pragma: no cover - see above
-    """Carry the parent's new name onto its channel subinterfaces; return how many were renamed."""
-    count = 0
-    for child, target in _child_target_names(children, parent_before, parent.name, module):
-        if target is None:
-            logger.warning(
-                "Cannot derive a name for channel interface %r from parent %r; leaving it unchanged.",
-                child.name,
-                parent.name,
-            )
-            continue
-        count += _rename_for_family(child, target, module.device, conflicts).count
-    return count
-
-
-def _apply_simple_rule_to_family(rule, parent, children, variables, module, conflicts):  # pragma: no cover
-    """Rename a channelized family in lockstep with its parent; return the count renamed.
-
-    The children act on the parent's *outcome*, never on its computed target: a parent that
-    collided or failed to save leaves the whole family untouched, while a parent that already
-    carries the right name still lets a stale child be repaired.
-    """
-    parent_before = parent.name
-    new_name = evaluate_name_template(rule.name_template, {**variables, "base": parent.name})
-    result = _rename_for_family(parent, new_name, module.device, conflicts)
-    if result.outcome in (_COLLISION, _ERROR):
-        logger.debug("Family of %r left unchanged: the parent could not be renamed to %r.", parent.name, new_name)
-        return result.count
-    return result.count + _rename_channel_children(parent, parent_before, children, module, conflicts)
-
-
-def _rename_family_parent(rule, parent, variables, module, conflicts):  # pragma: no cover - see above
-    """Rename an existing family's parent per the rule's parent template; return its rename outcome.
-
-    Only a channelized rule that names its parent touches it — a flat rule, or a blank parent
-    template, leaves the parent the name it already has.
-    """
-    if not (_is_channelized_rule(rule) and rule.parent_name_template):
-        return _RenameResult(parent.name, _UNCHANGED, 0)
-    target = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
-    return _rename_for_family(parent, target, module.device, conflicts)
-
-
-def _apply_breakout_rule_to_family(rule, parent, children, variables, module, conflicts):  # pragma: no cover
-    """Rename an already-channelized family; return the count renamed, or None when skipped.
-
-    Nothing is ever created here: the channels the rule describes are rows NetBox already models,
-    so a breakout rule renames them in place.  The parent is renamed only when the rule builds
-    channelized families and names their parent; the channels' ``{base}`` stays the parent's name
-    as it was before that rename.  A rule whose channel count disagrees with the hardware is a
-    modelling mismatch — the family is skipped whole rather than renamed into a shape it does not
-    have, and a parent that could not take its name stops the family the same way a simple rule's
-    does.
-
-    Every child's name is computed before the first save, so a template that only fails on a later
-    channel (channel-dependent arithmetic) aborts the family untouched instead of half renaming it.
-    """
-    if getattr(parent, "channels", None) != rule.channel_count:
-        logger.warning(
-            "Interface %r provides %s channels but rule '%s' defines %s; skipping the family.",
-            parent.name,
-            getattr(parent, "channels", None),
-            rule,
-            rule.channel_count,
-        )
-        return None
-    base_name = parent.name
-    targets = [
-        (
-            child,
-            evaluate_name_template(
-                rule.name_template,
-                {**variables, "base": base_name, "channel": str(rule.channel_start + child.channel_id - 1)},
-            ),
-        )
-        for child in children
-    ]
-    result = _rename_family_parent(rule, parent, variables, module, conflicts)
-    if result.outcome in (_COLLISION, _ERROR):
-        logger.debug(
-            "Family of %r left unchanged: the parent could not be renamed to %r.", base_name, result.target_name
-        )
-        return result.count
-    count = result.count
-    final_names = []
-    for child, new_name in targets:
-        previous_name = child.name
-        child_result = _rename_for_family(child, new_name, module.device, conflicts)
-        count += child_result.count
-        final_name = new_name if child_result.outcome in (_RENAMED, _UNCHANGED) else previous_name
-        final_names.append((child, final_name))
-    _preserve_names_across_parent_cascade(parent, base_name, final_names)
-    return count
-
-
-def _is_channelized_rule(rule):
-    """Return True when *rule* asks for the channelized topology instead of flat sibling interfaces."""
-    return rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
-
-
-def _channelized_family_names(rule, base_name, variables):  # pragma: no cover - requires channelization support
-    """Return ``(parent_name, [(channel_id, name), ...])`` for the family *rule* builds on *base_name*.
-
-    ``{base}`` is the base interface's current name for the parent and every channel; ``{channel}``
-    is ``channel_start + channel_id - 1``.  A blank parent template leaves the base's name alone.
-    Takes the name rather than the interface so prediction can reuse it without a row to point at.
-    """
-    family_vars = {**variables, "base": base_name}
-    parent_name = base_name
-    if rule.parent_name_template:
-        parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
-    channels = [
-        (
-            channel_id,
-            evaluate_name_template(
-                rule.name_template, {**family_vars, "channel": str(rule.channel_start + channel_id - 1)}
-            ),
-        )
-        for channel_id in range(1, rule.channel_count + 1)
-    ]
-    return parent_name, channels
-
-
-def _has_flat_expansion(module):  # pragma: no cover - requires channelization support
-    """Return True when *module* carries more interfaces than its module type's templates describe.
-
-    A flat breakout leaves N-1 rows beyond the templates, so the surplus is the structural mark of a
-    family an earlier apply installed.  Counting templates rather than their resolved names keeps
-    two templates that resolve to the same string from reading as one.
-    """
-    from dcim.models import Interface, InterfaceTemplate
-
-    templates = InterfaceTemplate.objects.filter(module_type_id=module.module_type_id).count()
-    return Interface.objects.filter(module=module).count() > templates
-
-
-def _first_taken_name(device, names, exclude_pk):  # pragma: no cover - requires channelization support
-    """Return the first of *names* already used by another interface on *device*, or None."""
-    for name in names:
-        if _name_exists_on_device(device, name, exclude_pk=exclude_pk):
-            return name
-    return None
-
-
-def _build_channelized_family(rule, base, variables, module, conflicts):  # pragma: no cover - see above
-    """Turn a plain base interface into a channelized family; return how many rows it changed.
-
-    The whole family is preflighted before anything is written: a module that already carries a flat
-    family, or a single occupied name — the parent's or any channel's — leaves the base exactly as
-    it was instead of half converting it.
-    """
-    from dcim.choices import InterfaceTypeChoices
-    from dcim.models import Interface
-
-    device = module.device
-    base_name = base.name
-    parent_name, channels = _channelized_family_names(rule, base_name, variables)
-    if _has_flat_expansion(module):
-        # Converting one sibling into a parent would strand the others beside the new family.
-        logger.warning(
-            "Module %s already carries a flat breakout family; rule '%s' will not convert interface "
-            "%r into the channelized parent %r — converting an installed family is a separate, "
-            "explicit operation. Skipping.",
-            module,
-            rule,
-            base.name,
-            parent_name,
-        )
-        _record_skip(conflicts, device, base.name, parent_name, base.pk)
-        return 0
-    blocker = _first_taken_name(device, [parent_name, *(name for _, name in channels)], base.pk)
-    if blocker is not None:
-        logger.warning(
-            "Cannot build the channelized family for interface %r on device %s: %r is already taken; skipping.",
-            base.name,
-            device,
-            blocker,
-        )
-        _record_skip(conflicts, device, base.name, blocker, base.pk)
-        return 0
-
-    count = 0
-    with transaction.atomic():
-        created_channels = []
-        base.channels = rule.channel_count
-        if parent_name != base.name:
-            base.name = parent_name
-            count += 1
-        base.full_clean()
-        base.save()
-        for channel_id, name in channels:
-            channel = Interface(
-                device=device,
-                module=module,
-                name=name,
-                type=InterfaceTypeChoices.TYPE_CHANNEL,
-                parent=base,
-                channel_id=channel_id,
-                enabled=base.enabled,
-            )
-            channel.full_clean()
-            channel.save()
-            created_channels.append((channel, name))
-            count += 1
-        _preserve_names_across_parent_cascade(base, base_name, created_channels)
-    return count
-
-
-def _apply_channelized_rule(rule, base, variables, module, conflicts):
-    """Build the channelized family *rule* describes on a plain base interface.
-
-    Returns None where NetBox cannot model channels: the rule describes a topology this release has
-    no rows for, and building a flat family instead would silently give the operator another one.
-    """
-    if not supports_channelization():
-        logger.warning(
-            "Rule '%s' builds a channelized family, which this NetBox release cannot model; "
-            "leaving interface %r unchanged.",
-            rule,
-            base.name,
-        )
-        return None
-    return _build_channelized_family(rule, base, variables, module, conflicts)  # pragma: no cover - see above
-
-
-def _apply_rule_with_family(rule, iface, children, variables, module, conflicts):
-    """Apply *rule* to *iface*, carrying its channel subinterfaces along.
-
-    Returns the number of interfaces renamed/created, or None when a channelized family was
-    skipped for a structural reason.  Interfaces that own no family take the plain path unchanged.
-    """
-    if rule.channel_count > 0 and (_is_channelized_parent(iface) or children):  # pragma: no cover
-        return _apply_breakout_rule_to_family(rule, iface, children, variables, module, conflicts)
-    if children:  # pragma: no cover - requires channelization support
-        return _apply_simple_rule_to_family(rule, iface, children, variables, module, conflicts)
-    if rule.channel_count > 0 and _is_channelized_rule(rule):
-        return _apply_channelized_rule(rule, iface, variables, module, conflicts)
-    return _apply_rule_to_interface(rule, iface, {**variables, "base": iface.name}, module, conflicts=conflicts)
-
-
-def _create_channel(iface, module, new_name, device, conflicts):
-    """Create a breakout channel interface *new_name*; return 1 if created, else 0.
-
-    Silently skips when this module already has the channel (idempotent
-    re-apply); records a conflict when *new_name* is taken by a different
-    interface on the device.
-    """
-    from dcim.models import Interface
-
-    if Interface.objects.filter(module=module, name=new_name).exists():
-        return 0  # idempotent: channel already created on this module
-    if _name_exists_on_device(device, new_name):
-        _record_conflict(conflicts, device, iface.name, new_name, iface.pk)
-        return 0
-    breakout_iface = Interface(
-        device=device,
-        module=module,
-        name=new_name,
-        type=iface.type,
-        enabled=iface.enabled,
-    )
-    breakout_iface.full_clean()
-    breakout_iface.save()
-    return 1
-
-
-def _apply_rule_to_interface(rule, iface, variables, module, conflicts=None):
-    """Apply a single rule to an interface, handling breakout channels.
-
-    All saves are wrapped in a transaction so a failure mid-breakout rolls
-    back any partially created interfaces.  A computed name that already exists
-    on the device is skipped (logged, and recorded in *conflicts* when a list
-    is passed) instead of raising — so automatic renaming (module install,
-    module-type change, VC change) never aborts the rest of the batch on a
-    name collision.
-
-    Returns the number of interfaces renamed/created.
-    """
-    count = 0
-    device = module.device
-
-    with transaction.atomic():
-        if rule.channel_count > 0:
-            # Breakout: rename base interface and create additional channel interfaces
-            for ch in range(rule.channel_count):
-                variables["channel"] = str(rule.channel_start + ch)
-                new_name = evaluate_name_template(rule.name_template, variables)
-                if ch == 0:
-                    count += _rename_in_place(iface, new_name, device, conflicts)
-                else:
-                    count += _create_channel(iface, module, new_name, device, conflicts)
-        else:
-            # Simple rename (converter offset, platform naming, etc.)
-            new_name = evaluate_name_template(rule.name_template, variables)
-            count += _rename_in_place(iface, new_name, device, conflicts)
-
-    return count
-
-
-def _find_channel_base(rule, ifaces, variables):
-    """Find the best 'base' interface for a channel rule on a single module.
-
-    Prefers an interface whose current name already equals the expected ch=0 name
-    (i.e. it has already been renamed to channel 0 and is safe to re-process).
-    Falls back to the first interface (alphabetically) so that on first apply,
-    the template-created base interface becomes channel 0.
-
-    This ensures apply_rule_to_existing / find_interfaces_for_rule call
-    _apply_rule_to_interface exactly ONCE per module for channel rules, preventing
-    duplicate-name IntegrityErrors when channels already exist.
-    """
-    if not ifaces:
-        return None
-    for iface in ifaces:
-        vars_copy = dict(variables)
-        vars_copy["base"] = iface.name
-        vars_copy["channel"] = str(rule.channel_start)  # ch=0
-        try:
-            ch0_name = evaluate_name_template(rule.name_template, vars_copy)
-            if iface.name == ch0_name:
-                return iface
-        except ValueError:
-            pass
-    return ifaces[0]
-
-
 def _matching_moduletype_pks(module_type_pattern):
-    """Return PKs of ModuleTypes whose model name matches the given regex pattern.
+    """Return PKs of ModuleTypes whose model name matches the given RE2 pattern.
 
-    Raises ValueError for invalid regex patterns, mirroring evaluate_name_template's
+    Raises ValueError for invalid patterns, mirroring evaluate_name_template's
     error-handling convention so callers can treat both as ValueError.
     """
     from dcim.models import ModuleType
 
     try:
-        compiled = re.compile(module_type_pattern)
-    except re.error as exc:
-        raise ValueError(f"Invalid module_type_pattern regex '{module_type_pattern}': {exc}") from exc
+        compiled = compile_module_type_pattern(module_type_pattern)
+    except ValidationError as exc:
+        raise ValueError(exc.messages[0]) from exc
     return [mt.pk for mt in ModuleType.objects.only("pk", "model") if compiled.fullmatch(mt.model)]
 
 
@@ -1807,7 +526,7 @@ def has_applicable_interfaces(rule) -> bool:
     try:
         results, _ = find_interfaces_for_rule(rule, limit=1)
         return len(results) > 0
-    except (ValueError, re.error):
+    except ValueError:
         return False
 
 
@@ -1832,162 +551,105 @@ def _build_module_qs(rule):
     return qs
 
 
-def _name_detail(name, role, channel_id=None) -> dict:
-    """Describe one previewed name so the UI can render a family as a family.
+_PREVIEW_ROLES = {
+    family_ops.MemberRole.PARENT: "parent",
+    family_ops.MemberRole.CHANNEL: "channel",
+}
 
-    *role* is ``interface`` (a plain rename), ``parent`` (the family's physical interface) or
-    ``channel``; *channel_id* is the parent channel a channel name is bound to, when known.
+
+def _member_detail(plan, member) -> family_ops.PlannedName:
+    """Describe one planned member so the UI can render a family as a family.
+
+    A flat family's members are the channels a breakout rule spells out; a plan that holds only
+    one of them is a plain rename, not a family.
     """
-    return {"name": name, "role": role, "channel_id": channel_id}
+    role = _PREVIEW_ROLES.get(member.role) or ("channel" if len(plan.members) > 1 else "interface")
+    return family_ops.PlannedName(member.target_name, role, member.channel_id)
 
 
-def _family_entry(module, parent, details, children) -> dict | None:
-    """Build a family preview entry from per-name *details*, or None when nothing would change.
+def _plan_details(plan) -> list:
+    """Describe every name the plan intends, or the error that stopped it from naming them."""
+    if plan.precondition_status != family_ops.FamilyStatus.FAILED:
+        return [_member_detail(plan, member) for member in plan.members]
+    root = _member_detail(plan, plan.members[0])
+    return [family_ops.PlannedName(f"<error: {plan.precondition_reason}>", root.role, root.channel_id)]
 
-    The entry stays keyed on the parent — the PK the Apply view submits — and lists the family's
-    names in ``new_names``, so the existing template loop keeps working unchanged.
+
+def _plan_changes_names(plan, existing_names) -> bool:
+    """Return whether the planned family would rename or create anything.
+
+    A plan that renames members compares intent with the names they carry now.  A plan that builds
+    a family out of one base compares intent with the names the module already holds, so a family
+    an earlier apply already installed previews as no change.
     """
-    if [detail["name"] for detail in details] == [parent.name, *(child.name for child in children)]:
+    if plan.base_name is None:  # pragma: no cover - requires channelization support
+        return plan.target_names != plan.source_names
+    return plan.target_names[0] != plan.base_name or any(
+        target_name not in existing_names for target_name in plan.target_names
+    )
+
+
+def _plan_entry(module, plan, interface, existing_names) -> dict | None:
+    """Build the preview entry for one family plan, or None when it would change nothing.
+
+    The entry stays keyed on the interface the Apply view submits, and lists the family's names in
+    ``new_names``, so the existing template loop keeps working unchanged.  A plan the live topology
+    blocks previews nothing, because the apply path would build nothing either.
+    """
+    failed = plan.precondition_status == family_ops.FamilyStatus.FAILED
+    if plan.precondition_status is not None and not failed:
         return None
+    if not failed and not _plan_changes_names(plan, existing_names):
+        return None
+    details = _plan_details(plan)
     return {
         "module": module,
-        "interface": parent,
-        "current_name": parent.name,
-        "new_names": [detail["name"] for detail in details],
+        "interface": interface,
+        "current_name": interface.name,
+        "new_names": [detail.name for detail in details],
         "name_details": details,
     }
 
 
-def _evaluate_plain_interface(rule, module, iface, variables, children=()) -> dict | None:
-    """Return a result dict if *iface* or one of its channels would be renamed by *rule*, else None.
+def _plan_root_name(plan) -> str:
+    """Return the name of the interface a plan is submitted through."""
+    return plan.base_name if plan.base_name is not None else plan.members[0].source_name
 
-    A channelized parent is previewed together with its channels, so the Apply page shows the whole
-    family behind the one PK it submits.
+
+def _preview_plans(rule, plan_set) -> list:
+    """Return the plans this preview reports.
+
+    A breakout rule on a module that already models channelized families renames those families and
+    adds none beside them.  Anywhere else it builds one family per base, and two bases that intend
+    the same names are the one family an earlier apply already started, so it is offered once: the
+    same family the apply path would build.
     """
-    vars_copy = {**variables, "base": iface.name}
-    try:
-        new_name = evaluate_name_template(rule.name_template, vars_copy)
-    except ValueError as exc:
-        new_name = f"<error: {exc}>"
-    if children:  # pragma: no cover - requires channelization support
-        return _family_entry(module, iface, _lockstep_details(new_name, iface, children, module), children)
-    return _family_entry(module, iface, [_name_detail(new_name, "interface")], ())
+    if rule.channel_count <= 0:
+        return list(plan_set.plans)
+    installed = [plan for plan in plan_set.plans if plan.base_name is None]
+    if installed:  # pragma: no cover - requires a NetBox that models channelization
+        return installed
+    creations = [plan for plan in plan_set.plans if plan.base_name is not None]
+    kept = family_targets.one_family_per_name_set([(plan.base_name, plan.target_names) for plan in creations])
+    return [creations[index] for index in kept]
 
 
-def _lockstep_details(new_name, parent, children, module) -> list:  # pragma: no cover - see above
-    """Per-name preview details for a family renamed in lockstep with its parent.
-
-    A channel whose suffix cannot be derived previews as unchanged — the same thing the apply path
-    does with it.
-    """
-    details = [_name_detail(new_name, "parent")]
-    for child, target in _child_target_names(children, parent.name, new_name, module):
-        details.append(_name_detail(child.name if target is None else target, "channel", child.channel_id))
-    return details
-
-
-def _channelized_family_entry(rule, module, parent, children, variables) -> dict | None:  # pragma: no cover
-    """Preview a breakout rule against an already-channelized family.
-
-    Nothing is created — only the existing channels are renamed, plus the parent when the rule
-    names one — so a family whose channel count disagrees with the rule previews as no change at
-    all.
-    """
-    if getattr(parent, "channels", None) != rule.channel_count:
-        return None
-    parent_name = parent.name
-    if _is_channelized_rule(rule) and rule.parent_name_template:
-        try:
-            parent_name = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent.name})
-        except ValueError as exc:
-            parent_name = f"<error: {exc}>"
-    details = [_name_detail(parent_name, "parent")]
-    for child in children:
-        channel = str(rule.channel_start + child.channel_id - 1)
-        try:
-            new_name = evaluate_name_template(
-                rule.name_template, {**variables, "base": parent.name, "channel": channel}
-            )
-        except ValueError as exc:
-            new_name = f"<error: {exc}>"
-        details.append(_name_detail(new_name, "channel", child.channel_id))
-    return _family_entry(module, parent, details, children)
-
-
-def _channelized_family_preview(rule, module, base, variables) -> dict | None:  # pragma: no cover - see below
-    """Describe the channelized family a rule would build on a plain base interface."""
-    try:
-        parent_name, channels = _channelized_family_names(rule, base.name, variables)
-    except ValueError as exc:
-        return _family_entry(module, base, [_name_detail(f"<error: {exc}>", "parent")], ())
-    details = [_name_detail(parent_name, "parent")]
-    details.extend(_name_detail(name, "channel", channel_id) for channel_id, name in channels)
-    return _family_entry(module, base, details, ())
-
-
-def _channelized_creation_entry(rule, module, bases, variables) -> dict | None:
-    """Return the preview entry for the family a channelized rule would build, or None for none.
-
-    A release that cannot model channels previews nothing, because the apply path builds nothing
-    there either; neither does a module whose flat family the apply path refuses to convert.
-    """
-    if not supports_channelization():
-        return None
-    if _has_flat_expansion(module):  # pragma: no cover - requires channelization support
-        return None
-    return _channelized_family_preview(  # pragma: no cover - requires channelization support
-        rule, module, _find_channel_base(rule, bases, variables), variables
-    )
-
-
-def _channel_rule_entries(rule, module, bases, children_by_parent, variables) -> list:
-    """Return the preview entries a channel rule produces for one module.
-
-    A module whose base is already channelized previews per family (renames only); a channelized
-    rule on a plain base previews the family it would build; anything else keeps the flat breakout
-    preview of one entry per module.
-    """
-    families = [base for base in bases if _is_channelized_parent(base)]
-    if families:  # pragma: no cover - requires a NetBox that models channelization
-        entries = [
-            _channelized_family_entry(rule, module, parent, children_by_parent.get(parent.pk, ()), variables)
-            for parent in families
-        ]
-        return [entry for entry in entries if entry]
-    if _is_channelized_rule(rule):
-        entry = _channelized_creation_entry(rule, module, bases, variables)
-        return [entry] if entry else []
-    entry = _channel_rule_entry(rule, module, bases, variables)
-    return [entry] if entry else []
-
-
-def _channel_rule_entry(rule, module, ifaces, variables) -> dict | None:
-    """Return a result dict if the channel rule would change any name for this module, else None."""
-    base_iface = _find_channel_base(rule, ifaces, variables)
-    if base_iface is None:
-        return None
-    vars_copy = {**variables, "base": base_iface.name}
-    expected_names = []
-    try:
-        for ch in range(rule.channel_count):
-            expected_names.append(
-                evaluate_name_template(rule.name_template, {**vars_copy, "channel": str(rule.channel_start + ch)})
-            )
-    except ValueError as exc:
-        expected_names = [f"<error: {exc}>"]
-    existing_names = {i.name for i in ifaces}
-    # Report if any channel name is missing or the base itself needs renaming
-    if any(n not in existing_names for n in expected_names) or (
-        expected_names and expected_names[0] != base_iface.name
-    ):
-        return {
-            "module": module,
-            "interface": base_iface,
-            "current_name": base_iface.name,
-            "new_names": expected_names,
-            "name_details": [_name_detail(name, "channel") for name in expected_names],
-        }
-    return None
+def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
+    """Preview one module from its family plans.  Returns (checked_count, should_stop)."""
+    plan_set = family_ops.plan_prospective_families(module, rule, variables, family_ops.describe_interfaces(ifaces))
+    checked = len(plan_set.plans)
+    if not checked:
+        return 0, False
+    rows_by_name = {iface.name: iface for iface in ifaces}
+    existing_names = frozenset(rows_by_name)
+    for plan in _preview_plans(rule, plan_set):
+        entry = _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+        if entry is None:
+            continue
+        results.append(entry)
+        if limit is not None and len(results) >= limit:
+            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
+    return checked, False
 
 
 def _count_remaining_interfaces(module_qs, processed_pks) -> int:
@@ -1998,35 +660,6 @@ def _count_remaining_interfaces(module_qs, processed_pks) -> int:
     if supports_channelization():  # pragma: no cover - the column exists only on NetBox 4.7+
         qs = qs.filter(channel_id__isnull=True)  # a family counts once, through its parent
     return qs.count()
-
-
-def _process_channel_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Process one module for a channel rule.  Returns (checked_count, should_stop)."""
-    bases, children_by_parent = _partition_families(ifaces)
-    checked = len(bases)
-    if not bases:
-        return checked, False
-    for entry in _channel_rule_entries(rule, module, bases, children_by_parent, variables):
-        results.append(entry)
-        if limit is not None and len(results) >= limit:
-            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
-    return checked, False
-
-
-def _process_plain_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Process one module for a plain (non-channel) rule.  Returns (checked_count, should_stop)."""
-    bases, children_by_parent = _partition_families(ifaces)
-    checked = 0
-    for iface_idx, iface in enumerate(bases):
-        checked += 1
-        entry = _evaluate_plain_interface(rule, module, iface, variables, children_by_parent.get(iface.pk, ()))
-        if entry:
-            results.append(entry)
-            if limit is not None and len(results) >= limit:
-                checked += len(bases) - (iface_idx + 1)
-                checked += _count_remaining_interfaces(module_qs, processed_pks)
-                return checked, True
-    return checked, False
 
 
 def find_interfaces_for_rule(rule, limit=None):
@@ -2042,7 +675,7 @@ def find_interfaces_for_rule(rule, limit=None):
             "interface":    Interface instance,
             "current_name": str,
             "new_names":    list[str],    # one entry per channel, or single-element
-            "name_details": list[dict],   # {"name", "role", "channel_id"} per new_names entry
+            "name_details": list[PlannedName],  # name, role and channel id per new_names entry
         }
 
     Only includes entries where at least one new_name differs from current_name.
@@ -2062,8 +695,6 @@ def find_interfaces_for_rule(rule, limit=None):
         "module_bay",
         "module_bay__parent",
     )
-    process_fn = _process_channel_module if rule.channel_count > 0 else _process_plain_module
-
     # Batch-load all interfaces for matching modules to avoid N+1 queries.
     ifaces_by_module = defaultdict(list)
     for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
@@ -2076,7 +707,7 @@ def find_interfaces_for_rule(rule, limit=None):
         processed_pks.add(module.pk)
         variables = build_variables(module.module_bay, device=module.device)
         ifaces = ifaces_by_module.get(module.pk, [])
-        checked, stop = process_fn(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+        checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
         total_checked += checked
         if stop:
             return results, total_checked
@@ -2084,128 +715,37 @@ def find_interfaces_for_rule(rule, limit=None):
     return results, total_checked
 
 
-def _apply_channel_rule_to_module(rule, module, ifaces, variables, id_set, conflicts):
-    """Apply a channel rule to one module via its base interface; return the rename count.
-
-    On a module whose base is already channelized the rule renames the existing channels, once per
-    family.  Otherwise the rule is processed ONCE per module (not per interface) so existing
-    channel names are not re-created.  An unexpected failure (e.g. a save race) is logged and
-    skipped so it never aborts the surrounding batch.
-    """
-    bases, children_by_parent = _partition_families(ifaces)
-    if not bases:
-        return 0
-    families = [base for base in bases if _is_channelized_parent(base)]
-    if families:  # pragma: no cover - requires a NetBox that models channelization
-        count = 0
-        for parent in families:
-            if id_set is not None and parent.pk not in id_set:
-                continue
-            count += _apply_family(rule, parent, children_by_parent.get(parent.pk, ()), variables, module, conflicts)
-        return count
-    base_iface = _find_channel_base(rule, bases, variables)
-    if id_set is not None and base_iface.pk not in id_set:
-        return 0
-    vars_copy = dict(variables)
-    vars_copy["base"] = base_iface.name
-    try:
-        if _is_channelized_rule(rule):
-            return _apply_channelized_rule(rule, base_iface, variables, module, conflicts) or 0
-        return _apply_rule_to_interface(rule, base_iface, vars_copy, module, conflicts=conflicts)
-    except (ValueError, ValidationError, IntegrityError):
-        logger.exception(
-            "Failed to apply channel rule '%s' to module '%s' (id=%s); skipping.",
-            rule,
-            module,
-            module.pk,
+def _batch_modules(rule):
+    """Return the rule's modules with every relation planning and template resolution dereference."""
+    return list(
+        _build_module_qs(rule).select_related(
+            "module_type",
+            "device__device_type",
+            "device__platform",
+            *family_template_names.BAY_CHAIN_RELATIONS,
         )
-        return 0
+    )
 
 
-def _apply_family(rule, iface, children, variables, module, conflicts):
-    """Apply *rule* to one base interface and its channels, logging (never raising) on failure."""
-    try:
-        return _apply_rule_with_family(rule, iface, children, variables, module, conflicts) or 0
-    except (ValueError, ValidationError, IntegrityError):
-        logger.exception(
-            "Failed to apply rule '%s' to interface '%s' (id=%s); skipping.",
-            rule,
-            iface.name,
-            iface.pk,
-        )
-        return 0
-
-
-def _apply_plain_rule_to_module(rule, module, ifaces, variables, id_set, conflicts):
-    """Apply a non-channel rule to each selected interface on one module; return the rename count.
-
-    Each base interface is independent: an unexpected failure on one is logged and skipped so the
-    rest of the module (and batch) still process.  Channel subinterfaces are not selectable on
-    their own — they are renamed only as part of the family whose parent was selected.
-    """
-    bases, children_by_parent = _partition_families(ifaces)
-    count = 0
-    for iface in bases:
-        if id_set is not None and iface.pk not in id_set:
-            continue
-        count += _apply_family(rule, iface, children_by_parent.get(iface.pk, ()), variables, module, conflicts)
-    return count
-
-
-def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None):
+def apply_rule_to_existing(rule, limit=None, interface_ids=None) -> family_ops.BatchOutcome:
     """Apply a rule retroactively to all matching installed modules.
 
-    Unlike apply_interface_name_rules(), this does not skip already-renamed
-    interfaces — it re-evaluates every interface on each matching module.
+    Unlike apply_interface_name_rules(), this does not skip already-renamed interfaces: it plans
+    every family each matching module carries or would gain, and executes each in its own
+    transaction, so one blocked family costs the batch only that family.
 
-    For channel rules (channel_count > 0), each module is processed as a single
-    unit using _find_channel_base() to pick the base interface.  Calling
-    _apply_rule_to_interface for every interface in the module would produce
-    duplicate-name IntegrityErrors when channel interfaces already exist.
+    If *interface_ids* is provided (list/set of Interface PKs), only the families those interfaces
+    reach are applied; an empty collection touches the database not at all.  Selecting a
+    channelized parent brings its channel subinterfaces along; selecting a channel subinterface on
+    its own does nothing, because it is not an independent candidate.  If *limit* is set the batch
+    stops after the module that reached that many changed interfaces.
 
-    If *interface_ids* is provided (list/set of Interface PKs), only those
-    interfaces are processed; all others are skipped.  For channel rules the
-    base interface PK is used as the selector.  An empty *interface_ids*
-    collection returns 0 immediately without touching the database.  Selecting a
-    channelized parent brings its channel subinterfaces along; selecting a channel
-    subinterface on its own does nothing, because it is not an independent candidate.
-
-    If *conflicts* is a list, each interface skipped because its target name is
-    already taken on the device is appended to it (and logged) — letting the
-    caller report how many renames were dropped.  Collisions never raise.
-
-    Returns the number of interfaces renamed/created.
+    Returns the batch outcome: one explicit family result per family it planned.
     """
-    from dcim.models import Interface
-
     id_set = frozenset(interface_ids) if interface_ids is not None else None
-    if id_set is not None and not id_set:
-        return 0
-
-    if not rule.enabled:
-        return 0
-
-    module_qs = _build_module_qs(rule)
-
-    # Batch-load interfaces to avoid N+1 queries in the module loop.
-    ifaces_by_module = defaultdict(list)
-    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
-        ifaces_by_module[iface.module_id].append(iface)
-
-    count = 0
-    for module in module_qs.select_related("module_bay", "module_type", "device", "device__virtual_chassis"):
-        variables = build_variables(module.module_bay, device=module.device)
-        ifaces = ifaces_by_module.get(module.pk, [])
-
-        if rule.channel_count > 0:
-            count += _apply_channel_rule_to_module(rule, module, ifaces, variables, id_set, conflicts)
-        else:
-            count += _apply_plain_rule_to_module(rule, module, ifaces, variables, id_set, conflicts)
-
-        if limit is not None and count >= limit:
-            return count
-
-    return count
+    if not rule.enabled or (id_set is not None and not id_set):
+        return family_ops.BatchOutcome(families=())
+    return family_ops.apply_rule_to_modules(rule, _batch_modules(rule), selected_pks=id_set, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -2215,400 +755,28 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None, conflicts=None)
 # with N channel subinterfaces.  Converting one rewrites rows an operator owns — cables, addresses,
 # tags — so it is never a side effect of applying a rule: the operator confirms it per family.
 
-# The ch-0 row, the names its family carries now, and the names it would carry once converted.
-_ConversionFamily = namedtuple("_ConversionFamily", ("module", "base", "current_names", "parent_name", "channel_names"))
 
+def find_convertible_families(rule, limit=None) -> family_ops.ConversionPreview:
+    """Return the preview of the flat families *rule* could convert, convertible or not.
 
-def _conversion_offered(rule):
-    """Return True when *rule* describes a topology an installed flat family could be converted into.
-
-    A disabled rule renames nothing on any apply path, so it converts nothing either.  A flat family
-    has no parent row — its ch-0 interface *is* the base — so without a parent name there is nowhere
-    for that base to go, and the conversion is not offered at all.
+    Each candidate names the ch-0 row the confirm form submits, the family's current names, the
+    names it would carry, and where the ch-0 row's configuration lands.  A family beyond *limit* is
+    never dry-run; the preview reports that one was left unexamined.
     """
-    return rule.enabled and _is_channelized_rule(rule) and rule.channel_count > 0 and bool(rule.parent_name_template)
+    # Only the cheap half of the guard, so a rule that offers no conversion never reads its modules;
+    # whether this release can hold a family is the family package's call.
+    if not family_ops.conversion_offered(rule):
+        return family_ops.ConversionPreview(candidates=())
+    return family_ops.preview_rule_conversions(rule, _batch_modules(rule), limit=limit)
 
 
-def _base_marked_ch0_name(rule, variables):  # pragma: no cover - requires channelization support
-    """Return *rule*'s escaped ch-0 output with ``{base}`` left as a sentinel, or None when it cannot be.
-
-    Evaluated once per rule: the sentinel stands in for ``{base}`` so a raw matcher can be spliced
-    over it afterwards.
-    """
-    try:
-        evaluated = evaluate_name_template(
-            rule.name_template, {**variables, "base": _BASE_SENTINEL, "channel": str(rule.channel_start)}
-        )
-    except (ValueError, TypeError):
-        # A {base} inside an arithmetic expression cannot take a non-numeric stand-in — see the docs.
-        logger.debug(
-            "Rule '%s' evaluates {base} arithmetically, so a base predating a virtual-chassis "
-            "position change cannot be recovered from its output names; not offering its families.",
-            rule,
-        )
-        return None
-    if _BASE_SENTINEL not in evaluated:
-        return None  # the rule's output does not carry the base, so no drift reached it
-    return re.escape(evaluated)
-
-
-def _recovered_bases(rule, interfaces, variables, matchers):  # pragma: no cover - channelization only
-    """Return the historical ``{base}`` values *rule*'s installed families still spell on this module.
-
-    A flat family carries rule-*output* names, so a raw matcher cannot be run against them directly:
-    it is spliced into the rule's own ch-0 output as a capture instead — a repeated ``{base}`` becomes
-    a backreference rather than a second group — and the capture yields the base the family was named
-    with.  Conversion rewrites rows an operator owns, so anything ambiguous (one matcher over two
-    bases, or two templates recovering the same one) yields nothing at all.
-    """
-    marked = _base_marked_ch0_name(rule, variables)
-    if marked is None:
-        return []
-    head, _, tail = marked.partition(_BASE_SENTINEL)
-    tail = tail.replace(_BASE_SENTINEL, "(?P=base)")
-    recovered = defaultdict(int)
-    for matcher in matchers:
-        family_pattern = _compile_pattern(f"{head}(?P<base>{matcher.pattern.pattern}){tail}")
-        if family_pattern is None:
-            continue
-        matches = (family_pattern.fullmatch(iface.name) for iface in interfaces)
-        bases = {match.group("base") for match in matches if match}
-        if len(bases) == 1:
-            recovered[bases.pop()] += 1
-    return [base for base, claims in recovered.items() if claims == 1]
-
-
-def _family_on(rule, module, by_name, variables, base_name):  # pragma: no cover - channelization only
-    """Return the family *rule* describes on *base_name*, or None when this module carries none."""
-    family_vars = {**variables, "base": base_name}
-    parent_name = evaluate_name_template(rule.parent_name_template, family_vars)
-    channel_names = [
-        evaluate_name_template(rule.name_template, {**family_vars, "channel": str(rule.channel_start + offset)})
-        for offset in range(rule.channel_count)
-    ]
-    base = by_name.get(channel_names[0])
-    if base is None or _is_channel_child(base) or _is_channelized_parent(base):
-        return None
-    return _ConversionFamily(
-        module=module,
-        base=base,
-        current_names=[name for name in channel_names if name in by_name],
-        parent_name=parent_name,
-        channel_names=channel_names,
-    )
-
-
-def _conversion_family(rule, module, interfaces, variables, raw):  # pragma: no cover - channelization only
-    """Return the flat family *rule* would convert on *module*, or None when it carries none.
-
-    Identification is by name: ``name_template`` is evaluated over the rule's channel range against
-    each raw template name, and the ch-0 name has to still be a plain interface — a family that was
-    already converted (its ch-0 name now belongs to a channel row) is therefore never offered twice.
-    A family named before this device's virtual-chassis position changed spells a base no template
-    resolves to any more, so those bases are recovered from the family's own names and then
-    identified exactly the same way.
-    """
-    by_name = {iface.name: iface for iface in interfaces}
-    for base_name in sorted(raw.names):
-        family = _family_on(rule, module, by_name, variables, base_name)
-        if family is not None:
-            return family
-    for base_name in _recovered_bases(rule, interfaces, variables, raw.matchers):
-        family = _family_on(rule, module, by_name, variables, base_name)
-        if family is not None:
-            return family
-    return None
-
-
-def _conversion_families(rule):  # pragma: no cover - requires channelization support
-    """Yield the flat family each module in *rule*'s scope still carries.
-
-    A flat breakout is applied once per module (see ``_apply_channel_rule_to_module``), so a module
-    carries at most one such family and the conversion mirrors that.
-    """
-    from dcim.models import Interface
-
-    modules = list(_build_module_qs(rule).select_related("module_type", "device", *_BAY_CHAIN_RELATIONS))
-    raw_by_module = _raw_names_by_module(modules)
-    ifaces_by_module = defaultdict(list)
-    for iface in Interface.objects.filter(module__in=[module.pk for module in modules]).order_by("module_id", "name"):
-        ifaces_by_module[iface.module_id].append(iface)
-    for module in modules:
-        variables = build_variables(module.module_bay, device=module.device)
-        ifaces = ifaces_by_module.get(module.pk, [])
-        family = _conversion_family(rule, module, ifaces, variables, raw_by_module[module.pk])
-        if family is not None:
-            yield family
-
-
-def _validate_or_block(iface, role):  # pragma: no cover - requires channelization support
-    """Run NetBox's own validation on *iface*, restating a rejection as this family's blocking reason."""
-    try:
-        iface.full_clean()
-    except ValidationError as exc:
-        raise ValidationError(f"{role} {iface.name!r}: {' '.join(exc.messages)}") from exc
-
-
-def _split_ch0_row(rule, family, base):  # pragma: no cover - requires channelization support
-    """Make *base* the family's parent and move its logical identity onto a new channel-1 child.
-
-    Everything an operator configured on the ch-0 row described a channel, not the cage carrying it,
-    so addresses, VLANs, MTU, description and tags move; custom fields can mean either thing and are
-    copied.  The physical row keeps its pk, cable, type, module link and mark_connected.
-    """
-    from dcim.choices import InterfaceTypeChoices
-    from dcim.models import Interface
-
-    carried = {
-        "description": base.description,
-        "mtu": base.mtu,
-        "mode": base.mode,
-        "untagged_vlan_id": base.untagged_vlan_id,
-    }
-    tagged_vlans = list(base.tagged_vlans.all())
-    tags = list(base.tags.all())
-
-    base.name = family.parent_name
-    base.channels = rule.channel_count
-    base.description = ""
-    base.mtu = None
-    base.mode = ""
-    base.untagged_vlan = None
-    _validate_or_block(base, "parent")
-    base.save()  # BaseInterface.save() drops the tagged VLANs of an interface that no longer tags
-    base.tags.clear()
-
-    channel = Interface(
-        device=family.module.device,
-        module=family.module,
-        name=family.channel_names[0],
-        type=InterfaceTypeChoices.TYPE_CHANNEL,
-        parent=base,
-        channel_id=1,
-        enabled=base.enabled,
-        custom_field_data=dict(base.custom_field_data or {}),
-        **carried,
-    )
-    _validate_or_block(channel, "channel")
-    channel.save()
-    channel.tagged_vlans.set(tagged_vlans)
-    channel.tags.set(tags)
-    base.ip_addresses.all().update(assigned_object_id=channel.pk)
-    base.fhrp_group_assignments.all().update(interface_id=channel.pk)
-
-
-def _rewrite_family(rule, family):  # pragma: no cover - requires channelization support
-    """Convert *family* in place, raising ValidationError with the reason when it cannot be converted.
-
-    Only what upstream cannot decide for us is checked here: the parent's name has to be free, every
-    sibling has to be present, a sibling already bound to another parent's channel is not ours to
-    take, and a cabled sibling cannot become a channel — TYPE_CHANNEL is nonconnectable but not
-    virtual, so ``Interface.clean()`` accepts a cable on one.  Everything else is left to
-    ``full_clean()`` on each prospective row, which inherits upstream's rules as they grow.
-    """
-    from dcim.choices import InterfaceTypeChoices
-    from dcim.models import Interface
-
-    device = family.module.device
-    # Locked for the transaction: the checks below act on this snapshot, and the saves write it back.
-    by_name = {iface.name: iface for iface in Interface.objects.select_for_update().filter(module=family.module)}
-    base = by_name.get(family.channel_names[0])
-    if base is None or base.pk != family.base.pk:
-        raise ValidationError(
-            f"{family.channel_names[0]!r} is gone or replaced: the family changed since it was scanned"
-        )
-
-    if _name_exists_on_device(device, family.parent_name, exclude_pk=base.pk):
-        raise ValidationError(f"the parent name {family.parent_name!r} is already taken on {device}")
-
-    siblings = []
-    for channel_id, name in enumerate(family.channel_names[1:], start=2):
-        sibling = by_name.get(name)
-        if sibling is None or sibling.pk == base.pk:
-            raise ValidationError(f"{name!r} is missing: this module carries no complete flat family")
-        # Rebinding it validates cleanly, so only this check keeps the other family whole.
-        if _is_channel_child(sibling):
-            owner = sibling.parent.name if sibling.parent_id else "another parent"
-            raise ValidationError(
-                f"{name!r} is already channel {sibling.channel_id} of {owner}; "
-                f"converting would take it out of that family"
-            )
-        if sibling.cable_id:
-            raise ValidationError(f"{name!r} has a cable attached; a channel takes its cable from the parent")
-        siblings.append((channel_id, sibling))
-
-    _split_ch0_row(rule, family, base)
-    for channel_id, sibling in siblings:
-        sibling.type = InterfaceTypeChoices.TYPE_CHANNEL
-        sibling.parent = base
-        sibling.channel_id = channel_id
-        _validate_or_block(sibling, "channel")
-        sibling.save()
-
-
-def _convert_family(rule, family, commit):  # pragma: no cover - requires channelization support
-    """Convert *family*; return an empty string on success, or the reason it was refused.
-
-    The whole conversion runs inside one savepoint, so a dry run (*commit* False) and a family that
-    turns out to be unconvertible both leave every row exactly as it was — the rows are re-read here
-    too, so a rolled-back dry run cannot hand mutated objects back to the caller.
-    """
-    try:
-        with transaction.atomic():
-            _rewrite_family(rule, family)
-            if not commit:
-                transaction.set_rollback(True)
-    except (ValidationError, IntegrityError, ValueError) as exc:
-        return "; ".join(getattr(exc, "messages", [str(exc)]))
-    return ""
-
-
-def _conversion_metadata_note(family):  # pragma: no cover - requires channelization support
-    """Return the sentence the Apply page shows about where the ch-0 row's configuration ends up."""
-    return (
-        f"The addresses, VLANs, MTU, description and tags on {family.base.name} move to the new "
-        f"channel 1 interface that takes over that name; custom field values are copied. The physical "
-        f"row keeps its ID and becomes the parent {family.parent_name}, so automation keyed on that "
-        f"interface ID will address the parent afterwards."
-    )
-
-
-def _conversion_verdict(family, reason):  # pragma: no cover - requires channelization support
-    """Describe what converting *family* would do, and why it cannot be done when it cannot."""
-    details = [_name_detail(family.parent_name, "parent")]
-    details.extend(
-        _name_detail(name, "channel", channel_id) for channel_id, name in enumerate(family.channel_names, start=1)
-    )
-    return {
-        "module": family.module,
-        "interface": family.base,
-        "current_name": family.base.name,
-        "current_names": family.current_names,
-        "new_names": [family.parent_name, *family.channel_names],
-        "name_details": details,
-        "convertible": not reason,
-        "reason": reason,
-        "metadata_note": _conversion_metadata_note(family),
-    }
-
-
-def find_convertible_families(rule, limit=None) -> tuple:
-    """Return ``(verdicts, has_more)`` for the flat families *rule* could convert, convertible or not.
-
-    Nothing is written: every family is converted inside a savepoint that is rolled back again, so
-    each verdict carries the reason NetBox itself would refuse the family rather than a guess at its
-    rules.  Each verdict names the ch-0 row the confirm form submits, the family's current names,
-    the names it would carry, and where the ch-0 row's configuration lands.
-
-    That dry run is what the scan costs, and a blocked family costs it too, so *limit* caps the
-    families examined — one verdict each — rather than the convertible ones among them.  A family
-    beyond the limit is never dry-run; *has_more* reports that one was left unexamined.
-    """
-    if not (_conversion_offered(rule) and supports_channelization()):
-        return [], False
-    return _find_convertible_families(rule, limit)  # pragma: no cover - requires channelization support
-
-
-def _find_convertible_families(rule, limit):  # pragma: no cover - requires channelization support
-    """Dry-run at most *limit* of *rule*'s flat families; see ``find_convertible_families``."""
-    verdicts = []
-    for family in _conversion_families(rule):
-        if limit is not None and len(verdicts) >= limit:
-            return verdicts, True
-        verdicts.append(_conversion_verdict(family, _convert_family(rule, family, commit=False)))
-    return verdicts, False
-
-
-def convert_flat_families(rule, base_pks=None, conflicts=None) -> int:
-    """Convert *rule*'s installed flat families to the channelized topology; return how many.
+def convert_flat_families(rule, base_pks=None) -> family_ops.BatchOutcome:
+    """Convert *rule*'s installed flat families to the channelized topology.
 
     *base_pks* is the set of ch-0 interface pks the operator confirmed: ``None`` converts every
-    convertible family (the batch the background job runs), an empty collection converts none.  A
-    family that cannot be converted is logged, appended to *conflicts* in the usual skipped-rename
-    shape and passed over — it is never half converted, and never costs the rest of the batch.
+    convertible family (the batch the background job runs), an empty collection converts none.
+
+    Returns the batch outcome: one explicit family result per family it planned.
     """
-    if not supports_channelization():
-        logger.warning(
-            "Rule '%s' converts flat families into the channelized topology, which this NetBox release "
-            "cannot model; nothing was converted.",
-            rule,
-        )
-        return 0
-    return _convert_flat_families(rule, base_pks, conflicts)  # pragma: no cover - see above
-
-
-def _convert_flat_families(rule, base_pks, conflicts):  # pragma: no cover - requires channelization support
-    """Convert the confirmed flat families of *rule*; see ``convert_flat_families``."""
-    if not _conversion_offered(rule):
-        return 0
     selected = None if base_pks is None else frozenset(base_pks)
-    if selected is not None and not selected:
-        return 0
-
-    converted = 0
-    for family in _conversion_families(rule):
-        if selected is not None and family.base.pk not in selected:
-            continue
-        current_name = family.base.name
-        reason = _convert_family(rule, family, commit=True)
-        if reason:
-            logger.warning(
-                "Cannot convert the flat family of interface %r on %s into the channelized parent %r: %s. Skipping.",
-                current_name,
-                family.module,
-                family.parent_name,
-                reason,
-            )
-            _record_skip(conflicts, family.module.device, current_name, family.parent_name, family.base.pk)
-            continue
-        converted += 1
-    return converted
-
-
-def evaluate_name_template(template: str, variables: dict) -> str:
-    """Evaluate a name template with variable substitution and safe arithmetic.
-
-    Supports templates like:
-        "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
-
-    Variables are substituted first, then any brace-enclosed expression
-    containing arithmetic operators is safely evaluated via AST. True division
-    (/) is not allowed — use floor division (//) instead. Results are cast to
-    int to ensure interface names are always whole numbers.
-    """
-    # First pass: substitute all simple variables
-    result = template
-    for key, value in variables.items():
-        result = result.replace(f"{{{key}}}", str(value))
-
-    # Second pass: evaluate any remaining brace-enclosed arithmetic expressions
-    def _eval_expr(match):
-        expr = match.group(1).strip()
-        # Allow digits, arithmetic operators (excluding lone /), parens, whitespace.
-        # Negative lookahead disallows a single / that is not part of //.
-        if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
-            raise ValueError(f"Unsafe expression in name template: {expr}")
-        try:
-            node = ast.parse(expr, mode="eval")
-            for child in ast.walk(node):
-                if not isinstance(
-                    child,
-                    (
-                        ast.Expression,
-                        ast.BinOp,
-                        ast.UnaryOp,
-                        ast.Constant,
-                        ast.Add,
-                        ast.Sub,
-                        ast.Mult,
-                        ast.FloorDiv,
-                        ast.USub,
-                        ast.UAdd,
-                    ),
-                ):
-                    raise ValueError(f"Unsafe AST node in expression: {type(child).__name__}")
-            return str(int(eval(compile(node, "<template>", "eval"))))  # noqa: S307
-        except (SyntaxError, TypeError, ZeroDivisionError) as e:
-            raise ValueError(f"Invalid arithmetic expression '{expr}': {e}") from e
-
-    return re.sub(r"\{([^}]+)\}", _eval_expr, result)
+    return family_ops.convert_rule_families(rule, _batch_modules(rule), selected_pks=selected)

@@ -22,10 +22,12 @@ from django.urls import reverse
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
+    build_variables,
     find_interfaces_for_rule,
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
@@ -275,12 +277,11 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
         """The Apply view counts what it skipped, so the collision is reported, not just logged."""
         self._occupy("et-0/0/5")
         self._install(self.module_type, "5", run_rules=False)
-        conflicts: list = []
 
-        built = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 0)
-        self.assertEqual([conflict["attempted_name"] for conflict in conflicts], ["et-0/0/5"])
+        self.assertEqual(built.changed_count, 0)
+        self.assertEqual([member.target_name for member in built.skipped_members], ["et-0/0/5"])
 
     def test_the_family_is_built_once_the_blocker_is_gone(self):
         """The skip is a state of the device, not a decision about the rule."""
@@ -357,13 +358,12 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the preflight, so neither can convert a family behind the other's back."""
         self._switch_to_channelized()
-        conflicts: list = []
 
-        changed = apply_rule_to_existing(self.rule, conflicts=conflicts)
+        changed = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(changed, 0)
+        self.assertEqual(changed.changed_count, 0)
         self._assert_still_flat()
-        self.assertTrue(conflicts, "the skipped family was not reported to the Apply view")
+        self.assertTrue(changed.skipped_members, "the skipped family was not reported to the Apply view")
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -414,14 +414,12 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""
-        conflicts: list = []
-
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            changed = apply_rule_to_existing(self.rule, conflicts=conflicts)
+            changed = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(changed, 0)
+        self.assertEqual(changed.changed_count, 0)
         self._assert_untouched()
-        self.assertTrue(conflicts, "the skipped module was not reported to the Apply view")
+        self.assertTrue(changed.skipped_members, "the skipped module was not reported to the Apply view")
         self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
 
     def test_the_preview_offers_no_family_it_would_not_build(self):
@@ -469,6 +467,32 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
         module, _ = self._install(self.channelized_type, "3")
 
         self.assertEqual(self._parent(module).name, "et-0/0/3")
+
+    def test_an_incomplete_installed_family_blocks_every_rename(self):
+        module, bay = self._install(self.channelized_type, "3", run_rules=False)
+        rule = InterfaceNameRule.objects.get(module_type=self.channelized_type)
+        parent = self._parent(module)
+        self.assertEqual(parent.channels, rule.channel_count)
+        self._child(module, 4).delete()
+        original_names = self._names(module)
+
+        plans = plan_installed_families(module, rule, build_variables(bay, device=self.device))
+        self.assertEqual(len(plans.plans), 1)
+        plan = plans.plans[0]
+        outcome = execute_installed_plan(plan)
+        parent.refresh_from_db()
+        evidence = (
+            f"precondition_status={plan.precondition_status!r}, "
+            f"targets={[member.target_name for member in plan.members]!r}, "
+            f"parent_after_execution={parent.name!r}, outcome={outcome.status!r}"
+        )
+        self.assertEqual(plan.precondition_status, FamilyStatus.BLOCKED, evidence)
+        self.assertIn("missing 1", plan.precondition_reason)
+        self.assertEqual(
+            [member.target_name for member in plan.members], [member.snapshot.name for member in plan.members]
+        )
+        self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
+        self.assertEqual(self._names(module), original_names)
 
     def test_a_blocked_channel_keeps_its_old_name_after_the_parent_rename(self):
         """NetBox's deferred cascade must not move a child whose configured target is occupied."""
@@ -528,7 +552,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         self.assertEqual(results[0]["current_name"], "3")
         self.assertEqual(results[0]["new_names"], self.FAMILY_NAMES)
         self.assertEqual(
-            [(detail["role"], detail["channel_id"]) for detail in results[0]["name_details"]],
+            [(detail.role, detail.channel_id) for detail in results[0]["name_details"]],
             [("parent", None), ("channel", 1), ("channel", 2), ("channel", 3), ("channel", 4)],
         )
 
@@ -550,7 +574,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         """Applying a rule to already-installed hardware creates the family the preview promised."""
         built = apply_rule_to_existing(self.rule)
 
-        self.assertEqual(built, 5)
+        self.assertEqual(built.changed_count, 5)
         self.assertEqual(self._names(self.module), self.FAMILY_NAMES)
         self.assertEqual(self._parent(self.module).channels, 4)
 
@@ -560,7 +584,7 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
 
         built = apply_rule_to_existing(self.rule, interface_ids=[base.pk])
 
-        self.assertEqual(built, 5)
+        self.assertEqual(built.changed_count, 5)
         self.assertEqual(self._names(self.module), self.FAMILY_NAMES)
 
     def test_the_rule_test_view_previews_the_family(self):

@@ -253,7 +253,7 @@ class SignalDeviceHandlerTest(TestCase):
         module's interface (real work) while reading the enabled-rule fingerprint a single time for
         the whole device, proving the pin is engaged on INR's own batch path (no cross-plugin API).
         """
-        from netbox_interface_name_rules import engine
+        from netbox_interface_name_rules import rule_selection
 
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 
@@ -264,17 +264,17 @@ class SignalDeviceHandlerTest(TestCase):
         iface1 = Interface.objects.create(device=self.device, module=module1, name="old-1", type="10gbase-x-sfpp")
 
         calls = []
-        real_version = engine._enabled_rules_version
+        real_version = rule_selection._enabled_rules_version
 
         def counting_version(*args, **kwargs):
             calls.append(1)
             return real_version(*args, **kwargs)
 
-        engine._enabled_rules_version = counting_version
+        rule_selection._enabled_rules_version = counting_version
         try:
             _apply_rules_for_device_deferred(self.device.pk)
         finally:
-            engine._enabled_rules_version = real_version
+            rule_selection._enabled_rules_version = real_version
 
         iface0.refresh_from_db()
         iface1.refresh_from_db()

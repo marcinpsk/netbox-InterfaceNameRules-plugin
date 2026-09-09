@@ -3,6 +3,7 @@
 """Tests for the template evaluation engine (pure functions, no DB)."""
 
 from unittest import TestCase
+from unittest.mock import patch
 
 from netbox_interface_name_rules.engine import evaluate_name_template
 
@@ -39,10 +40,11 @@ class EvaluateNameTemplateTest(TestCase):
         self.assertEqual(result, "xe-0/0/2:3")
 
     def test_arithmetic_expression(self):
-        result = evaluate_name_template(
-            "GigabitEthernet{slot}/{8 + 3}",
-            {"slot": "2", "bay_position": "0", "bay_position_num": "0"},
-        )
+        with patch("builtins.eval", side_effect=AssertionError("template arithmetic called eval")):
+            result = evaluate_name_template(
+                "GigabitEthernet{slot}/{8 + 3}",
+                {"slot": "2", "bay_position": "0", "bay_position_num": "0"},
+            )
         self.assertEqual(result, "GigabitEthernet2/11")
 
     def test_arithmetic_with_variables(self):
@@ -77,6 +79,14 @@ class EvaluateNameTemplateTest(TestCase):
                 "{__import__('os').system('ls')}",
                 {},
             )
+
+    def test_a_format_spec_field_names_the_unsupported_construct(self):
+        """The template language is substitution plus arithmetic, so `str.format` fields must say so."""
+        for template in ("Ethernet{channel:>2}", "Ethernet{channel!r}"):
+            with self.subTest(template=template), self.assertRaises(ValueError) as raised:
+                evaluate_name_template(template, {"channel": "1"})
+
+            self.assertIn("conversions and format specifications", str(raised.exception))
 
     def test_division_expression(self):
         result = evaluate_name_template(
