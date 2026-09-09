@@ -356,6 +356,26 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         for candidate in ("xe-0/0/3", "xe-1/0/3"):
             self.assertIn(candidate, output)
 
+    def test_drift_warning_uses_the_engine_logger(self):
+        module, bay = self._install_on(self.device, self.decoy_type, "3")
+        rename_out_of_band(Interface.objects.get(module=module, name="mgmt-3"), "xe-0/0/3")
+        self._renumber(2)
+        InterfaceNameRule.objects.create(module_type=self.decoy_type, name_template="et-{base}")
+
+        with self.assertLogs(engine.logger, level="WARNING") as logs:
+            renamed = apply_interface_name_rules(module, bay)
+
+        self.assertEqual(renamed, 0)
+        self.assertEqual(self._names(module), ["xe-0/0/3", "xe-1/0/3"])
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].name, engine.__name__)
+        self.assertEqual(
+            logs.records[0].getMessage(),
+            f"Interface template 'xe-{{vc_position:0}}/0/{{module}}' of {module} could name any of "
+            "['xe-0/0/3', 'xe-1/0/3'] since this device's virtual-chassis position changed; "
+            "skipping them all rather than renaming a guess.",
+        )
+
     def test_a_forced_re_apply_does_not_break_out_an_ambiguous_pair(self):
         """The same claim reached through the force path, where distinct targets hide the collision.
 
