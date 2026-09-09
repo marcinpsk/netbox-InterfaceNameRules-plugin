@@ -31,9 +31,11 @@ services:
       https_proxy: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
       no_proxy: ${NO_PROXY:-}
-      REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-}
-      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
-      CURL_CA_BUNDLE: ${CURL_CA_BUNDLE:-}
+      # setup.sh installs any ca-bundle.crt into this store, so a host path here
+      # would only name a file the container cannot open.
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      CURL_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,7 +47,12 @@ services:
 
   postgres:
     image: postgres:18
-    command: postgres -c max_connections=200
+    # PostgreSQL 18 allocates a dynamic shared memory segment at startup and fails
+    # to start on Docker's 64MB default /dev/shm.
+    shm_size: 1gb
+    # Parallel test runs open a connection per worker per test database, and this
+    # postgres serves several test databases at once.
+    command: postgres -c max_connections=800
     environment:
       POSTGRES_DB: ${DB_NAME:-netbox}
       POSTGRES_USER: ${DB_USER:-netbox}
@@ -89,3 +96,6 @@ networks:
       config:
         # Pinned to avoid Docker auto-assigning 172.30.x.x
         - subnet: "172.28.200.0/24"
+          # Dynamic assignment stays above .128 so no unpinned service (e.g. a local
+          # override) can take the static postgres/redis addresses setup.sh uses.
+          ip_range: "172.28.200.128/25"
