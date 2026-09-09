@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.2 (2026-09-09)
+
+### Chores
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#85](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/85),
+  [`8e409a7`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8e409a7aded1307bb70f1c99aa6163fde4d26008))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#84](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/84),
+  [`49d51ca`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/49d51caf26e583929c4310e22e845d4aaa1c8a13))
+
+### Refactoring
+
+- Establish interface family architecture
+  ([#83](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/83),
+  [`47569b2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/47569b29882191eb432fe19ace625966d87c134d))
+
+
 ## v1.5.1 (2026-08-22)
 
 ### Bug Fixes
