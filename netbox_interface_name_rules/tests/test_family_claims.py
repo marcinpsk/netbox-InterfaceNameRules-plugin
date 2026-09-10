@@ -8,6 +8,13 @@ from netbox_interface_name_rules import family
 
 
 class TemplateClaimsTest(SimpleTestCase):
+    def test_claim_copies_labels_from_a_mutable_list(self):
+        labels = ["x"]
+        claim = family.TemplateClaim(1, "A", labels)
+        self.assertIsInstance(claim.labels, tuple)
+        labels.append("y")
+        self.assertEqual(claim.labels, ("x",))
+
     def test_empty_relation(self):
         self.assertEqual(
             family.resolve_template_claims((), module="module", label_kind="interface name"),

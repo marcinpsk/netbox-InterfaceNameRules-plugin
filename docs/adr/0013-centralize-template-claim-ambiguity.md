@@ -4,7 +4,7 @@ status: accepted
 
 # Centralize template claim ambiguity
 
-The engine and installed-family discovery use the same two-sided uniqueness rule.
+The engine and installed-family discovery each implemented the same two-sided uniqueness rule.
 Exhaustive checks over 4096 relations established their equivalence.
 The family package owns this rule through immutable `TemplateClaim` values and
 `resolve_template_claims`, exported at the package boundary.

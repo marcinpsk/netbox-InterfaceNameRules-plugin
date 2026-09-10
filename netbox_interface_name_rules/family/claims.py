@@ -14,6 +14,9 @@ class TemplateClaim:
     template_name: str
     labels: tuple[str, ...]
 
+    def __post_init__(self):
+        object.__setattr__(self, "labels", tuple(self.labels))
+
 
 def resolve_template_claims(claims, *, module, label_kind):
     """Return accepted pairs in claimant order and rendered collision messages.
