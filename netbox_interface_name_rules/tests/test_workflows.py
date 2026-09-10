@@ -46,7 +46,11 @@ def _workflows_running_pytest(directory=None):
     found = {}
     for path in sorted((directory or _WORKFLOWS).glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
-        prefixes = re.findall(r"^([^\n]*?)\bpytest(?=\s|$)", text, re.MULTILINE)
+        prefixes = [
+            match[1]
+            for segment in re.split(r"&&|\|\||;|\||\n", text)
+            if (match := re.search(r"^(.*?)\bpytest(?=\s|$)", segment))
+        ]
         if any(not re.search(r"\bpip(?:3)?\s+install\b", prefix) for prefix in prefixes):
             found[path.name] = text
     return found
@@ -99,8 +103,13 @@ class WorkflowDetectionTest(SimpleTestCase):
             "xvfb": "xvfb-run pytest tests",
             "plain": "pytest tests",
             "selection": "pytest -k install",
+            "chained": "pip install -e . && pytest",
+            "or_chain": "pip install -e . || pytest",
+            "semicolon_chain": "pip install -e .; pytest",
+            "pipeline": "pip install -e . | pytest",
             "pip": "pip install pytest-cov",
             "uv": "uv pip install pytest-xdist",
+            "pip_pytest": "pip install pytest",
         }
         with tempfile.TemporaryDirectory() as directory:
             workflows = pathlib.Path(directory)
@@ -109,4 +118,4 @@ class WorkflowDetectionTest(SimpleTestCase):
             found = _workflows_running_pytest(workflows)
         for name, command in commands.items():
             with self.subTest(command=command):
-                self.assertEqual(f"{name}.yml" in found, name not in {"pip", "uv"})
+                self.assertEqual(f"{name}.yml" in found, name not in {"pip", "uv", "pip_pytest"})
