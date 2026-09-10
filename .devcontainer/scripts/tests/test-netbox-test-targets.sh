@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (C) 2026 Marcin Zieba
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 
 set -eo pipefail
 
