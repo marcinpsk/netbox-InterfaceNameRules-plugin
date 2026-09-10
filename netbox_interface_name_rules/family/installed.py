@@ -83,9 +83,10 @@ def flat_family_bases(module, rule, variables, interfaces, catalog):
     """Return ``(template base, source base)`` for every base a flat family could be named from.
 
     The template base is the name the rule resolves for this module now; the source base is the one
-    an installed family still spells, which differs after a virtual-chassis renumber.  A historical
-    base more than one template could claim is dropped: the rows it names are not certainly one
-    family's, and neither renaming nor converting them is this plugin's guess to make.
+    an installed family still spells, which differs after a virtual-chassis renumber.
+    A historical base that more than one template could claim is dropped.
+    Every historical base of a template that claims multiple bases is also dropped.
+    These claims do not identify one family with certainty, so the plugin does not rename or convert them.
     """
     if rule.channel_count <= 0:
         return ()
