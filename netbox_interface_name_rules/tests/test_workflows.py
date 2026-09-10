@@ -8,6 +8,8 @@ so a missing distribution breaks the job before a single test runs.
 
 import pathlib
 import re
+import sys
+import tempfile
 import tomllib
 
 from django.test import SimpleTestCase
@@ -44,8 +46,8 @@ def _workflows_running_pytest():
     """Map each workflow that invokes pytest to its full text."""
     found = {}
     for path in sorted(_WORKFLOWS.glob("*.y*ml")):
-        text = path.read_text()
-        if re.search(r"^\s*(?:-\s*)?(?:uv run [^\n]*)?pytest\b", text, re.MULTILINE):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"^(?![^\n]*\binstall\b)[^\n]*\bpytest(?=\s|$)", text, re.MULTILINE):
             found[path.name] = text
     return found
 
@@ -87,3 +89,26 @@ class WorkflowPytestPluginTest(SimpleTestCase):
                         rf"install[^\n]*\b{re.escape(distribution)}\b",
                         f"{name} runs pytest but never installs {distribution}",
                     )
+
+
+class WorkflowDetectionTest(SimpleTestCase):
+    def test_command_prefixes_are_detected_and_installations_are_excluded(self):
+        global _WORKFLOWS
+        original = _WORKFLOWS
+        with tempfile.TemporaryDirectory() as directory:
+            _WORKFLOWS = pathlib.Path(directory)
+            self.addCleanup(setattr, sys.modules[__name__], "_WORKFLOWS", original)
+            commands = {
+                "python": "python -m pytest tests",
+                "poetry": "poetry run pytest tests",
+                "xvfb": "xvfb-run pytest tests",
+                "plain": "pytest tests",
+                "pip": "pip install pytest-cov",
+                "uv": "uv pip install pytest-xdist",
+            }
+            for name, command in commands.items():
+                (_WORKFLOWS / f"{name}.yml").write_text(f"steps:\n  - run: |\n      {command}\n", encoding="utf-8")
+            found = _workflows_running_pytest()
+            for name in commands:
+                with self.subTest(command=commands[name]):
+                    self.assertEqual(f"{name}.yml" in found, name not in {"pip", "uv"})

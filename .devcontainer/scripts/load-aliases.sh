@@ -123,10 +123,13 @@ netbox-shell() {
 # worker private PostgreSQL and Redis databases, so concurrent suites in the shared devcontainer
 # do not collide. Override the targets with TEST_DB_NAME=... / TEST_REDIS_HOST=... .
 netbox-test() {
+  if [ "$#" -eq 0 ]; then
+    set -- netbox_interface_name_rules
+  fi
   cd "$PLUGIN_DIR" && source /opt/netbox/venv/bin/activate && \
     TEST_DB_NAME="${TEST_DB_NAME:-test_netbox_interface_name_rules}" \
     TEST_REDIS_HOST="${TEST_REDIS_HOST:-redis}" \
-    pytest netbox_interface_name_rules "$@"
+    pytest "$@"
 }
 
 # Run a Django-runner suite on an isolated test database. The plugin's own suite runs under

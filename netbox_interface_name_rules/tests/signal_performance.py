@@ -521,7 +521,7 @@ def _cpu_model() -> str:
     """Return a stable processor description without recording the host identity."""
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
-        for line in cpuinfo.read_text().splitlines():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
             if line.lower().startswith("model name"):
                 return line.partition(":")[2].strip()
     return platform.processor() or "unknown"
@@ -1192,5 +1192,5 @@ class SignalPathPerformanceTest(TransactionTestCase):
             "scenarios": scenario_results,
         }
         validate_artifact(artifact, "generated performance artifact")
-        output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
-        output.with_suffix(".md").write_text(_markdown_summary(artifact))
+        output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        output.with_suffix(".md").write_text(_markdown_summary(artifact), encoding="utf-8")

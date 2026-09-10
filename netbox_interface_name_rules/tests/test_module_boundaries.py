@@ -30,7 +30,7 @@ def _family_submodules() -> set[str]:
 def _family_submodule_imports(path: pathlib.Path) -> set[str]:
     """Return the family submodules *path* imports directly, by either spelling."""
     submodules = _family_submodules()
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -76,7 +76,8 @@ class FamilySeamTest(SimpleTestCase):
             path = pathlib.Path(directory) / "sample.py"
             path.write_text(
                 "import netbox_interface_name_rules.family.batch\n"
-                "import netbox_interface_name_rules.family.conversion as conversion\n"
+                "import netbox_interface_name_rules.family.conversion as conversion\n",
+                encoding="utf-8",
             )
 
             self.assertEqual(_family_submodule_imports(path), {"batch", "conversion"})

@@ -35,7 +35,7 @@ def _is_banner(text):
 
 def _own_line_comments(path):
     """Map each line number carrying a whole-line explanatory comment to its text."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     found = {}
     with path.open("rb") as handle:
         for token in tokenize.tokenize(handle.readline):
@@ -82,7 +82,7 @@ class CommentStyleTest(SimpleTestCase):
     def test_no_unrecorded_multi_line_comment_block(self):
         recorded = {
             name: Counter({text: count for text, count in entries})
-            for name, entries in json.loads(BASELINE.read_text()).items()
+            for name, entries in json.loads(BASELINE.read_text(encoding="utf-8")).items()
         }
         unrecorded = []
         for name, entries in blocks_in_package().items():
@@ -101,6 +101,6 @@ class CommentStyleTest(SimpleTestCase):
         """The key holds the whole run, so a later line cannot change without a baseline update."""
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "sample.py"
-            path.write_text("# first line\n# second line\nvalue = 1\n")
+            path.write_text("# first line\n# second line\nvalue = 1\n", encoding="utf-8")
 
             self.assertEqual(list(_blocks(path)), ["# first line\n# second line"])
