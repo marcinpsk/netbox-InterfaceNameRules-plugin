@@ -137,7 +137,7 @@ fi
 
 echo "🔧 Installing development dependencies..."
 apt-get update -qq
-apt-get install -y -qq net-tools git
+apt-get install -y -qq net-tools git ripgrep
 # Dev tools used by the agent loop and pre-commit hooks. Keep in sync with
 # the `dev` extras in pyproject.toml — at minimum, anything invoked by:
 #   - test + coverage runs:                  pytest, pytest-django, pytest-cov, pytest-xdist
@@ -172,6 +172,7 @@ if [ -z "$PLUGIN_WS_DIR" ]; then
 fi
 echo "📂 Plugin workspace: $PLUGIN_WS_DIR"
 cd "$PLUGIN_WS_DIR"
+$PIP_CMD install --group workflow-tests
 $PIP_CMD install -e .
 echo "✅ Installed $PLUGIN_NAME in editable mode"
 

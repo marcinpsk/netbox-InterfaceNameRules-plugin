@@ -7,8 +7,6 @@ import re
 
 import re2
 from dcim.models import (
-    Device,
-    DeviceRole,
     DeviceType,
     Interface,
     Manufacturer,
@@ -16,7 +14,6 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     ModuleType,
-    Site,
 )
 from django.core.exceptions import ValidationError
 from django.db import connection
@@ -25,6 +22,7 @@ from django.test import TestCase
 
 from netbox_interface_name_rules.engine import apply_interface_name_rules, find_matching_rule, has_applicable_interfaces
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_device
 
 _RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
 
@@ -390,9 +388,7 @@ class RegexApplyRulesTest(TestCase):
         cls.mt_zr = ModuleType.objects.create(manufacturer=manufacturer, model="QSFP-DD-400G-ZR", part_number="APZR")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 0", position="0")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 1", position="1")
-        role = DeviceRole.objects.create(name="RxApplyRole", slug="rxapplyrole")
-        site = Site.objects.create(name="RxApplySite", slug="rxapplysite")
-        cls.device = Device.objects.create(name="rx-apply-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("RxApply", cls.device_type, name="rx-apply-01")
 
     def test_regex_rule_renames_interface(self):
         """Regex rule matches and renames interface for LR4."""

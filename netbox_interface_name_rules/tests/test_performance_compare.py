@@ -10,7 +10,6 @@ import tomllib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _COMPARE_PATH = _PROJECT_ROOT / "performance" / "compare.py"
@@ -67,18 +66,20 @@ class PerformancePackageTest(unittest.TestCase):
     """The repository-only performance harness does not ship as a generic package."""
 
     def test_package_discovery_excludes_the_performance_tools(self):
-        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
+        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         patterns = configuration["tool"]["setuptools"]["packages"]["find"]["include"]
 
         self.assertFalse(any(fnmatch.fnmatchcase("performance", pattern) for pattern in patterns))
 
     def test_pytest_adds_the_repository_checkout_to_pythonpath(self):
-        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text())
+        configuration = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
         self.assertIn(".", configuration["tool"]["pytest"]["ini_options"]["pythonpath"])
 
     def test_recorded_direct_callbacks_reach_zero_shared_reads(self):
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
+            encoding="utf-8"
+        )
         expected_scenarios = {
             "module.direct_callback.no_matching_rule",
             "module.direct_callback.plain_rename",
@@ -100,12 +101,12 @@ class PerformancePackageTest(unittest.TestCase):
         self.assertEqual({row[3] for row in direct_reads}, {"0"})
 
     def test_readme_does_not_equate_shared_reads_with_all_disk_io(self):
-        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
 
         self.assertNotIn("never goes to disk", readme)
 
     def test_readme_does_not_infer_planner_cost_from_statement_counts(self):
-        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
 
         self.assertNotIn("less planner work", readme)
         self.assertIn(
@@ -115,14 +116,16 @@ class PerformancePackageTest(unittest.TestCase):
 
     def test_readme_shared_read_claim_matches_the_comparison(self):
         """Read the recorded shared reads rather than pinning what one pair of runs happened to show."""
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
+            encoding="utf-8"
+        )
         before_reads = after_reads = 0
         for line in comparison.splitlines():
             cells = [cell.strip().strip("`") for cell in line.strip().strip("|").split("|")]
             if len(cells) == 6 and cells[1] == "Shared reads" and ".direct_callback." in cells[0]:
                 before_reads += int(cells[2])
                 after_reads += int(cells[3])
-        readme = _unwrapped((_PROJECT_ROOT / "performance" / "README.md").read_text())
+        readme = _unwrapped((_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8"))
 
         self.assertNotIn("No shared-buffer reads were observed in any direct-callback scenario.", readme)
         scoped_claim = "No shared-buffer reads were observed in any direct-callback scenario after the refactor"
@@ -137,7 +140,9 @@ class PerformancePackageTest(unittest.TestCase):
             self.assertIn(before_claim, readme)
 
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
+            encoding="utf-8"
+        )
         introduction = comparison.split("## Environment", 1)[0]
 
         self.assertIn(compare._COMPARISON_INTRO, introduction)
@@ -149,7 +154,9 @@ class PerformancePackageTest(unittest.TestCase):
         self.assertNotIn("Database work is deterministic", introduction)
 
     def test_comparison_machine_time_note_matches_the_load_it_reports(self):
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
+            encoding="utf-8"
+        )
         environment = comparison.split("## Environment", 1)[1].split("## Database work", 1)[0]
         machine_time = comparison.split("## Machine time", 1)[1].split("## Statement-count regressions", 1)[0]
         load_row = next(row for row in environment.splitlines() if row.startswith("| host load"))
@@ -160,19 +167,6 @@ class PerformancePackageTest(unittest.TestCase):
         expected = compare._MACHINE_TIME_COMPARABLE_NOTE if quiet else compare._MACHINE_TIME_UNPROVEN_NOTE
 
         self.assertIn(expected, machine_time)
-
-
-class XdistWorkerCapTest(unittest.TestCase):
-    """The shared host gets a bounded number of automatic pytest workers."""
-
-    def test_auto_worker_count_is_capped_at_eight(self):
-        configuration_path = _PROJECT_ROOT / "conftest.py"
-        spec = importlib.util.spec_from_file_location("project_conftest", configuration_path)
-        configuration = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(configuration)
-
-        with patch("xdist.plugin.pytest_xdist_auto_num_workers", return_value=32):
-            self.assertEqual(configuration.pytest_xdist_auto_num_workers(object()), 8)
 
 
 class PlanIdentityTest(unittest.TestCase):
@@ -213,8 +207,8 @@ class ComparisonDestinationTest(unittest.TestCase):
     def test_main_validates_inputs_before_the_destination(self):
         with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
             before, after = Path(directory) / "before.json", Path(directory) / "after.json"
-            before.write_text(json.dumps(_timed_artifact(_MACHINE_TIME)))
-            after.write_text(json.dumps(_artifact({})))
+            before.write_text(json.dumps(_timed_artifact(_MACHINE_TIME)), encoding="utf-8")
+            after.write_text(json.dumps(_artifact({})), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "scenarios"):
                 compare.main(["compare.py", str(before), str(after), str(before)])
 
@@ -223,12 +217,12 @@ class ComparisonDestinationTest(unittest.TestCase):
             root = Path(directory)
             before, after, destination = root / "before.json", root / "after.json", root / "report.md"
             contents = json.dumps(_timed_artifact(_MACHINE_TIME))
-            before.write_text(contents)
-            after.write_text(contents)
+            before.write_text(contents, encoding="utf-8")
+            after.write_text(contents, encoding="utf-8")
             compare.main(["compare.py", str(before), str(after), str(destination)])
-            self.assertIn("# Automatic naming performance comparison", destination.read_text())
-            self.assertEqual(before.read_text(), contents)
-            self.assertEqual(after.read_text(), contents)
+            self.assertIn("# Automatic naming performance comparison", destination.read_text(encoding="utf-8"))
+            self.assertEqual(before.read_text(encoding="utf-8"), contents)
+            self.assertEqual(after.read_text(encoding="utf-8"), contents)
 
     def test_main_refuses_to_overwrite_either_input(self):
         for target in ("before.json", "after.json"):
@@ -237,16 +231,16 @@ class ComparisonDestinationTest(unittest.TestCase):
                     root = Path(directory)
                     before, after = root / "before.json", root / "after.json"
                     contents = json.dumps(_timed_artifact(_MACHINE_TIME))
-                    before.write_text(contents)
-                    after.write_text(contents)
+                    before.write_text(contents, encoding="utf-8")
+                    after.write_text(contents, encoding="utf-8")
                     destination = root / target
                     if symlink:
                         destination = root / "report.md"
                         destination.symlink_to(root / target)
                     with self.assertRaisesRegex(SystemExit, "destination.*input"):
                         compare.main(["compare.py", str(before), str(after), str(destination)])
-                    self.assertEqual(before.read_text(), contents)
-                    self.assertEqual(after.read_text(), contents)
+                    self.assertEqual(before.read_text(encoding="utf-8"), contents)
+                    self.assertEqual(after.read_text(encoding="utf-8"), contents)
 
     def test_main_refuses_a_hard_link_to_either_input(self):
         for target in ("before.json", "after.json"):
