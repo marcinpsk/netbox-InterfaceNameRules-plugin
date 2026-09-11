@@ -51,6 +51,7 @@ netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
 
 [dependency-groups]
 dev = [
+    {include-group = "workflow-tests"},
     "build",
     "reuse",
     "ruff>=0.16",
@@ -61,6 +62,10 @@ dev = [
     "pytest-xdist>=3.8",
     "python-semantic-release",
     "django>=5.1,<7.0",
+]
+workflow-tests = [
+    "tree-sitter==0.26.0",
+    "tree-sitter-bash==0.25.1",
 ]
 docs = [
     "mkdocs>=1,<2",

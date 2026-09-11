@@ -172,6 +172,7 @@ if [ -z "$PLUGIN_WS_DIR" ]; then
 fi
 echo "📂 Plugin workspace: $PLUGIN_WS_DIR"
 cd "$PLUGIN_WS_DIR"
+$PIP_CMD install --group workflow-tests
 $PIP_CMD install -e .
 echo "✅ Installed $PLUGIN_NAME in editable mode"
 
