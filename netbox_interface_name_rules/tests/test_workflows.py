@@ -11,6 +11,7 @@ import re
 import tempfile
 import tomllib
 
+import yaml
 from django.test import SimpleTestCase
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -46,9 +47,12 @@ def _workflows_running_pytest(directory=None):
     found = {}
     for path in sorted((directory or _WORKFLOWS).glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
+        workflow = yaml.safe_load(text)
+        commands = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if "run" in step]
         prefixes = [
             match[1]
-            for segment in re.split(r"&&|\|\||;|\||\n", text)
+            for command in commands
+            for segment in re.split(r"&&|\|\||;|\||\n", command)
             if (match := re.search(r"^(.*?)\bpytest(?=\s|$)", segment))
         ]
         if any(not re.search(r"\bpip(?:3)?\s+install\b", prefix) for prefix in prefixes):
@@ -114,8 +118,25 @@ class WorkflowDetectionTest(SimpleTestCase):
         with tempfile.TemporaryDirectory() as directory:
             workflows = pathlib.Path(directory)
             for name, command in commands.items():
-                (workflows / f"{name}.yml").write_text(f"steps:\n  - run: |\n      {command}\n", encoding="utf-8")
+                (workflows / f"{name}.yml").write_text(
+                    f"jobs:\n  test:\n    steps:\n      - run: |\n          {command}\n", encoding="utf-8"
+                )
             found = _workflows_running_pytest(workflows)
         for name, command in commands.items():
             with self.subTest(command=command):
                 self.assertEqual(f"{name}.yml" in found, name not in {"pip", "uv", "pip_pytest"})
+
+    def test_workflow_metadata_does_not_count_as_a_pytest_command(self):
+        workflows_by_name = {
+            "workflow_name": "name: Document pytest behavior\njobs:\n  docs:\n    steps:\n      - run: echo ready\n",
+            "step_name": 'jobs:\n  docs:\n    steps:\n      - name: "Document pytest behavior"\n        run: echo ready\n',
+            "comment": "# Document pytest behavior\njobs:\n  docs:\n    steps:\n      - run: echo ready\n",
+            "action_input": "jobs:\n  docs:\n    steps:\n      - uses: ./action\n        with:\n          description: pytest behavior\n",
+            "reusable_job": "jobs:\n  docs:\n    uses: ./.github/workflows/docs.yml\n    with:\n      description: pytest behavior\n",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = pathlib.Path(directory)
+            for name, text in workflows_by_name.items():
+                (workflows / f"{name}.yml").write_text(text, encoding="utf-8")
+            found = _workflows_running_pytest(workflows)
+        self.assertEqual(found, {})
