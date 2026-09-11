@@ -231,10 +231,14 @@ def _machine_time_note(before, after):
 def _environment_table(before, after):
     """Return the revisions and settings each run was taken under."""
     rows = ["| Field | Before | After |", "| --- | --- | --- |"]
-    for key in ("plugin_revision", "netbox_revision", "netbox_version", "cpu_model", "operating_system_release"):
-        rows.append(f"| {key} | `{before['environment'].get(key)}` | `{after['environment'].get(key)}` |")
-    for key in ("samples", "warmups"):
-        rows.append(f"| {key} | `{before['configuration'].get(key)}` | `{after['configuration'].get(key)}` |")
+    rows.extend(
+        f"| {key} | `{before['environment'].get(key)}` | `{after['environment'].get(key)}` |"
+        for key in ("plugin_revision", "netbox_revision", "netbox_version", "cpu_model", "operating_system_release")
+    )
+    rows.extend(
+        f"| {key} | `{before['configuration'].get(key)}` | `{after['configuration'].get(key)}` |"
+        for key in ("samples", "warmups")
+    )
     postgres_before = before["environment"].get("postgresql", {}).get("server_version")
     postgres_after = after["environment"].get("postgresql", {}).get("server_version")
     rows.append(f"| postgresql | `{postgres_before}` | `{postgres_after}` |")
@@ -294,8 +298,10 @@ def main(argv):
             "",
             "### Where those statements come from",
             "",
-            "Each raised scenario is broken down by statement source. Table names identify reads and "
-            "writes, while transaction-control categories identify savepoint bookkeeping.",
+            (
+                "Each raised scenario is broken down by statement source. Table names identify reads and "
+                "writes, while transaction-control categories identify savepoint bookkeeping."
+            ),
             "",
             "| Scenario | Statement source | Before | After | Change |",
             "| --- | --- | ---: | ---: | ---: |",

@@ -122,7 +122,8 @@ def _get_enabled_rules():
     length, then primary key. A reload publishes one new cache dictionary so a
     concurrent reader cannot combine values from two versions.
     """
-    global _RULE_CACHE
+    # One module-level cache, replaced atomically.
+    global _RULE_CACHE  # noqa: PLW0603
 
     pinned = getattr(_pin, "depth", 0) > 0
     if pinned and getattr(_pin, "primed", False):

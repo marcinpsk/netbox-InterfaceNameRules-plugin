@@ -76,7 +76,7 @@ _DOLLAR_LITERAL_RE = re.compile(
     r"\$\$.*?\$\$|\$(?P<tag>[A-Za-z_][A-Za-z_0-9]*)\$.*?\$(?P=tag)\$",
     re.DOTALL,
 )
-_NUMBER_RE = re.compile(r"(?<![A-Za-z_0-9$])[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?(?![A-Za-z_0-9$])", re.I)
+_NUMBER_RE = re.compile(r"(?<![A-Za-z_0-9$])[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?(?![A-Za-z_0-9$])", re.IGNORECASE)
 _SAVEPOINT_RE = re.compile(r"s\d+_x\d+")
 _DJANGO_CURSOR_RE = re.compile(r"_django_curs_\d+_(sync|async)_\d+")
 _AUTO_EXPLAIN_PLAN_RE = re.compile(r"\bplan:\s*(?P<document>[\[{].*)", re.DOTALL)
@@ -508,8 +508,8 @@ def _auto_explain_notices():
 
 def _git_revision(path: Path) -> str | None:
     """Return the source revision for a checkout, if the checkout metadata is present."""
-    result = subprocess.run(
-        ["git", "-C", str(path), "rev-parse", "HEAD"],
+    result = subprocess.run(  # noqa: S603 - Fixed git arguments inspect a local checkout.
+        ["git", "-C", str(path), "rev-parse", "HEAD"],  # noqa: S607 - Use git from the test environment PATH.
         check=False,
         capture_output=True,
         text=True,
@@ -536,7 +536,8 @@ def _planner_environment() -> dict[str, str]:
         server_version_num = cursor.fetchone()[0]
         planner = {}
         for setting in _PLANNER_SETTINGS:
-            cursor.execute(f"SHOW {setting}")  # noqa: S608 - names come only from the fixed tuple above
+            # Names come only from the fixed _PLANNER_SETTINGS tuple above.
+            cursor.execute(f"SHOW {setting}")
             planner[setting] = cursor.fetchone()[0]
     return {
         "server_version": server_version,

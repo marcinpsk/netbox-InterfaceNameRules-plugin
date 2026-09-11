@@ -9,6 +9,8 @@ whatever the installed NetBox expects, so a convention change upstream surfaces 
 Behaviour unique to this plugin (test/apply/toggle/duplicate) is covered in test_views.py.
 """
 
+from typing import ClassVar
+
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.test import SimpleTestCase
 from utilities.testing import APIViewTestCases, ViewTestCases
@@ -171,8 +173,10 @@ class InterfaceNameRuleViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 
         # module_type is matched by model name (to_field_name="model") on import.
         cls.csv_data = (
-            "module_type,module_type_pattern,module_type_is_regex,name_template,parent_name_template,"
-            "breakout_mode,channel_count,channel_start,enabled",
+            (
+                "module_type,module_type_pattern,module_type_is_regex,name_template,parent_name_template,"
+                "breakout_mode,channel_count,channel_start,enabled"
+            ),
             f"{module_types[4].model},,false,Ethernet{{slot}}/10,,flat,0,0,true",
             f"{module_types[5].model},,false,Ethernet{{slot}}/11,,flat,0,0,true",
             ",QSFP-DD-400G-.*,true,Ethernet{slot}/12,Ethernet{slot},channelized,4,1,true",
@@ -196,7 +200,7 @@ class InterfaceNameRuleAPIViewTestCase(APIViewTestCases.APIViewTestCase):
     """REST API: get, list, create, update, delete, their bulk forms, OPTIONS, brief mode and GraphQL."""
 
     model = InterfaceNameRule
-    brief_fields = ["description", "display", "id", "name_template", "url"]
+    brief_fields: ClassVar[list[str]] = ["description", "display", "id", "name_template", "url"]
     # Plugin API routes are namespaced under plugins-api, not the bare app label.
     view_namespace = "plugins-api:netbox_interface_name_rules"
 

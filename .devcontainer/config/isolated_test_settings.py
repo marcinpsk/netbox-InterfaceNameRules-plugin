@@ -22,15 +22,15 @@
 # (the ``netbox-test-isolated`` helper in load-aliases.sh wires both up for you).
 import os as _os
 
-from netbox.settings import *  # noqa: F401,F403
+from netbox.settings import *
 
 _name = _os.environ.get("TEST_DB_NAME")
 if _name:
-    DATABASES["default"].setdefault("TEST", {})["NAME"] = _name  # noqa: F405
+    DATABASES["default"].setdefault("TEST", {})["NAME"] = _name
 
 # NetBox writes the search cache inline only when no RQ worker serves the queue, so
 # ``TEST_REDIS_DB`` moves the queues off the database the devcontainer's worker holds.
 _redis_db = _os.environ.get("TEST_REDIS_DB")
 if _redis_db:
-    for _queue in RQ_QUEUES.values():  # noqa: F405
+    for _queue in RQ_QUEUES.values():
         _queue["DB"] = int(_redis_db)

@@ -57,7 +57,7 @@ from netbox_interface_name_rules.views import RulePreview
 FLAT = "flat"
 CHANNELIZED = "channelized"
 
-TEST_PASSWORD = "testpass123"  # noqa: S105 - test credential only
+TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 User = get_user_model()
 
@@ -1115,7 +1115,7 @@ class BreakoutModeMigrationTest(TestCase):
     def _latest_migration(self):
         """Return the name of the plugin's newest migration."""
         loader = MigrationLoader(connection)
-        return sorted(name for app_label, name in loader.graph.leaf_nodes(self.APP))[-1]
+        return max(name for app_label, name in loader.graph.leaf_nodes(self.APP))
 
     def test_the_migrations_describe_the_models_as_they_are_now(self):
         """A model change shipped without its migration only fails later, on someone else's upgrade.

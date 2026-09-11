@@ -53,7 +53,7 @@ class IsolatedTestSettingsTest(TestCase):
         # Hand the child this interpreter's own import path. NetBox lives in a different place in
         # the devcontainer than in CI, and neither location may be assumed here.
         env["PYTHONPATH"] = os.pathsep.join([str(CONFIG_DIR), *(entry for entry in sys.path if entry)])
-        completed = subprocess.run(
+        completed = subprocess.run(  # noqa: S603 - Run a fixed probe with test-controlled module names.
             [sys.executable, "-c", _PROBE, module],
             env=env,
             capture_output=True,
