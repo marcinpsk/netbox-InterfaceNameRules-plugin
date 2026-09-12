@@ -26,7 +26,10 @@ Message construction belongs to the primitive so callers cannot drift in wording
 The primitive does not log. Callers emit its messages through their own logger,
 which preserves the engine warning source and keeps the decision free of side effects.
 
-Increment 1 adopts the primitive only in the engine.
-Installed-family adoption belongs to increment 2.
+The engine and installed-family discovery both use the primitive.
+Installed-family discovery passes the complete historical base relation and emits
+collision messages through its own logger with the label kind `family base`.
+Current resolved bases remain unconditional and precede accepted historical bases.
+Historical base extraction and duplicate handling remain unchanged.
 The `_singly_claimed` rule counts member primary keys across complete family
 candidates and remains separate.

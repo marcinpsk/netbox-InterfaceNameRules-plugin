@@ -810,7 +810,46 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._join(VirtualChassis.objects.create(name="vcconv-vc2"), 5, device=standalone)
         self._switch_to_channelized(rule)
 
-        self.assertEqual(find_convertible_families(rule).candidates, ())
+        with self.assertLogs("netbox_interface_name_rules.family.installed", level="WARNING") as logs:
+            self.assertEqual(find_convertible_families(rule).candidates, ())
+
+        warnings = " ".join(logs.output)
+        self.assertIn("Family base", warnings)
+        self.assertIn("xe-{vc_position:0}/0/{module}", warnings)
+        self.assertIn("xe-{vc_position:9}/0/{module}", warnings)
+        self.assertIn(str(module), warnings)
+
+    def test_an_unrelated_family_survives_overlapping_historical_claims(self):
+        """A multi-base claim rejects its shared base but leaves an unrelated family available."""
+        module_type = _token_module_type(
+            self.manufacturer,
+            "VcConv-OVERLAP",
+            "xe-{vc_position}/0/{module}",
+            "xe-1/{vc_position}/{module}",
+            "et-{vc_position}/0/{module}",
+        )
+        rule = self._flat_rule(module_type, "brk-{base}:{channel}")
+        module, _ = self._install_on(self.device, module_type, "3")
+        for channel in range(4):
+            rename_out_of_band(
+                Interface.objects.get(module=module, name=f"brk-xe-1/1/3:{channel}"),
+                f"brk-xe-2/0/3:{channel}",
+            )
+        self._renumber(5)
+        self._switch_to_channelized(rule)
+
+        with self.assertLogs("netbox_interface_name_rules.family.installed", level="WARNING") as logs:
+            candidates = find_convertible_families(rule).candidates
+
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].convertible, candidates[0].reason)
+        self.assertEqual(list(candidates[0].current_names), [f"brk-et-1/0/3:{channel}" for channel in range(4)])
+        self.assertEqual(candidates[0].new_names[0], "et-0/0/3")
+        self.assertIn(
+            f"Family base 'xe-1/0/3' on {module} could be the drifted name of any of the templates "
+            "['xe-1/{vc_position}/{module}', 'xe-{vc_position}/0/{module}']",
+            " ".join(logs.output),
+        )
 
     def test_a_rule_without_a_base_is_identified_after_a_renumber(self):
         """Drift-immune by construction — asserted, not assumed, so the fix cannot regress it."""
