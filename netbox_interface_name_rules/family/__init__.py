@@ -11,6 +11,7 @@ from .batch import (
     plan_module_families,
 )
 from .capabilities import supports_channelization
+from .claims import TemplateClaim, resolve_template_claims
 from .conversion import (
     conversion_offered,
     convert_rule_families,
@@ -93,6 +94,7 @@ __all__ = (
     "ProspectiveInterface",
     "ProspectiveMember",
     "StructuralFamilyPlan",
+    "TemplateClaim",
     "apply_rule_to_modules",
     "channelized_family_names",
     "conversion_offered",
@@ -123,6 +125,7 @@ __all__ = (
     "plan_prospective_families",
     "plan_structural_family",
     "preview_rule_conversions",
+    "resolve_template_claims",
     "resolved_template_names",
     "supports_channelization",
     "template_channel_suffixes",
