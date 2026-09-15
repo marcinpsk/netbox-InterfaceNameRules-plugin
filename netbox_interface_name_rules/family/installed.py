@@ -9,6 +9,7 @@ from dcim.models import Interface
 
 from ..choices import BreakoutModeChoices
 from ..naming import evaluate_name_template
+from .claims import TemplateClaim, resolve_template_claims
 from .domain import (
     FamilyStatus,
     FamilyTopology,
@@ -73,32 +74,19 @@ def _historical_bases(rule, variables, template, interfaces):  # pragma: no cove
     return tuple(sorted(bases))
 
 
-def _ambiguous_bases(historical_by_template):
-    """Return every historical base that more than one template could claim."""
-    ambiguous = {base_name for bases in historical_by_template.values() if len(bases) > 1 for base_name in bases}
-    single_claims: dict[str, int] = {}
-    for bases in historical_by_template.values():
-        if len(bases) == 1:  # pragma: no cover - historical matchers require VC token support
-            single_claims[bases[0]] = single_claims.get(bases[0], 0) + 1
-    ambiguous.update(base_name for base_name, count in single_claims.items() if count > 1)
-    return ambiguous
+def _source_bases(template, historical_bases):
+    """Return the template's own base and its accepted historical bases."""
+    return (template.resolved, *historical_bases)
 
 
-def _source_bases(template, historical_bases, ambiguous_bases):
-    """Return the template's own base and every historical base it alone claims."""
-    unambiguous = tuple(
-        base_name for base_name in historical_bases if len(historical_bases) == 1 and base_name not in ambiguous_bases
-    )
-    return (template.resolved, *unambiguous)
-
-
-def flat_family_bases(rule, variables, interfaces, catalog):
+def flat_family_bases(module, rule, variables, interfaces, catalog):
     """Return ``(template base, source base)`` for every base a flat family could be named from.
 
     The template base is the name the rule resolves for this module now; the source base is the one
-    an installed family still spells, which differs after a virtual-chassis renumber.  A historical
-    base more than one template could claim is dropped: the rows it names are not certainly one
-    family's, and neither renaming nor converting them is this plugin's guess to make.
+    an installed family still spells, which differs after a virtual-chassis renumber.
+    A historical base that more than one template could claim is dropped.
+    Every historical base of a template that claims multiple bases is also dropped.
+    These claims do not identify one family with certainty, so the plugin does not rename or convert them.
     """
     if rule.channel_count <= 0:
         return ()
@@ -106,11 +94,21 @@ def flat_family_bases(rule, variables, interfaces, catalog):
     historical_by_template = {
         template.pk: _historical_bases(rule, variables, template, interfaces) for template in templates
     }
-    ambiguous_bases = _ambiguous_bases(historical_by_template)
+    accepted, messages = resolve_template_claims(
+        tuple(
+            TemplateClaim(template.pk, template.template_name, historical_by_template[template.pk])
+            for template in templates
+        ),
+        module=module,
+        label_kind="family base",
+    )
+    for message in messages:
+        logger.warning(message)
+    accepted_by_template = {pk: (base,) for pk, base in accepted}
     return tuple(
         (template.resolved, source_base)
         for template in templates
-        for source_base in _source_bases(template, historical_by_template[template.pk], ambiguous_bases)
+        for source_base in _source_bases(template, accepted_by_template.get(template.pk, ()))
     )
 
 
@@ -135,7 +133,7 @@ def _singly_claimed(candidates):
     return [candidate for candidate in candidates if all(claims[member.pk] == 1 for member in candidate[2])]
 
 
-def flat_family_candidates(rule, variables, interfaces, catalog):
+def flat_family_candidates(module, rule, variables, interfaces, catalog):
     """Return complete, unambiguous flat-family candidates on this module.
 
     A flat family carries the names the rule's channel range spells, and a flat rule and the
@@ -146,7 +144,7 @@ def flat_family_candidates(rule, variables, interfaces, catalog):
     if not by_name:
         return []
     candidates = []
-    for base_name, source_base in flat_family_bases(rule, variables, interfaces, catalog):
+    for base_name, source_base in flat_family_bases(module, rule, variables, interfaces, catalog):
         names = family_names_for(rule, variables, base_name, source_base)
         if names is None:
             continue
@@ -159,11 +157,11 @@ def flat_family_candidates(rule, variables, interfaces, catalog):
     return _singly_claimed(candidates)
 
 
-def _flat_candidates(rule, variables, interfaces, catalog):
+def _flat_candidates(module, rule, variables, interfaces, catalog):
     """Return the flat families a flat-mode rule owns on this module."""
     if rule.breakout_mode != BreakoutModeChoices.FLAT:
         return []
-    return flat_family_candidates(rule, variables, interfaces, catalog)
+    return flat_family_candidates(module, rule, variables, interfaces, catalog)
 
 
 def _flat_plan(module, target_names, interfaces):
@@ -346,7 +344,7 @@ def plan_installed_families(module, rule, variables, interfaces=None) -> Install
     plans = _channelized_plans(module, rule, variables, interfaces, catalog)
     plans.extend(
         _flat_plan(module, target_names, members)
-        for _base_name, target_names, members in _flat_candidates(rule, variables, interfaces, catalog)
+        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, catalog)
     )
     plans.sort(key=lambda plan: plan.member_pks[0])
     return InstalledFamilyPlanSet(module_id=module.pk, plans=tuple(plans))
