@@ -235,9 +235,11 @@ def _missing_workflow_distributions(directory=None):
                 if arguments is None:
                     continue
                 required = _required_distributions(_configured_addopts(), arguments)
-                for distribution in sorted(required):
-                    if not any(_command_installs_distribution(earlier, distribution) for earlier in commands[:index]):
-                        missing.append((workflow, job, distribution))
+                missing.extend(
+                    (workflow, job, distribution)
+                    for distribution in sorted(required)
+                    if not any(_command_installs_distribution(earlier, distribution) for earlier in commands[:index])
+                )
     return tuple(missing)
 
 
