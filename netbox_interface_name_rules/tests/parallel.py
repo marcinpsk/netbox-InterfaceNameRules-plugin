@@ -32,7 +32,9 @@ def _worker_number(worker_id: str) -> int:
 def isolated_test_database_name(base_name: str, worker_id: str | None) -> str:
     """Return a PostgreSQL-safe test database name for one pytest worker."""
     suffix = f"_{worker_id}" if worker_id else ""
-    return f"{base_name[: _POSTGRES_NAME_LIMIT - len(suffix)]}{suffix}"
+    prefix_limit = _POSTGRES_NAME_LIMIT - len(suffix.encode("utf-8"))
+    prefix = base_name.encode("utf-8")[:prefix_limit].decode("utf-8", errors="ignore")
+    return f"{prefix}{suffix}"
 
 
 def isolated_cache_location(location: str, host: str, database: int) -> str:

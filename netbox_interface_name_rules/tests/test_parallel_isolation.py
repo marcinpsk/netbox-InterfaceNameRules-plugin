@@ -116,6 +116,19 @@ def test_database_name_stays_within_the_postgresql_limit():
     assert database_name.endswith("_gw5")
 
 
+def test_multibyte_database_names_preserve_distinct_worker_suffixes():
+    base_name = f"test_{'é' * 30}"
+
+    database_names = {
+        isolated_test_database_name(base_name, "gw0"),
+        isolated_test_database_name(base_name, "gw1"),
+    }
+
+    assert len(database_names) == 2
+    assert all(len(name.encode("utf-8")) <= 63 for name in database_names)
+    assert {name[-4:] for name in database_names} == {"_gw0", "_gw1"}
+
+
 def test_a_worker_above_the_ceiling_is_rejected():
     with pytest.raises(ValueError, match=f"At most {MAX_PARALLEL_WORKERS} pytest workers"):
         isolated_redis_databases(f"gw{MAX_PARALLEL_WORKERS}")
