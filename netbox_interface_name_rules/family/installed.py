@@ -74,11 +74,6 @@ def _historical_bases(rule, variables, template, interfaces):  # pragma: no cove
     return tuple(sorted(bases))
 
 
-def _source_bases(template, historical_bases):
-    """Return the template's own base and its accepted historical bases."""
-    return (template.resolved, *historical_bases)
-
-
 def flat_family_bases(module, rule, variables, interfaces, catalog):
     """Return ``(template base, source base)`` for every base a flat family could be named from.
 
@@ -87,6 +82,7 @@ def flat_family_bases(module, rule, variables, interfaces, catalog):
     A historical base that more than one template could claim is dropped.
     Every historical base of a template that claims multiple bases is also dropped.
     These claims do not identify one family with certainty, so the plugin does not rename or convert them.
+    Current bases precede historical bases so an exact claim always owns its installed rows.
     """
     if rule.channel_count <= 0:
         return ()
@@ -105,11 +101,13 @@ def flat_family_bases(module, rule, variables, interfaces, catalog):
     for message in messages:
         logger.warning(message)
     accepted_by_template = {pk: (base,) for pk, base in accepted}
-    return tuple(
+    current_bases = tuple((template.resolved, template.resolved) for template in templates)
+    historical_bases = tuple(
         (template.resolved, source_base)
         for template in templates
-        for source_base in _source_bases(template, accepted_by_template.get(template.pk, ()))
+        for source_base in accepted_by_template.get(template.pk, ())
     )
+    return current_bases + historical_bases
 
 
 def family_names_for(rule, variables, base_name, source_base):

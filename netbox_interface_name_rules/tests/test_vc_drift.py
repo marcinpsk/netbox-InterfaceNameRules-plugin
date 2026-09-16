@@ -851,6 +851,27 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
             " ".join(logs.output),
         )
 
+    def test_current_base_precedes_an_earlier_templates_historical_base(self):
+        """An exact current base owns its rows before an earlier template's historical match."""
+        module_type = _token_module_type(
+            self.manufacturer,
+            "VcConv-CURRENT-FIRST",
+            "xe-{vc_position:0}/0/{module}",
+            "xe-1/0/{module}",
+        )
+        rule = self._flat_rule(module_type, "brk-{base}:{channel}")
+        self._renumber(2)
+        module, _ = self._install_on(self.device, module_type, "3")
+        Interface.objects.filter(module=module, name__contains="xe-2/0/3").delete()
+        self._switch_to_channelized(rule, parent_name_template="parent-{base}")
+
+        candidates = find_convertible_families(rule).candidates
+
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].convertible, candidates[0].reason)
+        self.assertEqual(list(candidates[0].current_names), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
+        self.assertEqual(candidates[0].new_names[0], "parent-xe-1/0/3")
+
     def test_a_rule_without_a_base_is_identified_after_a_renumber(self):
         """Drift-immune by construction — asserted, not assumed, so the fix cannot regress it."""
         rule = self._flat_rule(self.free_type, "et-0/0/{bay_position}:{channel}")
