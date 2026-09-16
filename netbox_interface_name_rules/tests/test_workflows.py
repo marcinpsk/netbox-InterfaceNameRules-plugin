@@ -195,9 +195,9 @@ def _shell_commands(command, workflow):
                 else:
                     words.append(word)
                 previous_end = part.end_byte
-            commands.append(tuple(words))
+            commands.append((node.start_byte, tuple(words)))
         pending.extend(node.named_children)
-    return tuple(commands)
+    return tuple(words for _position, words in sorted(commands))
 
 
 def _shell_runs_pytest(command, workflow):
@@ -206,16 +206,39 @@ def _shell_runs_pytest(command, workflow):
 
 
 def _workflows_running_pytest(directory=None):
-    """Map each workflow in *directory* that invokes pytest to its literal commands."""
+    """Map each workflow that invokes pytest to ordered literal commands per job."""
     found = {}
     for path in sorted((directory or _WORKFLOWS).glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
         workflow = yaml.safe_load(text)
-        commands = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if "run" in step]
-        shell_commands = tuple(words for command in commands for words in _shell_commands(command, path.name))
-        if any(_is_pytest_invocation(words) for words in shell_commands):
-            found[path.name] = shell_commands
+        jobs = {
+            job_name: tuple(
+                words
+                for step in job.get("steps", [])
+                if "run" in step
+                for words in _shell_commands(step["run"], path.name)
+            )
+            for job_name, job in workflow["jobs"].items()
+        }
+        if any(_is_pytest_invocation(words) for commands in jobs.values() for words in commands):
+            found[path.name] = jobs
     return found
+
+
+def _missing_workflow_distributions(directory=None):
+    """Return required pytest distributions not installed earlier in the same job."""
+    missing = []
+    for workflow, jobs in _workflows_running_pytest(directory).items():
+        for job, commands in jobs.items():
+            for index, command in enumerate(commands):
+                arguments = _pytest_arguments(command)
+                if arguments is None:
+                    continue
+                required = _required_distributions(_configured_addopts(), arguments)
+                for distribution in sorted(required):
+                    if not any(_command_installs_distribution(earlier, distribution) for earlier in commands[:index]):
+                        missing.append((workflow, job, distribution))
+    return tuple(missing)
 
 
 class RequiredDistributionTest(SimpleTestCase):
@@ -290,23 +313,60 @@ class WorkflowPytestPluginTest(SimpleTestCase):
         )
 
     def test_every_pytest_workflow_installs_the_plugins_addopts_requires(self):
-        workflows = _workflows_running_pytest()
+        missing = _missing_workflow_distributions()
 
-        self.assertTrue(workflows, "no workflow was detected as running pytest")
-        for name, commands in workflows.items():
-            pytest_arguments = tuple(
-                arguments for command in commands if (arguments := _pytest_arguments(command)) is not None
-            )
-            required = _required_distributions(_configured_addopts(), *pytest_arguments)
-            for distribution in sorted(required):
-                with self.subTest(workflow=name, distribution=distribution):
-                    self.assertTrue(
-                        any(_command_installs_distribution(command, distribution) for command in commands),
-                        f"{name} runs pytest but never installs {distribution}",
-                    )
+        self.assertTrue(_workflows_running_pytest(), "no workflow was detected as running pytest")
+        self.assertEqual(
+            missing,
+            (),
+            "\n".join(
+                f"{workflow} job {job!r} runs pytest before installing {distribution}"
+                for workflow, job, distribution in missing
+            ),
+        )
 
 
 class WorkflowDetectionTest(SimpleTestCase):
+    def test_workflow_scanner_preserves_job_and_command_order(self):
+        workflow = {
+            "jobs": {
+                "install-elsewhere": {"steps": [{"run": "uv pip install pytest-cov pytest-xdist"}]},
+                "test": {
+                    "steps": [
+                        {
+                            "run": "pytest tests\nuv pip install pytest-cov pytest-xdist",
+                        }
+                    ]
+                },
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workflows = pathlib.Path(directory)
+            (workflows / "ordered.yml").write_text(yaml.safe_dump(workflow, sort_keys=False), encoding="utf-8")
+
+            found = _workflows_running_pytest(workflows)
+            missing = _missing_workflow_distributions(workflows)
+
+        self.assertEqual(
+            found,
+            {
+                "ordered.yml": {
+                    "install-elsewhere": (("uv", "pip", "install", "pytest-cov", "pytest-xdist"),),
+                    "test": (
+                        ("pytest", "tests"),
+                        ("uv", "pip", "install", "pytest-cov", "pytest-xdist"),
+                    ),
+                }
+            },
+        )
+        self.assertEqual(
+            missing,
+            (
+                ("ordered.yml", "test", "pytest-cov"),
+                ("ordered.yml", "test", "pytest-xdist"),
+            ),
+        )
+
     def test_shell_syntax_distinguishes_commands_from_argument_text(self):
         commands = {
             "echo": ("echo pytest", False),

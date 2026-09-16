@@ -20,10 +20,12 @@ static check.
 Syntax errors raise an error that names the workflow. The check does not fall
 back to text matching. The dependency check reuses the parsed pytest arguments
 and accepts only literal package-manager install commands. Comments, metadata,
-and argument text cannot create or satisfy a dependency requirement. Real YAML
-fixtures cover command lists, quotations, heredocs, metadata, installations,
-and invalid shell input. The checked-in workflow test also verifies that only
-the two test workflows invoke pytest.
+and argument text cannot create or satisfy a dependency requirement. The check
+preserves job and command order. Each pytest command can use only installations
+that precede it in the same job. Real YAML fixtures cover command lists,
+quotations, heredocs, metadata, installations, and invalid shell input. The
+checked-in workflow test also verifies that only the two test workflows invoke
+pytest.
 
 The `workflow-tests` dependency group owns the parser versions. The development
 group includes it. Both test workflows and devcontainer setup install it.
