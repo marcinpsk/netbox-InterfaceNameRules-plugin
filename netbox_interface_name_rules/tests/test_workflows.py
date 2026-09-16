@@ -29,6 +29,21 @@ _OPTION_OWNERS = {
     "-n": "pytest-xdist",
     "--dist": "pytest-xdist",
 }
+_XVFB_RUN_FLAGS = {"-a", "--auto-servernum", "-l", "--listen-tcp"}
+_XVFB_RUN_VALUE_OPTIONS = {
+    "-e",
+    "--error-file",
+    "-f",
+    "--auth-file",
+    "-n",
+    "--server-num",
+    "-p",
+    "--xauth-protocol",
+    "-s",
+    "--server-args",
+    "-w",
+    "--wait",
+}
 
 
 def _configured_addopts():
@@ -37,12 +52,18 @@ def _configured_addopts():
         return tomllib.load(handle)["tool"]["pytest"]["ini_options"]["addopts"]
 
 
-def _required_distributions(*command_lines):
-    """Return the pytest plugins the options in *command_lines* require."""
-    text = " ".join(command_lines)
-    # An option ends at whitespace, at `=`, or at end of input; `--cov-report` is not `--cov`.
+def _required_distributions(*argument_sequences):
+    """Return the pytest plugins required by literal pytest arguments."""
+    arguments = [
+        argument
+        for sequence in argument_sequences
+        for argument in (shlex.split(sequence) if isinstance(sequence, str) else sequence)
+        if argument is not None
+    ]
     return {
-        owner for option, owner in _OPTION_OWNERS.items() if re.search(rf"(?<!\S){re.escape(option)}(?=[\s=]|$)", text)
+        owner
+        for option, owner in _OPTION_OWNERS.items()
+        if any(argument == option or argument.startswith(f"{option}=") for argument in arguments)
     }
 
 
@@ -64,29 +85,100 @@ def _literal_shell_word(node):
     return shlex.split(text.replace("\\\n", ""))[0]
 
 
-def _is_pytest_invocation(words):
-    """Recognize literal pytest commands and the supported runner prefixes."""
+def _is_python_executable(name):
+    """Return whether *name* is a supported literal Python executable."""
+    return name == "python" or re.fullmatch(r"python3(?:\.\d+)*", name) is not None
+
+
+def _xvfb_run_command(words):
+    """Return the command after supported xvfb-run options, or an empty tuple."""
+    words = tuple(words)
+    index = 0
+    while index < len(words):
+        option = words[index]
+        if option is None:
+            return ()
+        if option == "--":
+            return words[index + 1 :]
+        if option in _XVFB_RUN_FLAGS:
+            index += 1
+            continue
+        if option in _XVFB_RUN_VALUE_OPTIONS:
+            if index + 1 >= len(words) or words[index + 1] is None:
+                return ()
+            index += 2
+            continue
+        if any(option.startswith(f"{name}=") for name in _XVFB_RUN_VALUE_OPTIONS if name.startswith("--")):
+            index += 1
+            continue
+        if option.startswith("-"):
+            return ()
+        return words[index:]
+    return ()
+
+
+def _pytest_arguments(words):
+    """Return literal pytest arguments after supported runner prefixes."""
     if not words or words[0] is None:
-        return False
+        return None
     name = pathlib.PurePosixPath(words[0]).name
     if name == "pytest":
-        return True
-    if name in {"python", "python3"}:
-        return words[1:3] == ["-m", "pytest"]
-    if name in {"poetry", "uv"} and words[1:2] == ["run"]:
-        return _is_pytest_invocation(words[2:])
+        return tuple(words[1:])
+    if _is_python_executable(name):
+        return tuple(words[3:]) if tuple(words[1:3]) == ("-m", "pytest") else None
+    if name in {"poetry", "uv"} and tuple(words[1:2]) == ("run",):
+        return _pytest_arguments(words[2:])
     if name == "xvfb-run":
-        return _is_pytest_invocation(words[1:])
-    return False
+        return _pytest_arguments(_xvfb_run_command(words[1:]))
+    return None
 
 
-def _shell_runs_pytest(command, workflow):
-    """Inspect executable command nodes without interpreting arguments as shell programs."""
+def _is_pytest_invocation(words):
+    """Recognize literal pytest commands and the supported runner prefixes."""
+    return _pytest_arguments(words) is not None
+
+
+def _installation_arguments(words):
+    """Return arguments to a literal package-manager install command."""
+    if not words or words[0] is None:
+        return None
+    name = pathlib.PurePosixPath(words[0]).name
+    if re.fullmatch(r"pip(?:3(?:\.\d+)*)?", name) and tuple(words[1:2]) == ("install",):
+        return tuple(words[2:])
+    if _is_python_executable(name) and tuple(words[1:4]) == ("-m", "pip", "install"):
+        return tuple(words[4:])
+    if name == "uv" and tuple(words[1:3]) == ("pip", "install"):
+        return tuple(words[3:])
+    return None
+
+
+def _distribution_name(argument):
+    """Return the normalized distribution name from one static requirement argument."""
+    if argument is None or argument.startswith("-"):
+        return None
+    match = re.match(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^]]+\])?(?=[<>=!~@]|$)", argument)
+    if match is None:
+        return None
+    return re.sub(r"[-_.]+", "-", match.group("name")).lower()
+
+
+def _command_installs_distribution(words, distribution):
+    """Return whether a literal install command names *distribution*."""
+    arguments = _installation_arguments(words)
+    if arguments is None:
+        return False
+    expected = re.sub(r"[-_.]+", "-", distribution).lower()
+    return any(_distribution_name(argument) == expected for argument in arguments)
+
+
+def _shell_commands(command, workflow):
+    """Return the literal executable commands in one shell program."""
     command = re.sub(r"\$\{\{.*?\}\}", "${WORKFLOW_EXPRESSION}", command, flags=re.DOTALL)
     source = command.encode("utf-8")
     root = Parser(_SHELL_LANGUAGE).parse(source).root_node
     if root.has_error:
         raise ValueError(f"{workflow}: cannot parse workflow shell command")
+    commands = []
     pending = [root]
     while pending:
         node = pending.pop()
@@ -103,22 +195,26 @@ def _shell_runs_pytest(command, workflow):
                 else:
                     words.append(word)
                 previous_end = part.end_byte
-            if _is_pytest_invocation(words):
-                return True
+            commands.append(tuple(words))
         pending.extend(node.named_children)
-    return False
+    return tuple(commands)
+
+
+def _shell_runs_pytest(command, workflow):
+    """Inspect executable command nodes without interpreting arguments as shell programs."""
+    return any(_is_pytest_invocation(words) for words in _shell_commands(command, workflow))
 
 
 def _workflows_running_pytest(directory=None):
-    """Map each workflow in *directory* that invokes pytest to its full text."""
+    """Map each workflow in *directory* that invokes pytest to its literal commands."""
     found = {}
     for path in sorted((directory or _WORKFLOWS).glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
         workflow = yaml.safe_load(text)
         commands = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if "run" in step]
-        pytest_invocations = [_shell_runs_pytest(command, path.name) for command in commands]
-        if any(pytest_invocations):
-            found[path.name] = text
+        shell_commands = tuple(words for command in commands for words in _shell_commands(command, path.name))
+        if any(_is_pytest_invocation(words) for words in shell_commands):
+            found[path.name] = shell_commands
     return found
 
 
@@ -140,6 +236,34 @@ class RequiredDistributionTest(SimpleTestCase):
 
     def test_the_configured_addopts_require_both_plugins(self):
         self.assertEqual(_required_distributions(_configured_addopts()), {"pytest-cov", "pytest-xdist"})
+
+    def test_only_pytest_arguments_create_requirements(self):
+        commands = (("echo", "pytest --cov"), ("pytest", "tests"))
+        pytest_arguments = tuple(
+            arguments for command in commands if (arguments := _pytest_arguments(command)) is not None
+        )
+
+        self.assertEqual(_required_distributions(*pytest_arguments), set())
+
+
+class DistributionInstallationTest(SimpleTestCase):
+    def test_argument_text_is_not_an_installation(self):
+        self.assertFalse(_command_installs_distribution(("echo", "install pytest-cov"), "pytest-cov"))
+        self.assertFalse(_command_installs_distribution(("printf", "pip install pytest-cov"), "pytest-cov"))
+
+    def test_a_package_manager_install_command_is_an_installation(self):
+        self.assertTrue(
+            _command_installs_distribution(
+                ("uv", "pip", "install", "--system", "pytest-cov==7.0.0"),
+                "pytest-cov",
+            )
+        )
+        self.assertTrue(
+            _command_installs_distribution(
+                ("python3.14", "-m", "pip", "install", "pytest-cov"),
+                "pytest-cov",
+            )
+        )
 
 
 class WorkflowPytestPluginTest(SimpleTestCase):
@@ -169,14 +293,15 @@ class WorkflowPytestPluginTest(SimpleTestCase):
         workflows = _workflows_running_pytest()
 
         self.assertTrue(workflows, "no workflow was detected as running pytest")
-        for name, text in workflows.items():
-            pytest_lines = re.findall(r"^.*\bpytest\b.*$", text, re.MULTILINE)
-            required = _required_distributions(_configured_addopts(), *pytest_lines)
+        for name, commands in workflows.items():
+            pytest_arguments = tuple(
+                arguments for command in commands if (arguments := _pytest_arguments(command)) is not None
+            )
+            required = _required_distributions(_configured_addopts(), *pytest_arguments)
             for distribution in sorted(required):
                 with self.subTest(workflow=name, distribution=distribution):
-                    self.assertRegex(
-                        text,
-                        rf"install[^\n]*\b{re.escape(distribution)}\b",
+                    self.assertTrue(
+                        any(_command_installs_distribution(command, distribution) for command in commands),
                         f"{name} runs pytest but never installs {distribution}",
                     )
 
@@ -205,8 +330,10 @@ class WorkflowDetectionTest(SimpleTestCase):
             "literal_continuation": ("'py\\\ntest' tests", False),
             "substitution": ("echo $(pytest tests)", True),
             "python_version": ("python3 -m pytest tests", True),
+            "versioned_python": ("python3.14 -m pytest tests", True),
             "uv_runner": ("uv run pytest tests", True),
             "runner_module": ("uv run python -m pytest tests", True),
+            "xvfb_options": ("xvfb-run -a pytest tests", True),
             "expanded_argument": ('pytest "$SELECTION"', True),
             "dynamic_executable": ("${{ inputs.runner }} tests", False),
         }

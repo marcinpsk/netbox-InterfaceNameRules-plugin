@@ -119,9 +119,9 @@ netbox-shell() {
   cd /opt/netbox/netbox && source /opt/netbox/venv/bin/activate && python manage.py shell
 }
 
-# Run the plugin suite with pytest, the runner CI uses. The settings module gives each xdist
-# worker private PostgreSQL and Redis databases, so concurrent suites in the shared devcontainer
-# do not collide. Override the targets with TEST_DB_NAME=... / TEST_REDIS_HOST=... .
+# Run the plugin suite with pytest, the runner CI uses. Each xdist worker gets private databases.
+# Concurrent netbox-test callers wait for the shared targets. Direct pytest callers coordinate
+# their own targets. Override them with TEST_DB_NAME=... / TEST_REDIS_HOST=... .
 netbox-test() {
   if [ "$#" -eq 0 ]; then
     set -- netbox_interface_name_rules
@@ -129,7 +129,7 @@ netbox-test() {
   cd "$PLUGIN_DIR" && source /opt/netbox/venv/bin/activate && \
     TEST_DB_NAME="${TEST_DB_NAME:-test_netbox_interface_name_rules}" \
     TEST_REDIS_HOST="${TEST_REDIS_HOST:-redis}" \
-    pytest "$@"
+    flock --exclusive --no-fork /tmp/netbox-interface-name-rules-tests.lock pytest "$@"
 }
 
 # Run a Django-runner suite on an isolated test database. The plugin's own suite runs under
