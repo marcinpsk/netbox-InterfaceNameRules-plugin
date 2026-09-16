@@ -387,7 +387,7 @@ class ProspectiveStructuralPlanTest(ProspectivePlanTestCase):
             plan.target_names,
             ("et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"),
         )
-        self.assertEqual([member.role for member in plan.members][0], MemberRole.PARENT)
+        self.assertEqual(next(member.role for member in plan.members), MemberRole.PARENT)
         self.assertEqual(plan_set.predicted_names("3"), plan.target_names)
 
     def test_a_planned_name_another_interface_owns_blocks_the_family(self):

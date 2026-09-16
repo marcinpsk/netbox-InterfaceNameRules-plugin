@@ -447,7 +447,7 @@ class RegexEngineMigrationTest(TestCase):
 
     def _latest_migration(self):
         loader = MigrationExecutor(connection).loader
-        return sorted(name for app_label, name in loader.graph.leaf_nodes(self.APP))[-1]
+        return max(name for app_label, name in loader.graph.leaf_nodes(self.APP))
 
     def test_every_pattern_admitted_by_the_migration_is_one_way(self):
         """An admitted pattern must never add an RE2 full match."""

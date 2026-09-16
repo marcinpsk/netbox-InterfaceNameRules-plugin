@@ -36,7 +36,7 @@ def _run_empty_pytest(*arguments, timeout=180):
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("PYTEST_", "COV_"))}
     environment["TEST_DB_NAME"] = "test_worker_pool_contract"
     environment["TEST_REDIS_HOST"] = os.environ.get("TEST_REDIS_HOST", "redis")
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603 - Run pytest with test-controlled arguments.
         [
             sys.executable,
             "-m",

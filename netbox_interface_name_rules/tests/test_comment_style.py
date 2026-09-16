@@ -81,8 +81,7 @@ class CommentStyleTest(SimpleTestCase):
 
     def test_no_unrecorded_multi_line_comment_block(self):
         recorded = {
-            name: Counter({text: count for text, count in entries})
-            for name, entries in json.loads(BASELINE.read_text(encoding="utf-8")).items()
+            name: Counter(dict(entries)) for name, entries in json.loads(BASELINE.read_text(encoding="utf-8")).items()
         }
         unrecorded = []
         for name, entries in blocks_in_package().items():

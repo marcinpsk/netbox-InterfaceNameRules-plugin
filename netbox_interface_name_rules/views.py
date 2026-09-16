@@ -25,7 +25,7 @@ from .forms import (
     InterfaceNameRuleImportForm,
     RuleTestForm,
 )
-from .models import InterfaceNameRule
+from .models import InterfaceNameRule, csv_export_entry
 from .tables import InterfaceNameRuleTable
 
 logger = logging.getLogger(__name__)
@@ -81,15 +81,12 @@ class InterfaceNameRuleListView(generic.ObjectListView):
 
     def export_yaml(self):
         """Export all rules as a single YAML list (overrides NetBox's per-object concatenation)."""
-        data = []
-        for rule in self.queryset.order_by("pk").select_related(
-            "module_type", "parent_module_type", "device_type", "platform"
-        ):
-            entry = {}
-            for header, value in zip(InterfaceNameRule.csv_headers, rule.to_csv()):
-                if (value != "" and value is not None) or header in {"name_template"}:
-                    entry[header] = value
-            data.append(entry)
+        data = [
+            csv_export_entry(InterfaceNameRule.csv_headers, rule.to_csv())
+            for rule in self.queryset.order_by("pk").select_related(
+                "module_type", "parent_module_type", "device_type", "platform"
+            )
+        ]
         return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
@@ -246,10 +243,7 @@ class RuleTestView(BaseMultiObjectView):
             qs = qs.filter(module_type_is_regex=False, module_type=cd.get("module_type"))
         for field in ("parent_module_type", "device_type", "platform"):
             val = cd.get(field)
-            if val:
-                qs = qs.filter(**{field: val})
-            else:
-                qs = qs.filter(**{f"{field}__isnull": True})
+            qs = qs.filter(**{field: val}) if val else qs.filter(**{f"{field}__isnull": True})
         return qs.first()
 
     def _handle_save_rule(self, request, cd):
@@ -337,10 +331,11 @@ class RuleTestView(BaseMultiObjectView):
                     )
             else:
                 preview_results = [row(evaluate_name_template(name_template, variables), "interface")]
-            return preview_results, None
         except Exception as exc:
-            logger.exception("Template evaluation error: %s", exc)
+            logger.exception("Template evaluation error")
             return None, type(exc).__name__
+        else:
+            return preview_results, None
 
     def _fetch_db_preview(self, cd):
         """Run find_interfaces_for_rule against the DB; return (db_preview, db_total, error)."""
@@ -371,12 +366,13 @@ class RuleTestView(BaseMultiObjectView):
         )
         try:
             db_preview, db_total = find_interfaces_for_rule(fake, limit=100)
-            return db_preview, db_total, None
         except (re.error, ValueError) as exc:
             return [], 0, f"Invalid module type regex: {exc}"
         except Exception as exc:
-            logger.exception("Unexpected error in find_interfaces_for_rule: %s", exc)
+            logger.exception("Unexpected error in find_interfaces_for_rule")
             return [], 0, f"Unexpected error: {type(exc).__name__}"
+        else:
+            return db_preview, db_total, None
 
 
 class RuleApplyListView(BaseMultiObjectView):
@@ -438,11 +434,11 @@ class RuleApplyDetailView(generic.ObjectView):
         try:
             preview, total_checked = find_interfaces_for_rule(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
-            logger.exception("Failed to compute preview for rule %s: %s", rule, exc)
+            logger.exception("Failed to compute preview for rule %s", rule)
             messages.error(request, f"Failed to compute preview: {exc}")
             preview, total_checked = [], 0
         except Exception as exc:
-            logger.exception("Unexpected error computing preview for rule %s: %s", rule, exc)
+            logger.exception("Unexpected error computing preview for rule %s", rule)
             messages.error(request, f"Failed to compute preview: {type(exc).__name__}")
             preview, total_checked = [], 0
         # A conversion-scan failure must not blank the unrelated apply preview above.
@@ -450,11 +446,11 @@ class RuleApplyDetailView(generic.ObjectView):
             # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
             preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
-            logger.exception("Failed to compute the conversion preview for rule %s: %s", rule, exc)
+            logger.exception("Failed to compute the conversion preview for rule %s", rule)
             messages.error(request, f"Failed to compute the conversion preview: {exc}")
             preview_conversions = ConversionPreview(candidates=())
         except Exception as exc:
-            logger.exception("Unexpected error computing the conversion preview for rule %s: %s", rule, exc)
+            logger.exception("Unexpected error computing the conversion preview for rule %s", rule)
             messages.error(request, f"Failed to compute the conversion preview: {type(exc).__name__}")
             preview_conversions = ConversionPreview(candidates=())
         return render(
@@ -489,7 +485,7 @@ class RuleApplyDetailView(generic.ObjectView):
             )
             messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
         except Exception as e:
-            logger.exception("Failed to enqueue background job for rule %s: %s", rule, e)
+            logger.exception("Failed to enqueue background job for rule %s", rule)
             messages.error(request, f"Failed to enqueue background job: {type(e).__name__}")
 
     def _convert(self, request, rule):
@@ -512,7 +508,7 @@ class RuleApplyDetailView(generic.ObjectView):
         try:
             outcome = convert_flat_families(rule, convert_ids)
         except Exception as e:
-            logger.exception("Failed to convert families for rule %s: %s", rule, e)
+            logger.exception("Failed to convert families for rule %s", rule)
             messages.error(request, f"Failed to convert families: {type(e).__name__}")
             return
         converted = len(outcome.changed_families)
@@ -554,7 +550,7 @@ class RuleApplyDetailView(generic.ObjectView):
                             f"{len(outcome.skipped_members)} interface(s) skipped. The plugin log names each one.",
                         )
             except Exception as e:
-                logger.exception("Failed to apply rule %s: %s", rule, e)
+                logger.exception("Failed to apply rule %s", rule)
                 messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
 
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)

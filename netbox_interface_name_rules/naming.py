@@ -59,9 +59,9 @@ def _resolve_bay_position(module_bay):
     bay_position = module_bay.position or "0"
     if bay_position.startswith("{"):
         digits = _extract_trailing_digits(module_bay.name)
-        bay_position = digits if digits else "0"
+        bay_position = digits or "0"
     digits = _extract_trailing_digits(bay_position)
-    bay_position_num = digits if digits else "0"
+    bay_position_num = digits or "0"
     return bay_position, bay_position_num
 
 

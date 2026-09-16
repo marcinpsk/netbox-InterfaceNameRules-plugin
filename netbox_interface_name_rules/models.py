@@ -16,6 +16,15 @@ from .regex_safety import compile_module_type_pattern
 _TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
+def csv_export_entry(headers, values):
+    """Pair CSV headers with values, dropping empties but always keeping ``name_template``."""
+    return {
+        header: value
+        for header, value in zip(headers, values, strict=True)
+        if (value != "" and value is not None) or header == "name_template"
+    }
+
+
 def _expression_names_channel(field):
     """Return True when the brace group *field* parses as an expression naming ``channel``.
 
@@ -469,8 +478,5 @@ class InterfaceNameRule(NetBoxModel):
         """Return a YAML document for this rule (used by NetBox's built-in Export)."""
         import yaml
 
-        entry = {}
-        for header, value in zip(self.csv_headers, self.to_csv()):
-            if (value != "" and value is not None) or header in {"name_template"}:
-                entry[header] = value
+        entry = csv_export_entry(self.csv_headers, self.to_csv())
         return yaml.dump([entry], default_flow_style=False, allow_unicode=True, sort_keys=False)
