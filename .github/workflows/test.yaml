@@ -34,6 +34,9 @@ jobs:
             netbox-version: "v4.3.7"
           - python-version: "3.13"
             netbox-version: "v4.5.3"
+            # The one cell that reports coverage. Every coverage step below reads this flag, so the
+            # release that owns the report is named here and nowhere else.
+            coverage: true
           - python-version: "3.14"
             netbox-version: "v4.7.0"
           # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
@@ -121,7 +124,7 @@ jobs:
           PLUGINS = ['netbox_interface_name_rules']
           EOF
 
-      - name: Run tests with coverage
+      - name: Run tests
         working-directory: netbox-InterfaceNameRules-plugin
         env:
           NETBOX_CONFIGURATION: netbox.configuration
@@ -138,11 +141,13 @@ jobs:
           # instead of baseline drift. Bumping the top version means editing the matrix above, this
           # condition, and tests/query_counts.json together.
           UPDATE_QUERY_COUNTS: ${{ matrix.netbox-version != 'v4.7.0' && '1' || '' }}
+          # `addopts` turns coverage on for every invocation, but only one cell reports it.
+          COVERAGE_OPTION: ${{ !matrix.coverage && '--no-cov' || '' }}
         run: |
-          pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox
+          pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox $COVERAGE_OPTION
 
       - name: Generate coverage report
-        if: matrix.netbox-version == 'v4.5.3'
+        if: matrix.coverage
         working-directory: netbox-InterfaceNameRules-plugin
         env:
           COVERAGE_RCFILE: pyproject.toml
@@ -153,7 +158,7 @@ jobs:
           coverage xml -o ../coverage-report/coverage.xml
 
       - name: Upload coverage report
-        if: matrix.netbox-version == 'v4.5.3'
+        if: matrix.coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-report
@@ -161,7 +166,7 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
-        if: matrix.netbox-version == 'v4.5.3'
+        if: matrix.coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           files: coverage-report/coverage.xml

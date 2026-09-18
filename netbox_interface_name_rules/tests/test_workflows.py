@@ -470,3 +470,32 @@ class WorkflowDetectionTest(SimpleTestCase):
                 (workflows / f"{name}.yml").write_text(text, encoding="utf-8")
             found = _workflows_running_pytest(workflows)
         self.assertEqual(found, {})
+
+
+class CoverageMatrixTest(SimpleTestCase):
+    """One matrix cell reports coverage, and every coverage step reads that one flag."""
+
+    def _test_job(self):
+        """Return the matrix job that runs the suite against each supported NetBox release."""
+        with (_WORKFLOWS / "test.yaml").open(encoding="utf-8") as handle:
+            return yaml.safe_load(handle)["jobs"]["test-netbox"]
+
+    def test_exactly_one_matrix_cell_collects_coverage(self):
+        include = self._test_job()["strategy"]["matrix"]["include"]
+
+        self.assertEqual([cell["netbox-version"] for cell in include if cell.get("coverage")], ["v4.5.3"])
+
+    def test_no_step_condition_names_a_netbox_release(self):
+        """The reporting cell is named once, in the matrix, not again in every step condition."""
+        conditions = [step["if"] for step in self._test_job()["steps"] if "if" in step]
+
+        self.assertEqual([condition for condition in conditions if "netbox-version" in condition], [])
+
+    def test_pytest_turns_coverage_off_outside_that_cell(self):
+        steps = [step for step in self._test_job()["steps"] if "run" in step]
+        step = next(step for step in steps if _shell_runs_pytest(step["run"], "test.yaml"))
+        option = step["env"]["COVERAGE_OPTION"]
+
+        self.assertIn("matrix.coverage", option)
+        self.assertIn("--no-cov", option)
+        self.assertIn("$COVERAGE_OPTION", step["run"])
