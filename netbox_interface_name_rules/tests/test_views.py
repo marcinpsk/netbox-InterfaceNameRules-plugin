@@ -365,6 +365,22 @@ class RuleTestViewTest(ViewTestBase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["preview_results"][0]["result"], "GigabitEthernet3/11")
 
+    def test_preview_derives_every_variable_production_derives(self):
+        """An independently entered value could preview a name production cannot produce."""
+        data = {
+            "name_template": "{bay_position_num}-{sfp_slot}-{slot_num}-{parent_bay_position_num}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_bay_position": "TenGigabitEthernet3/2",
+            "var_slot": "Slot 7",
+            "var_parent_bay_position": "TenGigabitEthernet3/4",
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "2-2-7-4")
+
     def test_check_with_module_type_populates_db_preview(self):
         """POST check with module_type FK set triggers find_interfaces_for_rule."""
         data = {

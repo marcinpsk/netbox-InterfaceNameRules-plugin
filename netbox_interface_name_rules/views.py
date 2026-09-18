@@ -332,16 +332,18 @@ class RuleTestView(BaseMultiObjectView):
         channel_count = cd.get("channel_count") or 0
         channel_start = cd.get("channel_start") or 0
         slot = cd.get("var_slot") or "1"
+        bay_position = cd.get("var_bay_position") or "1"
         parent_bay_position = cd.get("var_parent_bay_position") or "1"
-        # Derived, not entered, so the preview offers the numeric forms production builds.
+        # Derive whatever build_variables derives, or the preview can show an impossible name.
+        bay_position_num = numeric_suffix(bay_position)
         variables = {
             "slot": slot,
             "slot_num": numeric_suffix(slot),
-            "bay_position": cd.get("var_bay_position") or "1",
-            "bay_position_num": cd.get("var_bay_position_num") or "1",
+            "bay_position": bay_position,
+            "bay_position_num": bay_position_num,
             "parent_bay_position": parent_bay_position,
             "parent_bay_position_num": numeric_suffix(parent_bay_position),
-            "sfp_slot": cd.get("var_sfp_slot") or "1",
+            "sfp_slot": bay_position_num,
             "base": cd.get("var_base") or "Ethernet1",
         }
 

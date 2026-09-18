@@ -106,17 +106,11 @@ class RuleTestForm(forms.Form):
     var_bay_position = forms.CharField(
         required=False, initial="1", label="{bay_position}", widget=forms.TextInput(attrs={"class": "form-control"})
     )
-    var_bay_position_num = forms.CharField(
-        required=False, initial="1", label="{bay_position_num}", widget=forms.TextInput(attrs={"class": "form-control"})
-    )
     var_parent_bay_position = forms.CharField(
         required=False,
         initial="1",
         label="{parent_bay_position}",
         widget=forms.TextInput(attrs={"class": "form-control"}),
-    )
-    var_sfp_slot = forms.CharField(
-        required=False, initial="1", label="{sfp_slot}", widget=forms.TextInput(attrs={"class": "form-control"})
     )
     var_base = forms.CharField(
         required=False,
