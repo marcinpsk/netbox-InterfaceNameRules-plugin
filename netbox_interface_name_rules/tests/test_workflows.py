@@ -77,6 +77,10 @@ _NON_INSTALLING_OPTIONS = frozenset({"--help", "-h", "--dry-run", "--version", "
 # Requirements files this project does not own. NetBox's own file comes from its checkout.
 _EXTERNAL_REQUIREMENTS = frozenset({"../netbox/requirements.txt"})
 
+# Interpreter flags that take no value; anything else ends the option scan.
+_PYTHON_FLAGS = frozenset("bBdEiIOqsSuvx")
+_PYTHON_VALUE_OPTIONS = {"-W", "-X"}
+
 _XVFB_RUN_FLAGS = {"-a", "--auto-servernum", "-l", "--listen-tcp"}
 _XVFB_RUN_VALUE_OPTIONS = {
     "-e",
@@ -194,6 +198,30 @@ def _after_options(words):
     return tuple(words[index:])
 
 
+def _python_module(words):
+    """Return the words after the interpreter's `-m`, or None when it runs something else.
+
+    Only a `-m` before a program operand names a module: `python -c 'print(0)' -m pip install`
+    hands those words to the program, and crediting it would hide a missing plugin. An option
+    this scan does not know ends it, so an interpreter call it cannot read installs nothing.
+    """
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word is None:
+            return None
+        if word == "-m":
+            return tuple(words[index + 1 :])
+        if word in _PYTHON_VALUE_OPTIONS:
+            index += 2
+            continue
+        if word.startswith("-") and len(word) > 1 and set(word[1:]) <= _PYTHON_FLAGS:
+            index += 1
+            continue
+        return None
+    return None
+
+
 def _is_package_manager(name):
     """Return whether *name* is a literal executable that installs packages."""
     return name == "uv" or _is_python_executable(name) or re.fullmatch(r"pip(?:3(?:\.\d+)*)?", name) is not None
@@ -218,9 +246,7 @@ def _installation_arguments(words):
     name = pathlib.PurePosixPath(words[0]).name
     rest = tuple(words[1:])
     if _is_python_executable(name):
-        if "-m" not in rest:
-            return None
-        rest = rest[rest.index("-m") + 1 :]
+        rest = _python_module(rest)
         if not rest or rest[0] is None:
             return None
         name, rest = pathlib.PurePosixPath(rest[0]).name, rest[1:]
@@ -862,6 +888,16 @@ class WorkflowPackageSourceTest(SimpleTestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual(_unsourced_requirements(command), ())
+
+    def test_a_module_named_after_a_program_operand_is_not_an_install(self):
+        """`python -c 'print(0)' -m pip install` passes those words to the program, not to pip."""
+        for command in (
+            ("python", "-c", "print(0)", "-m", "pip", "install", "--group", "ci-tests"),
+            ("python3", "script.py", "-m", "pip", "install", "--group", "ci-tests"),
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(_installation_arguments(command))
+                self.assertEqual(_installed_distributions(command), frozenset())
 
     def test_a_command_that_only_prints_is_not_an_install(self):
         """`--help` and `--dry-run` install nothing, so crediting them would hide a missing plugin."""
