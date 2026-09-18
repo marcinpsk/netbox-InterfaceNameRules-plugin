@@ -50,6 +50,15 @@ def _extract_trailing_digits(value: str) -> str:
     return value[index:]
 
 
+def numeric_suffix(value) -> str:
+    """Return the trailing digit run of *value*, or "0" when it has none.
+
+    A device type may compose the parent into a bay position, so any position can arrive
+    path-shaped, such as TenGigabitEthernet3/2/1. Arithmetic templates need the number.
+    """
+    return _extract_trailing_digits(str(value)) or "0"
+
+
 def _resolve_bay_position(module_bay):
     """Return the raw and numeric positions for *module_bay*.
 
@@ -87,9 +96,12 @@ def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
 def build_variables(module_bay, device=None):
     """Build template variables from a module bay and optional device.
 
-    The result includes slot, bay position, numeric bay position, parent bay
-    position, and SFP slot. A virtual-chassis position is included only for a
-    member device that has a position.
+    The result includes slot, bay position, parent bay position, SFP slot, and a
+    numeric counterpart for every position. A device type may compose the parent
+    into a bay position, giving a path-shaped value such as
+    ``TenGigabitEthernet3/2/1``, so arithmetic templates take the ``_num`` form.
+    A virtual-chassis position is included only for a member device that has a
+    position.
 
     A template that uses ``{vc_position}`` for a non-member device fails during
     evaluation because the variable is intentionally absent. Position zero is
@@ -103,11 +115,14 @@ def build_variables(module_bay, device=None):
 
     slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
 
+    # A device type may compose the parent into a bay position, so any position can be path-shaped.
     result = {
         "slot": slot,
+        "slot_num": numeric_suffix(slot),
         "bay_position": bay_position,
         "bay_position_num": bay_position_num,
         "parent_bay_position": parent_bay_position,
+        "parent_bay_position_num": numeric_suffix(parent_bay_position),
         "sfp_slot": bay_position_num,
     }
     if (

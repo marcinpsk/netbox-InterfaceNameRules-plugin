@@ -62,11 +62,87 @@ class NamingTest(TestCase):
             variables,
             {
                 "slot": "7",
+                "slot_num": "7",
                 "bay_position": "7",
                 "bay_position_num": "7",
                 "parent_bay_position": "0",
+                "parent_bay_position_num": "0",
                 "sfp_slot": "7",
                 "vc_position": "3",
             },
         )
         self.assertEqual(name, "xe-3/7/7")
+
+
+class NestedBayNumericTest(TestCase):
+    """Composed bay positions are normal input, so every position has a numeric accessor.
+
+    A device type that composes the parent into a bay position, the way the Catalyst 4900M and
+    the MX304 do, gives leaf bays path-shaped positions such as ``TenGigabitEthernet3/2/1``.
+    Arithmetic templates need the number out of each level.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="NestMfg", slug="nest-mfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="NEST-4900M", slug="nest-4900m")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="Slot 3", position="3")
+
+        cls.line_card_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="NEST-LINECARD", part_number="NEST-LINECARD"
+        )
+        ModuleBayTemplate.objects.create(
+            module_type=cls.line_card_type, name="X2 Port 2", position="TenGigabitEthernet{module}/2"
+        )
+
+        cls.twingig_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="NEST-CVR-X2-SFP", part_number="NEST-CVR-X2-SFP"
+        )
+        ModuleBayTemplate.objects.create(module_type=cls.twingig_type, name="SFP 1", position="{module}/1")
+
+        placement = make_placement("Nest")
+        cls.device = Device.objects.create(
+            name="nest-4900m-01", device_type=device_type, role=placement.role, site=placement.site
+        )
+        slot = ModuleBay.objects.get(device=cls.device, name="Slot 3")
+        line_card = Module.objects.create(device=cls.device, module_bay=slot, module_type=cls.line_card_type)
+        x2_port = ModuleBay.objects.get(device=cls.device, module=line_card, name="X2 Port 2")
+        twingig = Module.objects.create(device=cls.device, module_bay=x2_port, module_type=cls.twingig_type)
+        cls.sfp_bay = ModuleBay.objects.get(device=cls.device, module=twingig, name="SFP 1")
+
+    def test_the_fixture_composes_the_positions_the_device_type_intends(self):
+        """Guards the fixture itself: without composed positions the rest asserts nothing."""
+        self.assertEqual(self.sfp_bay.position, "TenGigabitEthernet3/2/1")
+        self.assertEqual(self.sfp_bay.parent.position, "TenGigabitEthernet3/2")
+
+    def test_every_position_variable_has_a_numeric_counterpart(self):
+        variables = build_variables(self.sfp_bay)
+
+        self.assertEqual(variables["bay_position"], "TenGigabitEthernet3/2/1")
+        self.assertEqual(variables["bay_position_num"], "1")
+        self.assertEqual(variables["parent_bay_position"], "TenGigabitEthernet3/2")
+        self.assertEqual(variables["parent_bay_position_num"], "2")
+        self.assertEqual(variables["slot"], "3")
+        self.assertEqual(variables["slot_num"], "3")
+
+    def test_a_two_level_hierarchy_resolves_the_slot_from_the_bare_parent(self):
+        """A transceiver straight in a line card, no converter: the parent bay is a bare slot."""
+        line_card_bay = ModuleBay.objects.get(device=self.device, name="X2 Port 2")
+        variables = build_variables(line_card_bay)
+
+        self.assertEqual(variables["bay_position"], "TenGigabitEthernet3/2")
+        self.assertEqual(variables["bay_position_num"], "2")
+        self.assertEqual(variables["parent_bay_position"], "3")
+        self.assertEqual(variables["slot"], "3")
+        self.assertEqual(variables["slot_num"], "3")
+
+    def test_the_twingig_conversion_template_evaluates(self):
+        """The Cisco TwinGig offset formula, which is why a numeric parent position is needed."""
+        variables = build_variables(self.sfp_bay)
+
+        name = evaluate_name_template(
+            "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
+            variables,
+        )
+
+        self.assertEqual(name, "GigabitEthernet3/11")
