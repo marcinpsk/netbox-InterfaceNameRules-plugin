@@ -68,6 +68,11 @@ workflow-tests = [
 lint = [
     "pre-commit>=4.5.1",
     "ruff>=0.16",
+]
+# `reuse lint` is a local `language: system` pre-commit hook, so it is needed wherever the full
+# hook set runs, but not by the CI lint job. It ships no usable wheel, and the CI lint job installs
+# `lint` with `--only-binary=:all:`, so it stays in its own group.
+reuse = [
     "reuse>=6.2",
 ]
 release = [
@@ -84,6 +89,7 @@ dev = [
     {include-group = "ci-tests"},
     {include-group = "workflow-tests"},
     {include-group = "lint"},
+    {include-group = "reuse"},
     {include-group = "release"},
     {include-group = "packaging"},
     "django>=5.1,<7.0",
@@ -94,6 +100,7 @@ devcontainer = [
     {include-group = "ci-tests"},
     {include-group = "workflow-tests"},
     {include-group = "lint"},
+    {include-group = "reuse"},
     # A co-mounted plugin's conftest imports these for type names only, so no browser is downloaded.
     "pynetbox",
     "playwright",
