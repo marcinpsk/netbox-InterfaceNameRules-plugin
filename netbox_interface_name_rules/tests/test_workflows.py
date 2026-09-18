@@ -30,6 +30,47 @@ _OPTION_OWNERS = {
     "-n": "pytest-xdist",
     "--dist": "pytest-xdist",
 }
+# Options that take their value as the next word, so it is not a requested package.
+_GROUP_OPTIONS = {"--group"}
+_REQUIREMENT_OPTIONS = {"-r", "--requirement", "--requirements"}
+# Options taking their value as the next word; an omission reads that value as a package.
+_VALUE_OPTIONS = {
+    "--only-binary",
+    "--no-binary",
+    "--no-build-isolation-package",
+    "--constraint",
+    "--constraints",
+    "-c",
+    "--override",
+    "--index",
+    "--index-url",
+    "-i",
+    "--default-index",
+    "--extra-index-url",
+    "--index-strategy",
+    "--find-links",
+    "-f",
+    "--python",
+    "-p",
+    "--python-version",
+    "--python-platform",
+    "--target",
+    "--prefix",
+    "--cache-dir",
+    "--link-mode",
+    "--resolution",
+    "--prerelease",
+    "--exclude-newer",
+    "--timeout",
+    "--extra",
+    "--proxy",
+    "--retries",
+}
+# Options that reach outside this project's own dependency declarations.
+_FOREIGN_SOURCE_OPTIONS = ("--project", "--with", "--with-requirements", "--directory")
+# Requirements files this project does not own. NetBox's own file comes from its checkout.
+_EXTERNAL_REQUIREMENTS = frozenset({"../netbox/requirements.txt"})
+
 _XVFB_RUN_FLAGS = {"-a", "--auto-servernum", "-l", "--listen-tcp"}
 _XVFB_RUN_VALUE_OPTIONS = {
     "-e",
@@ -139,18 +180,47 @@ def _is_pytest_invocation(words):
     return _pytest_arguments(words) is not None
 
 
+def _after_options(words):
+    """Return *words* without the leading option words a tool takes before its subcommand."""
+    index = 0
+    while index < len(words) and (words[index] or "").startswith("-"):
+        index += 1
+    return tuple(words[index:])
+
+
 def _installation_arguments(words):
-    """Return arguments to a literal package-manager install command."""
+    """Return arguments to a literal package-manager install command.
+
+    Global options may precede the subcommand, so `uv --system-certs pip install` and
+    `pip --isolated install` are recognised. Forms that install without the `install`
+    subcommand, such as `uv add`, `uv run --with` and `uvx`, are handled separately.
+    """
     if not words or words[0] is None:
         return None
     name = pathlib.PurePosixPath(words[0]).name
-    if re.fullmatch(r"pip(?:3(?:\.\d+)*)?", name) and tuple(words[1:2]) == ("install",):
-        return tuple(words[2:])
-    if _is_python_executable(name) and tuple(words[1:4]) == ("-m", "pip", "install"):
-        return tuple(words[4:])
-    if name == "uv" and tuple(words[1:3]) == ("pip", "install"):
-        return tuple(words[3:])
-    return None
+    rest = tuple(words[1:])
+    if _is_python_executable(name):
+        if "-m" not in rest:
+            return None
+        rest = rest[rest.index("-m") + 1 :]
+        if rest[:1] == ("uv",):
+            rest = _after_options(rest[1:])
+            if rest[:1] != ("pip",):
+                return None
+            rest = rest[1:]
+        elif rest[:1] == ("pip",):
+            rest = rest[1:]
+        else:
+            return None
+    elif name == "uv":
+        rest = _after_options(rest)
+        if rest[:1] != ("pip",):
+            return None
+        rest = rest[1:]
+    elif not re.fullmatch(r"pip(?:3(?:\.\d+)*)?", name):
+        return None
+    rest = _after_options(rest)
+    return tuple(rest[1:]) if rest[:1] == ("install",) else None
 
 
 def _distribution_name(argument):
@@ -163,11 +233,21 @@ def _distribution_name(argument):
     return re.sub(r"[-_.]+", "-", match.group("name")).lower()
 
 
+def _normalized(name):
+    """Return *name* in the form PEP 735 and PEP 503 compare by."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 @functools.cache
 def _dependency_groups():
-    """Expand every pyproject dependency group to the distribution names it installs."""
+    """Expand every pyproject dependency group to the distribution names it installs.
+
+    Group names are compared normalised, because the specification says `Test_Group` and
+    `test-group` are the same group.
+    """
     with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
-        groups = tomllib.load(handle)["dependency-groups"]
+        table = tomllib.load(handle)["dependency-groups"]
+    groups = {_normalized(name): entries for name, entries in table.items()}
 
     def expand(name, pending):
         if name not in groups:
@@ -179,10 +259,44 @@ def _dependency_groups():
             if isinstance(entry, str):
                 names.add(_distribution_name(entry))
             else:
-                names |= expand(entry["include-group"], pending | {name})
+                names |= expand(_normalized(entry["include-group"]), pending | {name})
         return names
 
     return {name: frozenset(expand(name, frozenset())) for name in groups}
+
+
+def _install_operands(arguments):
+    """Yield ``(kind, value)`` for each operand of an install command.
+
+    An option that takes a separate value consumes it, so `--only-binary pytest-cov` never reads
+    its operand as a requested package. Kind is "group", "requirements", "project" or "package".
+    """
+    pending = list(arguments)
+    while pending:
+        argument = pending.pop(0)
+        if argument is None:
+            yield "package", None
+            continue
+        if argument in _GROUP_OPTIONS:
+            yield "group", pending.pop(0) if pending else None
+            continue
+        if argument in _REQUIREMENT_OPTIONS:
+            yield "requirements", pending.pop(0) if pending else None
+            continue
+        for option in _GROUP_OPTIONS | _REQUIREMENT_OPTIONS:
+            if argument.startswith(f"{option}="):
+                kind = "group" if option in _GROUP_OPTIONS else "requirements"
+                yield kind, argument.split("=", 1)[1]
+                break
+        else:
+            if argument in _VALUE_OPTIONS:
+                pending and pending.pop(0)
+            elif argument.startswith("-"):
+                pass
+            elif argument in {".", "./"}:
+                yield "project", argument
+            else:
+                yield "package", argument
 
 
 def _installed_distributions(words):
@@ -192,52 +306,47 @@ def _installed_distributions(words):
         return frozenset()
     groups = _dependency_groups()
     names = set()
-    pending = list(arguments)
-    while pending:
-        argument = pending.pop(0)
-        if argument == "--group":
-            group = pending.pop(0) if pending else None
-        elif argument is not None and argument.startswith("--group="):
-            group = argument.split("=", 1)[1]
-        else:
-            if (name := _distribution_name(argument)) is not None:
-                names.add(name)
-            continue
-        if group not in groups:
-            raise ValueError(f"install command names unknown dependency group {group!r}")
-        names |= groups[group]
+    for kind, value in _install_operands(arguments):
+        if kind == "group":
+            group = _normalized(value) if value else None
+            if group not in groups:
+                raise ValueError(f"install command names unknown dependency group {value!r}")
+            names |= groups[group]
+        elif kind == "package" and (name := _distribution_name(value)) is not None:
+            names.add(name)
     return frozenset(names)
+
+
+def _unsourced_requirements(words):
+    """Return install operands that name a package instead of taking it from pyproject.
+
+    Every dependency this project controls is declared in `[dependency-groups]`, so a workflow
+    names a group and never a package. That is what lets Dependabot update them: it reads
+    `pyproject.toml` and cannot see a name written into a shell command.
+    """
+    arguments = _installation_arguments(words)
+    if arguments is None:
+        return ()
+    unsourced = [
+        argument
+        for argument in arguments
+        for option in _FOREIGN_SOURCE_OPTIONS
+        if argument == option or (argument or "").startswith(f"{option}=")
+    ]
+    for kind, value in _install_operands(arguments):
+        if kind == "package":
+            unsourced.append("<dynamic>" if value is None else value)
+        elif kind == "requirements" and value not in _EXTERNAL_REQUIREMENTS:
+            unsourced.append(f"-r {value}")
+        elif kind == "group" and (value is None or ":" in value or "/" in value):
+            # A path-qualified group comes from another project's pyproject.
+            unsourced.append(f"--group {value}")
+    return tuple(unsourced)
 
 
 def _command_installs_distribution(words, distribution):
     """Return whether a literal install command provides *distribution*."""
     return re.sub(r"[-_.]+", "-", distribution).lower() in _installed_distributions(words)
-
-
-def _pinned_requirements(words):
-    """Return install arguments carrying their own version instead of naming a dependency group.
-
-    A direct URL pins as hard as `==`, and PEP 508 allows spaces around its `@`, which the shell
-    splits into three words.
-    """
-    arguments = _installation_arguments(words)
-    if arguments is None:
-        return ()
-    pinned = []
-    index = 0
-    while index < len(arguments):
-        argument = arguments[index]
-        if _distribution_name(argument) is None:
-            index += 1
-            continue
-        if re.search(r"[<>=!~@]", argument):
-            pinned.append(argument)
-        elif arguments[index + 1 : index + 2] == ("@",) and index + 2 < len(arguments):
-            pinned.append(" ".join(arguments[index : index + 3]))
-            index += 3
-            continue
-        index += 1
-    return tuple(pinned)
 
 
 def _shell_commands(command, workflow):
@@ -580,50 +689,109 @@ class CoverageMatrixTest(SimpleTestCase):
         self.assertIn("$COVERAGE_OPTION", step["run"])
 
 
-class WorkflowVersionSourceTest(SimpleTestCase):
-    """Versions belong to pyproject.toml. A workflow names a dependency group, never a version."""
+class WorkflowPackageSourceTest(SimpleTestCase):
+    """A workflow names a dependency group, never a package.
 
-    def test_no_workflow_install_command_carries_a_version(self):
-        """Dependabot updates pyproject.toml and uv.lock; it cannot see a version inside a command."""
-        pinned = [
-            (workflow, job, argument)
+    Checking for a version is a deny list, and a deny list can be walked around: quoting
+    `'ruff == 0.16.0'` makes one shell word, a requirements file hides its contents, and an
+    option operand looks like a package. Requiring the group instead is decidable, and it is
+    what lets Dependabot maintain the versions, because it reads `pyproject.toml` and
+    `uv.lock` and cannot see a name written into a shell command.
+
+    What it does not reach, so nobody reads more into a pass than it proves: a form that
+    installs without the `install` subcommand (`uv add`, `uv run --with`, `uvx`), a command
+    whose executable or arguments are not literal, and an install run after `cd` into another
+    project. Adding one of those to a workflow needs review by eye.
+    """
+
+    def test_no_workflow_install_command_names_a_package(self):
+        unsourced = [
+            (workflow, job, operand)
             for workflow, jobs in _workflow_commands().items()
             for job, commands in jobs.items()
             for words in commands
-            for argument in _pinned_requirements(words)
+            for operand in _unsourced_requirements(words)
         ]
 
         self.assertEqual(
-            pinned,
+            unsourced,
             [],
-            "\n".join(f"{workflow} job {job!r} pins {argument}" for workflow, job, argument in pinned),
+            "\n".join(
+                f"{workflow} job {job!r} installs {operand!r} instead of naming a dependency group"
+                for workflow, job, operand in unsourced
+            ),
         )
 
-    def test_a_pinned_requirement_is_reported(self):
-        self.assertEqual(
-            _pinned_requirements(("uv", "pip", "install", "--system", "ruff==0.16.0", "pre-commit>=4")),
-            ("ruff==0.16.0", "pre-commit>=4"),
-        )
+    def test_a_named_package_is_reported_however_it_is_spelled(self):
+        """Each of these walked past the previous version-detecting guard."""
+        for command, expected in (
+            (("uv", "pip", "install", "ruff==0.16.0"), ("ruff==0.16.0",)),
+            (("uv", "pip", "install", "ruff"), ("ruff",)),
+            (("pip", "install", "ruff == 0.16.0"), ("ruff == 0.16.0",)),
+            (("pip", "install", "ruff[extra] == 1.0"), ("ruff[extra] == 1.0",)),
+            (("uv", "pip", "install", "ruff@https://x.invalid/ruff.whl"), ("ruff@https://x.invalid/ruff.whl",)),
+            (
+                ("uv", "pip", "install", "ruff", "@", "https://x.invalid/ruff.whl"),
+                ("ruff", "@", "https://x.invalid/ruff.whl"),
+            ),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), expected)
 
-    def test_neither_a_group_nor_an_option_is_a_pinned_requirement(self):
-        command = ("uv", "pip", "install", "--system", "--only-binary=:all:", "--group", "lint")
+    def test_an_option_operand_is_not_a_package(self):
+        """`--only-binary` takes the next word, so reading it as a package was a false positive."""
+        command = ("uv", "pip", "install", "--only-binary", "pytest-cov", "--group", "ci-tests")
 
-        self.assertEqual(_pinned_requirements(command), ())
+        self.assertEqual(_unsourced_requirements(command), ())
 
-    def test_argument_text_is_not_a_pinned_requirement(self):
-        self.assertEqual(_pinned_requirements(("echo", "install ruff==0.16.0")), ())
+    def test_a_group_the_project_and_netbox_requirements_are_sourced(self):
+        for command in (
+            ("uv", "pip", "install", "--system", "--only-binary=:all:", "--group", "ci-tests"),
+            ("uv", "pip", "install", "--system", "-e", "."),
+            ("uv", "pip", "install", "--system", "-r", "../netbox/requirements.txt"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), ())
 
-    def test_a_compact_direct_url_requirement_is_reported(self):
-        """A direct URL pins a version just as hard as `==`, and pyproject cannot see it."""
-        command = ("uv", "pip", "install", "ruff@https://example.invalid/ruff-0.16.0.whl")
+    def test_another_requirements_file_is_not_a_source(self):
+        """Its contents are invisible to this scan and to Dependabot alike."""
+        command = ("uv", "pip", "install", "-r", "requirements-dev.txt")
 
-        self.assertEqual(_pinned_requirements(command), ("ruff@https://example.invalid/ruff-0.16.0.whl",))
+        self.assertEqual(_unsourced_requirements(command), ("-r requirements-dev.txt",))
 
-    def test_a_spaced_direct_url_requirement_is_reported(self):
-        """PEP 508 allows spaces around `@`, which splits the requirement into three shell words."""
-        command = ("uv", "pip", "install", "ruff", "@", "https://example.invalid/ruff-0.16.0.whl")
+    def test_a_global_option_before_the_subcommand_still_installs(self):
+        """`uv --system-certs pip install ruff` installs ruff, so the scan has to see it."""
+        for command in (
+            ("uv", "--system-certs", "pip", "install", "ruff"),
+            ("pip", "--isolated", "install", "ruff"),
+            ("python3", "-I", "-m", "pip", "install", "ruff"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), ("ruff",))
 
-        self.assertEqual(_pinned_requirements(command), ("ruff @ https://example.invalid/ruff-0.16.0.whl",))
+    def test_a_group_taken_from_another_project_is_not_sourced(self):
+        """A path-qualified group reads another project's pyproject, not this one's."""
+        for command in (
+            ("uv", "pip", "install", "--group", "../other/pyproject.toml:lint"),
+            ("uv", "pip", "install", "--project", "../other", "--group", "lint"),
+            ("uv", "pip", "install", "--with", "ruff", "--group", "lint"),
+        ):
+            with self.subTest(command=command):
+                self.assertNotEqual(_unsourced_requirements(command), ())
+
+    def test_a_value_option_is_never_read_as_a_package(self):
+        """An option missing from the table would fail a legitimate workflow."""
+        for command in (
+            ("uv", "pip", "install", "--group", "lint", "--default-index", "https://example.invalid/simple"),
+            ("uv", "pip", "install", "--group", "lint", "--no-build-isolation-package", "pytest-cov"),
+            ("uv", "pip", "install", "--requirements", "../netbox/requirements.txt"),
+            ("uv", "pip", "install", "--group", "lint", "--index-strategy", "unsafe-best-match"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), ())
+
+    def test_argument_text_is_not_an_install(self):
+        self.assertEqual(_unsourced_requirements(("echo", "install ruff==0.16.0")), ())
 
 
 class DependencyGroupTest(SimpleTestCase):
