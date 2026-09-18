@@ -159,7 +159,7 @@ def load_interface_name_rules_file(filename):
             **defaults_extra,
         }
         try:
-            obj, was_created = InterfaceNameRule.objects.update_or_create(**lookup, defaults=defaults)
+            _obj, was_created = InterfaceNameRule.objects.update_or_create(**lookup, defaults=defaults)
             if was_created:
                 ok(f"{label} → {name_template!r}")
                 created += 1

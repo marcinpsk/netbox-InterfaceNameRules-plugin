@@ -8,8 +8,6 @@ These tests create real DB objects and exercise the full engine pipeline.
 import threading
 
 from dcim.models import (
-    Device,
-    DeviceRole,
     DeviceType,
     Interface,
     Manufacturer,
@@ -18,7 +16,6 @@ from dcim.models import (
     ModuleBayTemplate,
     ModuleType,
     Platform,
-    Site,
 )
 from django.test import TestCase
 
@@ -28,6 +25,7 @@ from netbox_interface_name_rules.engine import (
     find_matching_rule,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_device
 
 
 class FindMatchingRuleTest(TestCase):
@@ -158,9 +156,7 @@ class BuildVariablesTest(TestCase):
         cls.device_type = DeviceType.objects.create(manufacturer=manufacturer, model="VAR-DEV", slug="var-dev")
         # Templates must be created BEFORE devices (instantiated on device creation)
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 5", position="5")
-        role = DeviceRole.objects.create(name="VarRole", slug="varrole")
-        site = Site.objects.create(name="VarSite", slug="varsite")
-        cls.device = Device.objects.create(name="var-test-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("Var", cls.device_type, name="var-test-01")
 
     def test_simple_bay_variables(self):
         bay = ModuleBay.objects.get(device=self.device, name="Transceiver 5")
@@ -174,9 +170,7 @@ class BuildVariablesTest(TestCase):
         manufacturer = Manufacturer.objects.create(name="NNMfg", slug="nnmfg")
         dt = DeviceType.objects.create(manufacturer=manufacturer, model="NN-DEV", slug="nn-dev")
         ModuleBayTemplate.objects.create(device_type=dt, name="Transceiver swp3", position="swp3")
-        role = DeviceRole.objects.create(name="NNRole", slug="nnrole")
-        site = Site.objects.create(name="NNSite", slug="nnsite")
-        device = Device.objects.create(name="nn-test-01", device_type=dt, role=role, site=site)
+        device = make_device("NN", dt, name="nn-test-01")
         bay = ModuleBay.objects.get(device=device, name="Transceiver swp3")
         variables = build_variables(bay)
         self.assertEqual(variables["bay_position"], "swp3")
@@ -196,9 +190,7 @@ class ApplyInterfaceNameRulesTest(TestCase):
         # Templates before device
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 0", position="0")
         ModuleBayTemplate.objects.create(device_type=cls.device_type, name="Transceiver 1", position="1")
-        role = DeviceRole.objects.create(name="ApplyRole", slug="applyrole")
-        site = Site.objects.create(name="ApplySite", slug="applysite")
-        cls.device = Device.objects.create(name="apply-test-01", device_type=cls.device_type, role=role, site=site)
+        cls.device = make_device("Apply", cls.device_type, name="apply-test-01")
 
     def test_simple_rename(self):
         """Module install with matching rule renames the interface."""

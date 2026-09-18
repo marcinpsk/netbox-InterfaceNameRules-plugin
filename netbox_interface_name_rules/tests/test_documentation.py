@@ -27,14 +27,14 @@ _PREFLIGHT_REASONS = (
 
 def _conversion_sentences():
     """Return the conversion section as lowercased, whitespace-collapsed sentences."""
-    guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text()
+    guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text(encoding="utf-8")
     section = guide.split("### Converting an installed flat family", 1)[1].split("### Converter Offset", 1)[0]
     return [sentence for sentence in " ".join(section.lower().split()).split(". ") if sentence]
 
 
 def _example_conversion_sentences():
     """Return the conversion example as lowercased, whitespace-collapsed sentences."""
-    guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text()
+    guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text(encoding="utf-8")
     section = guide.split("### Converting a flat family (NetBox 4.7+)", 1)[1].split("What the conversion does", 1)[0]
     return [sentence for sentence in " ".join(section.lower().split()).split(". ") if sentence]
 
@@ -83,7 +83,9 @@ class PerformanceDocumentationTest(unittest.TestCase):
     """Keep the performance narrative consistent with the committed comparison."""
 
     def test_statement_attribution_matches_the_comparison(self):
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text()
+        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
+            encoding="utf-8"
+        )
         attribution = comparison.split("### Where those statements come from", 1)[1]
         changes_by_scenario = {}
         for line in attribution.splitlines():
@@ -94,7 +96,7 @@ class PerformanceDocumentationTest(unittest.TestCase):
             if change:
                 changes_by_scenario.setdefault(cells[0], {})[cells[1]] = change
 
-        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text()
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
         result = readme.split("## Result of the interface-family comparison", 1)[1]
         readme_changes = {}
         for line in result.split("Count the statements", 1)[0].splitlines():
@@ -118,7 +120,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
     """Keep reviewed compatibility and transaction statements complete."""
 
     def test_rule_priority_lists_every_specificity_score(self):
-        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text()
+        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
         priority = guide.split("### Rule Priority", 1)[1].split("### RE2 Pattern Syntax", 1)[0]
         scopes = {
             7: (
@@ -145,7 +147,9 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
                 )
 
     def test_transaction_adr_states_unrelated_failure_behavior(self):
-        adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text()
+        adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn(
             "An unrelated integrity or infrastructure failure rolls back its own family and propagates to the operation boundary.",
@@ -153,7 +157,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         )
 
     def test_re2_upgrade_guide_separates_errors_from_warnings(self):
-        guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text()
+        guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
         section = guide.split("## Run Database Migrations", 1)[1].split("## Restart NetBox", 1)[0]
         migration = " ".join(section.split())
 
@@ -167,7 +171,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("run the migration again", migration)
 
     def test_configuration_names_both_pattern_matching_contexts(self):
-        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text()
+        guide = (_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
         pattern_guidance = guide.split("### Rule Fields", 1)[1].split("### RE2 Pattern Syntax", 1)[0]
 
         self.assertIn("module type model name", pattern_guidance)
@@ -187,7 +191,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("Applies to Device Interfaces", help_text)
 
     def test_readme_badge_matches_the_supported_netbox_floor(self):
-        readme = (_PROJECT_ROOT / "README.md").read_text()
+        readme = (_PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("NetBox-%E2%89%A54.3.0-blue", readme)
         self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
@@ -209,9 +213,9 @@ def _shipped_patterns():
     """Return every module-type pattern the plugin ships or documents, by source."""
     found = []
     for path in sorted((_PROJECT_ROOT / "contrib").glob("*.yaml")):
-        found.extend((path.name, pattern) for pattern in _patterns_in(yaml.safe_load(path.read_text())))
+        found.extend((path.name, pattern) for pattern in _patterns_in(yaml.safe_load(path.read_text(encoding="utf-8"))))
     for path in sorted((_PROJECT_ROOT / "docs").glob("*.md")):
-        for raw in re.findall(r"^\s*-?\s*module_type_pattern:\s*(.+)$", path.read_text(), re.MULTILINE):
+        for raw in re.findall(r"^\s*-?\s*module_type_pattern:\s*(.+)$", path.read_text(encoding="utf-8"), re.MULTILINE):
             value = yaml.safe_load(raw)
             if isinstance(value, str):
                 found.append((path.name, value))

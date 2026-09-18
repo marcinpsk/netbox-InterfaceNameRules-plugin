@@ -49,34 +49,78 @@ include = ["netbox_interface_name_rules*"]
 [tool.setuptools.package-data]
 netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
 
+# One source for every version this project installs. Each group is shaped around the job that
+# installs it, so a workflow names a group and never a version. Dependabot's `uv` ecosystem updates
+# these and `uv.lock`; it cannot see a version written into a workflow command.
 [dependency-groups]
-dev = [
-    "build",
-    "reuse",
-    "ruff>=0.16",
-    "pre-commit",
-    "pytest",
-    "pytest-django",
-    "pytest-cov>=6.0",
+ci-tests = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0",
+    "pytest-django>=4.12",
     "pytest-xdist>=3.8",
-    "python-semantic-release",
-    "django>=5.1,<7.0",
+    # pytest-xdist needs it to carry a traceback back from a worker.
+    "tblib>=3.2.2",
+]
+workflow-tests = [
+    "tree-sitter==0.26.0",
+    "tree-sitter-bash==0.25.1",
+]
+lint = [
+    "pre-commit>=4.5.1",
+    "ruff>=0.16",
+]
+# `reuse lint` is a local `language: system` pre-commit hook, so it is needed wherever the full
+# hook set runs, but not by the CI lint job. It ships no usable wheel, and the CI lint job installs
+# `lint` with `--only-binary=:all:`, so it stays in its own group.
+reuse = [
+    "reuse>=6.2",
+]
+release = [
+    "python-semantic-release>=10.6.2",
+]
+packaging = [
+    "build>=1.4",
 ]
 docs = [
     "mkdocs>=1,<2",
     "mkdocs-material>=9,<10",
 ]
+dev = [
+    {include-group = "ci-tests"},
+    {include-group = "workflow-tests"},
+    {include-group = "lint"},
+    {include-group = "reuse"},
+    {include-group = "release"},
+    {include-group = "packaging"},
+    "django>=5.1,<7.0",
+]
+# Installed into the NetBox virtualenv, so it carries tools only. A framework pin here would
+# resolve against NetBox's own Django and could downgrade it for every session on the box.
+devcontainer = [
+    {include-group = "ci-tests"},
+    {include-group = "workflow-tests"},
+    {include-group = "lint"},
+    {include-group = "reuse"},
+    # A co-mounted plugin's conftest imports these for type names only, so no browser is downloaded.
+    "pynetbox",
+    "playwright",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["/opt/netbox/netbox", "."]
-DJANGO_SETTINGS_MODULE = "netbox.settings"
-addopts = "-n auto --dist loadscope"
+DJANGO_SETTINGS_MODULE = "netbox_interface_name_rules.tests.isolated_settings"
+addopts = "-n auto --dist loadscope --reuse-db --cov=netbox_interface_name_rules --cov-report=term-missing"
 
 [tool.ruff]
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "D", "C901", "I", "RET", "UP"]
+select = [
+    "E", "F", "W", "D", "C901", "I", "RET", "UP",
+    "A", "ASYNC", "B", "BLE", "C4", "DJ", "DTZ", "ERA", "EXE", "FLY", "FURB", "G",
+    "ICN", "INP", "INT", "ISC", "LOG", "N", "PERF", "PGH", "PIE", "PLC", "PLE", "PLW",
+    "PTH", "Q", "RSE", "RUF", "S", "SIM", "SLOT", "T10", "T20", "TC", "TRY", "YTT",
+]
 ignore = [
     "E501",   # line too long (handled by formatter)
     "F403",   # star imports
@@ -88,19 +132,44 @@ ignore = [
     "D107",   # missing docstring in __init__
     "D203",   # 1 blank line before class docstring (conflicts with D211)
     "D213",   # multi-line summary second line (conflicts with D212)
+    "PLC0415",  # lazy imports are deliberate: Django app loading order
+    "TRY003",   # the message in a raise is the operator wording
 ]
+
+# `×` in breakout notation (4×25G) and `–` in prose are deliberate, not homoglyphs.
+allowed-confusables = ["×", "–"]
 
 [tool.ruff.lint.mccabe]
 # Flag errors (`C901`) whenever the complexity level exceeds 15.
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-"*/migrations/*.py" = ["D"]
-"*/tests/*.py" = ["D"]
-".devcontainer/**" = ["D"]
-".devcontainer/scripts/test-e2e.py" = ["C901"]
+"**/__init__.py" = ["F401"]
+# Django migrations declare mutable dependencies and operations.
+"**/migrations/*.py" = ["D", "RUF012"]
+# NetBox and Django contracts use mutable class attributes.
+"netbox_interface_name_rules/{__init__,choices,filters,forms,models,tables,views}.py" = ["RUF012"]
+# Serializer Meta fields are a framework contract.
+"netbox_interface_name_rules/api/serializers.py" = ["RUF012"]
+"**/tests/*.py" = ["D", "N806", "S101", "SIM117", "B018", "PTH", "T20"]
+# Confusable characters are the fixture under test, not a mistake.
+"**/tests/test_regex.py" = ["RUF001"]
+# The module header draws the signal call graph; an inline noqa would break the
+# comment-block baseline in test_comment_style.py.
+"netbox_interface_name_rules/signals.py" = ["ERA001"]
+# Dev-only scripts: settings modules are loaded by path, not imported as a package.
+".devcontainer/**" = [
+    "D", "B904", "BLE001", "INP001", "PTH", "S101", "S105", "S110", "S310",
+    "S603", "S607", "T20", "TRY301",
+]
 ".devcontainer/scripts/load-sample-data.py" = ["C901"]
+".devcontainer/scripts/test-e2e.py" = ["C901"]
+"performance/**" = ["T20"]
+"scripts/**" = ["T20", "S101"]
+# A console check: its printed report is what CI reads.
+".github/scripts/**" = ["T20"]
+# The guard under test is a shell script, so running it is the test.
+"netbox_interface_name_rules/tests/test_network_pin_guard.py" = ["S603", "S607"]
 
 [tool.coverage.run]
 source = ["netbox_interface_name_rules"]

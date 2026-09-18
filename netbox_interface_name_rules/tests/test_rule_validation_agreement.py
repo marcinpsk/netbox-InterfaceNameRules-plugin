@@ -245,7 +245,7 @@ class RuleNormalizationMigrationTest(TestCase):
         migrations = Path(__file__).resolve().parents[1] / "migrations"
         for migration in sorted(migrations.rglob("*.py")):
             with self.subTest(migration=migration.name):
-                tree = ast.parse(migration.read_text())
+                tree = ast.parse(migration.read_text(encoding="utf-8"))
                 imports = []
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):

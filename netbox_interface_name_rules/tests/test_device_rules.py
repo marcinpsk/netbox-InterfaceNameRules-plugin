@@ -4,20 +4,19 @@
 
 from dcim.models import (
     Device,
-    DeviceRole,
     DeviceType,
     Interface,
     Manufacturer,
     ModuleBayTemplate,
     ModuleType,
     Platform,
-    Site,
     VirtualChassis,
 )
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import apply_device_interface_rules
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_placement
 
 
 class ApplyDeviceInterfaceRulesTest(TestCase):
@@ -31,15 +30,14 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
             manufacturer=manufacturer, model="DevRule-Switch", slug="devrule-switch"
         )
         cls.platform = Platform.objects.create(name="DevRule-IOS", slug="devrule-ios")
-        role = DeviceRole.objects.create(name="DevRuleRole", slug="devrulerole")
-        site = Site.objects.create(name="DevRuleSite", slug="devrulesit")
+        placement = make_placement("DevRule")
 
         cls.vc = VirtualChassis.objects.create(name="devrule-vc")
         cls.device1 = Device.objects.create(
             name="devrule-sw1",
             device_type=cls.device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=cls.vc,
             vc_position=1,
             platform=cls.platform,
@@ -47,16 +45,16 @@ class ApplyDeviceInterfaceRulesTest(TestCase):
         cls.device_no_vc = Device.objects.create(
             name="devrule-standalone",
             device_type=cls.device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
         )
         # Another device with vc_position=None (edge case: VC set but position unset)
         cls.vc2 = VirtualChassis.objects.create(name="devrule-vc2")
         cls.device_no_pos = Device.objects.create(
             name="devrule-nopos",
             device_type=cls.device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=cls.vc2,
             vc_position=None,
         )
@@ -304,14 +302,13 @@ class ApplyDeviceInterfaceRulesModuleTypeTest(TestCase):
         device_type = DeviceType.objects.create(manufacturer=manufacturer, model="DR2-Switch", slug="dr2-switch")
         ModuleBayTemplate.objects.create(device_type=device_type, name="Slot 0", position="0")
         cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="DR2-LC", part_number="DR2-LC")
-        role = DeviceRole.objects.create(name="DR2Role", slug="dr2role")
-        site = Site.objects.create(name="DR2Site", slug="dr2site")
+        placement = make_placement("DR2")
         vc = VirtualChassis.objects.create(name="dr2-vc")
         cls.device = Device.objects.create(
             name="dr2-sw1",
             device_type=device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=vc,
             vc_position=2,
         )
@@ -336,14 +333,13 @@ class DeviceInterfaceEdgeCaseNamesTest(TestCase):
     def setUpTestData(cls):
         mfg = Manufacturer.objects.create(name="EdgeMfg", slug="edgemfg")
         cls.device_type = DeviceType.objects.create(manufacturer=mfg, model="Edge-Dev", slug="edge-dev")
-        role = DeviceRole.objects.create(name="EdgeRole", slug="edgerole")
-        site = Site.objects.create(name="EdgeSite", slug="edgesite")
+        placement = make_placement("Edge")
         vc = VirtualChassis.objects.create(name="edge-vc")
         cls.device = Device.objects.create(
             name="edge-sw1",
             device_type=cls.device_type,
-            role=role,
-            site=site,
+            role=placement.role,
+            site=placement.site,
             virtual_chassis=vc,
             vc_position=1,
         )

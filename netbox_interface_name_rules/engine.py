@@ -13,7 +13,6 @@ from django.core.exceptions import ValidationError
 
 from . import family as family_ops
 from . import naming, rule_selection
-from .family import targets as family_targets
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 
@@ -88,40 +87,19 @@ def supports_vc_position_token():
 
 
 def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
-    """Return the labels of *candidates* that exactly one drifted ``{vc_position}`` template claims.
-
-    *candidates* pairs a label with the name forms it is compared under.  Both sides of the claim
-    have to be unique: a template matching two labels, or a label matched by two templates,
-    disqualifies everything involved with a warning rather than renaming a guess.
-    """
-    claims = defaultdict(list)
-    claimants = defaultdict(list)
-    for index, matcher in enumerate(matchers):
-        for label, forms in candidates:
-            if any(matcher.pattern.fullmatch(form) for form in forms):
-                claims[index].append(label)
-                claimants[label].append(index)
-
-    ambiguous = {index for index, claimed in claims.items() if len(claimed) > 1}
-    for index in sorted(ambiguous):
-        logger.warning(
-            "Interface template %r of %s could name any of %s since this device's virtual-chassis "
-            "position changed; skipping them all rather than renaming a guess.",
-            matchers[index].template_name,
-            module,
-            sorted(claims[index]),
+    """Build drift claims and delegate admission to the family package."""
+    claims = tuple(
+        family_ops.TemplateClaim(
+            index,
+            matcher.template_name,
+            tuple(label for label, forms in candidates if any(matcher.pattern.fullmatch(form) for form in forms)),
         )
-    for label, indexes in claimants.items():
-        if len(indexes) > 1:
-            logger.warning(
-                "Interface %r on %s could be the drifted name of any of the templates %s; "
-                "skipping it rather than renaming a guess.",
-                label,
-                module,
-                sorted(matchers[index].template_name for index in indexes),
-            )
-            ambiguous.update(indexes)
-    return [claims[index][0] for index in sorted(claims) if index not in ambiguous]
+        for index, matcher in enumerate(matchers)
+    )
+    accepted, messages = family_ops.resolve_template_claims(claims, module=module, label_kind="interface name")
+    for message in messages:
+        logger.warning("%s", message)
+    return [label for _, label in accepted]
 
 
 def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - requires vc_position token support
@@ -630,7 +608,7 @@ def _preview_plans(rule, plan_set) -> list:
     if installed:  # pragma: no cover - requires a NetBox that models channelization
         return installed
     creations = [plan for plan in plan_set.plans if plan.base_name is not None]
-    kept = family_targets.one_family_per_name_set([(plan.base_name, plan.target_names) for plan in creations])
+    kept = family_ops.one_family_per_name_set([(plan.base_name, plan.target_names) for plan in creations])
     return [creations[index] for index in kept]
 
 
