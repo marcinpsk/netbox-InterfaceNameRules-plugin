@@ -17,7 +17,7 @@ automatically apply renaming rules based on configurable templates.
 
 - **Signal-driven** — rules fire automatically on module install
 - **Template variables** — `{slot}`, `{bay_position}`, `{bay_position_num}`, `{channel}`, etc.
-- **Arithmetic expressions** — `{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}`
+- **Arithmetic expressions** — `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
 - **Breakout support** — create multiple channel interfaces from a single port
 - **Bounded regex pattern matching** — match module types with RE2 patterns (e.g., `QSFP-DD-400G-.*`) to cover entire product families with a single rule; exact FK match takes priority over regex
 - **Scoping** — rules can target specific device types, parent module types, platforms, or be universal
@@ -33,6 +33,24 @@ automatically apply renaming rules based on configurable templates.
 | Converter offset | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
 | Platform naming | swp{bay_position_num} for UfiSpace SONiC devices |
 | Linux server | eth{bay_position_num} or ens{slot}f{bay_position_num} |
+
+## What a rule cannot do
+
+A rule renames interfaces that NetBox has already created. The plugin runs on `post_save` of
+`dcim.Module`, because NetBox creates module interfaces with `bulk_create`, which fires no
+`pre_save` on the interfaces themselves.
+
+A rename therefore runs after the insert, never before it. Two consequences:
+
+- **A rule cannot resolve a name collision.** If a device type gives two bays the same position,
+  installing the second module fails on the `dcim_interface_unique_device_name` constraint at
+  insert time, before any rule runs. Fix that in the device type, by composing the parent into
+  the bay position, rather than with a rename rule.
+- **A rule cannot stop an interface from being created.** It only renames what exists.
+
+Composed bay positions also mean most transceivers already arrive with the right name, so a
+rename rule is for the names that position alone cannot produce, such as the converter offset
+above.
 
 ## Quick Start
 

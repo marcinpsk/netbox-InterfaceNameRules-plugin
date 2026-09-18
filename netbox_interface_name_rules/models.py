@@ -120,12 +120,17 @@ class InterfaceNameRule(NetBoxModel):
     as integer arithmetic. It is not str.format: conversions and format specifications are
     not part of the language.
       {slot}               - Slot number from parent module bay position
+      {slot_num}           - Numeric suffix of slot
       {bay_position}       - Position of the bay this module is installed into
       {bay_position_num}   - Numeric suffix of bay position (e.g., "swp1" → "1")
       {parent_bay_position} - Position of the parent module's bay
+      {parent_bay_position_num} - Numeric suffix of the parent bay position
       {sfp_slot}           - Sub-bay index within the parent module
       {base}               - Base interface name from NetBox position resolution
       {channel}            - Channel number (iterated for breakout)
+
+    A device type may compose the parent into a bay position, so a position can be
+    path-shaped, such as "TenGigabitEthernet3/2/1". Arithmetic takes the _num form.
 
     Module type matching supports two modes:
       - Exact: FK reference to a specific ModuleType (default)
@@ -192,7 +197,7 @@ class InterfaceNameRule(NetBoxModel):
         max_length=255,
         help_text=(
             "Interface name template expression, e.g. "
-            "'GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}'"
+            "'GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}'"
         ),
     )
     parent_name_template = models.CharField(
