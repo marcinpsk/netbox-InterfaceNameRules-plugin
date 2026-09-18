@@ -46,7 +46,8 @@ A rename therefore runs after the insert, never before it. Two consequences:
   installing the second module fails on the `dcim_interface_unique_device_name` constraint at
   insert time, before any rule runs. Fix that in the device type, by composing the parent into
   the bay position, rather than with a rename rule.
-- **A rule cannot stop an interface from being created.** It only renames what exists.
+- **A rule cannot stop NetBox from creating an interface.** A breakout rule does create the
+  channel interfaces of a family, but only after NetBox has inserted the one it starts from.
 
 Composed bay positions also mean most transceivers already arrive with the right name, so a
 rename rule is for the names that position alone cannot produce, such as the converter offset

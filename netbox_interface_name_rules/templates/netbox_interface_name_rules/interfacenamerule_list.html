@@ -53,12 +53,12 @@
 
             <h6 class="mt-3">Arithmetic Expressions</h6>
             <p>Arithmetic is supported inside braces:
-               <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></p>
+               <code>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></p>
 
             <h6 class="mt-3">Examples</h6>
             <ul class="mb-0">
                 <li><strong>Converter offset:</strong> GLC-T in CVR-X2-SFP &rarr;
-                    <code>GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></li>
+                    <code>GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></li>
                 <li><strong>Breakout:</strong> QSFP-4X10G-LR &rarr; <code>{base}:{channel}</code>
                     (Channels=4, Ch. Start=0)</li>
                 <li><strong>Platform naming:</strong> QSFP-100G-LR4 on ACX7024 &rarr;

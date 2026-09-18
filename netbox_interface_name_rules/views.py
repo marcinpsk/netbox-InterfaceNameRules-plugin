@@ -100,10 +100,16 @@ class ZeroMatchPatternWarningMixin:
     def post(self, request, *args, **kwargs):
         """Save through the parent view, then report a pattern that selects nothing."""
         response = super().post(request, *args, **kwargs)
-        if response.status_code not in (301, 302):
+        # A redirect means the object saved; an HTMX save answers 200 and redirects by header.
+        if response.status_code not in (301, 302) and "HX-Location" not in response.headers:
             return response
-        pattern = (request.POST.get("module_type_pattern") or "").strip()
-        if not pattern or not request.POST.get("module_type_is_regex"):
+        # The quick-add modal prefixes its fields.
+        prefix = "quickadd-" if "_quickadd" in request.POST else ""
+        pattern = (request.POST.get(f"{prefix}module_type_pattern") or "").strip()
+        if not pattern or not request.POST.get(f"{prefix}module_type_is_regex"):
+            return response
+        # A device-interface rule filters interface names, so no module type is expected to match.
+        if request.POST.get(f"{prefix}applies_to_device_interfaces"):
             return response
         from .rule_selection import module_types_matching_pattern
 

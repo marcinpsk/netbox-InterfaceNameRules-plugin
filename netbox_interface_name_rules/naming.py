@@ -51,12 +51,17 @@ def _extract_trailing_digits(value: str) -> str:
 
 
 def numeric_suffix(value) -> str:
-    """Return the trailing digit run of *value*, or "0" when it has none.
+    """Return the number *value* ends with, as a decimal literal, or "0" when it has none.
 
     A device type may compose the parent into a bay position, so any position can arrive
-    path-shaped, such as TenGigabitEthernet3/2/1. Arithmetic templates need the number.
+    path-shaped, such as TenGigabitEthernet3/2/1. The result goes into arithmetic, so it is
+    canonical: a zero-padded run such as "02" becomes "2", which Python rejects as a literal,
+    and a non-ASCII digit run yields "0" rather than a value the evaluator cannot read.
     """
-    return _extract_trailing_digits(str(value)) or "0"
+    digits = _extract_trailing_digits(str(value))
+    if not digits.isascii():
+        return "0"
+    return str(int(digits)) if digits else "0"
 
 
 def _resolve_bay_position(module_bay):

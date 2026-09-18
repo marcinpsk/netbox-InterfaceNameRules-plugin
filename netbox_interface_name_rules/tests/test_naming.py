@@ -17,7 +17,7 @@ from dcim.models import (
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.naming import build_variables, evaluate_name_template
+from netbox_interface_name_rules.naming import build_variables, evaluate_name_template, numeric_suffix
 from netbox_interface_name_rules.tests.helpers import make_placement
 
 
@@ -34,6 +34,28 @@ def _supports_module_placeholder():
 
 
 REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
+
+
+class NumericSuffixTest(TestCase):
+    """The `_num` variables exist to be used in arithmetic, so they must parse as literals."""
+
+    def test_a_zero_padded_position_yields_a_usable_literal(self):
+        """Python rejects `02` as a decimal literal, so the suffix has to be canonical."""
+        self.assertEqual(numeric_suffix("TenGigabitEthernet3/02"), "2")
+        self.assertEqual(evaluate_name_template("Gi{8 + {n}}", {"n": numeric_suffix("bay/02")}), "Gi10")
+
+    def test_a_non_ascii_digit_run_is_not_a_number(self):
+        """`isdigit` accepts these, but neither the evaluator nor `int` can read them."""
+        self.assertEqual(numeric_suffix("abc\u0662"), "0")
+        self.assertEqual(numeric_suffix("p\u00b2"), "0")
+
+    def test_a_position_without_digits_is_zero(self):
+        self.assertEqual(numeric_suffix("swp"), "0")
+        self.assertEqual(numeric_suffix(""), "0")
+
+    def test_an_ordinary_position_is_unchanged(self):
+        self.assertEqual(numeric_suffix("TenGigabitEthernet3/2"), "2")
+        self.assertEqual(numeric_suffix("swp11"), "11")
 
 
 class NamingTest(TestCase):

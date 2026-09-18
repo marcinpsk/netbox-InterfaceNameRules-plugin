@@ -298,6 +298,28 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
+    def test_a_device_interface_rule_is_not_called_ineffective(self):
+        """There the pattern filters interface names, so matching no module type is expected."""
+        from django.contrib.messages import get_messages
+
+        response = self.client.post(
+            self._create_url(),
+            {
+                "name_template": "Gi{vc_position}/{port}",
+                "applies_to_device_interfaces": "on",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "^Ethernet.*$",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="^Ethernet.*$").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
+
     def test_an_equivalent_regex_pattern_warns_about_nothing(self):
         from django.contrib.messages import get_messages
 
