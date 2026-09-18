@@ -39,9 +39,9 @@ def _resolve_bay_position(module_bay):
     return naming._resolve_bay_position(module_bay)
 
 
-def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+def _resolve_slot(module_bay, bay_position, parent_bay_position):
     """Delegate slot resolution while preserving the engine helper."""
-    return naming._resolve_slot(module_bay, bay_position_num, parent_bay_position)
+    return naming._resolve_slot(module_bay, bay_position, parent_bay_position)
 
 
 def build_variables(module_bay, device=None):
