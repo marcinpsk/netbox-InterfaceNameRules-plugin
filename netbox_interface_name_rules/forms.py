@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-from dcim.models import DeviceType, ModuleType, Platform
+from dcim.models import DeviceType, Interface, ModuleBay, ModuleType, Platform
 from django import forms
 from django.core.exceptions import ValidationError
 from netbox.forms import (
@@ -16,6 +16,10 @@ from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .choices import BreakoutModeChoices
 from .models import InterfaceNameRule
+
+# A preview variable holds a real position or interface name, so the model fields bound them.
+_POSITION_MAX_LENGTH = ModuleBay._meta.get_field("position").max_length
+_INTERFACE_NAME_MAX_LENGTH = Interface._meta.get_field("name").max_length
 
 
 class RuleTestForm(forms.Form):
@@ -101,20 +105,30 @@ class RuleTestForm(forms.Form):
 
     # --- Variable override fields ---
     var_slot = forms.CharField(
-        required=False, initial="1", label="{slot}", widget=forms.TextInput(attrs={"class": "form-control"})
+        required=False,
+        initial="1",
+        max_length=_POSITION_MAX_LENGTH,
+        label="{slot}",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
     )
     var_bay_position = forms.CharField(
-        required=False, initial="1", label="{bay_position}", widget=forms.TextInput(attrs={"class": "form-control"})
+        required=False,
+        initial="1",
+        max_length=_POSITION_MAX_LENGTH,
+        label="{bay_position}",
+        widget=forms.TextInput(attrs={"class": "form-control"}),
     )
     var_parent_bay_position = forms.CharField(
         required=False,
         initial="1",
+        max_length=_POSITION_MAX_LENGTH,
         label="{parent_bay_position}",
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
     var_base = forms.CharField(
         required=False,
         initial="Ethernet1",
+        max_length=_INTERFACE_NAME_MAX_LENGTH,
         label="{base} (current interface name)",
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
