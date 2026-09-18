@@ -6,6 +6,7 @@ pytest fails during argument parsing when `addopts` names an option no installed
 so a missing distribution breaks the job before a single test runs.
 """
 
+import functools
 import pathlib
 import re
 import shlex
@@ -162,13 +163,67 @@ def _distribution_name(argument):
     return re.sub(r"[-_.]+", "-", match.group("name")).lower()
 
 
-def _command_installs_distribution(words, distribution):
-    """Return whether a literal install command names *distribution*."""
+@functools.cache
+def _dependency_groups():
+    """Expand every pyproject dependency group to the distribution names it installs."""
+    with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        groups = tomllib.load(handle)["dependency-groups"]
+
+    def expand(name, pending):
+        if name not in groups:
+            raise ValueError(f"unknown dependency group {name!r}")
+        if name in pending:
+            raise ValueError(f"dependency group {name!r} includes itself")
+        names = set()
+        for entry in groups[name]:
+            if isinstance(entry, str):
+                names.add(_distribution_name(entry))
+            else:
+                names |= expand(entry["include-group"], pending | {name})
+        return names
+
+    return {name: frozenset(expand(name, frozenset())) for name in groups}
+
+
+def _installed_distributions(words):
+    """Return what a literal install command provides, expanding each dependency group it names."""
     arguments = _installation_arguments(words)
     if arguments is None:
-        return False
-    expected = re.sub(r"[-_.]+", "-", distribution).lower()
-    return any(_distribution_name(argument) == expected for argument in arguments)
+        return frozenset()
+    groups = _dependency_groups()
+    names = set()
+    pending = list(arguments)
+    while pending:
+        argument = pending.pop(0)
+        if argument == "--group":
+            group = pending.pop(0) if pending else None
+        elif argument is not None and argument.startswith("--group="):
+            group = argument.split("=", 1)[1]
+        else:
+            if (name := _distribution_name(argument)) is not None:
+                names.add(name)
+            continue
+        if group not in groups:
+            raise ValueError(f"install command names unknown dependency group {group!r}")
+        names |= groups[group]
+    return frozenset(names)
+
+
+def _command_installs_distribution(words, distribution):
+    """Return whether a literal install command provides *distribution*."""
+    return re.sub(r"[-_.]+", "-", distribution).lower() in _installed_distributions(words)
+
+
+def _pinned_requirements(words):
+    """Return install arguments carrying their own version instead of naming a dependency group."""
+    arguments = _installation_arguments(words)
+    if arguments is None:
+        return ()
+    return tuple(
+        argument
+        for argument in arguments
+        if _distribution_name(argument) is not None and re.search(r"[<>=!~]", argument)
+    )
 
 
 def _shell_commands(command, workflow):
@@ -205,13 +260,12 @@ def _shell_runs_pytest(command, workflow):
     return any(_is_pytest_invocation(words) for words in _shell_commands(command, workflow))
 
 
-def _workflows_running_pytest(directory=None):
-    """Map each workflow that invokes pytest to ordered literal commands per job."""
+def _workflow_commands(directory=None):
+    """Map every workflow to the ordered literal commands in each of its jobs."""
     found = {}
     for path in sorted((directory or _WORKFLOWS).glob("*.y*ml")):
-        text = path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(text)
-        jobs = {
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        found[path.name] = {
             job_name: tuple(
                 words
                 for step in job.get("steps", [])
@@ -220,9 +274,16 @@ def _workflows_running_pytest(directory=None):
             )
             for job_name, job in workflow["jobs"].items()
         }
-        if any(_is_pytest_invocation(words) for commands in jobs.values() for words in commands):
-            found[path.name] = jobs
     return found
+
+
+def _workflows_running_pytest(directory=None):
+    """Map each workflow that invokes pytest to ordered literal commands per job."""
+    return {
+        name: jobs
+        for name, jobs in _workflow_commands(directory).items()
+        if any(_is_pytest_invocation(words) for commands in jobs.values() for words in commands)
+    }
 
 
 def _missing_workflow_distributions(directory=None):
@@ -294,7 +355,8 @@ class DistributionInstallationTest(SimpleTestCase):
 class WorkflowPytestPluginTest(SimpleTestCase):
     """A workflow that runs pytest installs every plugin the run needs."""
 
-    def test_devcontainer_installs_the_workflow_test_dependency_group(self):
+    def test_the_devcontainer_installs_everything_the_suite_needs(self):
+        """The devcontainer and CI run the same suite, so they install from the same groups."""
         setup = (_PROJECT_ROOT / ".devcontainer" / "scripts" / "setup.sh").read_bytes()
         pending = [Parser(_SHELL_LANGUAGE).parse(setup).root_node]
         installation_arguments = []
@@ -305,13 +367,16 @@ class WorkflowPytestPluginTest(SimpleTestCase):
                 if arguments[:1] == ["install"]:
                     installation_arguments.append(arguments)
             pending.extend(node.named_children)
-        self.assertTrue(
-            any(
-                arguments[index : index + 2] == ["--group", "workflow-tests"]
-                for arguments in installation_arguments
-                for index in range(len(arguments) - 1)
-            ),
-            "devcontainer setup does not install the shared workflow test dependencies",
+
+        groups = _dependency_groups()
+        installed = frozenset().union(
+            *(_installed_distributions(("uv", "pip", *arguments)) for arguments in installation_arguments)
+        )
+
+        self.assertEqual(
+            sorted((groups["ci-tests"] | groups["workflow-tests"]) - installed),
+            [],
+            "devcontainer setup does not install every distribution the suite needs",
         )
 
     def test_every_pytest_workflow_installs_the_plugins_addopts_requires(self):
@@ -499,3 +564,61 @@ class CoverageMatrixTest(SimpleTestCase):
         self.assertIn("matrix.coverage", option)
         self.assertIn("--no-cov", option)
         self.assertIn("$COVERAGE_OPTION", step["run"])
+
+
+class WorkflowVersionSourceTest(SimpleTestCase):
+    """Versions belong to pyproject.toml. A workflow names a dependency group, never a version."""
+
+    def test_no_workflow_install_command_carries_a_version(self):
+        """Dependabot updates pyproject.toml and uv.lock; it cannot see a version inside a command."""
+        pinned = [
+            (workflow, job, argument)
+            for workflow, jobs in _workflow_commands().items()
+            for job, commands in jobs.items()
+            for words in commands
+            for argument in _pinned_requirements(words)
+        ]
+
+        self.assertEqual(
+            pinned,
+            [],
+            "\n".join(f"{workflow} job {job!r} pins {argument}" for workflow, job, argument in pinned),
+        )
+
+    def test_a_pinned_requirement_is_reported(self):
+        self.assertEqual(
+            _pinned_requirements(("uv", "pip", "install", "--system", "ruff==0.16.0", "pre-commit>=4")),
+            ("ruff==0.16.0", "pre-commit>=4"),
+        )
+
+    def test_neither_a_group_nor_an_option_is_a_pinned_requirement(self):
+        command = ("uv", "pip", "install", "--system", "--only-binary=:all:", "--group", "lint")
+
+        self.assertEqual(_pinned_requirements(command), ())
+
+    def test_argument_text_is_not_a_pinned_requirement(self):
+        self.assertEqual(_pinned_requirements(("echo", "install ruff==0.16.0")), ())
+
+
+class DependencyGroupTest(SimpleTestCase):
+    """The group expansion the install check reads has to follow `include-group` and reject typos."""
+
+    def test_a_group_expands_through_include_group(self):
+        groups = _dependency_groups()
+
+        self.assertLessEqual(groups["ci-tests"], groups["dev"])
+        self.assertLessEqual(groups["ci-tests"], groups["devcontainer"])
+
+    def test_the_devcontainer_group_pins_no_framework(self):
+        """It installs into the NetBox virtualenv, where a Django pin could downgrade the server."""
+        self.assertNotIn("django", _dependency_groups()["devcontainer"])
+
+    def test_a_group_install_provides_the_distributions_it_names(self):
+        installed = _installed_distributions(("uv", "pip", "install", "--group", "ci-tests"))
+
+        self.assertIn("pytest-cov", installed)
+        self.assertIn("tblib", installed)
+
+    def test_an_unknown_group_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "no-such-group"):
+            _installed_distributions(("uv", "pip", "install", "--group", "no-such-group"))

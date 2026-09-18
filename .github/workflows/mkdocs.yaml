@@ -41,7 +41,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: uv pip install --system "mkdocs-material>=9,<10"
+        run: uv pip install --system --group docs
 
       - name: Save coverage report from gh-pages
         run: |

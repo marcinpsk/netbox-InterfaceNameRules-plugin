@@ -49,27 +49,54 @@ include = ["netbox_interface_name_rules*"]
 [tool.setuptools.package-data]
 netbox_interface_name_rules = ["templates/**/*", "static/**/*"]
 
+# One source for every version this project installs. Each group is shaped around the job that
+# installs it, so a workflow names a group and never a version. Dependabot's `uv` ecosystem updates
+# these and `uv.lock`; it cannot see a version written into a workflow command.
 [dependency-groups]
-dev = [
-    {include-group = "workflow-tests"},
-    "build",
-    "reuse",
-    "ruff>=0.16",
-    "pre-commit",
-    "pytest",
-    "pytest-django",
-    "pytest-cov>=6.0",
+ci-tests = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0",
+    "pytest-django>=4.12",
     "pytest-xdist>=3.8",
-    "python-semantic-release",
-    "django>=5.1,<7.0",
+    # pytest-xdist needs it to carry a traceback back from a worker.
+    "tblib>=3.2.2",
 ]
 workflow-tests = [
     "tree-sitter==0.26.0",
     "tree-sitter-bash==0.25.1",
 ]
+lint = [
+    "pre-commit>=4.5.1",
+    "ruff>=0.16",
+    "reuse>=6.2",
+]
+release = [
+    "python-semantic-release>=10.6.2",
+]
+packaging = [
+    "build>=1.4",
+]
 docs = [
     "mkdocs>=1,<2",
     "mkdocs-material>=9,<10",
+]
+dev = [
+    {include-group = "ci-tests"},
+    {include-group = "workflow-tests"},
+    {include-group = "lint"},
+    {include-group = "release"},
+    {include-group = "packaging"},
+    "django>=5.1,<7.0",
+]
+# Installed into the NetBox virtualenv, so it carries tools only. A framework pin here would
+# resolve against NetBox's own Django and could downgrade it for every session on the box.
+devcontainer = [
+    {include-group = "ci-tests"},
+    {include-group = "workflow-tests"},
+    {include-group = "lint"},
+    # A co-mounted plugin's conftest imports these for type names only, so no browser is downloaded.
+    "pynetbox",
+    "playwright",
 ]
 
 [tool.pytest.ini_options]
