@@ -7,7 +7,7 @@ import re
 import yaml
 from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -90,7 +90,38 @@ class InterfaceNameRuleListView(generic.ObjectListView):
         return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
-class InterfaceNameRuleCreateView(generic.ObjectEditView):
+class ZeroMatchPatternWarningMixin:
+    """Warn when a saved regex rule matches no module type that exists now.
+
+    Saving still succeeds, because a rule may name a module type that is not in the database yet.
+    NetBox's edit view does its work in ``post`` and offers no post-save hook, so this wraps it.
+    """
+
+    def post(self, request, *args, **kwargs):
+        """Save through the parent view, then report a pattern that selects nothing."""
+        response = super().post(request, *args, **kwargs)
+        if response.status_code not in (301, 302):
+            return response
+        pattern = (request.POST.get("module_type_pattern") or "").strip()
+        if not pattern or not request.POST.get("module_type_is_regex"):
+            return response
+        from .rule_selection import module_types_matching_pattern
+
+        try:
+            matched = module_types_matching_pattern(pattern)
+        except ValidationError:
+            return response
+        if not matched:
+            messages.warning(
+                request,
+                f"Pattern {pattern!r} matches no module type, so this rule will not fire. "
+                "The field takes a regular expression, not a glob: '*' repeats the character "
+                "before it, so 'GLC-T*' does not match 'GLC-TE'. Use 'GLC-T.*'.",
+            )
+        return response
+
+
+class InterfaceNameRuleCreateView(ZeroMatchPatternWarningMixin, generic.ObjectEditView):
     """Create view for InterfaceNameRule."""
 
     queryset = InterfaceNameRule.objects.all()
@@ -111,7 +142,7 @@ class InterfaceNameRuleView(generic.ObjectView):
     queryset = InterfaceNameRule.objects.all()
 
 
-class InterfaceNameRuleEditView(generic.ObjectEditView):
+class InterfaceNameRuleEditView(ZeroMatchPatternWarningMixin, generic.ObjectEditView):
     """Edit view for InterfaceNameRule."""
 
     queryset = InterfaceNameRule.objects.all()
@@ -295,16 +326,21 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .naming import evaluate_name_template
+        from .naming import evaluate_name_template, numeric_suffix
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
         channel_start = cd.get("channel_start") or 0
+        slot = cd.get("var_slot") or "1"
+        parent_bay_position = cd.get("var_parent_bay_position") or "1"
+        # Derived, not entered, so the preview offers the numeric forms production builds.
         variables = {
-            "slot": cd.get("var_slot") or "1",
+            "slot": slot,
+            "slot_num": numeric_suffix(slot),
             "bay_position": cd.get("var_bay_position") or "1",
             "bay_position_num": cd.get("var_bay_position_num") or "1",
-            "parent_bay_position": cd.get("var_parent_bay_position") or "1",
+            "parent_bay_position": parent_bay_position,
+            "parent_bay_position_num": numeric_suffix(parent_bay_position),
             "sfp_slot": cd.get("var_sfp_slot") or "1",
             "base": cd.get("var_base") or "Ethernet1",
         }

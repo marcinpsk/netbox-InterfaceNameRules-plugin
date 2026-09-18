@@ -235,6 +235,81 @@ class RuleApplicableViewTest(ViewTestBase):
         self.assertIn("applicable", data)
 
 
+class ZeroMatchPatternWarningTest(ViewTestBase):
+    """A regex rule that matches no module type is indistinguishable from one that works.
+
+    `*` is a quantifier in a regular expression, so a glob-style pattern silently matches
+    nothing. Saving still succeeds, because a rule may legitimately name a module type that
+    does not exist yet, but the operator is told.
+    """
+
+    def _create_url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+
+    def _post(self, pattern):
+        return self.client.post(
+            self._create_url(),
+            {
+                "name_template": "et-0/0/{bay_position}",
+                "module_type_is_regex": "on",
+                "module_type_pattern": pattern,
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+    def test_a_glob_style_pattern_saves_and_warns_that_it_matches_nothing(self):
+        from django.contrib.messages import get_messages
+
+        ModuleType.objects.create(manufacturer=self.module_type.manufacturer, model="GLC-TE", part_number="GLC-TE")
+
+        response = self._post("GLC-T*")
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_editing_a_rule_into_a_zero_match_pattern_also_warns(self):
+        """The warning belongs to both entry points; a rule can be broken by an edit too."""
+        from django.contrib.messages import get_messages
+
+        rule = InterfaceNameRule.objects.create(
+            name_template="et-0/0/{bay_position}", module_type_is_regex=True, module_type_pattern="VIEW-.*"
+        )
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", kwargs={"pk": rule.pk})
+
+        response = self.client.post(
+            url,
+            {
+                "name_template": "et-0/0/{bay_position}",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "VIEW-T*",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.module_type_pattern, "VIEW-T*")
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_an_equivalent_regex_pattern_warns_about_nothing(self):
+        from django.contrib.messages import get_messages
+
+        ModuleType.objects.create(manufacturer=self.module_type.manufacturer, model="GLC-TE", part_number="GLC-TE")
+
+        response = self._post("GLC-T.*")
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T.*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [])
+
+
 class RuleTestViewTest(ViewTestBase):
     """Test the RuleTestView (build-rule / preview)."""
 
@@ -273,6 +348,22 @@ class RuleTestViewTest(ViewTestBase):
         self.assertEqual(preview[0]["result"], "et-0/0/0:0")
         self.assertEqual(preview[1]["result"], "et-0/0/0:1")
         self.assertEqual(preview[2]["result"], "et-0/0/0:2")
+
+    def test_preview_derives_numeric_positions_from_a_composed_position(self):
+        """A device type may compose the parent in, so the preview offers the same `_num` forms."""
+        data = {
+            "name_template": "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_slot": "3",
+            "var_parent_bay_position": "TenGigabitEthernet3/2",
+            "var_sfp_slot": "1",
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "GigabitEthernet3/11")
 
     def test_check_with_module_type_populates_db_preview(self):
         """POST check with module_type FK set triggers find_interfaces_for_rule."""
