@@ -18,7 +18,9 @@ def _missing_encodings(tree):
         name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", None)
         if name not in {"open", "read_text", "write_text"}:
             continue
-        if any(keyword.arg == "encoding" for keyword in node.keywords):
+        encoding = next((keyword.value for keyword in node.keywords if keyword.arg == "encoding"), None)
+        # A literal `encoding=None` selects the locale default, so it is not an explicit encoding.
+        if encoding is not None and not (isinstance(encoding, ast.Constant) and encoding.value is None):
             continue
         if name == "open":
             module_open = (
@@ -50,6 +52,13 @@ class TextEncodingTest(SimpleTestCase):
     def test_text_access_requires_an_encoding_keyword(self):
         tree = ast.parse('open("data")\npath.open("r")\npath.read_text()\npath.write_text("text")')
         self.assertEqual(list(_missing_encodings(tree)), [1, 2, 3, 4])
+
+    def test_a_literal_none_encoding_is_not_an_encoding(self):
+        """`encoding=None` is the locale default, which is what the convention exists to prevent."""
+        tree = ast.parse(
+            'open("data", encoding=None)\npath.read_text(encoding=None)\npath.write_text("t", encoding=None)'
+        )
+        self.assertEqual(list(_missing_encodings(tree)), [1, 2, 3])
 
     def test_module_open_uses_the_second_argument_as_mode(self):
         tree = ast.parse('io.open("blob.txt", "r")\nbuiltins.open("blob.txt")\nio.open("data.txt", "rb")')
