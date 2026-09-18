@@ -54,7 +54,9 @@ from netbox_interface_name_rules.engine import (
     supports_channelization,
     supports_vc_position_token,
 )
+from netbox_interface_name_rules.family import plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.signals import _apply_rules_deferred
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
@@ -885,3 +887,26 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self.assertEqual(len(candidates), 1)
         self.assertTrue(candidates[0].convertible, candidates[0].reason)
         self.assertEqual(candidates[0].new_names[0], "pe-0/0/7")
+
+    def test_a_current_base_is_still_planned_when_an_earlier_template_claims_it_historically(self):
+        """A historical claim on another template's current base must not cancel both families."""
+        module_type = _token_module_type(
+            self.manufacturer,
+            "VcConv-CURRENT-OVERLAP",
+            "xe-{vc_position:0}/0/{module}",
+            "xe-1/0/{module}",
+        )
+        rule = self._flat_rule(module_type, "brk-{base}:{channel}")
+        self._renumber(2)
+        module, _ = self._install_on(self.device, module_type, "3")
+        # Leaves the tokenized template one historical base: the other template's current base.
+        Interface.objects.filter(module=module, name__contains="xe-2/0/3").delete()
+        variables = build_variables(module.module_bay, device=module.device)
+
+        plans = plan_installed_families(module, rule, variables).plans
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(
+            sorted(member.snapshot.name for member in plans[0].members),
+            [f"brk-xe-1/0/3:{channel}" for channel in range(4)],
+        )

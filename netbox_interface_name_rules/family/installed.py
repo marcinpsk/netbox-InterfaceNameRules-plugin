@@ -82,7 +82,8 @@ def flat_family_bases(module, rule, variables, interfaces, catalog):
     A historical base that more than one template could claim is dropped.
     Every historical base of a template that claims multiple bases is also dropped.
     These claims do not identify one family with certainty, so the plugin does not rename or convert them.
-    Current bases precede historical bases so an exact claim always owns its installed rows.
+    A historical base that some template resolves to now is dropped: the exact claim owns those
+    rows, and keeping both would make the two claims cancel each other.
     """
     if rule.channel_count <= 0:
         return ()
@@ -102,10 +103,12 @@ def flat_family_bases(module, rule, variables, interfaces, catalog):
         logger.warning(message)
     accepted_by_template = {pk: (base,) for pk, base in accepted}
     current_bases = tuple((template.resolved, template.resolved) for template in templates)
+    resolved_now = {template.resolved for template in templates}
     historical_bases = tuple(
         (template.resolved, source_base)
         for template in templates
         for source_base in accepted_by_template.get(template.pk, ())
+        if source_base not in resolved_now
     )
     return current_bases + historical_bases
 
