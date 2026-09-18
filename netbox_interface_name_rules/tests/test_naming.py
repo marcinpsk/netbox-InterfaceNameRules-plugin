@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Integration tests for the lower-level naming seam."""
 
+from unittest import skipUnless
+
 from dcim.models import (
     Device,
     DeviceType,
@@ -17,6 +19,21 @@ from django.test import TestCase
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables, evaluate_name_template
 from netbox_interface_name_rules.tests.helpers import make_placement
+
+
+def _supports_module_placeholder():
+    """Return True when this NetBox resolves ``{module}`` in module-bay positions.
+
+    Probed from the helper that performs the resolution rather than a version comparison, so a
+    backport or an upstream removal is detected by what NetBox actually provides. Without it a
+    bay position stays literal, so a device type cannot compose the parent in at all.
+    """
+    from dcim import utils
+
+    return hasattr(utils, "resolve_module_placeholder")
+
+
+REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
 
 
 class NamingTest(TestCase):
@@ -74,6 +91,7 @@ class NamingTest(TestCase):
         self.assertEqual(name, "xe-3/7/7")
 
 
+@skipUnless(_supports_module_placeholder(), REQUIRES_MODULE_PLACEHOLDER)
 class NestedBayNumericTest(TestCase):
     """Composed bay positions are normal input, so every position has a numeric accessor.
 
