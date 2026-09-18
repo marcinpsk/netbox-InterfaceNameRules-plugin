@@ -51,9 +51,10 @@ therefore path-shaped strings in the general case, and arithmetic on one fails:
 Unsafe expression in name template: 8 + (TenGigabitEthernet3/2 - 1) * 2 + 1
 ```
 
-Every position has a `_num` counterpart holding its trailing digit run. Use those wherever a
-template does arithmetic. They are also correct for a plain numeric position, so `_num` is the
-safe default.
+Every position has a `_num` counterpart holding the number its digits spell, so a padded run
+such as `02` reads `2`, which is what arithmetic accepts. Use those wherever a template does
+arithmetic. They are also correct for a plain numeric position, so `_num` is the safe default;
+the raw variable still gives the position as it is stored.
 
 ## Virtual Chassis Support
 
