@@ -72,6 +72,7 @@ See `contrib/ufispace.yaml` for a real-world example of the pattern mode and `co
 | `{bay_position}` | Raw bay position string |
 | `{bay_position_num}` | Numeric suffix of bay position |
 | `{slot}` | Top-level slot/module bay position |
+| `{slot_num}` | Number the slot ends with, for arithmetic |
 | `{parent_bay_position}` | Parent module's bay position, possibly path-shaped |
 | `{parent_bay_position_num}` | Number the parent bay position ends with, for arithmetic |
 | `{sfp_slot}` | Sub-bay index within parent module |

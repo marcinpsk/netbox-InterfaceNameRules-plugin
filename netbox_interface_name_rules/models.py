@@ -128,6 +128,8 @@ class InterfaceNameRule(NetBoxModel):
       {sfp_slot}           - Sub-bay index within the parent module
       {base}               - Base interface name from NetBox position resolution
       {channel}            - Channel number (iterated for breakout)
+      {vc_position}        - Virtual Chassis member position, for a member device only
+      {port}               - Segment after the last "/" of a device interface name
 
     A device type may compose the parent into a bay position, so a position can be
     path-shaped, such as "TenGigabitEthernet3/2/1". Arithmetic takes the _num form.

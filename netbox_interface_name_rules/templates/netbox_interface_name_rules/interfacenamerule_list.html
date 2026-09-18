@@ -40,9 +40,11 @@
                 </thead>
                 <tbody>
                     <tr><td><code>{slot}</code></td><td>Module</td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
+                    <tr><td><code>{slot_num}</code></td><td>Module</td><td>Numeric suffix of slot (e.g., "Slot 7" &rarr; "7")</td></tr>
                     <tr><td><code>{bay_position}</code></td><td>Module</td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
                     <tr><td><code>{bay_position_num}</code></td><td>Module</td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
                     <tr><td><code>{parent_bay_position}</code></td><td>Module</td><td>Position of the parent module's bay</td></tr>
+                    <tr><td><code>{parent_bay_position_num}</code></td><td>Module</td><td>Numeric suffix of parent bay position (e.g., "TenGigabitEthernet3/2" &rarr; "2")</td></tr>
                     <tr><td><code>{sfp_slot}</code></td><td>Module</td><td>Numeric sub-bay index within the parent module</td></tr>
                     <tr><td><code>{base}</code></td><td>Both</td><td>Original interface name from the template (or current name for device-level rules)</td></tr>
                     <tr><td><code>{port}</code></td><td>Device</td><td>Segment after the last "/" in the current interface name (e.g., "Gi0/1" &rarr; "1"); full name if no "/"</td></tr>
