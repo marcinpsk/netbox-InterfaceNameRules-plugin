@@ -215,15 +215,29 @@ def _command_installs_distribution(words, distribution):
 
 
 def _pinned_requirements(words):
-    """Return install arguments carrying their own version instead of naming a dependency group."""
+    """Return install arguments carrying their own version instead of naming a dependency group.
+
+    A direct URL pins as hard as `==`, and PEP 508 allows spaces around its `@`, which the shell
+    splits into three words.
+    """
     arguments = _installation_arguments(words)
     if arguments is None:
         return ()
-    return tuple(
-        argument
-        for argument in arguments
-        if _distribution_name(argument) is not None and re.search(r"[<>=!~]", argument)
-    )
+    pinned = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if _distribution_name(argument) is None:
+            index += 1
+            continue
+        if re.search(r"[<>=!~@]", argument):
+            pinned.append(argument)
+        elif arguments[index + 1 : index + 2] == ("@",) and index + 2 < len(arguments):
+            pinned.append(" ".join(arguments[index : index + 3]))
+            index += 3
+            continue
+        index += 1
+    return tuple(pinned)
 
 
 def _shell_commands(command, workflow):
@@ -598,6 +612,18 @@ class WorkflowVersionSourceTest(SimpleTestCase):
 
     def test_argument_text_is_not_a_pinned_requirement(self):
         self.assertEqual(_pinned_requirements(("echo", "install ruff==0.16.0")), ())
+
+    def test_a_compact_direct_url_requirement_is_reported(self):
+        """A direct URL pins a version just as hard as `==`, and pyproject cannot see it."""
+        command = ("uv", "pip", "install", "ruff@https://example.invalid/ruff-0.16.0.whl")
+
+        self.assertEqual(_pinned_requirements(command), ("ruff@https://example.invalid/ruff-0.16.0.whl",))
+
+    def test_a_spaced_direct_url_requirement_is_reported(self):
+        """PEP 508 allows spaces around `@`, which splits the requirement into three shell words."""
+        command = ("uv", "pip", "install", "ruff", "@", "https://example.invalid/ruff-0.16.0.whl")
+
+        self.assertEqual(_pinned_requirements(command), ("ruff @ https://example.invalid/ruff-0.16.0.whl",))
 
 
 class DependencyGroupTest(SimpleTestCase):
