@@ -68,6 +68,8 @@ _VALUE_OPTIONS = {
 }
 # Options that reach outside this project's own dependency declarations.
 _FOREIGN_SOURCE_OPTIONS = ("--project", "--with", "--with-requirements", "--directory")
+# Options that make the command install nothing, whatever its subcommand says.
+_NON_INSTALLING_OPTIONS = frozenset({"--help", "-h", "--dry-run", "--version", "-V"})
 # Requirements files this project does not own. NetBox's own file comes from its checkout.
 _EXTERNAL_REQUIREMENTS = frozenset({"../netbox/requirements.txt"})
 
@@ -188,14 +190,26 @@ def _after_options(words):
     return tuple(words[index:])
 
 
-def _installation_arguments(words):
-    """Return arguments to a literal package-manager install command.
+def _is_package_manager(name):
+    """Return whether *name* is a literal executable that installs packages."""
+    return name == "uv" or _is_python_executable(name) or re.fullmatch(r"pip(?:3(?:\.\d+)*)?", name) is not None
 
-    Global options may precede the subcommand, so `uv --system-certs pip install` and
-    `pip --isolated install` are recognised. Forms that install without the `install`
-    subcommand, such as `uv add`, `uv run --with` and `uvx`, are handled separately.
+
+def _installation_arguments(words):
+    """Return arguments to a command that installs, or None.
+
+    Recognition is strict, so an option's separate value before the subcommand, as in
+    `uv --project ../other pip install`, is not recognised: a value cannot be told from a
+    subcommand without a table of every option uv and pip take. Crediting a command that
+    installs nothing would let a job run pytest without the plugins `addopts` makes mandatory,
+    which is why this side errs towards recognising too little and `_installed_operands` errs
+    the other way, and why `--help` and `--dry-run` disqualify a command outright. Forms that
+    install without the `install` subcommand, such as `uv add`, `uv run --with` and `uvx`, are
+    out of reach of both.
     """
     if not words or words[0] is None:
+        return None
+    if _NON_INSTALLING_OPTIONS.intersection(words):
         return None
     name = pathlib.PurePosixPath(words[0]).name
     rest = tuple(words[1:])
@@ -203,16 +217,10 @@ def _installation_arguments(words):
         if "-m" not in rest:
             return None
         rest = rest[rest.index("-m") + 1 :]
-        if rest[:1] == ("uv",):
-            rest = _after_options(rest[1:])
-            if rest[:1] != ("pip",):
-                return None
-            rest = rest[1:]
-        elif rest[:1] == ("pip",):
-            rest = rest[1:]
-        else:
+        if not rest or rest[0] is None:
             return None
-    elif name == "uv":
+        name, rest = pathlib.PurePosixPath(rest[0]).name, rest[1:]
+    if name == "uv":
         rest = _after_options(rest)
         if rest[:1] != ("pip",):
             return None
@@ -221,6 +229,21 @@ def _installation_arguments(words):
         return None
     rest = _after_options(rest)
     return tuple(rest[1:]) if rest[:1] == ("install",) else None
+
+
+def _installed_operands(words):
+    """Return the operands after the `install` word of a package-manager command, or None.
+
+    Recognition is permissive on purpose: the subcommand is found wherever it sits, so a value
+    before it cannot hide the install, and a command that merely mentions the word is read as
+    one rather than trusted. Missing an install is the worse error for the source question,
+    because a package name would then pass unseen.
+    """
+    if not words or words[0] is None:
+        return None
+    if not _is_package_manager(pathlib.PurePosixPath(words[0]).name):
+        return None
+    return tuple(words[words.index("install") + 1 :]) if "install" in words else None
 
 
 def _distribution_name(argument):
@@ -324,14 +347,14 @@ def _unsourced_requirements(words):
     names a group and never a package. That is what lets Dependabot update them: it reads
     `pyproject.toml` and cannot see a name written into a shell command.
     """
-    arguments = _installation_arguments(words)
+    arguments = _installed_operands(words)
     if arguments is None:
         return ()
     unsourced = [
-        argument
-        for argument in arguments
+        word
+        for word in words
         for option in _FOREIGN_SOURCE_OPTIONS
-        if argument == option or (argument or "").startswith(f"{option}=")
+        if word == option or (word or "").startswith(f"{option}=")
     ]
     for kind, value in _install_operands(arguments):
         if kind == "package":
@@ -779,6 +802,32 @@ class WorkflowPackageSourceTest(SimpleTestCase):
             with self.subTest(command=command):
                 self.assertNotEqual(_unsourced_requirements(command), ())
 
+    def test_a_global_option_value_does_not_hide_the_install(self):
+        """A value before the subcommand used to stop the scan finding `pip` at all."""
+        self.assertEqual(
+            _unsourced_requirements(("uv", "--project", "../other", "pip", "install", "--group", "lint")),
+            ("--project",),
+        )
+        self.assertEqual(
+            _unsourced_requirements(("uv", "--python", "3.12", "pip", "install", "ruff")),
+            ("ruff",),
+        )
+
+    def test_a_global_option_value_is_not_itself_a_finding(self):
+        """`--python 3.12` is ordinary; only a foreign source counts."""
+        command = ("uv", "--python", "3.12", "pip", "install", "--group", "lint")
+
+        self.assertEqual(_unsourced_requirements(command), ())
+
+    def test_a_boolean_global_flag_does_not_hide_the_install(self):
+        """`--native-tls` takes no value, so the word after it is the subcommand itself."""
+        for command in (
+            ("uv", "--native-tls", "pip", "install", "ruff"),
+            ("uv", "--offline", "pip", "install", "ruff"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), ("ruff",))
+
     def test_a_value_option_is_never_read_as_a_package(self):
         """An option missing from the table would fail a legitimate workflow."""
         for command in (
@@ -789,6 +838,26 @@ class WorkflowPackageSourceTest(SimpleTestCase):
         ):
             with self.subTest(command=command):
                 self.assertEqual(_unsourced_requirements(command), ())
+
+    def test_a_command_that_only_prints_is_not_an_install(self):
+        """`--help` and `--dry-run` install nothing, so crediting them would hide a missing plugin."""
+        for command in (
+            ("uv", "--help", "pip", "install", "--group", "ci-tests"),
+            ("uv", "pip", "install", "--dry-run", "--group", "ci-tests"),
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(_installation_arguments(command))
+                self.assertEqual(_installed_distributions(command), frozenset())
+
+    def test_another_command_s_arguments_are_not_a_certain_install(self):
+        """`uv run ... echo pip install` runs echo; crediting it would hide a missing plugin."""
+        for command in (
+            ("uv", "run", "--no-sync", "echo", "pip", "install", "--group", "ci-tests"),
+            ("uv", "--offline", "run", "--no-sync", "echo", "pip", "install", "--group", "ci-tests"),
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(_installation_arguments(command))
+                self.assertEqual(_installed_distributions(command), frozenset())
 
     def test_argument_text_is_not_an_install(self):
         self.assertEqual(_unsourced_requirements(("echo", "install ruff==0.16.0")), ())
