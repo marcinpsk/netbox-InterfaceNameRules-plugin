@@ -96,6 +96,8 @@ class ZeroMatchPatternWarningMixin:
 
     Saving still succeeds, because a rule may name a module type that is not in the database yet.
     NetBox's edit view does its work in ``post`` and offers no post-save hook, so this wraps it.
+    A quick add answers with a modal fragment that renders no messages, so that warning reaches
+    the operator on the next page they load.
     """
 
     def post(self, request, *args, **kwargs):

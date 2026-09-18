@@ -68,6 +68,10 @@ _VALUE_OPTIONS = {
 }
 # Options that reach outside this project's own dependency declarations.
 _FOREIGN_SOURCE_OPTIONS = ("--project", "--with", "--with-requirements", "--directory")
+# Options that install a project from a path, so the path is the requirement.
+_EDITABLE_OPTIONS = {"-e", "--editable"}
+# Short options whose value may be written onto them, as in `-rfile`.
+_ATTACHED_VALUE_OPTIONS = ("-c", "-e", "-f", "-i", "-p", "-r")
 # Options that make the command install nothing, whatever its subcommand says.
 _NON_INSTALLING_OPTIONS = frozenset({"--help", "-h", "--dry-run", "--version", "-V"})
 # Requirements files this project does not own. NetBox's own file comes from its checkout.
@@ -288,11 +292,35 @@ def _dependency_groups():
     return {name: frozenset(expand(name, frozenset())) for name in groups}
 
 
+def _detach(argument):
+    """Return *argument* as ``(option, value)``, with an attached or `=` value split out.
+
+    pip and uv take a value written onto its option, so `-rfile` and `--editable=../other` name
+    a source exactly as `-r file` does.
+    """
+    if not argument.startswith("-"):
+        return argument, None
+    option, separator, attached = argument.partition("=")
+    if separator:
+        return option, attached
+    if not argument.startswith("--") and argument[:2] in _ATTACHED_VALUE_OPTIONS and len(argument) > 2:
+        return argument[:2], argument[2:]
+    return argument, None
+
+
+def _operand_value(attached, pending):
+    """Return an option's value: the one attached to it, or the next word."""
+    if attached is not None:
+        return attached
+    return pending.pop(0) if pending else None
+
+
 def _install_operands(arguments):
     """Yield ``(kind, value)`` for each operand of an install command.
 
-    An option that takes a separate value consumes it, so `--only-binary pytest-cov` never reads
-    its operand as a requested package. Kind is "group", "requirements", "project" or "package".
+    An option's value is consumed with the option, attached or separate, so `--only-binary
+    pytest-cov` never reads its operand as a requested package. Kind is "group",
+    "requirements", "project" or "package".
     """
     pending = list(arguments)
     while pending:
@@ -300,26 +328,22 @@ def _install_operands(arguments):
         if argument is None:
             yield "package", None
             continue
-        if argument in _GROUP_OPTIONS:
-            yield "group", pending.pop(0) if pending else None
-            continue
-        if argument in _REQUIREMENT_OPTIONS:
-            yield "requirements", pending.pop(0) if pending else None
-            continue
-        for option in _GROUP_OPTIONS | _REQUIREMENT_OPTIONS:
-            if argument.startswith(f"{option}="):
-                kind = "group" if option in _GROUP_OPTIONS else "requirements"
-                yield kind, argument.split("=", 1)[1]
-                break
+        option, attached = _detach(argument)
+        if option in _GROUP_OPTIONS:
+            yield "group", _operand_value(attached, pending)
+        elif option in _REQUIREMENT_OPTIONS:
+            yield "requirements", _operand_value(attached, pending)
+        elif option in _EDITABLE_OPTIONS:
+            target = _operand_value(attached, pending)
+            yield ("project" if target in {".", "./"} else "package"), target
+        elif option in _VALUE_OPTIONS:
+            _operand_value(attached, pending)
+        elif option.startswith("-"):
+            pass
+        elif option in {".", "./"}:
+            yield "project", option
         else:
-            if argument in _VALUE_OPTIONS:
-                pending and pending.pop(0)
-            elif argument.startswith("-"):
-                pass
-            elif argument in {".", "./"}:
-                yield "project", argument
-            else:
-                yield "package", argument
+            yield "package", option
 
 
 def _installed_distributions(words):
@@ -858,6 +882,28 @@ class WorkflowPackageSourceTest(SimpleTestCase):
             with self.subTest(command=command):
                 self.assertIsNone(_installation_arguments(command))
                 self.assertEqual(_installed_distributions(command), frozenset())
+
+    def test_an_attached_option_value_is_read_like_a_separate_one(self):
+        """`-rfile` and `--editable=../other` walked past the scan; their spaced forms did not."""
+        for command, expected in (
+            (("uv", "pip", "install", "-rrequirements-dev.txt"), ("-r requirements-dev.txt",)),
+            (("uv", "pip", "install", "--requirement=requirements-dev.txt"), ("-r requirements-dev.txt",)),
+            (("uv", "pip", "install", "-e../other"), ("../other",)),
+            (("uv", "pip", "install", "--editable=../other"), ("../other",)),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), expected)
+
+    def test_an_attached_value_on_a_sourced_install_stays_sourced(self):
+        """An option table that misread an attached value would fail a legitimate workflow."""
+        for command in (
+            ("uv", "pip", "install", "--system", "--only-binary=:all:", "--group=ci-tests"),
+            ("uv", "pip", "install", "-r../netbox/requirements.txt"),
+            ("uv", "pip", "install", "--editable=."),
+            ("uv", "pip", "install", "--group", "lint", "-c../netbox/requirements.txt"),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(_unsourced_requirements(command), ())
 
     def test_argument_text_is_not_an_install(self):
         self.assertEqual(_unsourced_requirements(("echo", "install ruff==0.16.0")), ())
