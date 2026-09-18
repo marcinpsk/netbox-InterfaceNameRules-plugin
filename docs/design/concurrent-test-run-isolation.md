@@ -2,7 +2,9 @@
 
 ## 0. Review record
 
-No claim is refuted yet.
+The adversarial review refuted changes to Django settings, worker counts, and
+direct CI. Those claims reopen if CI starts sharing a Redis service. See
+[Ratification](#ratification).
 
 ## Brief
 
