@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
@@ -99,17 +100,21 @@ class ZeroMatchPatternWarningMixin:
 
     def post(self, request, *args, **kwargs):
         """Save through the parent view, then report a pattern that selects nothing."""
-        response = super().post(request, *args, **kwargs)
-        # A redirect means the object saved; an HTMX save answers 200 and redirects by header.
-        if response.status_code not in (301, 302) and "HX-Location" not in response.headers:
-            return response
-        # The quick-add modal prefixes its fields.
+        # The quick-add modal prefixes its fields, and it answers a successful save with 200.
         prefix = "quickadd-" if "_quickadd" in request.POST else ""
         pattern = (request.POST.get(f"{prefix}module_type_pattern") or "").strip()
-        if not pattern or not request.POST.get(f"{prefix}module_type_is_regex"):
-            return response
+        regex_rule = pattern and request.POST.get(f"{prefix}module_type_is_regex")
         # A device-interface rule filters interface names, so no module type is expected to match.
-        if request.POST.get(f"{prefix}applies_to_device_interfaces"):
+        device_rule = request.POST.get(f"{prefix}applies_to_device_interfaces")
+        started = timezone.now()
+        response = super().post(request, *args, **kwargs)
+        if not regex_rule or device_rule:
+            return response
+        # Only a rule written by this request saved; a rejected form leaves nothing to report on.
+        saved = self.queryset.model.objects.filter(
+            module_type_pattern=pattern, module_type_is_regex=True, last_updated__gte=started
+        )
+        if not saved.exists():
             return response
         from .rule_selection import module_types_matching_pattern
 

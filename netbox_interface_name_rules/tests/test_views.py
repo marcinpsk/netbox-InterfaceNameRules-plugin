@@ -298,6 +298,48 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
+    def test_a_rule_saved_through_the_quick_add_modal_also_warns(self):
+        """Quick add answers a successful save with 200 and no redirect, so it used to be skipped."""
+        from django.contrib.messages import get_messages
+
+        response = self.client.post(
+            f"{self._create_url()}?_quickadd=True",
+            {
+                "_quickadd": "True",
+                "quickadd-name_template": "et-0/0/{bay_position}",
+                "quickadd-module_type_is_regex": "on",
+                "quickadd-module_type_pattern": "QUICK-T*",
+                "quickadd-channel_count": "0",
+                "quickadd-channel_start": "0",
+                "quickadd-breakout_mode": "flat",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="QUICK-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_a_rejected_submission_is_not_called_ineffective(self):
+        """No rule was saved, so a warning about one would describe nothing."""
+        from django.contrib.messages import get_messages
+
+        response = self.client.post(
+            self._create_url(),
+            {
+                "name_template": "",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "REJECT-T*",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+        )
+
+        self.assertFalse(InterfaceNameRule.objects.filter(module_type_pattern="REJECT-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
+
     def test_a_device_interface_rule_is_not_called_ineffective(self):
         """There the pattern filters interface names, so matching no module type is expected."""
         from django.contrib.messages import get_messages
@@ -353,6 +395,21 @@ class RuleTestViewTest(ViewTestBase):
         }
         response = self.client.post(self._url(), data)
         self.assertEqual(response.status_code, 200)
+
+    def test_an_oversized_variable_is_rejected_instead_of_raising(self):
+        """Converting a digit run over Python's limit raised before the preview could catch it."""
+        data = {
+            "name_template": "Gi{bay_position_num}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_bay_position": "1" * 4301,
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("var_bay_position", response.context["form"].errors)
+        self.assertIsNone(response.context["preview_results"])
 
     def test_check_channel_preview_returns_multiple_results(self):
         """POST check with channel_count=3 produces one preview entry per channel."""
