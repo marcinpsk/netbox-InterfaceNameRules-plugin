@@ -91,23 +91,31 @@ class InterfaceNameRuleListView(generic.ObjectListView):
         return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+def _submitted(request, field):
+    """Return a submitted rule field, wherever the form put it.
+
+    NetBox 4.4 gave the quick-add modal a ``quickadd`` form prefix; 4.3 posts the fields under
+    their own names, so the prefix cannot be assumed from the quick-add marker alone.
+    """
+    return request.POST.get(f"quickadd-{field}") or request.POST.get(field)
+
+
 class ZeroMatchPatternWarningMixin:
     """Warn when a saved regex rule matches no module type that exists now.
 
     Saving still succeeds, because a rule may name a module type that is not in the database yet.
     NetBox's edit view does its work in ``post`` and offers no post-save hook, so this wraps it.
     A quick add answers with a modal fragment that renders no messages, so that warning reaches
-    the operator on the next page they load.
+    the operator on the next page they load, and it answers a successful save with 200 rather
+    than a redirect, which is why a save is recognised from the database and not the response.
     """
 
     def post(self, request, *args, **kwargs):
         """Save through the parent view, then report a pattern that selects nothing."""
-        # The quick-add modal prefixes its fields, and it answers a successful save with 200.
-        prefix = "quickadd-" if "_quickadd" in request.POST else ""
-        pattern = (request.POST.get(f"{prefix}module_type_pattern") or "").strip()
-        regex_rule = pattern and request.POST.get(f"{prefix}module_type_is_regex")
+        pattern = (_submitted(request, "module_type_pattern") or "").strip()
+        regex_rule = pattern and _submitted(request, "module_type_is_regex")
         # A device-interface rule filters interface names, so no module type is expected to match.
-        device_rule = request.POST.get(f"{prefix}applies_to_device_interfaces")
+        device_rule = _submitted(request, "applies_to_device_interfaces")
         started = timezone.now()
         response = super().post(request, *args, **kwargs)
         if not regex_rule or device_rule:

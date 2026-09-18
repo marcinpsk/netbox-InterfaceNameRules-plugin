@@ -298,25 +298,55 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
+    def _quick_add_prefix(self):
+        """Return the field prefix this NetBox's quick-add form uses, read from the form itself.
+
+        NetBox 4.4 gave the modal a `quickadd` form prefix; 4.3 posts the fields unprefixed.
+        """
+        response = self.client.get(f"{self._create_url()}?_quickadd=True")
+
+        return "quickadd-" if b'name="quickadd-module_type_pattern"' in response.content else ""
+
+    def _post_quick_add(self, pattern, prefix):
+        """Post a quick add whose fields carry *prefix*.
+
+        The prefix comes from `?_quickadd=True`, so the unprefixed shape omits it and marks the
+        request in the body alone, exactly as a NetBox without the form prefix does.
+        """
+        url = f"{self._create_url()}?_quickadd=True" if prefix else self._create_url()
+
+        return self.client.post(
+            url,
+            {
+                "_quickadd": "True",
+                f"{prefix}name_template": "et-0/0/{bay_position}",
+                f"{prefix}module_type_is_regex": "on",
+                f"{prefix}module_type_pattern": pattern,
+                f"{prefix}channel_count": "0",
+                f"{prefix}channel_start": "0",
+                f"{prefix}breakout_mode": "flat",
+            },
+        )
+
     def test_a_rule_saved_through_the_quick_add_modal_also_warns(self):
         """Quick add answers a successful save with 200 and no redirect, so it used to be skipped."""
         from django.contrib.messages import get_messages
 
-        response = self.client.post(
-            f"{self._create_url()}?_quickadd=True",
-            {
-                "_quickadd": "True",
-                "quickadd-name_template": "et-0/0/{bay_position}",
-                "quickadd-module_type_is_regex": "on",
-                "quickadd-module_type_pattern": "QUICK-T*",
-                "quickadd-channel_count": "0",
-                "quickadd-channel_start": "0",
-                "quickadd-breakout_mode": "flat",
-            },
-        )
+        response = self._post_quick_add("QUICK-T*", self._quick_add_prefix())
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="QUICK-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_a_quick_add_that_does_not_prefix_its_fields_also_warns(self):
+        """The shape NetBox 4.3 posts: the quick-add marker with the fields under their own names."""
+        from django.contrib.messages import get_messages
+
+        response = self._post_quick_add("PLAIN-T*", "")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="PLAIN-T*").exists())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
