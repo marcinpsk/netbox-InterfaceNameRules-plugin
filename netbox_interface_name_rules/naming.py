@@ -79,23 +79,25 @@ def _resolve_bay_position(module_bay):
     return bay_position, numeric_suffix(bay_position)
 
 
-def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
+def _resolve_slot(module_bay, bay_position, parent_bay_position):
     """Return the slot value from the module-bay hierarchy.
 
     A nested bay takes the parent or grandparent position. A bay owned by an
-    installed module takes that module's bay position. Other bays use their
-    numeric position.
+    installed module takes that module's bay position. Other bays use the digits
+    of their own position, as stored, because a slot is a position and not a
+    number; ``slot_num`` is the counterpart arithmetic reads.
     """
     if module_bay.parent:
         parent_bay = module_bay.parent
         if parent_bay.parent and hasattr(parent_bay.parent, "installed_module"):
             return parent_bay.parent.position or parent_bay_position
         return parent_bay_position
+    own_digits = _extract_trailing_digits(bay_position) or "0"
     if hasattr(module_bay, "module") and module_bay.module:
         owner_module = module_bay.module
         if hasattr(owner_module, "module_bay") and owner_module.module_bay:
-            return owner_module.module_bay.position or bay_position_num
-    return bay_position_num
+            return owner_module.module_bay.position or own_digits
+    return own_digits
 
 
 def build_variables(module_bay, device=None):
@@ -118,7 +120,7 @@ def build_variables(module_bay, device=None):
     if module_bay.parent:
         parent_bay_position = module_bay.parent.position or "0"
 
-    slot = _resolve_slot(module_bay, bay_position_num, parent_bay_position)
+    slot = _resolve_slot(module_bay, bay_position, parent_bay_position)
 
     # A device type may compose the parent into a bay position, so any position can be path-shaped.
     result = {

@@ -185,6 +185,9 @@ class NestedBayNumericTest(TestCase):
         self.assertEqual(variables["bay_position_num"], "2")
         self.assertEqual(variables["sfp_slot"], "2")
         self.assertEqual(evaluate_name_template("Gi{8 + {bay_position_num}}", variables), "Gi10")
+        # The slot is a position, so it keeps the digits as stored; only its _num counterpart canonicalises.
+        self.assertEqual(variables["slot"], "02")
+        self.assertEqual(variables["slot_num"], "2")
 
     def test_the_twingig_conversion_template_evaluates(self):
         """The Cisco TwinGig offset formula, which is why a numeric parent position is needed."""
