@@ -176,6 +176,16 @@ class NestedBayNumericTest(TestCase):
         self.assertEqual(variables["slot"], "3")
         self.assertEqual(variables["slot_num"], "3")
 
+    def test_a_zero_padded_position_yields_a_number_arithmetic_accepts(self):
+        """`"02"` is not a Python literal, so a padded position used to raise on arithmetic."""
+        bay = ModuleBay.objects.create(device=self.device, name="Padded Bay", position="TenGigabitEthernet3/02")
+        variables = build_variables(bay)
+
+        self.assertEqual(variables["bay_position"], "TenGigabitEthernet3/02")
+        self.assertEqual(variables["bay_position_num"], "2")
+        self.assertEqual(variables["sfp_slot"], "2")
+        self.assertEqual(evaluate_name_template("Gi{8 + {bay_position_num}}", variables), "Gi10")
+
     def test_the_twingig_conversion_template_evaluates(self):
         """The Cisco TwinGig offset formula, which is why a numeric parent position is needed."""
         variables = build_variables(self.sfp_bay)

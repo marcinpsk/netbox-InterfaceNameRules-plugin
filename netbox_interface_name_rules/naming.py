@@ -68,15 +68,15 @@ def _resolve_bay_position(module_bay):
     """Return the raw and numeric positions for *module_bay*.
 
     A template expression such as ``{module}`` resolves from trailing digits in
-    the bay name. A missing numeric suffix resolves to zero.
+    the bay name. The numeric position comes from ``numeric_suffix``, the one
+    function every numeric variable is derived through, so a zero-padded
+    position such as ``"02"`` reaches arithmetic as ``"2"``.
     """
     bay_position = module_bay.position or "0"
     if bay_position.startswith("{"):
         digits = _extract_trailing_digits(module_bay.name)
         bay_position = digits or "0"
-    digits = _extract_trailing_digits(bay_position)
-    bay_position_num = digits or "0"
-    return bay_position, bay_position_num
+    return bay_position, numeric_suffix(bay_position)
 
 
 def _resolve_slot(module_bay, bay_position_num, parent_bay_position):
