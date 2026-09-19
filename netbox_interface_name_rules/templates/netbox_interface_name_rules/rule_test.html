@@ -135,9 +135,11 @@
               <thead class="table-light"><tr><th>Variable</th><th>Description</th><th>Example</th></tr></thead>
               <tbody>
                 <tr><td><code>{slot}</code></td><td>Top-level slot from parent bay position</td><td><code>0</code>, <code>2</code></td></tr>
-                <tr><td><code>{bay_position}</code></td><td>Bay position string from NetBox</td><td><code>0</code>, <code>swp1</code></td></tr>
+                <tr><td><code>{slot_num}</code></td><td>Numeric suffix of slot</td><td><code>3</code></td></tr>
+                <tr><td><code>{bay_position}</code></td><td>Bay position string from NetBox</td><td><code>swp1</code>, <code>TenGigabitEthernet3/2/1</code></td></tr>
                 <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position</td><td><code>1</code> (from <code>swp1</code>)</td></tr>
-                <tr><td><code>{parent_bay_position}</code></td><td>Parent module bay's position</td><td><code>0</code>, <code>2</code></td></tr>
+                <tr><td><code>{parent_bay_position}</code></td><td>Parent module bay's position</td><td><code>2</code>, <code>TenGigabitEthernet3/2</code></td></tr>
+                <tr><td><code>{parent_bay_position_num}</code></td><td>Numeric suffix of parent bay position</td><td><code>2</code></td></tr>
                 <tr><td><code>{sfp_slot}</code></td><td>Sub-bay index within parent module</td><td><code>0</code>, <code>1</code></td></tr>
                 <tr><td><code>{base}</code></td><td>Current interface name from NetBox</td><td><code>Ethernet1</code>, <code>et-0/0/0</code></td></tr>
                 <tr><td><code>{channel}</code></td><td>Channel number (auto-set for breakout)</td><td><code>0</code>, <code>1</code>, <code>2</code></td></tr>
@@ -145,7 +147,9 @@
             </table>
             <p class="text-muted small mt-1 mb-0">
               <strong>Arithmetic:</strong> expressions inside <code>{}</code> are evaluated safely,
-              e.g. <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code>.
+              e.g. <code>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code>.
+              Use the <code>_num</code> variables in arithmetic: a bay position may be a
+              path such as <code>TenGigabitEthernet3/2/1</code>.
             </p>
           </details>
         </div>

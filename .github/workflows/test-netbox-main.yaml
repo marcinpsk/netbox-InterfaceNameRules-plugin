@@ -73,7 +73,7 @@ jobs:
         working-directory: netbox-InterfaceNameRules-plugin
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system --only-binary=:all: --group ci-tests --group workflow-tests
+          uv pip install --system --only-binary=:all: --group ci-tests
           uv pip install --system -e .
 
       - name: Set up NetBox configuration

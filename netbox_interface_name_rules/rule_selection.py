@@ -45,6 +45,18 @@ def pinned_rule_cache():
                 _pin.__dict__.pop(attr, None)
 
 
+def module_types_matching_pattern(pattern):
+    """Return the model names *pattern* matches among the module types that exist now.
+
+    Compiles and full-matches exactly as selection does, so a pattern that returns nothing here
+    also selects nothing when a module is installed.
+    """
+    from dcim.models import ModuleType
+
+    compiled = compile_module_type_pattern(pattern)
+    return tuple(model for model in ModuleType.objects.values_list("model", flat=True) if compiled.fullmatch(model))
+
+
 def _compile_pattern(pattern):
     """Compile a stored pattern once, or return None when RE2 rejects it."""
     try:

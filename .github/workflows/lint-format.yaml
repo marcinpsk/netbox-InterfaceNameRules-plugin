@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: 'uv pip install --system --only-binary=:all: --group lint'
 
+      - name: Check the lockfile is current
+        run: uv lock --check
+
       - name: Run Ruff linting
         run: ruff check .
 
