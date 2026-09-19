@@ -293,12 +293,6 @@
       1
     ]
   ],
-  "tests/test_workflows.py": [
-    [
-      "# The option each pytest plugin registers. `--no-cov` needs pytest-cov for the same reason `--cov`\n# does: an unregistered option is a parse error, whether it turns coverage on or off.",
-      1
-    ]
-  ],
   "views.py": [
     [
       "# Skip duplicate detection when the user lacks view permission — we cannot\n# query existing rules without it, so add-only users always land on the\n# create form (potentially allowing duplicates).",

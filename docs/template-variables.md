@@ -8,10 +8,12 @@ These variables are available in rules that rename **module-installed interfaces
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{bay_position}` | Raw bay position string | `0`, `swp1` |
+| `{bay_position}` | Raw bay position string | `0`, `swp1`, `TenGigabitEthernet3/2/1` |
 | `{bay_position_num}` | Numeric suffix of bay position | `0`, `1` |
 | `{slot}` | Top-level slot/module bay position | `3` |
-| `{parent_bay_position}` | Parent module's bay position | `2` |
+| `{slot_num}` | Numeric suffix of slot | `3` |
+| `{parent_bay_position}` | Parent module's bay position | `2`, `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of parent bay position | `2` |
 | `{sfp_slot}` | Sub-bay index within parent module | `1` |
 | `{base}` | Original interface name from NetBox template | `Interface 0` |
 | `{channel}` | Breakout channel number (requires `channel_count`) | `0`, `1`, `2` |
@@ -34,10 +36,25 @@ The **Module Type Pattern** field in device interface rules acts as a **regex fi
 Any brace-enclosed expression containing arithmetic operators is evaluated safely:
 
 ```
-{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}
+{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}
 ```
 
 Supported operators: `+`, `-`, `*`, `//` (floor division), parentheses. Float division (`/`) is **not** supported — use `//` for integer division.
+
+### Use the `_num` variables in arithmetic
+
+A device type may compose the parent into a bay position, the way the Catalyst 4900M and the
+MX304 do, so that a nested bay reads `TenGigabitEthernet3/2/1` rather than `1`. Positions are
+therefore path-shaped strings in the general case, and arithmetic on one fails:
+
+```
+Unsafe expression in name template: 8 + (TenGigabitEthernet3/2 - 1) * 2 + 1
+```
+
+Every position has a `_num` counterpart holding the number its digits spell, so a padded run
+such as `02` reads `2`, which is what arithmetic accepts. Use those wherever a template does
+arithmetic. They are also correct for a plain numeric position, so `_num` is the safe default;
+the raw variable still gives the position as it is stored.
 
 ## Virtual Chassis Support
 
@@ -213,7 +230,7 @@ those families are left unoffered rather than converted on a guess.
 ### Converter Offset
 
 ```yaml
-name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
 # Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11
 ```
 

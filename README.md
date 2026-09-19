@@ -25,7 +25,7 @@ automatically apply renaming rules based on configurable templates.
 
 - **Signal-driven** — rules fire automatically on module install, no manual step needed
 - **Template variables** — `{slot}`, `{bay_position}`, `{bay_position_num}`, `{base}`, `{channel}`, etc.
-- **Arithmetic expressions** — `{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}`
+- **Arithmetic expressions** — `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
 - **Breakout support** — create multiple channel interfaces from a single port (e.g., QSFP+ 4x10G)
 - **Scoping** — rules can be scoped to specific device types, parent module types, or be universal
 - **Bulk import/export** — YAML-based rule management via the UI or API

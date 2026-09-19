@@ -4,15 +4,32 @@
 
 import importlib
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
 import re2
 import yaml
+from dcim.models import Device, ModuleBay
+
+from netbox_interface_name_rules.naming import build_variables
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
+
+# Names the engine adds when it renames, so a reference table may list them.
+_ENGINE_VARIABLES = frozenset({"base", "channel", "port"})
+_MARKDOWN_VARIABLE_ROW = re.compile(r"^\| `\{(\w+)\}`")
+_VARIABLE_TABLES = (
+    (
+        "netbox_interface_name_rules/templates/netbox_interface_name_rules/interfacenamerule_list.html",
+        re.compile(r"<td><code>\{(\w+)\}</code>"),
+    ),
+    ("contrib/README.md", _MARKDOWN_VARIABLE_ROW),
+    ("docs/template-variables.md", _MARKDOWN_VARIABLE_ROW),
+    ("netbox_interface_name_rules/models.py", re.compile(r"^ {6}\{(\w+)\} +-")),
+)
 
 
 # _blocking_reason() and the staleness check decide these before _rewrite() runs, so NetBox never sees them.
@@ -234,3 +251,75 @@ class ShippedPatternRe2AuditTest(unittest.TestCase):
                 re.compile(pattern)
                 re2.compile(pattern)
                 self.assertFalse(_RE2_AUDIT._uses_different_re2_semantics(pattern))
+
+
+def _first_table_variables(path, pattern):
+    """Return the variables listed in the first variable table of *path*.
+
+    The rows end at the first line that lists none, because a second table further down would
+    otherwise cover a variable missing from the first: `docs/template-variables.md` lists the
+    device-rule variables in one of its own. A commented-out row is not on the page, so the
+    comments go first, and an unterminated one is an error rather than a row that counts.
+    """
+    text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
+    if "<!--" in text:
+        raise ValueError(f"{path.name} holds an unterminated comment, so its table cannot be read")
+    names = []
+    for line in text.splitlines():
+        match = pattern.search(line)
+        if match:
+            names.append(match.group(1))
+        elif names:
+            break
+    return frozenset(names)
+
+
+def _built_variables():
+    """Return every variable name `build_variables` produces, from the function itself.
+
+    Neither call reaches the database: the resolvers read the position, name, parent and module
+    of the bay, and the virtual-chassis fields of the device.
+    """
+    member = Device(virtual_chassis_id=1, vc_position=1)
+    return frozenset(build_variables(ModuleBay())) | frozenset(build_variables(ModuleBay(), member))
+
+
+class TemplateVariableReferenceTest(unittest.TestCase):
+    """Every reference table lists every variable `build_variables` produces.
+
+    Three tables restate that set, and the two variables this feature added reached only one of
+    them. A table may also list `base`, `channel` and `port`, which the engine adds at rename
+    time; anything else it lists does not exist.
+    """
+
+    def test_a_commented_out_row_is_not_documented(self):
+        """A row inside an HTML comment is not on the page, so it must not satisfy the guard."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "table.html"
+            path.write_text(
+                "<tr><td><code>{slot}</code></td></tr>\n<!-- <tr><td><code>{slot_num}</code></td></tr> -->\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_first_table_variables(path, _VARIABLE_TABLES[0][1]), frozenset({"slot"}))
+
+    def test_an_unterminated_comment_is_an_error(self):
+        """It hides every row below it on the page, so reading the rows would report a stale table."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "table.html"
+            path.write_text(
+                "<tr><td><code>{slot}</code></td></tr>\n<!-- <tr><td><code>{slot_num}</code></td></tr>\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "unterminated comment"):
+                _first_table_variables(path, _VARIABLE_TABLES[0][1])
+
+    def test_every_reference_table_lists_every_built_variable(self):
+        built = _built_variables()
+
+        for path, pattern in _VARIABLE_TABLES:
+            with self.subTest(path=path):
+                documented = _first_table_variables(_PROJECT_ROOT / path, pattern)
+
+                self.assertEqual(documented - _ENGINE_VARIABLES, built)

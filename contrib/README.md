@@ -60,7 +60,7 @@ These YAML files can be imported directly into NetBox via **Interface Name Rules
 # Parent module scoping (SFP inside an X2-to-SFP converter)
 - module_type: SFP-1G-T
   parent_module_type: CVR-X2-SFP
-  name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+  name_template: "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
 ```
 
 See `contrib/ufispace.yaml` for a real-world example of the pattern mode and `contrib/converters.yaml` for parent module scoping.
@@ -72,7 +72,9 @@ See `contrib/ufispace.yaml` for a real-world example of the pattern mode and `co
 | `{bay_position}` | Raw bay position string |
 | `{bay_position_num}` | Numeric suffix of bay position |
 | `{slot}` | Top-level slot/module bay position |
-| `{parent_bay_position}` | Parent module's bay position |
+| `{slot_num}` | Number the slot ends with, for arithmetic |
+| `{parent_bay_position}` | Parent module's bay position, possibly path-shaped |
+| `{parent_bay_position_num}` | Number the parent bay position ends with, for arithmetic |
 | `{sfp_slot}` | Sub-bay index within parent module |
 | `{base}` | Base interface name from NetBox position resolution |
 | `{vc_position}` | Virtual Chassis member position (`device.vc_position`); only injected when the device is a VC member — templates using this variable will produce no rename on non-VC devices |
@@ -93,7 +95,7 @@ With `channel_count: 4` and `{base}` resolving to `et-0/0/1`, this creates
 `et-0/0/1:0`, `et-0/0/1:1`, `et-0/0/1:2`, and `et-0/0/1:3`.
 
 Arithmetic expressions are supported inside `name_template`.
-Variables like `{parent_bay_position}` and `{sfp_slot}` are substituted first,
+Variables like `{parent_bay_position_num}` and `{sfp_slot}` are substituted first,
 then any brace group that resolves to a pure arithmetic expression is evaluated
 safely via Python `ast` (only `+`, `-`, `*`, `//` and parentheses are allowed).
 **Float division `/` is not supported and will raise an error — use integer
@@ -104,8 +106,8 @@ division `//` instead (e.g. `{slot // 2}`).**
 - module_type_pattern: "SFP-.*"
   module_type_is_regex: true
   parent_module_type: CVR-X2-SFP
-  name_template: "swp{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+  name_template: "swp{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
 ```
 
-For example, with `parent_bay_position=1` and `sfp_slot=0` the expression
+For example, with `parent_bay_position_num=1` and `sfp_slot=0` the expression
 evaluates to `8 + (1 - 1) * 2 + 0 = 8`, producing `swp8`.
