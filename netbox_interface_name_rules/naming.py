@@ -152,7 +152,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
     evaluated. True division is not allowed. Arithmetic results are converted
     to integers so interface names contain whole numbers.
 
-    For example, ``GigabitEthernet{slot}/{8 + {sfp_slot}}`` substitutes the
+    For example, ``GigabitEthernet{slot_num}/{8 + {sfp_slot}}`` substitutes the
     variables before evaluating the arithmetic expression.
     """
     result = template

@@ -307,7 +307,7 @@ the parent bay position.
 # Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11
 - module_type: SFP-1G-T
   parent_module_type: CVR-X2-SFP
-  name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
+  name_template: "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
   description: "SFP-1G-T in CVR-X2-SFP: offset port numbering"
 ```
 

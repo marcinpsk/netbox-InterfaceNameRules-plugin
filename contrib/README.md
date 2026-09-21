@@ -99,7 +99,9 @@ Variables like `{parent_bay_position_num}` and `{sfp_slot}` are substituted firs
 then any brace group that resolves to a pure arithmetic expression is evaluated
 safely via Python `ast` (only `+`, `-`, `*`, `//` and parentheses are allowed).
 **Float division `/` is not supported and will raise an error — use integer
-division `//` instead (e.g. `{slot // 2}`).**
+division `//` instead (e.g. `{{slot_num} // 2}`).**
+A variable is substituted only as the exact token `{slot_num}`, so it keeps its
+own braces inside an arithmetic expression.
 
 ```yaml
 # Converter offset naming — arithmetic in name_template

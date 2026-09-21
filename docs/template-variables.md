@@ -230,7 +230,7 @@ those families are left unoffered rather than converted on a guess.
 ### Converter Offset
 
 ```yaml
-name_template: "GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
+name_template: "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
 # Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11
 ```
 

@@ -199,7 +199,7 @@ class InterfaceNameRule(NetBoxModel):
         max_length=255,
         help_text=(
             "Interface name template expression, e.g. "
-            "'GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}'"
+            "'GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}'"
         ),
     )
     parent_name_template = models.CharField(
