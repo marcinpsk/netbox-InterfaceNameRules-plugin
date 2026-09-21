@@ -5,7 +5,20 @@
 from unittest import TestCase
 from unittest.mock import patch
 
+import pytest
+
 from netbox_interface_name_rules.engine import evaluate_name_template
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _keep_template_evaluation_setup_independent_of_urls():
+    """Fail if test setup tries to resolve a URL for this pure module."""
+
+    def refuse_url_resolution(*args, **kwargs):
+        raise AssertionError("pure template evaluation test setup resolved a URL")
+
+    with patch("django.urls.reverse", new=refuse_url_resolution):
+        yield
 
 
 class EvaluateNameTemplateTest(TestCase):

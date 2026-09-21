@@ -70,9 +70,9 @@ def _refuse_dropped_preview_keys(monkeypatch):
     from django.urls import reverse
 
     original = Client.post
-    preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def post(self, path, data=None, *args, **kwargs):
+        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
         if path.split("?", 1)[0] == preview_path and isinstance(data, dict):
             refuse_dropped_preview_keys(data)
         return original(self, path, data, *args, **kwargs)
