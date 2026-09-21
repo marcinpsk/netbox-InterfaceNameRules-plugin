@@ -38,7 +38,7 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family.execution import _lock_family
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.naming import evaluate_name_template
+from netbox_interface_name_rules.name_template import evaluate_name_template
 from netbox_interface_name_rules.tests.helpers import make_placement
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 

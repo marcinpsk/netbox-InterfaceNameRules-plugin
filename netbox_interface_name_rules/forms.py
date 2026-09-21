@@ -16,6 +16,7 @@ from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .choices import BreakoutModeChoices
 from .models import InterfaceNameRule
+from .name_template import validate_breakout_topology
 
 # A preview variable holds a real position or interface name, so the model fields bound them.
 _POSITION_MAX_LENGTH = ModuleBay._meta.get_field("position").max_length
@@ -162,10 +163,8 @@ class RuleTestForm(forms.Form):
 
     def _clean_breakout_topology(self, cleaned_data):
         """Reject mode/channel-count/parent-template combinations the model would refuse on save."""
-        from .models import _validate_breakout_topology
-
         try:
-            _validate_breakout_topology(
+            validate_breakout_topology(
                 cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT,
                 cleaned_data.get("channel_count") or 0,
                 cleaned_data.get("parent_name_template") or "",

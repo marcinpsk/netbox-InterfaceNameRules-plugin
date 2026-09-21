@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 
 from ..choices import BreakoutModeChoices
-from ..naming import evaluate_name_template
+from ..name_template import evaluate_name_template
 from .capabilities import supports_channelization
 from .domain import (
     FamilyStatus,

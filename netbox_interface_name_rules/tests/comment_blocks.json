@@ -73,7 +73,7 @@
       1
     ],
     [
-      "# The implications _validate_breakout_topology() enforces over enum and integer\n# columns, written as ~P | Q. Its parent-template grammar rules stay in save().",
+      "# The implications validate_breakout_topology() enforces over enum and integer\n# columns, written as ~P | Q. Its parent-template grammar rules stay in save().",
       1
     ]
   ],

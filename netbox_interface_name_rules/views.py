@@ -347,7 +347,8 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .naming import evaluate_name_template, numeric_suffix
+        from .name_template import evaluate_name_template
+        from .naming import build_bay_chain_variables
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
@@ -355,18 +356,8 @@ class RuleTestView(BaseMultiObjectView):
         slot = cd.get("var_slot") or "1"
         bay_position = cd.get("var_bay_position") or "1"
         parent_bay_position = cd.get("var_parent_bay_position") or "1"
-        # Derive whatever build_variables derives, or the preview can show an impossible name.
-        bay_position_num = numeric_suffix(bay_position)
-        variables = {
-            "slot": slot,
-            "slot_num": numeric_suffix(slot),
-            "bay_position": bay_position,
-            "bay_position_num": bay_position_num,
-            "parent_bay_position": parent_bay_position,
-            "parent_bay_position_num": numeric_suffix(parent_bay_position),
-            "sfp_slot": bay_position_num,
-            "base": cd.get("var_base") or "Ethernet1",
-        }
+        variables = build_bay_chain_variables(slot, bay_position, parent_bay_position)
+        variables["base"] = cd.get("var_base") or "Ethernet1"
 
         def row(result, role, channel=None):
             """Describe one previewed name."""

@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-import ast
-import re
-
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -11,9 +8,8 @@ from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
+from .name_template import validate_breakout_topology
 from .regex_safety import compile_module_type_pattern
-
-_TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
 def csv_export_entry(headers, values):
@@ -25,88 +21,7 @@ def csv_export_entry(headers, values):
     }
 
 
-def _expression_names_channel(field):
-    """Return True when the brace group *field* parses as an expression naming ``channel``.
-
-    Mirrors how ``evaluate_name_template`` reads a brace group — ``ast.parse`` plus a walk — so
-    ``{channel + 1}`` is caught here instead of failing at evaluation time.  A group that is not an
-    expression at all is left to the plain-name check.
-    """
-    try:
-        tree = ast.parse(field.strip(), mode="eval")
-    except (SyntaxError, ValueError):
-        return False
-    return any(isinstance(node, ast.Name) and node.id == "channel" for node in ast.walk(tree))
-
-
-def _references_channel(template):
-    """Return True when *template* names ``{channel}`` in any spelling the engine can be handed.
-
-    Covers the plain form, the conversion and format-spec forms (``{channel!r}``, ``{channel:>2}``),
-    the nested-arithmetic one (``{{channel} + 1}``) and the identifier inside an arithmetic
-    expression (``{channel + 1}``).  ``string.Formatter().parse()`` is not used here: it rejects the
-    plugin's own arithmetic templates as malformed field names.
-    """
-    for field in _TEMPLATE_FIELD.findall(template):
-        name = field.split("!", 1)[0].split(":", 1)[0].strip()
-        if name == "channel" or name.startswith(("channel.", "channel[")):
-            return True
-        if _expression_names_channel(field):
-            return True
-    return False
-
-
-def _has_unbalanced_braces(template):
-    """Return True when *template*'s braces do not pair up.
-
-    Nested groups are the plugin's arithmetic form (``{8 + ({x} - 1) * 2}``), so depth is counted
-    rather than matched pairwise.
-    """
-    depth = 0
-    for char in template:
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth < 0:
-                return True
-    return depth != 0
-
-
 _TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
-
-
-def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):
-    """Check that the mode, the channel count and the parent template describe one topology.
-
-    Raises ``ValidationError`` blaming the field that makes the combination impossible.  Shared by
-    the model's ``clean()`` and by ``RuleTestForm`` so the tester refuses exactly what a save would.
-    """
-    channelized = breakout_mode == BreakoutModeChoices.CHANNELIZED
-    if applies_to_device_interfaces:
-        # The device-level path renames existing interfaces; it never creates a family to name.
-        if channelized:
-            raise ValidationError({"breakout_mode": "Device-level interface rules cannot build a channelized family."})
-        if parent_name_template:
-            raise ValidationError(
-                {"parent_name_template": "Parent name template is not available for device-level interface rules."}
-            )
-    if parent_name_template:
-        if not channelized:
-            raise ValidationError(
-                {"parent_name_template": "Parent name template requires the channelized breakout mode."}
-            )
-        if _has_unbalanced_braces(parent_name_template):
-            # Parent template only: stray braces in name_template predate this and are already stored.
-            raise ValidationError(
-                {"parent_name_template": "Unbalanced braces — every '{' in the template needs a '}'."}
-            )
-        if _references_channel(parent_name_template):
-            raise ValidationError(
-                {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
-            )
-    if channelized and not channel_count:
-        raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
 
 
 class InterfaceNameRule(NetBoxModel):
@@ -277,7 +192,7 @@ class InterfaceNameRule(NetBoxModel):
             self.module_type_pattern = ""
             if not self.module_type:
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        _validate_breakout_topology(
+        validate_breakout_topology(
             self.breakout_mode,
             self.channel_count,
             self.parent_name_template,
@@ -384,7 +299,7 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.CheckConstraint(
-                # The implications _validate_breakout_topology() enforces over enum and integer
+                # The implications validate_breakout_topology() enforces over enum and integer
                 # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
                 condition=(
                     models.Q(breakout_mode__in=[BreakoutModeChoices.FLAT, BreakoutModeChoices.CHANNELIZED])
@@ -427,7 +342,7 @@ class InterfaceNameRule(NetBoxModel):
             update_fields = frozenset(update_fields)
             kwargs["update_fields"] = update_fields
         if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
-            _validate_breakout_topology(
+            validate_breakout_topology(
                 self.breakout_mode,
                 self.channel_count,
                 self.parent_name_template,

@@ -12,7 +12,7 @@ from collections import defaultdict
 from django.core.exceptions import ValidationError
 
 from . import family as family_ops
-from . import naming, rule_selection
+from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 
@@ -51,7 +51,7 @@ def build_variables(module_bay, device=None):
 
 def evaluate_name_template(template: str, variables: dict) -> str:
     """Delegate template evaluation while preserving the engine entry point."""
-    return naming.evaluate_name_template(template, variables)
+    return name_template.evaluate_name_template(template, variables)
 
 
 def _get_parent_module_type(module_bay):

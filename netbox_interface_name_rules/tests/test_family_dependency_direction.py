@@ -44,7 +44,7 @@ class FamilyDependencyDirectionTest(SimpleTestCase):
                 module_dependencies = _plugin_dependencies(path)
                 self.assertNotIn("engine", module_dependencies)
                 dependencies.update(module_dependencies)
-        self.assertEqual(dependencies, {"naming", "choices", "rule_selection"})
+        self.assertEqual(dependencies, {"name_template", "naming", "choices", "rule_selection"})
 
     def test_detector_reports_every_engine_import_spelling(self):
         spellings = (

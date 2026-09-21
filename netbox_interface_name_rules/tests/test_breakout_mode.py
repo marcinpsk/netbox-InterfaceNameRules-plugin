@@ -44,7 +44,8 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
-from netbox_interface_name_rules.models import InterfaceNameRule, _references_channel
+from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.name_template import references_channel
 from netbox_interface_name_rules.rule_selection import _VERSION_COLUMNS
 from netbox_interface_name_rules.tests.test_channelization import (
     PARENT_TYPE,
@@ -188,8 +189,8 @@ class BreakoutModeValidationTest(TestCase):
         The expression pass exists to catch ``{channel + 1}``; turning every group it fails to parse
         into a channel error would blame the wrong thing.
         """
-        self.assertFalse(_references_channel("et-0/0/{bay_position!r}"))
-        self.assertTrue(_references_channel("et-0/0/{channel!r}"))
+        self.assertFalse(references_channel("et-0/0/{bay_position!r}"))
+        self.assertTrue(references_channel("et-0/0/{channel!r}"))
 
     def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
         """The rule is 'no channel', not 'no expressions' — arithmetic parent names must still save."""

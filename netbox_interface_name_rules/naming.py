@@ -1,39 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Build naming variables and evaluate interface-name templates."""
+"""Build name-template variables from NetBox rows."""
 
-import ast
-import operator
-import re
-
-_BINARY_OPERATORS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.FloorDiv: operator.floordiv,
-}
-_UNARY_OPERATORS = {
-    ast.UAdd: operator.pos,
-    ast.USub: operator.neg,
-}
-# A `str.format` field left over after substitution: a known name followed by `!conv` or `:spec`.
-_FORMAT_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\s*(?:![rsa]|:[^{}]*)$")
-
-
-def _evaluate_arithmetic(node):
-    """Evaluate one validated integer arithmetic syntax tree without executing code."""
-    if isinstance(node, ast.Expression):
-        return _evaluate_arithmetic(node.body)
-    if isinstance(node, ast.Constant) and type(node.value) is int:
-        return node.value
-    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
-        return _BINARY_OPERATORS[type(node.op)](
-            _evaluate_arithmetic(node.left),
-            _evaluate_arithmetic(node.right),
-        )
-    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
-        return _UNARY_OPERATORS[type(node.op)](_evaluate_arithmetic(node.operand))
-    raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
+from .name_template import NamingContext, TemplateVariableCondition, TemplateVariableSource, variables_for_context
 
 
 def _extract_trailing_digits(value: str) -> str:
@@ -100,6 +69,32 @@ def _resolve_slot(module_bay, bay_position, parent_bay_position):
     return own_digits
 
 
+def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_position=None, *, bay_position_num=None):
+    """Build the catalogue entries derived from resolved module-bay positions."""
+    if bay_position_num is None:
+        bay_position_num = numeric_suffix(bay_position)
+    variables = variables_for_context(
+        NamingContext.MODULE_MEMBER,
+        source=TemplateVariableSource.MODULE_BAY_CHAIN,
+    )
+    values = {
+        "slot": slot,
+        "slot_num": numeric_suffix(slot),
+        "bay_position": bay_position,
+        "bay_position_num": bay_position_num,
+        "parent_bay_position": parent_bay_position,
+        "parent_bay_position_num": numeric_suffix(parent_bay_position),
+        "sfp_slot": bay_position_num,
+        "vc_position": str(vc_position),
+    }
+    return {
+        variable.name: values[variable.name]
+        for variable in variables
+        if variable.condition is None
+        or (variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER and vc_position is not None)
+    }
+
+
 def build_variables(module_bay, device=None):
     """Build template variables from a module bay and optional device.
 
@@ -122,56 +117,17 @@ def build_variables(module_bay, device=None):
 
     slot = _resolve_slot(module_bay, bay_position, parent_bay_position)
 
-    # A device type may compose the parent into a bay position, so any position can be path-shaped.
-    result = {
-        "slot": slot,
-        "slot_num": numeric_suffix(slot),
-        "bay_position": bay_position,
-        "bay_position_num": bay_position_num,
-        "parent_bay_position": parent_bay_position,
-        "parent_bay_position_num": numeric_suffix(parent_bay_position),
-        "sfp_slot": bay_position_num,
-    }
+    vc_position = None
     if (
         device is not None
         and getattr(device, "virtual_chassis_id", None) is not None
         and device.vc_position is not None
     ):
-        result["vc_position"] = str(device.vc_position)
-    return result
-
-
-def evaluate_name_template(template: str, variables: dict) -> str:
-    """Evaluate a name template with variable substitution and safe arithmetic.
-
-    A brace group holds either a documented variable name or an arithmetic expression over the
-    substituted values. This is not ``str.format``: braces nest for arithmetic, and ``str.format``
-    conversions (``!r``) and format specifications (``:>2``) are not part of the language.
-
-    Variables are substituted before remaining brace-enclosed arithmetic is
-    evaluated. True division is not allowed. Arithmetic results are converted
-    to integers so interface names contain whole numbers.
-
-    For example, ``GigabitEthernet{slot_num}/{8 + {sfp_slot}}`` substitutes the
-    variables before evaluating the arithmetic expression.
-    """
-    result = template
-    for key, value in variables.items():
-        result = result.replace(f"{{{key}}}", str(value))
-
-    def _eval_expr(match):
-        expr = match.group(1).strip()
-        if _FORMAT_FIELD_RE.fullmatch(expr):
-            raise ValueError(
-                f"Name templates take a variable or an arithmetic expression, not str.format "
-                f"conversions and format specifications: {{{expr}}}"
-            )
-        if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
-            raise ValueError(f"Unsafe expression in name template: {expr}")
-        try:
-            node = ast.parse(expr, mode="eval")
-            return str(int(_evaluate_arithmetic(node)))
-        except (SyntaxError, TypeError, ZeroDivisionError) as exc:
-            raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
-
-    return re.sub(r"\{([^}]+)\}", _eval_expr, result)
+        vc_position = device.vc_position
+    return build_bay_chain_variables(
+        slot,
+        bay_position,
+        parent_bay_position,
+        vc_position=vc_position,
+        bay_position_num=bay_position_num,
+    )

@@ -16,7 +16,7 @@ from re import Pattern
 
 from dcim.models import InterfaceTemplate, Module
 
-from ..rule_selection import _compile_pattern
+from ..rule_selection import compile_stored_pattern
 
 BAY_CHAIN_RELATIONS = (
     "device",
@@ -92,7 +92,7 @@ def _historical_pattern(template, module, token_re):  # pragma: no cover - requi
     pattern = literals[0]
     for index, literal in zip(indexes, literals[1:], strict=True):
         pattern += _vc_position_alternatives(fallbacks[int(index)]) + literal
-    return _compile_pattern(pattern)
+    return compile_stored_pattern(pattern)
 
 
 # One batch of modules shares its module chains, template rows and resolved names, thread-locally.

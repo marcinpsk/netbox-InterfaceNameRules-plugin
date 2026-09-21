@@ -8,7 +8,7 @@ import re
 from dcim.models import Interface
 
 from ..choices import BreakoutModeChoices
-from ..naming import evaluate_name_template
+from ..name_template import evaluate_name_template
 from .claims import TemplateClaim, resolve_template_claims
 from .domain import (
     FamilyStatus,

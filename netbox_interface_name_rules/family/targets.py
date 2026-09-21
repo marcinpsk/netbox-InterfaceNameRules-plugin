@@ -10,7 +10,7 @@ inputs are names, channel identifiers and the rule.
 from dataclasses import dataclass
 
 from ..choices import BreakoutModeChoices
-from ..naming import evaluate_name_template
+from ..name_template import evaluate_name_template
 from .domain import FamilyStatus
 
 AMBIGUOUS_SUFFIX_REASON = "channel suffix is ambiguous or unavailable"

@@ -13,7 +13,8 @@ import yaml
 from dcim.models import Device, ModuleBay
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.naming import build_variables, evaluate_name_template
+from netbox_interface_name_rules.name_template import evaluate_name_template
+from netbox_interface_name_rules.naming import build_variables
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -412,7 +413,7 @@ _PINNED_EXAMPLES = (
     (f"{_UI}/rule_test.html", f"<code>{_OFFSET}</code>", (_OFFSET,)),
     ("contrib/README.md", "{{slot_num} // 2}", ("{{slot_num} // 2}",)),
     (
-        "netbox_interface_name_rules/naming.py",
+        "netbox_interface_name_rules/name_template.py",
         "GigabitEthernet{slot_num}/{8 + {sfp_slot}}",
         ("GigabitEthernet{slot_num}/{8 + {sfp_slot}}",),
     ),
