@@ -23,6 +23,22 @@ User = get_user_model()
 
 TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
+# The preview variables and override fields the conftest guard is expected to know about.
+_VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base"})
+_PREVIEW_VARIABLES = frozenset(
+    {
+        "slot",
+        "slot_num",
+        "bay_position",
+        "bay_position_num",
+        "parent_bay_position",
+        "parent_bay_position_num",
+        "sfp_slot",
+        "base",
+        "channel",
+    }
+)
+
 
 class ViewTestBase(TestCase):
     """Base class that creates a superuser and logs in."""
@@ -419,12 +435,14 @@ class RuleTestViewTest(ViewTestBase):
         """POST to rule test view with a simple template returns a result."""
         data = {
             "name_template": "et-0/0/{bay_position}",
-            "bay_position": "3",
+            "var_bay_position": "3",
             "channel_count": "0",
             "channel_start": "0",
         }
         response = self.client.post(self._url(), data)
+
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "et-0/0/3")
 
     def test_an_oversized_variable_is_rejected_instead_of_raising(self):
         """Converting a digit run over Python's limit raised before the preview could catch it."""
@@ -466,7 +484,8 @@ class RuleTestViewTest(ViewTestBase):
             "channel_start": "0",
             "var_slot": "3",
             "var_parent_bay_position": "TenGigabitEthernet3/2",
-            "var_sfp_slot": "1",
+            # The form has no {sfp_slot} field: the preview derives it from the composed leaf position.
+            "var_bay_position": "TenGigabitEthernet3/2/1",
         }
 
         response = self.client.post(self._url(), data)
@@ -1217,3 +1236,45 @@ class YAMLExportTest(ViewTestBase):
             for key, value in entry.items():
                 if key in optional_headers:
                     self.assertNotIn(value, ["", None], f"Key {key!r} has blank value in exported rule")
+
+
+class PreviewKeyContractTest(TestCase):
+    """Cover the autouse guard in `conftest.py`, which no test would otherwise exercise.
+
+    It has no assertions of its own while every POST is well formed, so a contract that degraded
+    to an empty set would let every dropped key through and report nothing.
+    """
+
+    def test_the_contract_names_every_variable_the_preview_derives(self):
+        from netbox_interface_name_rules.tests.conftest import _preview_key_contract
+
+        fields, variables = _preview_key_contract()
+
+        self.assertEqual({name for name in fields if name.startswith("var_")}, {f"var_{n}" for n in _VAR_FIELDS})
+        self.assertEqual(variables, _PREVIEW_VARIABLES)
+
+    def test_a_key_the_form_declares_is_accepted(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"name_template": "x", "var_bay_position": "3"}), [])
+
+    def test_a_prefixed_key_the_form_does_not_declare_is_refused(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"var_sfp_slot": "1"}), ["var_sfp_slot"])
+
+    def test_a_bare_variable_name_is_refused(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"bay_position": "3", "sfp_slot": "1"}), ["bay_position", "sfp_slot"])
+
+    def test_an_unrelated_post_is_left_alone(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"action": "apply", "interface_ids": ["1"], "query": "{x}"}), [])
+
+    def test_the_refusal_names_the_key(self):
+        from netbox_interface_name_rules.tests.conftest import refuse_dropped_preview_keys
+
+        with self.assertRaisesRegex(AssertionError, "'bay_position'"):
+            refuse_dropped_preview_keys({"bay_position": "3"})
