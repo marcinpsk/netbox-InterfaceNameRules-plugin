@@ -13,8 +13,9 @@ from dcim.models import (
     ModuleType,
 )
 from django.contrib.auth import get_user_model
-from django.test import TestCase
-from django.urls import reverse
+from django.http import HttpResponse
+from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.urls import path, reverse
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import make_device
@@ -38,6 +39,17 @@ _PREVIEW_VARIABLES = frozenset(
         "channel",
     }
 )
+
+
+def _echo_body(request):
+    """Return the request body from an unrelated test view."""
+    return HttpResponse(request.body)
+
+
+class _UnrelatedPostURLConf:
+    """Expose one unrelated view without the plugin URL namespace."""
+
+    urlpatterns = (path("echo/", _echo_body),)
 
 
 class ViewTestBase(TestCase):
@@ -1278,3 +1290,17 @@ class PreviewKeyContractTest(TestCase):
 
         with self.assertRaisesRegex(AssertionError, "'bay_position'"):
             refuse_dropped_preview_keys({"bay_position": "3"})
+
+
+@override_settings(ROOT_URLCONF=_UnrelatedPostURLConf, MIDDLEWARE=[])
+class PreviewPostGuardTest(SimpleTestCase):
+    """The preview guard leaves posts to an unrelated URLconf unchanged."""
+
+    def test_posts_reach_a_urlconf_without_the_plugin_namespace(self):
+        client = Client()
+
+        raw_response = client.post("/echo/", data="body", content_type="text/plain")
+        dict_response = client.post("/echo/", data={"message": "body"})
+
+        self.assertEqual(raw_response.content, b"body")
+        self.assertEqual(dict_response.status_code, 200)

@@ -67,13 +67,18 @@ def _refuse_dropped_preview_keys(monkeypatch):
     `post`, nor a non-dict body; neither submits the rule-test form.
     """
     from django.test import Client
-    from django.urls import reverse
+    from django.urls import NoReverseMatch, reverse
 
     original = Client.post
 
     def post(self, path, data=None, *args, **kwargs):
-        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
-        if path.split("?", 1)[0] == preview_path and isinstance(data, dict):
+        if not isinstance(data, dict):
+            return original(self, path, data, *args, **kwargs)
+        try:
+            preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+        except NoReverseMatch:
+            return original(self, path, data, *args, **kwargs)
+        if path.split("?", 1)[0] == preview_path:
             refuse_dropped_preview_keys(data)
         return original(self, path, data, *args, **kwargs)
 
