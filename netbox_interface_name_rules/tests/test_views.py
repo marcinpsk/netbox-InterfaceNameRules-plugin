@@ -12,8 +12,9 @@ from dcim.models import (
     ModuleBay,
     ModuleType,
 )
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import path, reverse
 
@@ -50,6 +51,28 @@ class _UnrelatedPostURLConf:
     """Expose one unrelated view without the plugin URL namespace."""
 
     urlpatterns = (path("echo/", _echo_body),)
+
+
+def _stream_body(request):
+    """Return a streaming response from an unrelated test view."""
+    return StreamingHttpResponse((b"body",))
+
+
+class _StreamingResponseURLConf:
+    """Expose one streaming view without the plugin URL namespace."""
+
+    urlpatterns = (path("stream/", _stream_body),)
+
+
+def _select_streaming_response_urlconf(get_response):
+    """Select the unrelated URLconf only for the streaming request."""
+
+    def middleware(request):
+        if request.path == "/stream/":
+            request.urlconf = _StreamingResponseURLConf
+        return get_response(request)
+
+    return middleware
 
 
 class ViewTestBase(TestCase):
@@ -1304,3 +1327,30 @@ class PreviewPostGuardTest(SimpleTestCase):
 
         self.assertEqual(raw_response.content, b"body")
         self.assertEqual(dict_response.status_code, 200)
+
+
+@override_settings(
+    MIDDLEWARE=("netbox_interface_name_rules.tests.test_views._select_streaming_response_urlconf",),
+)
+class PreviewPostGuardURLConfStateTest(SimpleTestCase):
+    """The preview guard ignores URLconf state left by an open streaming response."""
+
+    def test_an_open_streaming_response_cannot_disable_the_preview_guard(self):
+        preview_path = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_test",
+            urlconf=settings.ROOT_URLCONF,
+        )
+        client = Client()
+
+        streaming_response = client.get("/stream/")
+        self.addCleanup(streaming_response.close)
+
+        self.assertTrue(streaming_response.streaming)
+        with self.assertRaises(AssertionError) as raised:
+            client.post(preview_path, {"bay_position": "3"})
+        self.assertEqual(
+            str(raised.exception),
+            "POST carries 'bay_position', which RuleTestForm does not declare. Django drops the key, so the "
+            "preview falls back to the field default and the assertion passes without reading the submitted value. "
+            "Submit a position the preview derives this value from.",
+        )
