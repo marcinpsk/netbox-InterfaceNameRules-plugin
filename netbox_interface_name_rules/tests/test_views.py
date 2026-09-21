@@ -23,6 +23,22 @@ User = get_user_model()
 
 TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
+# The preview variables and override fields the conftest guard is expected to know about.
+_VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base"})
+_PREVIEW_VARIABLES = frozenset(
+    {
+        "slot",
+        "slot_num",
+        "bay_position",
+        "bay_position_num",
+        "parent_bay_position",
+        "parent_bay_position_num",
+        "sfp_slot",
+        "base",
+        "channel",
+    }
+)
+
 
 class ViewTestBase(TestCase):
     """Base class that creates a superuser and logs in."""
@@ -235,6 +251,175 @@ class RuleApplicableViewTest(ViewTestBase):
         self.assertIn("applicable", data)
 
 
+class ZeroMatchPatternWarningTest(ViewTestBase):
+    """A regex rule that matches no module type is indistinguishable from one that works.
+
+    `*` is a quantifier in a regular expression, so a glob-style pattern silently matches
+    nothing. Saving still succeeds, because a rule may legitimately name a module type that
+    does not exist yet, but the operator is told.
+    """
+
+    def _create_url(self):
+        return reverse("plugins:netbox_interface_name_rules:interfacenamerule_add")
+
+    def _post(self, pattern):
+        return self.client.post(
+            self._create_url(),
+            {
+                "name_template": "et-0/0/{bay_position}",
+                "module_type_is_regex": "on",
+                "module_type_pattern": pattern,
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+    def test_a_glob_style_pattern_saves_and_warns_that_it_matches_nothing(self):
+        from django.contrib.messages import get_messages
+
+        ModuleType.objects.create(manufacturer=self.module_type.manufacturer, model="GLC-TE", part_number="GLC-TE")
+
+        response = self._post("GLC-T*")
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_editing_a_rule_into_a_zero_match_pattern_also_warns(self):
+        """The warning belongs to both entry points; a rule can be broken by an edit too."""
+        from django.contrib.messages import get_messages
+
+        rule = InterfaceNameRule.objects.create(
+            name_template="et-0/0/{bay_position}", module_type_is_regex=True, module_type_pattern="VIEW-.*"
+        )
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", kwargs={"pk": rule.pk})
+
+        response = self.client.post(
+            url,
+            {
+                "name_template": "et-0/0/{bay_position}",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "VIEW-T*",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.module_type_pattern, "VIEW-T*")
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def _quick_add_prefix(self):
+        """Return the field prefix this NetBox's quick-add form uses, read from the form itself.
+
+        NetBox 4.4 gave the modal a `quickadd` form prefix; 4.3 posts the fields unprefixed.
+        """
+        response = self.client.get(f"{self._create_url()}?_quickadd=True")
+
+        return "quickadd-" if b'name="quickadd-module_type_pattern"' in response.content else ""
+
+    def _post_quick_add(self, pattern, prefix):
+        """Post a quick add whose fields carry *prefix*.
+
+        The prefix comes from `?_quickadd=True`, so the unprefixed shape omits it and marks the
+        request in the body alone, exactly as a NetBox without the form prefix does.
+        """
+        url = f"{self._create_url()}?_quickadd=True" if prefix else self._create_url()
+
+        return self.client.post(
+            url,
+            {
+                "_quickadd": "True",
+                f"{prefix}name_template": "et-0/0/{bay_position}",
+                f"{prefix}module_type_is_regex": "on",
+                f"{prefix}module_type_pattern": pattern,
+                f"{prefix}channel_count": "0",
+                f"{prefix}channel_start": "0",
+                f"{prefix}breakout_mode": "flat",
+            },
+        )
+
+    def test_a_rule_saved_through_the_quick_add_modal_also_warns(self):
+        """Quick add answers a successful save with 200 and no redirect, so it used to be skipped."""
+        from django.contrib.messages import get_messages
+
+        response = self._post_quick_add("QUICK-T*", self._quick_add_prefix())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="QUICK-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_a_quick_add_that_does_not_prefix_its_fields_also_warns(self):
+        """The shape NetBox 4.3 posts: the quick-add marker with the fields under their own names."""
+        from django.contrib.messages import get_messages
+
+        response = self._post_quick_add("PLAIN-T*", "")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="PLAIN-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
+
+    def test_a_rejected_submission_is_not_called_ineffective(self):
+        """No rule was saved, so a warning about one would describe nothing."""
+        from django.contrib.messages import get_messages
+
+        response = self.client.post(
+            self._create_url(),
+            {
+                "name_template": "",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "REJECT-T*",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+        )
+
+        self.assertFalse(InterfaceNameRule.objects.filter(module_type_pattern="REJECT-T*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
+
+    def test_a_device_interface_rule_is_not_called_ineffective(self):
+        """There the pattern filters interface names, so matching no module type is expected."""
+        from django.contrib.messages import get_messages
+
+        response = self.client.post(
+            self._create_url(),
+            {
+                "name_template": "Gi{vc_position}/{port}",
+                "applies_to_device_interfaces": "on",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "^Ethernet.*$",
+                "channel_count": "0",
+                "channel_start": "0",
+                "breakout_mode": "flat",
+            },
+            follow=True,
+        )
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="^Ethernet.*$").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
+
+    def test_an_equivalent_regex_pattern_warns_about_nothing(self):
+        from django.contrib.messages import get_messages
+
+        ModuleType.objects.create(manufacturer=self.module_type.manufacturer, model="GLC-TE", part_number="GLC-TE")
+
+        response = self._post("GLC-T.*")
+
+        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T.*").exists())
+        warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
+        self.assertEqual([m for m in warnings if "matches no module type" in m], [])
+
+
 class RuleTestViewTest(ViewTestBase):
     """Test the RuleTestView (build-rule / preview)."""
 
@@ -250,12 +435,29 @@ class RuleTestViewTest(ViewTestBase):
         """POST to rule test view with a simple template returns a result."""
         data = {
             "name_template": "et-0/0/{bay_position}",
-            "bay_position": "3",
+            "var_bay_position": "3",
             "channel_count": "0",
             "channel_start": "0",
         }
         response = self.client.post(self._url(), data)
+
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "et-0/0/3")
+
+    def test_an_oversized_variable_is_rejected_instead_of_raising(self):
+        """Converting a digit run over Python's limit raised before the preview could catch it."""
+        data = {
+            "name_template": "Gi{bay_position_num}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_bay_position": "1" * 4301,
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("var_bay_position", response.context["form"].errors)
+        self.assertIsNone(response.context["preview_results"])
 
     def test_check_channel_preview_returns_multiple_results(self):
         """POST check with channel_count=3 produces one preview entry per channel."""
@@ -273,6 +475,39 @@ class RuleTestViewTest(ViewTestBase):
         self.assertEqual(preview[0]["result"], "et-0/0/0:0")
         self.assertEqual(preview[1]["result"], "et-0/0/0:1")
         self.assertEqual(preview[2]["result"], "et-0/0/0:2")
+
+    def test_preview_derives_numeric_positions_from_a_composed_position(self):
+        """A device type may compose the parent in, so the preview offers the same `_num` forms."""
+        data = {
+            "name_template": "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_slot": "3",
+            "var_parent_bay_position": "TenGigabitEthernet3/2",
+            # The form has no {sfp_slot} field: the preview derives it from the composed leaf position.
+            "var_bay_position": "TenGigabitEthernet3/2/1",
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "GigabitEthernet3/11")
+
+    def test_preview_derives_every_variable_production_derives(self):
+        """An independently entered value could preview a name production cannot produce."""
+        data = {
+            "name_template": "{bay_position_num}-{sfp_slot}-{slot_num}-{parent_bay_position_num}",
+            "channel_count": "0",
+            "channel_start": "0",
+            "var_bay_position": "TenGigabitEthernet3/2",
+            "var_slot": "Slot 7",
+            "var_parent_bay_position": "TenGigabitEthernet3/4",
+        }
+
+        response = self.client.post(self._url(), data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["preview_results"][0]["result"], "2-2-7-4")
 
     def test_check_with_module_type_populates_db_preview(self):
         """POST check with module_type FK set triggers find_interfaces_for_rule."""
@@ -1001,3 +1236,45 @@ class YAMLExportTest(ViewTestBase):
             for key, value in entry.items():
                 if key in optional_headers:
                     self.assertNotIn(value, ["", None], f"Key {key!r} has blank value in exported rule")
+
+
+class PreviewKeyContractTest(TestCase):
+    """Cover the autouse guard in `conftest.py`, which no test would otherwise exercise.
+
+    It has no assertions of its own while every POST is well formed, so a contract that degraded
+    to an empty set would let every dropped key through and report nothing.
+    """
+
+    def test_the_contract_names_every_variable_the_preview_derives(self):
+        from netbox_interface_name_rules.tests.conftest import _preview_key_contract
+
+        fields, variables = _preview_key_contract()
+
+        self.assertEqual({name for name in fields if name.startswith("var_")}, {f"var_{n}" for n in _VAR_FIELDS})
+        self.assertEqual(variables, _PREVIEW_VARIABLES)
+
+    def test_a_key_the_form_declares_is_accepted(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"name_template": "x", "var_bay_position": "3"}), [])
+
+    def test_a_prefixed_key_the_form_does_not_declare_is_refused(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"var_sfp_slot": "1"}), ["var_sfp_slot"])
+
+    def test_a_bare_variable_name_is_refused(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"bay_position": "3", "sfp_slot": "1"}), ["bay_position", "sfp_slot"])
+
+    def test_an_unrelated_post_is_left_alone(self):
+        from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
+
+        self.assertEqual(dropped_preview_keys({"action": "apply", "interface_ids": ["1"], "query": "{x}"}), [])
+
+    def test_the_refusal_names_the_key(self):
+        from netbox_interface_name_rules.tests.conftest import refuse_dropped_preview_keys
+
+        with self.assertRaisesRegex(AssertionError, "'bay_position'"):
+            refuse_dropped_preview_keys({"bay_position": "3"})

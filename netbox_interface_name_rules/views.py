@@ -7,10 +7,11 @@ import re
 import yaml
 from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
@@ -90,7 +91,58 @@ class InterfaceNameRuleListView(generic.ObjectListView):
         return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
-class InterfaceNameRuleCreateView(generic.ObjectEditView):
+def _submitted(request, field):
+    """Return a submitted rule field, wherever the form put it.
+
+    NetBox 4.4 gave the quick-add modal a ``quickadd`` form prefix; 4.3 posts the fields under
+    their own names, so the prefix cannot be assumed from the quick-add marker alone.
+    """
+    return request.POST.get(f"quickadd-{field}") or request.POST.get(field)
+
+
+class ZeroMatchPatternWarningMixin:
+    """Warn when a saved regex rule matches no module type that exists now.
+
+    Saving still succeeds, because a rule may name a module type that is not in the database yet.
+    NetBox's edit view does its work in ``post`` and offers no post-save hook, so this wraps it.
+    A quick add answers with a modal fragment that renders no messages, so that warning reaches
+    the operator on the next page they load, and it answers a successful save with 200 rather
+    than a redirect, which is why a save is recognised from the database and not the response.
+    """
+
+    def post(self, request, *args, **kwargs):
+        """Save through the parent view, then report a pattern that selects nothing."""
+        pattern = (_submitted(request, "module_type_pattern") or "").strip()
+        regex_rule = pattern and _submitted(request, "module_type_is_regex")
+        # A device-interface rule filters interface names, so no module type is expected to match.
+        device_rule = _submitted(request, "applies_to_device_interfaces")
+        started = timezone.now()
+        response = super().post(request, *args, **kwargs)
+        if not regex_rule or device_rule:
+            return response
+        # Only a rule written by this request saved; a rejected form leaves nothing to report on.
+        saved = self.queryset.model.objects.filter(
+            module_type_pattern=pattern, module_type_is_regex=True, last_updated__gte=started
+        )
+        if not saved.exists():
+            return response
+        from .rule_selection import module_types_matching_pattern
+
+        try:
+            matched = module_types_matching_pattern(pattern)
+        except ValidationError:
+            return response
+        if not matched:
+            messages.warning(
+                request,
+                f"Pattern {pattern!r} matches no module type, so this rule will not fire. "
+                "The field takes a regular expression, not a glob: '*' repeats the character "
+                "before it, so 'GLC-T*' does not match 'GLC-TE'. Use 'GLC-T.*'.",
+            )
+        return response
+
+
+class InterfaceNameRuleCreateView(ZeroMatchPatternWarningMixin, generic.ObjectEditView):
     """Create view for InterfaceNameRule."""
 
     queryset = InterfaceNameRule.objects.all()
@@ -111,7 +163,7 @@ class InterfaceNameRuleView(generic.ObjectView):
     queryset = InterfaceNameRule.objects.all()
 
 
-class InterfaceNameRuleEditView(generic.ObjectEditView):
+class InterfaceNameRuleEditView(ZeroMatchPatternWarningMixin, generic.ObjectEditView):
     """Edit view for InterfaceNameRule."""
 
     queryset = InterfaceNameRule.objects.all()
@@ -295,17 +347,24 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .naming import evaluate_name_template
+        from .naming import evaluate_name_template, numeric_suffix
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
         channel_start = cd.get("channel_start") or 0
+        slot = cd.get("var_slot") or "1"
+        bay_position = cd.get("var_bay_position") or "1"
+        parent_bay_position = cd.get("var_parent_bay_position") or "1"
+        # Derive whatever build_variables derives, or the preview can show an impossible name.
+        bay_position_num = numeric_suffix(bay_position)
         variables = {
-            "slot": cd.get("var_slot") or "1",
-            "bay_position": cd.get("var_bay_position") or "1",
-            "bay_position_num": cd.get("var_bay_position_num") or "1",
-            "parent_bay_position": cd.get("var_parent_bay_position") or "1",
-            "sfp_slot": cd.get("var_sfp_slot") or "1",
+            "slot": slot,
+            "slot_num": numeric_suffix(slot),
+            "bay_position": bay_position,
+            "bay_position_num": bay_position_num,
+            "parent_bay_position": parent_bay_position,
+            "parent_bay_position_num": numeric_suffix(parent_bay_position),
+            "sfp_slot": bay_position_num,
             "base": cd.get("var_base") or "Ethernet1",
         }
 

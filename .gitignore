@@ -28,8 +28,6 @@ performance/baselines/*.json
 .ruff_cache/
 .mypy_cache/
 
-# uv
-uv.lock
 
 # IDE
 .vscode/*
