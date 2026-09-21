@@ -66,12 +66,14 @@ def _refuse_dropped_preview_keys(monkeypatch):
     covered as well as a literal. It does not reach DRF's `APIClient`, which defines its own
     `post`, nor a non-dict body; neither submits the rule-test form.
     """
+    from django.urls import reverse
     from django.test import Client
 
     original = Client.post
+    preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
     def post(self, path, data=None, *args, **kwargs):
-        if isinstance(data, dict):
+        if path.split("?", 1)[0] == preview_path and isinstance(data, dict):
             refuse_dropped_preview_keys(data)
         return original(self, path, data, *args, **kwargs)
 
