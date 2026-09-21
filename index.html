@@ -360,6 +360,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-a-rule-cannot-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a rule cannot do
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -622,6 +633,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-a-rule-cannot-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a rule cannot do
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -676,7 +698,7 @@ automatically apply renaming rules based on configurable templates.</p>
 <ul>
 <li><strong>Signal-driven</strong> — rules fire automatically on module install</li>
 <li><strong>Template variables</strong> — <code>{slot}</code>, <code>{bay_position}</code>, <code>{bay_position_num}</code>, <code>{channel}</code>, etc.</li>
-<li><strong>Arithmetic expressions</strong> — <code>{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}</code></li>
+<li><strong>Arithmetic expressions</strong> — <code>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></li>
 <li><strong>Breakout support</strong> — create multiple channel interfaces from a single port</li>
 <li><strong>Bounded regex pattern matching</strong> — match module types with RE2 patterns (e.g., <code>QSFP-DD-400G-.*</code>) to cover entire product families with a single rule; exact FK match takes priority over regex</li>
 <li><strong>Scoping</strong> — rules can target specific device types, parent module types, platforms, or be universal</li>
@@ -714,6 +736,22 @@ automatically apply renaming rules based on configurable templates.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="what-a-rule-cannot-do">What a rule cannot do</h2>
+<p>A rule renames interfaces that NetBox has already created. The plugin runs on <code>post_save</code> of
+<code>dcim.Module</code>, because NetBox creates module interfaces with <code>bulk_create</code>, which fires no
+<code>pre_save</code> on the interfaces themselves.</p>
+<p>A rename therefore runs after the insert, never before it. Two consequences:</p>
+<ul>
+<li><strong>A rule cannot resolve a name collision.</strong> If a device type gives two bays the same position,
+  installing the second module fails on the <code>dcim_interface_unique_device_name</code> constraint at
+  insert time, before any rule runs. Fix that in the device type, by composing the parent into
+  the bay position, rather than with a rename rule.</li>
+<li><strong>A rule cannot stop NetBox from creating an interface.</strong> A breakout rule does create the
+  channel interfaces of a family, but only after NetBox has inserted the one it starts from.</li>
+</ul>
+<p>Composed bay positions also mean most transceivers already arrive with the right name, so a
+rename rule is for the names that position alone cannot produce, such as the converter offset
+above.</p>
 <h2 id="quick-start">Quick Start</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>netbox-interface-name-rules
 </code></pre></div>
