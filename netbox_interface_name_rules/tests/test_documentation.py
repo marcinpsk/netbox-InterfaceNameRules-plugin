@@ -215,11 +215,21 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
 
 
+_PATTERN_KEY = re.compile(r"^\s*-?\s*module_type_pattern:\s*(.+)$", re.MULTILINE)
+
+
 def _patterns_in(node):
-    """Yield every module_type_pattern value nested anywhere in a loaded YAML document."""
+    """Yield every module_type_pattern nested anywhere in a loaded YAML document.
+
+    A value that is not a string is an error rather than a skip: an unquoted pattern such as
+    `[A-Z]` parses as a list, and a pattern the reader drops is one `re2.compile` never sees.
+    """
     if isinstance(node, dict):
-        if isinstance(node.get("module_type_pattern"), str):
-            yield node["module_type_pattern"]
+        if "module_type_pattern" in node:
+            pattern = node["module_type_pattern"]
+            if not isinstance(pattern, str):
+                raise TypeError(f"module_type_pattern is not a string: {pattern!r}")
+            yield pattern
         for value in node.values():
             yield from _patterns_in(value)
     elif isinstance(node, list):
@@ -227,16 +237,29 @@ def _patterns_in(node):
             yield from _patterns_in(value)
 
 
+def _patterns_in_markdown(path):
+    """Yield every module-type pattern a guide documents, ignoring what an HTML comment retired.
+
+    Reads the guides the way `_templates_in_markdown` does, for the same two reasons.
+    """
+    text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
+    if "<!--" in text:
+        raise ValueError(f"{path.name} holds an unterminated comment, so its patterns cannot be read")
+    for raw in _PATTERN_KEY.findall(text):
+        value = yaml.safe_load(raw)
+        if not isinstance(value, str):
+            raise TypeError(f"{path.name} documents a module_type_pattern that is not a string: {raw!r}")
+        yield value
+
+
 def _shipped_patterns():
     """Return every module-type pattern the plugin ships or documents, by source."""
     found = []
     for path in sorted((_PROJECT_ROOT / "contrib").glob("*.yaml")):
         found.extend((path.name, pattern) for pattern in _patterns_in(yaml.safe_load(path.read_text(encoding="utf-8"))))
-    for path in sorted((_PROJECT_ROOT / "docs").glob("*.md")):
-        for raw in re.findall(r"^\s*-?\s*module_type_pattern:\s*(.+)$", path.read_text(encoding="utf-8"), re.MULTILINE):
-            value = yaml.safe_load(raw)
-            if isinstance(value, str):
-                found.append((path.name, value))
+    for directory in ("docs", "contrib"):
+        for path in sorted((_PROJECT_ROOT / directory).glob("*.md")):
+            found.extend((path.name, pattern) for pattern in _patterns_in_markdown(path))
     return found
 
 
@@ -252,6 +275,48 @@ class ShippedPatternRe2AuditTest(unittest.TestCase):
                 re.compile(pattern)
                 re2.compile(pattern)
                 self.assertFalse(_RE2_AUDIT._uses_different_re2_semantics(pattern))
+
+    def test_every_shipped_and_documented_source_contributes_patterns(self):
+        """A renamed file or a dropped directory would otherwise shrink the audit in silence."""
+        expected = {
+            "cisco.yaml",
+            "demo-vc.yaml",
+            "juniper-channelized.yaml",
+            "juniper.yaml",
+            "linux.yaml",
+            "ufispace-device-type.yaml",
+            "ufispace.yaml",
+            "README.md",
+            "examples.md",
+            "template-variables.md",
+        }
+
+        self.assertEqual({source for source, _ in _shipped_patterns()}, expected)
+
+    def test_a_non_string_pattern_in_a_shipped_file_is_an_error(self):
+        """An unquoted `[A-Z]` parses as a list, and a skipped pattern is one re2 never compiles."""
+        with self.assertRaisesRegex(TypeError, "module_type_pattern"):
+            list(_patterns_in({"rules": [{"module_type_pattern": ["A-Z"]}]}))
+
+    def test_a_non_string_pattern_in_a_guide_is_an_error(self):
+        """A bare RE2 quantifier such as `{2,3}` parses as a mapping."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text("- module_type_pattern: {2,3}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(TypeError, "module_type_pattern"):
+                list(_patterns_in_markdown(path))
+
+    def test_a_commented_out_pattern_is_not_audited(self):
+        """A retired example is not on the page, so enforcing it would report a guide as stale."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text(
+                '- module_type_pattern: "QSFP-.*"\n<!--\n- module_type_pattern: "RETIRED-.*"\n-->\n',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(list(_patterns_in_markdown(path)), ["QSFP-.*"])
 
 
 def _first_table_variables(path, pattern):
