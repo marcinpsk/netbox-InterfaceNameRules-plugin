@@ -181,13 +181,17 @@ def _unisolated_reverse_classes(path: pathlib.Path) -> set[str]:
 
 
 def _private_module_names(path: pathlib.Path) -> set[str]:
-    """Return the private names *path* defines at module level."""
+    """Return the private names *path* binds at module level, by definition or by assignment."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) and node.name.startswith("_")
-    }
+    found = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) and node.name.startswith("_"):
+            found.add(node.name)
+        elif isinstance(node, ast.Assign):
+            found.update(t.id for t in node.targets if isinstance(t, ast.Name) and t.id.startswith("_"))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id.startswith("_"):
+            found.add(node.target.id)
+    return found
 
 
 def _banned_api_names() -> set[str]:
