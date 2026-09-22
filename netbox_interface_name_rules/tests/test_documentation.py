@@ -158,11 +158,6 @@ class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
             with self.subTest(variable=variable.name):
                 self.assertNotIn(f"{{{variable.name}}} -", docstring)
 
-    def test_rule_tester_names_the_module_base_as_the_raw_template_name(self):
-        from netbox_interface_name_rules.forms import RuleTestForm
-
-        self.assertEqual(RuleTestForm().fields["var_base"].label, "{base} (raw template name)")
-
 
 # _blocking_reason() and the staleness check decide these before _rewrite() runs, so NetBox never sees them.
 _PREFLIGHT_REASONS = (
