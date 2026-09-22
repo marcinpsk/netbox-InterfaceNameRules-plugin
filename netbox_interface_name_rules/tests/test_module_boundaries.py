@@ -203,9 +203,13 @@ def _banned_api_names() -> set[str]:
     return set(config["tool"]["ruff"]["lint"]["flake8-tidy-imports"]["banned-api"])
 
 
-def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, str]:
-    """Map each name bound in *tree* to the plugin module it refers to."""
-    aliases = {}
+def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, set[str]]:
+    """Map each name bound in *tree* to every plugin module it can refer to.
+
+    A name can be bound more than once, in separate scopes or in sequence. Every binding is kept,
+    so a later one cannot exempt an access made through an earlier one.
+    """
+    aliases: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             base = "." * node.level + (node.module or "")
@@ -214,16 +218,33 @@ def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, str]:
                 continue
             for alias in node.names:
                 if not alias.name.startswith("_"):
-                    aliases[alias.asname or alias.name] = f"{module}.{alias.name}"
+                    aliases.setdefault(alias.asname or alias.name, set()).add(f"{module}.{alias.name}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if not alias.name.startswith(PLUGIN_PACKAGE):
                     continue
-                if alias.asname:
-                    aliases[alias.asname] = alias.name
-                else:
-                    aliases[alias.name.split(".")[0]] = alias.name.split(".")[0]
+                bound = alias.asname or alias.name.split(".")[0]
+                aliases.setdefault(bound, set()).add(alias.name if alias.asname else bound)
+    _propagate_copied_references(tree, aliases)
     return aliases
+
+
+def _propagate_copied_references(tree: ast.AST, aliases: dict[str, set[str]]) -> None:
+    """Treat `name = <module reference>` as another binding, to a fixed point."""
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            parts = _dotted_parts(node.value)
+            if not isinstance(target, ast.Name) or parts is None:
+                continue
+            for owner in _referenced_modules(parts, aliases):
+                if owner not in aliases.get(target.id, set()):
+                    aliases.setdefault(target.id, set()).add(owner)
+                    changed = True
 
 
 def _dotted_parts(node: ast.AST) -> list[str] | None:
@@ -239,28 +260,52 @@ def _dotted_parts(node: ast.AST) -> list[str] | None:
     return parts
 
 
+def _referenced_modules(parts: list[str], aliases: dict[str, set[str]]) -> set[str]:
+    """Return every plugin module the dotted name *parts* can refer to."""
+    return {".".join([root, *parts[1:]]) for root in aliases.get(parts[0], set())}
+
+
+def _is_private_name(name: str) -> bool:
+    """Return whether *name* is private rather than public or a dunder."""
+    return name.startswith("_") and not (name.startswith("__") and name.endswith("__"))
+
+
 def _private_plugin_attributes(path: pathlib.Path, module_name: str | None = None) -> set[str]:
-    """Return the private names *path* reads from another plugin module by attribute access."""
+    """Return the private names *path* reads from another plugin module without importing them."""
     module_name = module_name or _module_name(path)
     package = module_name.rpartition(".")[0] or module_name
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     aliases = _module_alias_targets(tree, package)
     found = set()
+
+    def record(owners, attribute):
+        for owner in owners:
+            if owner.startswith(PLUGIN_PACKAGE) and owner != module_name:
+                found.add(f"{owner}.{attribute}")
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute) or not node.attr.startswith("_"):
-            continue
-        if node.attr.startswith("__") and node.attr.endswith("__"):
-            continue
-        parts = _dotted_parts(node)
-        if parts is None or len(parts) < 2:
-            continue
-        target = aliases.get(parts[0])
-        if target is None:
-            continue
-        owner = ".".join([target, *parts[1:-1]])
-        if owner.startswith(PLUGIN_PACKAGE) and owner != module_name:
-            found.add(f"{owner}.{node.attr}")
+        if isinstance(node, ast.Attribute) and _is_private_name(node.attr):
+            parts = _dotted_parts(node)
+            if parts is not None and len(parts) >= 2:
+                record(_referenced_modules(parts[:-1], aliases), node.attr)
+        elif _is_literal_getattr(node):
+            parts = _dotted_parts(node.args[0])
+            if parts is not None:
+                record(_referenced_modules(parts, aliases), node.args[1].value)
     return found
+
+
+def _is_literal_getattr(node: ast.AST) -> bool:
+    """Return whether *node* is `getattr(<name>, "<private>")`."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+        and _is_private_name(node.args[1].value)
+    )
 
 
 class FamilySeamTest(SimpleTestCase):
@@ -438,6 +483,13 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
     reference to a sibling and reach a private name through it, which no guard saw before.
     """
 
+    def _found(self, source, module_name=f"{PLUGIN_PACKAGE}.engine"):
+        """Return what the detector reports for *source*, analysed as *module_name*."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+            return _private_plugin_attributes(path, module_name=module_name)
+
     def test_production_modules_do_not_read_private_plugin_attributes(self):
         violations = set()
         for path in _production_modules():
@@ -457,29 +509,47 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
             "import netbox_interface_name_rules.naming as renamed\nrenamed._resolve_slot(1, 2, 3)",
             "import netbox_interface_name_rules\nnetbox_interface_name_rules.naming._resolve_slot(1, 2, 3)",
         )
-        with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "sample.py"
-            for source in spellings:
-                with self.subTest(source=source):
-                    path.write_text(source, encoding="utf-8")
-                    found = _private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.sample")
+        for source in spellings:
+            with self.subTest(source=source):
+                self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
 
-                    self.assertEqual(found, {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+    def test_a_literal_getattr_is_a_violation(self):
+        source = 'from . import naming\ngetattr(naming, "_resolve_slot")(1, 2, 3)'
+
+        self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_copied_module_reference_is_a_violation(self):
+        source = "from . import naming\nresolver = naming\nresolver._resolve_slot(1, 2, 3)"
+
+        self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_chain_of_copied_references_is_a_violation(self):
+        source = "from . import naming\nfirst = naming\nsecond = first\nsecond._resolve_slot(1, 2, 3)"
+
+        self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_later_import_cannot_erase_an_earlier_violation(self):
+        """A name rebound to this module must not exempt an access made through the sibling."""
+        sequential = "from . import naming as helper\nhelper._resolve_slot(1, 2, 3)\nfrom . import engine as helper"
+        scoped = (
+            "def run():\n    from . import naming as helper\n    return helper._resolve_slot(1, 2, 3)\n"
+            "def other():\n    from . import engine as helper\n    return helper\n"
+        )
+        for source in (sequential, scoped):
+            with self.subTest(source=source):
+                self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
 
     def test_a_modules_own_private_name_is_not_a_violation(self):
         source = "import netbox_interface_name_rules.naming\nnetbox_interface_name_rules.naming._resolve_slot(1, 2, 3)"
-        with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "sample.py"
-            path.write_text(source, encoding="utf-8")
 
-            found = _private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.naming")
-
-            self.assertEqual(found, set())
+        self.assertEqual(self._found(source, module_name=f"{PLUGIN_PACKAGE}.naming"), set())
 
     def test_a_dunder_on_a_sibling_module_is_not_a_violation(self):
         source = "from netbox_interface_name_rules import naming\nprint(naming.__name__)"
-        with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "sample.py"
-            path.write_text(source, encoding="utf-8")
 
-            self.assertEqual(_private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.sample"), set())
+        self.assertEqual(self._found(source), set())
+
+    def test_a_public_name_on_a_sibling_module_is_not_a_violation(self):
+        source = "from . import naming\nnaming.numeric_suffix('3')"
+
+        self.assertEqual(self._found(source), set())
