@@ -271,14 +271,72 @@ def _plugin_modules() -> frozenset[str]:
     return frozenset(names)
 
 
+def _module_path(module_name: str) -> pathlib.Path | None:
+    """Return the file that defines *module_name*, or None when the plugin does not define it."""
+    relative = pathlib.Path(*module_name.split(".")[1:])
+    for candidate in (PACKAGE / relative.with_suffix(".py"), PACKAGE / relative / "__init__.py"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@functools.cache
+def _module_import_aliases(module_name: str) -> frozenset[tuple[str, str]]:
+    """Return the (bound name, plugin module) pairs *module_name* imports.
+
+    A module that imports a sibling re-exposes it as an attribute, so `engine.naming` is `naming`.
+    """
+    path = _module_path(module_name)
+    if path is None:
+        return frozenset()
+    package = module_name.rpartition(".")[0] or module_name
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    modules = _plugin_modules()
+    pairs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            base = "." * node.level + (node.module or "")
+            imported = resolve_name(base, package) if node.level else (node.module or "")
+            if not imported.startswith(PLUGIN_PACKAGE):
+                continue
+            for alias in node.names:
+                if f"{imported}.{alias.name}" in modules:
+                    pairs.add((alias.asname or alias.name, f"{imported}.{alias.name}"))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                target = alias.name if alias.asname else alias.name.split(".")[0]
+                if target in modules:
+                    pairs.add((bound, target))
+    return frozenset(pairs)
+
+
+def _walk_module_chain(start: set[str], parts: list[str]) -> set[str]:
+    """Follow *parts* from each module in *start*, through submodules and re-exported modules.
+
+    Every step lands on a module the plugin defines, so the walk is bounded by a finite set.
+    """
+    current = set(start)
+    for part in parts:
+        following = set()
+        for module in current:
+            if f"{module}.{part}" in _plugin_modules():
+                following.add(f"{module}.{part}")
+                continue
+            following.update(target for bound, target in _module_import_aliases(module) if bound == part)
+        current = following
+        if not current:
+            break
+    return current
+
+
 def _referenced_modules(parts: list[str], aliases: dict[str, set[str]]) -> set[str]:
     """Return every plugin module the dotted name *parts* can refer to.
 
-    Candidates are intersected with the modules that exist, so a dotted name that walks into a
-    class or a function yields nothing. That also bounds the alias fixed point to a finite set.
+    Each step must land on a module the plugin defines, so a dotted name that walks into a class
+    or a function yields nothing, and the alias fixed point is bounded by a finite set.
     """
-    candidates = {".".join([root, *parts[1:]]) for root in aliases.get(parts[0], set())}
-    return candidates & _plugin_modules()
+    return _walk_module_chain(aliases.get(parts[0], set()) & _plugin_modules(), parts[1:])
 
 
 def _is_private_name(name: str) -> bool:
@@ -554,6 +612,14 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
         for source in (sequential, scoped):
             with self.subTest(source=source):
                 self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_module_reached_through_another_modules_import_is_a_violation(self):
+        """`engine.naming` is `naming`, so a private read through it crosses the same boundary."""
+        source = "from . import engine\nengine.naming._resolve_slot(1, 2, 3)"
+
+        found = self._found(source, module_name=f"{PLUGIN_PACKAGE}.views")
+
+        self.assertEqual(found, {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
 
     def test_a_self_rebinding_assignment_terminates(self):
         """A name reassigned to one of its own attributes must not grow the candidates forever."""
