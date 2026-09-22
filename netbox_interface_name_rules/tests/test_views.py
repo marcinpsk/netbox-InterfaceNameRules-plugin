@@ -54,15 +54,30 @@ _HTML_COMMENT = re.compile(rb"<!--.*?-->", re.DOTALL)
 class _ReferenceRowParser(HTMLParser):
     """Read the attributes and visible cells of rendered variable-reference rows."""
 
-    def __init__(self):
+    def __init__(self, table_id):
         super().__init__()
+        self.table_id = table_id
         self.rows = []
+        self.table_count = 0
+        self._table_depth = 0
+        self._in_body = False
         self._row = None
         self._cell = None
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
-        if tag == "tr" and "data-naming-contexts" in attributes and "data-template-variable" in attributes:
+        if tag == "table":
+            if attributes.get("id") == self.table_id:
+                self.table_count += 1
+            if self._table_depth or attributes.get("id") == self.table_id:
+                self._table_depth += 1
+        elif tag == "tbody" and self._table_depth == 1:
+            self._in_body = True
+        elif tag == "tr" and self._in_body:
+            if self._row is not None:
+                raise AssertionError(f"{self.table_id} contains a nested row")
+            if "data-naming-contexts" not in attributes or "data-template-variable" not in attributes:
+                raise AssertionError(f"{self.table_id} contains a row that is not a catalogue row")
             self._row = (attributes["data-naming-contexts"].split(), attributes["data-template-variable"], [])
         elif tag == "td" and self._row is not None:
             self._cell = []
@@ -78,31 +93,80 @@ class _ReferenceRowParser(HTMLParser):
         elif tag == "tr" and self._row is not None:
             self.rows.append((*self._row[:2], *self._row[2]))
             self._row = None
+        elif tag == "tbody" and self._in_body and self._table_depth == 1:
+            self._in_body = False
+        elif tag == "table" and self._table_depth:
+            self._table_depth -= 1
+            if not self._table_depth:
+                self._in_body = False
 
 
-def _rendered_variable_rows(response):
+def _rendered_variable_rows(response, table_id):
     """Return the attributes and visible cells of each rendered reference row."""
     content = _HTML_COMMENT.sub(b"", response.content)
     if b"<!--" in content:
         raise ValueError("response holds an unterminated comment, so its variable rows cannot be read")
-    parser = _ReferenceRowParser()
+    parser = _ReferenceRowParser(table_id)
     parser.feed(content.decode())
+    parser.close()
+    if parser.table_count != 1:
+        raise AssertionError(f"expected one {table_id} table, found {parser.table_count}")
     return parser.rows
 
 
 class RenderedVariableRowTest(SimpleTestCase):
     def test_a_commented_out_row_is_not_rendered(self):
         response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
             b'<!-- <tr data-naming-contexts="module_member" data-template-variable="retired">'
             b"<td><code>{retired}</code></td><td>Retired</td><td><code>0</code></td></tr> -->"
             b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
             b"<td><code>{slot}</code></td><td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"</tbody></table>"
         )
 
         self.assertEqual(
-            _rendered_variable_rows(response),
+            _rendered_variable_rows(response, "variable-reference"),
             [(["module_member"], "slot", "{slot}", "Top-level slot.", "Slot 3")],
         )
+
+    def test_an_unmarked_row_in_the_reference_table_is_rejected(self):
+        response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
+            b"<tr><td><code>{unknown_variable}</code></td><td>Unsupported variable</td><td>0</td></tr>"
+            b"</tbody></table>"
+        )
+
+        with self.assertRaisesRegex(AssertionError, "variable-reference"):
+            _rendered_variable_rows(response, "variable-reference")
+
+    def test_rows_outside_the_reference_table_are_ignored(self):
+        response = HttpResponse(
+            b'<table><tbody><tr data-naming-contexts="device_interface" data-template-variable="unrelated">'
+            b"<td><code>{unrelated}</code></td></tr></tbody></table>"
+            b'<table id="variable-reference"><tbody>'
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code></td><td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"</tbody></table>"
+        )
+
+        self.assertEqual(
+            _rendered_variable_rows(response, "variable-reference"),
+            [(["module_member"], "slot", "{slot}", "Top-level slot.", "Slot 3")],
+        )
+
+    def test_a_nested_table_does_not_end_the_reference_table_body(self):
+        response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code><table><tbody></tbody></table></td>"
+            b"<td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"<tr><td><code>{unknown_variable}</code></td><td>Unsupported variable</td><td>0</td></tr>"
+            b"</tbody></table>"
+        )
+
+        with self.assertRaisesRegex(AssertionError, "variable-reference"):
+            _rendered_variable_rows(response, "variable-reference")
 
 
 def _echo_body(request):
@@ -237,7 +301,7 @@ class RuleListViewTest(ViewTestBase):
 
     def test_variable_reference_groups_equal_module_rule_rows(self):
         response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
-        rows = _rendered_variable_rows(response)
+        rows = _rendered_variable_rows(response, "rule-list-variable-reference")
         self.assertEqual(
             rows,
             [
@@ -625,7 +689,7 @@ class RuleTestViewTest(ViewTestBase):
 
     def test_variable_reference_lists_only_variables_the_preview_can_derive(self):
         response = self.client.get(self._url())
-        rows = _rendered_variable_rows(response)
+        rows = _rendered_variable_rows(response, "rule-tester-variable-reference")
 
         self.assertEqual(
             rows,

@@ -354,7 +354,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
 
 
-_PATTERN_KEY = re.compile(r"^\s*-?\s*module_type_pattern:\s*(.+)$", re.MULTILINE)
+_PATTERN_KEY = re.compile(r"^[^\S\r\n]*-?[^\S\r\n]*module_type_pattern:[^\S\r\n]*(.+)$", re.MULTILINE)
 
 
 def _patterns_in(node):
@@ -459,6 +459,13 @@ class ShippedPatternRe2AuditTest(unittest.TestCase):
 
             self.assertEqual(list(_patterns_in_markdown(path)), ["QSFP-.*"])
 
+    def test_a_blank_line_after_a_yaml_fence_stays_inside_the_pattern_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text('```yaml\n\n- module_type_pattern: "QSFP-.*"\n```\n', encoding="utf-8")
+
+            self.assertEqual(list(_patterns_in_markdown(path)), ["QSFP-.*"])
+
     def test_a_pattern_in_a_yaml_flow_mapping_is_audited(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "guide.md"
@@ -473,8 +480,15 @@ _OFFSET = "{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
 _FORM_EXAMPLE = "e.g. et-0/0/{bay_position} or {base}:{channel}"
 _PARENT_FORM_EXAMPLE = "parent interface, e.g. et-0/0/{bay_position}"
 _UI_LIST = f"{_UI}/interfacenamerule_list.html"
-_MARKDOWN_YAML_BLOCK = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
-_MARKDOWN_TEMPLATE_KEY = re.compile(r"^\s*-?\s*(?:parent_)?name_template\s*:", re.MULTILINE)
+_UI_EXAMPLES_LIST_ID = "interface-name-rule-examples"
+_MARKDOWN_YAML_BLOCK = re.compile(
+    r"^```yaml[^\S\r\n]*\r?\n(.*?)^```[^\S\r\n]*$",
+    re.DOTALL | re.MULTILINE,
+)
+_MARKDOWN_TEMPLATE_KEY = re.compile(
+    r"^[^\S\r\n]*-?[^\S\r\n]*(?:parent_)?name_template[^\S\r\n]*:",
+    re.MULTILINE,
+)
 _TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 _MARKDOWN_TABLE_CONTEXTS = {
     "README.md": {"Supported scenarios": NamingContext.MODULE_MEMBER},
@@ -518,29 +532,40 @@ class DocumentedTemplate:
 
 
 class _CodeExampleParser(HTMLParser):
-    """Collect code elements with their line, attributes, and visible text."""
+    """Collect code elements from the rule-list help panel's examples list."""
 
     def __init__(self):
         super().__init__()
         self.examples = []
+        self.examples_list_count = 0
+        self.examples_list_depth = 0
         self.open_code = None
 
     def handle_starttag(self, tag, attrs):
-        if tag != "code":
+        attributes = dict(attrs)
+        if tag == "ul" and attributes.get("id") == _UI_EXAMPLES_LIST_ID:
+            self.examples_list_count += 1
+            self.examples_list_depth = 1
+            return
+        if tag == "ul" and self.examples_list_depth:
+            self.examples_list_depth += 1
+            return
+        if tag != "code" or not self.examples_list_depth:
             return
         if self.open_code is not None:
             raise ValueError("code elements cannot be nested")
-        self.open_code = [self.getpos()[0], dict(attrs), []]
+        self.open_code = [self.getpos()[0], attributes, []]
 
     def handle_data(self, data):
         if self.open_code is not None:
             self.open_code[2].append(data)
 
     def handle_endtag(self, tag):
-        if tag != "code":
+        if tag == "ul" and self.examples_list_depth:
+            self.examples_list_depth -= 1
             return
-        if self.open_code is None:
-            raise ValueError("a code element closes without opening")
+        if tag != "code" or self.open_code is None:
+            return
         line, attributes, parts = self.open_code
         self.examples.append((line, attributes, "".join(parts)))
         self.open_code = None
@@ -670,22 +695,20 @@ def _templates_in_help_text():
 def _templates_in_rule_list_examples():
     """Yield explicitly marked name templates from the rule list help panel."""
     source = _UI_LIST
-    pinned = {
-        template
-        for pinned_source, _anchor, templates in _PINNED_EXAMPLES
-        if pinned_source == source
-        for template, _context in templates
-    }
     parser = _CodeExampleParser()
     parser.feed((_PROJECT_ROOT / source).read_text(encoding="utf-8"))
     parser.close()
+    if parser.examples_list_count != 1:
+        raise AssertionError(f"{source} must have one {_UI_EXAMPLES_LIST_ID} list")
+    if parser.examples_list_depth:
+        raise ValueError(f"{source} has an unclosed {_UI_EXAMPLES_LIST_ID} list")
     if parser.open_code is not None:
         raise ValueError(f"{source} has an unclosed code element")
     for line, attributes, template in parser.examples:
         context = attributes.get("data-name-template-context")
         if context is not None:
             yield DocumentedTemplate(source, template, NamingContext(context))
-        elif _TEMPLATE_VARIABLE.search(template) and template not in pinned:
+        elif any(brace in template for brace in "{}"):
             raise AssertionError(f"{source}:{line} has a name-template example not marked with a naming context")
 
 
@@ -701,6 +724,11 @@ def _templates_in_e2e_script():
         if not node.args or not isinstance(node.args[0], ast.Dict):
             continue
         payloads.append(node.args[0])
+    for payload in payloads:
+        for key, value in zip(payload.keys, payload.values, strict=True):
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                line = key.lineno if key is not None else value.lineno
+                raise TypeError(f"{source}:{line} has a payload key that is not a string literal")
     template_fields = {"name_template", "parent_name_template"}
     payload_key_ids = {
         id(key)
@@ -714,11 +742,7 @@ def _templates_in_e2e_script():
         if isinstance(node, ast.Constant) and node.value in template_fields and id(node) not in payload_key_ids:
             raise AssertionError(f"{source}:{node.lineno} has a name-template key outside a direct dumps dictionary")
     for payload in payloads:
-        values = {
-            key.value: value
-            for key, value in zip(payload.keys, payload.values, strict=True)
-            if isinstance(key, ast.Constant) and isinstance(key.value, str)
-        }
+        values = {key.value: value for key, value in zip(payload.keys, payload.values, strict=True)}
         device_rule = values.get("applies_to_device_interfaces")
         name_context = (
             NamingContext.DEVICE_INTERFACE
@@ -888,16 +912,59 @@ class DocumentedTemplateTest(unittest.TestCase):
             path = root / _UI_LIST
             path.parent.mkdir(parents=True)
             path.write_text(
-                '<code data-name-template-context="module_member">eth{bay_position_num}</code>\n'
-                "<code><span>{unknown_variable}</span></code>\n",
+                f'<ul id="{_UI_EXAMPLES_LIST_ID}">\n'
+                '<li><code data-name-template-context="module_member">eth{bay_position_num}</code></li>\n'
+                "<li><code><span>{unknown_variable}</span></code></li>\n"
+                "</ul>\n",
                 encoding="utf-8",
             )
 
             with (
                 patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
-                self.assertRaisesRegex(AssertionError, rf"{re.escape(_UI_LIST)}:2 .*not marked"),
+                self.assertRaisesRegex(AssertionError, rf"{re.escape(_UI_LIST)}:3 .*not marked"),
             ):
                 tuple(_templates_in_rule_list_examples())
+
+    def test_rule_list_help_rejects_an_unmarked_arithmetic_template_example(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / _UI_LIST
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                f'<ul id="{_UI_EXAMPLES_LIST_ID}"><li>Half-slot naming: <code>eth{{slot_num // 2}}</code></li></ul>\n',
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
+                self.assertRaisesRegex(AssertionError, rf"{re.escape(_UI_LIST)}:1 .*not marked"),
+            ):
+                tuple(_templates_in_rule_list_examples())
+
+    def test_rule_list_help_ignores_code_outside_the_examples_list(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / _UI_LIST
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "<p><code>{not_an_example}</code></p>\n"
+                '<ul id="interface-name-rule-examples">\n'
+                '<li><code data-name-template-context="module_member">eth{bay_position_num}</code></li>\n'
+                "</ul>\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root):
+                self.assertEqual(
+                    tuple(_templates_in_rule_list_examples()),
+                    (
+                        DocumentedTemplate(
+                            _UI_LIST,
+                            "eth{bay_position_num}",
+                            NamingContext.MODULE_MEMBER,
+                        ),
+                    ),
+                )
 
     def test_end_to_end_rule_payloads_are_read_from_python_syntax(self):
         self.assertEqual(
@@ -938,6 +1005,36 @@ class DocumentedTemplateTest(unittest.TestCase):
                 ):
                     tuple(_templates_in_e2e_script())
 
+    def test_end_to_end_script_rejects_nonliteral_payload_keys(self):
+        payload_keys = (
+            '"name_" + "template": "{unknown_variable}"',
+            "**make_payload()",
+            '**{"name_template": "{unknown_variable}"}',
+        )
+        for payload_key in payload_keys:
+            with self.subTest(payload_key=payload_key), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / ".devcontainer" / "scripts" / "test-e2e.py"
+                path.parent.mkdir(parents=True)
+                path.write_text(
+                    "import json\n"
+                    "def make_payload(): return {}\n"
+                    "json.dumps({\n"
+                    '    "name_template": "eth{bay_position_num}",\n'
+                    f"    {payload_key},\n"
+                    "})\n",
+                    encoding="utf-8",
+                )
+
+                with (
+                    patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
+                    self.assertRaisesRegex(
+                        TypeError,
+                        r"\.devcontainer/scripts/test-e2e\.py:5 .*not a string literal",
+                    ),
+                ):
+                    tuple(_templates_in_e2e_script())
+
     def test_every_documented_template_uses_variables_from_its_naming_context(self):
         for documented in _documented_templates():
             available = {variable.name for variable in variables_for_context(documented.context)}
@@ -973,6 +1070,16 @@ class DocumentedTemplateTest(unittest.TestCase):
                 "<!-- ```yaml\nname_template: '{retired}'\n``` -->\n",
                 encoding="utf-8",
             )
+
+            self.assertEqual(
+                tuple(_templates_in_markdown(path, "guide.md")),
+                (DocumentedTemplate("guide.md", "eth{bay_position_num}", NamingContext.MODULE_MEMBER),),
+            )
+
+    def test_a_blank_line_after_a_yaml_fence_stays_inside_the_template_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text("```yaml\n\nname_template: 'eth{bay_position_num}'\n```\n", encoding="utf-8")
 
             self.assertEqual(
                 tuple(_templates_in_markdown(path, "guide.md")),
