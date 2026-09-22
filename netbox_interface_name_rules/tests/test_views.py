@@ -12,14 +12,15 @@ from dcim.models import (
     ModuleBay,
     ModuleType,
 )
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse, StreamingHttpResponse
 from django.test import Client, SimpleTestCase, TestCase, override_settings
-from django.urls import path, reverse
+from django.urls import path, re_path, reverse
+from rest_framework.test import APIClient
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import make_device
+from netbox_interface_name_rules.views import RuleTestView
 
 User = get_user_model()
 
@@ -53,6 +54,33 @@ class _UnrelatedPostURLConf:
     urlpatterns = (path("echo/", _echo_body),)
 
 
+class _UnrelatedCatchAllURLConf:
+    """Route every path to an unrelated view."""
+
+    urlpatterns = (re_path(r"^.*$", _echo_body),)
+
+
+class _RoutedPreviewURLConf:
+    """Expose the rule tester outside the configured root URLconf."""
+
+    urlpatterns = (
+        path("routed-preview/", RuleTestView.as_view()),
+        path("home/", _echo_body, name="home"),
+    )
+
+
+class _PermittedUser:
+    """Provide the permission state the real rule tester dispatch requires."""
+
+    is_active = True
+    is_authenticated = True
+    is_superuser = True
+
+    @staticmethod
+    def has_perms(_permissions):
+        return True
+
+
 def _stream_body(request):
     """Return a streaming response from an unrelated test view."""
     return StreamingHttpResponse((b"body",))
@@ -68,8 +96,30 @@ def _select_streaming_response_urlconf(get_response):
     """Select the unrelated URLconf only for the streaming request."""
 
     def middleware(request):
+        request.user = _PermittedUser()
         if request.path == "/stream/":
             request.urlconf = _StreamingResponseURLConf
+        return get_response(request)
+
+    return middleware
+
+
+def _route_to_unrelated_view(get_response):
+    """Route a configured preview path to an unrelated view."""
+
+    def middleware(request):
+        request.urlconf = _UnrelatedCatchAllURLConf
+        return get_response(request)
+
+    return middleware
+
+
+def _route_to_preview_view(get_response):
+    """Route a path from an unrelated root URLconf to the rule tester."""
+
+    def middleware(request):
+        request.user = _PermittedUser()
+        request.urlconf = _RoutedPreviewURLConf
         return get_response(request)
 
     return middleware
@@ -1322,11 +1372,55 @@ class PreviewPostGuardTest(SimpleTestCase):
     def test_posts_reach_a_urlconf_without_the_plugin_namespace(self):
         client = Client()
 
-        raw_response = client.post("/echo/", data="body", content_type="text/plain")
-        dict_response = client.post("/echo/", data={"message": "body"})
+        raw_response = client.post("/echo/", data="bay_position=3", content_type="application/x-www-form-urlencoded")
+        dict_response = client.post("/echo/", data={"bay_position": "3"})
 
-        self.assertEqual(raw_response.content, b"body")
+        self.assertEqual(raw_response.content, b"bay_position=3")
         self.assertEqual(dict_response.status_code, 200)
+
+
+class PreviewPostGuardViewTest(ViewTestBase):
+    """The preview guard checks requests that reach the rule tester."""
+
+    def test_a_normal_preview_post_refuses_a_dropped_variable(self):
+        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
+        with self.assertRaisesRegex(AssertionError, "'bay_position'"):
+            self.client.post(preview_path, {"bay_position": "3"})
+
+    def test_an_api_client_preview_post_refuses_a_dropped_variable(self):
+        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+        client = APIClient()
+        client.force_login(self.superuser)
+
+        with self.assertRaisesRegex(AssertionError, "'bay_position'"):
+            client.post(preview_path, {"bay_position": "3"})
+
+
+@override_settings(
+    MIDDLEWARE=("netbox_interface_name_rules.tests.test_views._route_to_unrelated_view",),
+)
+class PreviewPostGuardMiddlewareDiversionTest(SimpleTestCase):
+    """The preview guard follows middleware routing away from the configured preview path."""
+
+    def test_a_configured_preview_path_routed_elsewhere_is_left_alone(self):
+        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+
+        response = Client().post(preview_path, {"bay_position": "3"})
+
+        self.assertEqual(response.status_code, 200)
+
+
+@override_settings(
+    ROOT_URLCONF=_UnrelatedPostURLConf,
+    MIDDLEWARE=("netbox_interface_name_rules.tests.test_views._route_to_preview_view",),
+)
+class PreviewPostGuardMiddlewareSelectionTest(SimpleTestCase):
+    """The preview guard follows middleware routing into the rule tester."""
+
+    def test_a_path_missing_from_the_root_urlconf_is_checked_when_routed_to_preview(self):
+        with self.assertRaisesRegex(AssertionError, "'bay_position'"):
+            self.client.post("/routed-preview/", {"bay_position": "3"})
 
 
 @override_settings(
@@ -1336,12 +1430,9 @@ class PreviewPostGuardURLConfStateTest(SimpleTestCase):
     """The preview guard ignores URLconf state left by an open streaming response."""
 
     def test_an_open_streaming_response_cannot_disable_the_preview_guard(self):
-        preview_path = reverse(
-            "plugins:netbox_interface_name_rules:interfacenamerule_test",
-            urlconf=settings.ROOT_URLCONF,
-        )
-        client = Client()
+        preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
+        client = Client()
         streaming_response = client.get("/stream/")
         self.addCleanup(streaming_response.close)
 

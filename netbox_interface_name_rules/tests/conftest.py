@@ -60,30 +60,14 @@ def refuse_dropped_preview_keys(data):
 
 @pytest.fixture(autouse=True)
 def _refuse_dropped_preview_keys(monkeypatch):
-    """Fail a `django.test.Client.post` that carries a preview variable the form would drop.
+    """Fail any request that reaches the rule tester with a preview variable the form would drop."""
+    from netbox_interface_name_rules.views import RuleTestView
 
-    The check reads the dict that is actually sent, so a payload assembled from `**kwargs` is
-    covered as well as a literal. It does not reach DRF's `APIClient`, which defines its own
-    `post`, nor a non-dict body; neither submits the rule-test form.
-    """
-    from django.conf import settings
-    from django.test import Client
-    from django.urls import NoReverseMatch, reverse
+    original = RuleTestView.post
 
-    original = Client.post
+    @functools.wraps(original)
+    def post(self, request):
+        refuse_dropped_preview_keys(request.POST)
+        return original(self, request)
 
-    def post(self, path, data=None, *args, **kwargs):
-        if not isinstance(data, dict):
-            return original(self, path, data, *args, **kwargs)
-        try:
-            preview_path = reverse(
-                "plugins:netbox_interface_name_rules:interfacenamerule_test",
-                urlconf=settings.ROOT_URLCONF,
-            )
-        except NoReverseMatch:
-            return original(self, path, data, *args, **kwargs)
-        if path.split("?", 1)[0] == preview_path:
-            refuse_dropped_preview_keys(data)
-        return original(self, path, data, *args, **kwargs)
-
-    monkeypatch.setattr(Client, "post", post)
+    monkeypatch.setattr(RuleTestView, "post", post)
