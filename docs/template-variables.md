@@ -16,7 +16,7 @@ Module rules use these variables in the Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | Raw template name before any rule applies. | `et-0/0/1` |
+| `{base}` | Raw template name on first apply. Current name of the family's base interface on reapply. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 | `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
 
@@ -33,7 +33,7 @@ Module rules use these variables in the Parent Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | Raw template name before any rule applies. | `et-0/0/1` |
+| `{base}` | Raw template name on first apply. Current name of the family's base interface on reapply. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 
 ### Device interface names
@@ -204,8 +204,8 @@ channel_start: 0
 minus `{channel}` — the parent is the one interface in the family without a channel number, and a
 `{channel}` in it is rejected in every spelling, including inside an expression (`{channel + 1}`).
 Braces must balance, so a stray `{` is refused on save instead of ending up in an interface name.
-Blank leaves the parent the name NetBox gave it. `{base}` is the raw template name, for the parent
-and for every channel alike.
+Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for
+the parent and for every channel alike.
 
 The complete family is checked before anything is written: one occupied name — the parent's or any
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
