@@ -178,8 +178,8 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
 
         self.assertEqual(self._parent(module).name, "7-parent")
 
-    def test_module_base_description_matches_reapplication_behavior(self):
-        """A module starts from the raw name, then a reapply sees the installed parent's current name."""
+    def test_module_base_description_stays_true_of_reapplication_behavior(self):
+        """The catalogue names the common input role without claiming one reapply path."""
         module, bay = self._install(self.base_type, "7")
 
         self.assertEqual(self._parent(module).name, "7-parent")
@@ -187,7 +187,7 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
         self.assertEqual(self._parent(module).name, "7-parent-parent")
         base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
         descriptions = dict(base.descriptions)
-        expected = "Raw template name on first apply. Current name of the family's base interface on reapply."
+        expected = "The name the rule starts from, which is the module's raw template name when the rule first applies."
         self.assertEqual(descriptions[NamingContext.MODULE_MEMBER], expected)
         self.assertEqual(descriptions[NamingContext.MODULE_PARENT], expected)
 
@@ -324,7 +324,7 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
         cls.module_type = _plain_module_type(manufacturer, "ChanFlat-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
-            name_template="xe-0/0/{bay_position}:{channel}",
+            name_template="xe-0/0/{base}:{channel}",
             breakout_mode=FLAT,
             channel_count=4,
             channel_start=0,
@@ -350,6 +350,19 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
 
     def test_the_installed_family_is_flat_to_begin_with(self):
         """The precondition the rest of this case rests on: four plain siblings, no parent."""
+        self._assert_still_flat()
+
+    def test_reapply_starts_from_the_raw_template_name_again(self):
+        """A renamed member never becomes the base input for a later flat-family apply."""
+        plans = plan_installed_families(
+            self.module,
+            self.rule,
+            build_variables(self.bay, device=self.device),
+        )
+
+        self.assertEqual(len(plans.plans), 1)
+        self.assertEqual([member.target_name for member in plans.plans[0].members], self.FLAT_NAMES)
+        self.assertEqual(apply_interface_name_rules(self.module, self.bay), 0)
         self._assert_still_flat()
 
     def test_force_apply_does_not_convert_the_flat_family(self):

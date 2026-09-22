@@ -55,16 +55,15 @@ class TemplateVariableCatalogueTest(unittest.TestCase):
 
     def test_base_description_matches_each_input_name(self):
         base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
+        module_description = (
+            "The name the rule starts from, which is the module's raw template name when the rule first applies."
+        )
 
         self.assertEqual(
             dict(base.descriptions),
             {
-                NamingContext.MODULE_MEMBER: (
-                    "Raw template name on first apply. Current name of the family's base interface on reapply."
-                ),
-                NamingContext.MODULE_PARENT: (
-                    "Raw template name on first apply. Current name of the family's base interface on reapply."
-                ),
+                NamingContext.MODULE_MEMBER: module_description,
+                NamingContext.MODULE_PARENT: module_description,
                 NamingContext.DEVICE_INTERFACE: "Current interface name before the rule applies.",
             },
         )
@@ -223,15 +222,22 @@ class ConversionDocumentationTest(unittest.TestCase):
                     self.assertNotIn(reason, sentence)
 
 
-class ChannelizedFamilyDocumentationTest(unittest.TestCase):
-    """Keep the installed channelized-family description consistent with reapplication."""
+class BaseVariableDocumentationTest(unittest.TestCase):
+    """Keep each module-family base path explicit outside the generated reference."""
 
-    def test_base_is_documented_as_the_installed_parent_name(self):
+    def test_each_module_family_base_path_is_documented(self):
         guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text(encoding="utf-8")
 
         self.assertIn(
-            "Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for\n"
-            "the parent and for every channel alike.",
+            "For a flat breakout family, `{base}` is the module's raw template name on every apply.",
+            guide,
+        )
+        self.assertIn(
+            "For an installed channelized family, `{base}` is the installed parent's current name.",
+            guide,
+        )
+        self.assertIn(
+            "For a plain interface rename, `{base}` is the interface's current name.",
             guide,
         )
 
@@ -532,43 +538,42 @@ class DocumentedTemplate:
 
 
 class _CodeExampleParser(HTMLParser):
-    """Collect code elements from the rule-list help panel's examples list."""
+    """Collect marked elements from the rule-list help panel's examples list."""
 
     def __init__(self):
         super().__init__()
         self.examples = []
         self.examples_list_count = 0
         self.examples_list_depth = 0
-        self.open_code = None
+        self.open_example = None
+        self.unmarked_template_lines = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
         if tag == "ul" and attributes.get("id") == _UI_EXAMPLES_LIST_ID:
             self.examples_list_count += 1
             self.examples_list_depth = 1
-            return
-        if tag == "ul" and self.examples_list_depth:
+        elif tag == "ul" and self.examples_list_depth:
             self.examples_list_depth += 1
+        if not self.examples_list_depth or "data-name-template-context" not in attributes:
             return
-        if tag != "code" or not self.examples_list_depth:
-            return
-        if self.open_code is not None:
-            raise ValueError("code elements cannot be nested")
-        self.open_code = [self.getpos()[0], attributes, []]
+        if self.open_example is not None:
+            raise ValueError("marked name-template example elements cannot be nested")
+        self.open_example = [tag, self.getpos()[0], attributes, []]
 
     def handle_data(self, data):
-        if self.open_code is not None:
-            self.open_code[2].append(data)
+        if self.open_example is not None:
+            self.open_example[3].append(data)
+        elif self.examples_list_depth and any(brace in data for brace in "{}"):
+            self.unmarked_template_lines.append(self.getpos()[0])
 
     def handle_endtag(self, tag):
+        if self.open_example is not None and tag == self.open_example[0]:
+            _tag, line, attributes, parts = self.open_example
+            self.examples.append((line, attributes, "".join(parts)))
+            self.open_example = None
         if tag == "ul" and self.examples_list_depth:
             self.examples_list_depth -= 1
-            return
-        if tag != "code" or self.open_code is None:
-            return
-        line, attributes, parts = self.open_code
-        self.examples.append((line, attributes, "".join(parts)))
-        self.open_code = None
 
 
 _PINNED_EXAMPLES = (
@@ -702,14 +707,14 @@ def _templates_in_rule_list_examples():
         raise AssertionError(f"{source} must have one {_UI_EXAMPLES_LIST_ID} list")
     if parser.examples_list_depth:
         raise ValueError(f"{source} has an unclosed {_UI_EXAMPLES_LIST_ID} list")
-    if parser.open_code is not None:
-        raise ValueError(f"{source} has an unclosed code element")
-    for line, attributes, template in parser.examples:
-        context = attributes.get("data-name-template-context")
-        if context is not None:
-            yield DocumentedTemplate(source, template, NamingContext(context))
-        elif any(brace in template for brace in "{}"):
-            raise AssertionError(f"{source}:{line} has a name-template example not marked with a naming context")
+    if parser.open_example is not None:
+        raise ValueError(f"{source} has an unclosed marked name-template example element")
+    if parser.unmarked_template_lines:
+        line = parser.unmarked_template_lines[0]
+        raise AssertionError(f"{source}:{line} has a name-template example not marked with a naming context")
+    for _line, attributes, template in parser.examples:
+        context = attributes["data-name-template-context"]
+        yield DocumentedTemplate(source, template, NamingContext(context))
 
 
 def _templates_in_e2e_script():
@@ -922,6 +927,43 @@ class DocumentedTemplateTest(unittest.TestCase):
             with (
                 patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
                 self.assertRaisesRegex(AssertionError, rf"{re.escape(_UI_LIST)}:3 .*not marked"),
+            ):
+                tuple(_templates_in_rule_list_examples())
+
+    def test_rule_list_help_audits_a_marked_template_on_any_element(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / _UI_LIST
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                f'<ul id="{_UI_EXAMPLES_LIST_ID}">\n'
+                '<li><span data-name-template-context="module_member">{unknown_variable}</span></li>\n'
+                "</ul>\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
+                self.assertRaisesRegex(AssertionError, "unknown_variable"),
+            ):
+                for documented in _templates_in_rule_list_examples():
+                    available = {variable.name for variable in variables_for_context(documented.context)}
+                    referenced = set(_TEMPLATE_VARIABLE.findall(documented.template))
+                    self.assertLessEqual(referenced, available)
+
+    def test_rule_list_help_rejects_an_unmarked_template_on_any_element(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / _UI_LIST
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                f'<ul id="{_UI_EXAMPLES_LIST_ID}"><li><span>{{unknown_variable}}</span></li></ul>\n',
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
+                self.assertRaisesRegex(AssertionError, rf"{re.escape(_UI_LIST)}:1 .*not marked"),
             ):
                 tuple(_templates_in_rule_list_examples())
 

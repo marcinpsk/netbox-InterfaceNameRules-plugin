@@ -135,8 +135,14 @@ TEMPLATE_VARIABLES = (
         "base",
         ((_MEMBER, _CALLER), (_PARENT, _CALLER), (_DEVICE, _CALLER)),
         (
-            (_MEMBER, "Raw template name on first apply. Current name of the family's base interface on reapply."),
-            (_PARENT, "Raw template name on first apply. Current name of the family's base interface on reapply."),
+            (
+                _MEMBER,
+                "The name the rule starts from, which is the module's raw template name when the rule first applies.",
+            ),
+            (
+                _PARENT,
+                "The name the rule starts from, which is the module's raw template name when the rule first applies.",
+            ),
             (_DEVICE, "Current interface name before the rule applies."),
         ),
         "et-0/0/1",
