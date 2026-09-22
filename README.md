@@ -32,12 +32,12 @@ automatically apply renaming rules based on configurable templates.
 
 ## Supported scenarios
 
-| Scenario | Example |
-|----------|---------|
-| Converter offset | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
-| Breakout channels | QSFP-4X10G-LR → `et-0/0/4:0` through `et-0/0/4:3` |
-| Platform naming | QSFP-100G-LR4 on ACX7024 → `et-0/0/{bay_position}` |
-| UfiSpace breakout | QSFP-100G on S9610 → `swp{bay_position_num}s{channel}` |
+| Scenario | Name template | Example result |
+|----------|---------------|----------------|
+| Converter offset | `GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}` | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
+| Breakout channels | `et-0/0/{bay_position}:{channel}` | QSFP-4X10G-LR → `et-0/0/4:0` through `et-0/0/4:3` |
+| Platform naming | `et-0/0/{bay_position}` | QSFP-100G-LR4 on ACX7024 → `et-0/0/4` |
+| UfiSpace breakout | `swp{bay_position_num}s{channel}` | QSFP-100G on S9610 → `swp1s0` through `swp1s3` |
 
 ## Installation
 

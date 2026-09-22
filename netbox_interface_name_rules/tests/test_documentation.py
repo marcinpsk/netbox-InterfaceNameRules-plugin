@@ -2,36 +2,156 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Test documentation statements that define plugin behavior."""
 
+import ast
 import importlib
+import json
 import re
 import tempfile
 import unittest
+from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 import re2
 import yaml
 from dcim.models import Device, ModuleBay
+from django.core.management import call_command
 
+from netbox_interface_name_rules import template_variable_reference
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.name_template import evaluate_name_template
+from netbox_interface_name_rules.name_template import (
+    TEMPLATE_VARIABLES,
+    NamingContext,
+    evaluate_name_template,
+    variables_for_context,
+)
 from netbox_interface_name_rules.naming import build_variables
+from netbox_interface_name_rules.template_variable_reference import (
+    GENERATED_REGION_BEGIN,
+    GENERATED_REGION_END,
+    GeneratedReferenceRegion,
+    outdated_generated_regions,
+    regenerated_document,
+    render_markdown_reference,
+    write_generated_regions,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
 
-# Names the engine adds when it renames, so a reference table may list them.
-_ENGINE_VARIABLES = frozenset({"base", "channel", "port"})
-_MARKDOWN_VARIABLE_ROW = re.compile(r"^\| `\{(\w+)\}`")
-_VARIABLE_TABLES = (
-    (
-        "netbox_interface_name_rules/templates/netbox_interface_name_rules/interfacenamerule_list.html",
-        re.compile(r"<td><code>\{(\w+)\}</code>"),
-    ),
-    ("contrib/README.md", _MARKDOWN_VARIABLE_ROW),
-    ("docs/template-variables.md", _MARKDOWN_VARIABLE_ROW),
-    ("netbox_interface_name_rules/models.py", re.compile(r"^ {6}\{(\w+)\} +-")),
-)
+
+class TemplateVariableCatalogueTest(unittest.TestCase):
+    """The catalogue describes the reference shown to operators and agents."""
+
+    def test_every_variable_carries_its_context_descriptions_and_example(self):
+        for variable in TEMPLATE_VARIABLES:
+            provider_contexts = {context for context, _source in variable.providers}
+            with self.subTest(variable=variable.name):
+                self.assertEqual(set(dict(variable.descriptions)), provider_contexts)
+                self.assertTrue(variable.example)
+
+    def test_base_description_matches_each_input_name(self):
+        base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
+
+        self.assertEqual(
+            dict(base.descriptions),
+            {
+                NamingContext.MODULE_MEMBER: "Raw template name before any rule applies.",
+                NamingContext.MODULE_PARENT: "Raw template name before any rule applies.",
+                NamingContext.DEVICE_INTERFACE: "Current interface name before the rule applies.",
+            },
+        )
+
+
+class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
+    """Generated references stay synchronized with the language catalogue."""
+
+    def test_generated_regions_match_a_fresh_regeneration(self):
+        self.assertEqual(outdated_generated_regions(), ())
+
+    def test_generated_reference_names_each_rule_field(self):
+        reference = render_markdown_reference(3)
+
+        self.assertIn(
+            "### Module member names\n\nModule rules use these variables in the Name Template field.", reference
+        )
+        self.assertIn(
+            "### Module parent names\n\nModule rules use these variables in the Parent Name Template field.", reference
+        )
+        self.assertIn(
+            "### Device interface names\n\nDevice-interface rules use these variables in the Name Template field.",
+            reference,
+        )
+
+    def test_writer_repairs_a_stale_region(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "guide.md"
+            path.write_text(
+                f"Before\n{GENERATED_REGION_BEGIN}\nstale\n{GENERATED_REGION_END}\nAfter\n",
+                encoding="utf-8",
+            )
+            region = GeneratedReferenceRegion(path, 3)
+            with (
+                patch.object(template_variable_reference, "PROJECT_ROOT", root),
+                patch.object(template_variable_reference, "GENERATED_REFERENCE_REGIONS", (region,)),
+            ):
+                self.assertEqual(outdated_generated_regions(), ("guide.md",))
+                self.assertEqual(write_generated_regions(), ("guide.md",))
+                self.assertEqual(outdated_generated_regions(), ())
+
+            self.assertIn(render_markdown_reference(3), path.read_text(encoding="utf-8"))
+
+    def test_management_command_reports_updated_then_current_regions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "guide.md"
+            path.write_text(
+                f"{GENERATED_REGION_BEGIN}\nstale\n{GENERATED_REGION_END}\n",
+                encoding="utf-8",
+            )
+            region = GeneratedReferenceRegion(path, 3)
+            with (
+                patch.object(template_variable_reference, "PROJECT_ROOT", root),
+                patch.object(template_variable_reference, "GENERATED_REFERENCE_REGIONS", (region,)),
+            ):
+                updated_output = StringIO()
+                call_command("generate_template_variable_reference", stdout=updated_output)
+                current_output = StringIO()
+                call_command("generate_template_variable_reference", stdout=current_output)
+
+            self.assertEqual(updated_output.getvalue(), "Updated guide.md\n")
+            self.assertEqual(current_output.getvalue(), "Template-variable references are current.\n")
+
+    def test_malformed_generated_region_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text("No generated region.\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "must contain exactly one generated template-variable region"):
+                regenerated_document(GeneratedReferenceRegion(path, 3))
+
+    def test_agent_instructions_name_the_language_owner(self):
+        instructions = (_PROJECT_ROOT / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+
+        self.assertIn("**`name_template.py`**: Owns the name-template language", instructions)
+        self.assertNotIn("`naming.py` replaces known variables", instructions)
+        self.assertNotIn("Arithmetic inside braces is parsed with `ast.parse`", instructions)
+
+    def test_rule_model_points_at_the_catalogue_instead_of_relisting_variables(self):
+        docstring = InterfaceNameRule.__doc__ or ""
+
+        self.assertIn("TEMPLATE_VARIABLES", docstring)
+        for variable in TEMPLATE_VARIABLES:
+            with self.subTest(variable=variable.name):
+                self.assertNotIn(f"{{{variable.name}}} -", docstring)
+
+    def test_rule_tester_names_the_module_base_as_the_raw_template_name(self):
+        from netbox_interface_name_rules.forms import RuleTestForm
+
+        self.assertEqual(RuleTestForm().fields["var_base"].label, "{base} (raw template name)")
 
 
 # _blocking_reason() and the staleness check decide these before _rewrite() runs, so NetBox never sees them.
@@ -320,236 +440,386 @@ class ShippedPatternRe2AuditTest(unittest.TestCase):
             self.assertEqual(list(_patterns_in_markdown(path)), ["QSFP-.*"])
 
 
-def _first_table_variables(path, pattern):
-    """Return the variables listed in the first variable table of *path*.
-
-    The rows end at the first line that lists none, because a second table further down would
-    otherwise cover a variable missing from the first: `docs/template-variables.md` lists the
-    device-rule variables in one of its own. A commented-out row is not on the page, so the
-    comments go first, and an unterminated one is an error rather than a row that counts.
-    """
-    text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
-    if "<!--" in text:
-        raise ValueError(f"{path.name} holds an unterminated comment, so its table cannot be read")
-    names = []
-    for line in text.splitlines():
-        match = pattern.search(line)
-        if match:
-            names.append(match.group(1))
-        elif names:
-            break
-    return frozenset(names)
-
-
-def _built_variables():
-    """Return every variable name `build_variables` produces, from the function itself.
-
-    Neither call reaches the database: the resolvers read the position, name, parent and module
-    of the bay, and the virtual-chassis fields of the device.
-    """
-    member = Device(virtual_chassis_id=1, vc_position=1)
-    return frozenset(build_variables(ModuleBay())) | frozenset(build_variables(ModuleBay(), member))
-
-
-class TemplateVariableReferenceTest(unittest.TestCase):
-    """Every reference table lists every variable `build_variables` produces.
-
-    Three tables restate that set, and the two variables this feature added reached only one of
-    them. A table may also list `base`, `channel` and `port`, which the engine adds at rename
-    time; anything else it lists does not exist.
-    """
-
-    def test_a_commented_out_row_is_not_documented(self):
-        """A row inside an HTML comment is not on the page, so it must not satisfy the guard."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "table.html"
-            path.write_text(
-                "<tr><td><code>{slot}</code></td></tr>\n<!-- <tr><td><code>{slot_num}</code></td></tr> -->\n",
-                encoding="utf-8",
-            )
-
-            self.assertEqual(_first_table_variables(path, _VARIABLE_TABLES[0][1]), frozenset({"slot"}))
-
-    def test_an_unterminated_comment_is_an_error(self):
-        """It hides every row below it on the page, so reading the rows would report a stale table."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "table.html"
-            path.write_text(
-                "<tr><td><code>{slot}</code></td></tr>\n<!-- <tr><td><code>{slot_num}</code></td></tr>\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(ValueError, "unterminated comment"):
-                _first_table_variables(path, _VARIABLE_TABLES[0][1])
-
-    def test_every_reference_table_lists_every_built_variable(self):
-        built = _built_variables()
-
-        for path, pattern in _VARIABLE_TABLES:
-            with self.subTest(path=path):
-                documented = _first_table_variables(_PROJECT_ROOT / path, pattern)
-
-                self.assertEqual(documented - _ENGINE_VARIABLES, built)
-
-
-_TEMPLATE_KEY = re.compile(r"^\s*-?\s*(?:parent_)?name_template:\s*(.+)$", re.MULTILINE)
 _HELP_TEXT_EXAMPLE = re.compile(r"'([^']*\{[^']*)'")
-_TEMPLATE_SOURCES = ("contrib/*.yaml", "docs/*.md", "contrib/*.md", "models.py")
 _UI = "netbox_interface_name_rules/templates/netbox_interface_name_rules"
 _OFFSET = "{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}"
-_CISCO_OFFSET = f"GigabitEthernet{{slot_num}}/{_OFFSET}"
 _FORM_EXAMPLE = "e.g. et-0/0/{bay_position} or {base}:{channel}"
 _PARENT_FORM_EXAMPLE = "parent interface, e.g. et-0/0/{bay_position}"
 _UI_LIST = f"{_UI}/interfacenamerule_list.html"
-_YAML_KEY = f'name_template: "{_CISCO_OFFSET}"'
-# Examples that state the language rather than define a rule; each anchor is unique in its file.
+_MARKDOWN_YAML_BLOCK = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
+_HTML_TEMPLATE = re.compile(r'<code data-name-template-context="([^"]+)">([^<]+)</code>')
+_TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
+_MARKDOWN_TABLE_CONTEXTS = {
+    "README.md": {"Supported scenarios": NamingContext.MODULE_MEMBER},
+    "docs/index.md": {"Supported Scenarios": NamingContext.MODULE_MEMBER},
+    "docs/examples.md": {
+        "Rule overview for ACX7024": NamingContext.MODULE_MEMBER,
+        "Juniper EX Virtual Chassis": NamingContext.DEVICE_INTERFACE,
+    },
+}
+_DOCUMENTED_TEMPLATE_SOURCES = {
+    ".devcontainer/scripts/test-e2e.py",
+    "README.md",
+    "contrib/README.md",
+    "contrib/cisco.yaml",
+    "contrib/converters.yaml",
+    "contrib/demo-vc.yaml",
+    "contrib/juniper-channelized.yaml",
+    "contrib/juniper.yaml",
+    "contrib/linux.yaml",
+    "contrib/ufispace-device-type.yaml",
+    "contrib/ufispace.yaml",
+    "docs/configuration.md",
+    "docs/examples.md",
+    "docs/index.md",
+    "docs/template-variables.md",
+    "netbox_interface_name_rules/forms.py",
+    "netbox_interface_name_rules/models.py",
+    "netbox_interface_name_rules/name_template.py",
+    f"{_UI}/interfacenamerule_list.html",
+    f"{_UI}/rule_test.html",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentedTemplate:
+    """Record a shipped or documented name template and its naming context."""
+
+    source: str
+    template: str
+    context: NamingContext
+
+
 _PINNED_EXAMPLES = (
-    ("README.md", _OFFSET, (_OFFSET,)),
-    ("docs/index.md", _OFFSET, (_OFFSET,)),
-    # Line 233 of the guide is a name_template value the extractor already reads; anchor the prose one.
-    ("docs/template-variables.md", f"\n{_OFFSET}\n", (_OFFSET,)),
-    (_UI_LIST, f"<code>{_OFFSET}</code>", (_OFFSET,)),
-    (_UI_LIST, f"<code>{_CISCO_OFFSET}</code>", (_CISCO_OFFSET,)),
-    (f"{_UI}/rule_test.html", f"<code>{_OFFSET}</code>", (_OFFSET,)),
-    ("contrib/README.md", "{{slot_num} // 2}", ("{{slot_num} // 2}",)),
+    ("docs/template-variables.md", f"\n{_OFFSET}\n", ((_OFFSET, NamingContext.MODULE_MEMBER),)),
+    (f"{_UI}/rule_test.html", f"<code>{_OFFSET}</code>", ((_OFFSET, NamingContext.MODULE_MEMBER),)),
+    ("contrib/README.md", "{{slot_num} // 2}", (("{{slot_num} // 2}", NamingContext.MODULE_MEMBER),)),
     (
         "netbox_interface_name_rules/name_template.py",
         "GigabitEthernet{slot_num}/{8 + {sfp_slot}}",
-        ("GigabitEthernet{slot_num}/{8 + {sfp_slot}}",),
+        (("GigabitEthernet{slot_num}/{8 + {sfp_slot}}", NamingContext.MODULE_MEMBER),),
     ),
-    ("netbox_interface_name_rules/forms.py", _FORM_EXAMPLE, ("et-0/0/{bay_position}", "{base}:{channel}")),
-    ("netbox_interface_name_rules/forms.py", _PARENT_FORM_EXAMPLE, ("et-0/0/{bay_position}",)),
-    # Evaluating the converter-offset rule is not enough: a raw slot in its literal prefix renders.
-    ("contrib/README.md", _YAML_KEY, (_CISCO_OFFSET,)),
-    ("contrib/converters.yaml", _YAML_KEY, (_CISCO_OFFSET,)),
-    ("docs/examples.md", _YAML_KEY, (_CISCO_OFFSET,)),
-    ("docs/template-variables.md", _YAML_KEY, (_CISCO_OFFSET,)),
-    ("netbox_interface_name_rules/models.py", f"'{_CISCO_OFFSET}'", (_CISCO_OFFSET,)),
+    (
+        "netbox_interface_name_rules/forms.py",
+        _FORM_EXAMPLE,
+        (
+            ("et-0/0/{bay_position}", NamingContext.MODULE_MEMBER),
+            ("{base}:{channel}", NamingContext.MODULE_MEMBER),
+        ),
+    ),
+    (
+        "netbox_interface_name_rules/forms.py",
+        _PARENT_FORM_EXAMPLE,
+        (("et-0/0/{bay_position}", NamingContext.MODULE_PARENT),),
+    ),
 )
 
 
-def _templates_in(node):
-    """Yield every name template nested anywhere in a loaded YAML document."""
+def _templates_in(node, source):
+    """Yield every name template nested in loaded rule data with its naming context."""
     if isinstance(node, dict):
-        for key in ("name_template", "parent_name_template"):
+        device_rule = node.get("applies_to_device_interfaces") is True
+        for key, context in (
+            ("name_template", NamingContext.DEVICE_INTERFACE if device_rule else NamingContext.MODULE_MEMBER),
+            ("parent_name_template", NamingContext.MODULE_PARENT),
+        ):
             if key not in node:
                 continue
             if not isinstance(node[key], str):
                 raise TypeError(f"{key} is not a string: {node[key]!r}")
-            yield node[key]
-        for value in node.values():
-            yield from _templates_in(value)
+            yield DocumentedTemplate(source, node[key], context)
+        for key, value in node.items():
+            if key not in {"name_template", "parent_name_template"}:
+                yield from _templates_in(value, source)
     elif isinstance(node, list):
         for value in node:
-            yield from _templates_in(value)
+            yield from _templates_in(value, source)
 
 
-def _templates_in_markdown(path):
-    """Yield every name template a guide defines, ignoring what an HTML comment retired.
-
-    `_first_table_variables` drops commented-out rows for the same reason: a retired example is
-    not on the page, so enforcing it would report a guide that no longer says what it says.
-    """
+def _visible_markdown(path):
+    """Return visible Markdown while preserving content between generated-region markers."""
     text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
     if "<!--" in text:
         raise ValueError(f"{path.name} holds an unterminated comment, so its examples cannot be read")
-    for raw in _TEMPLATE_KEY.findall(text):
-        value = yaml.safe_load(raw)
-        if not isinstance(value, str):
-            raise TypeError(f"{path.name} has a name_template that is not a string: {raw!r}")
-        yield value
+    return text
+
+
+def _templates_in_markdown(path, source):
+    """Yield templates from complete YAML blocks; keys outside fences are intentionally out of scope."""
+    for block in _MARKDOWN_YAML_BLOCK.findall(_visible_markdown(path)):
+        yield from _templates_in(yaml.safe_load(block), source)
+
+
+def _templates_in_markdown_tables(path, source, contexts):
+    """Yield templates from explicitly named Markdown table columns."""
+    lines = _visible_markdown(path).splitlines()
+    heading = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip()
+        if not line.startswith("|"):
+            index += 1
+            continue
+        headers = [cell.strip() for cell in line.strip("|").split("|")]
+        if "Name template" not in headers:
+            index += 1
+            continue
+        if heading not in contexts:
+            raise AssertionError(f"{source} has no naming context for the {heading!r} template table")
+        template_column = headers.index("Name template")
+        index += 2
+        while index < len(lines) and lines[index].startswith("|"):
+            cells = [cell.strip() for cell in lines[index].strip("|").split("|")]
+            value = cells[template_column]
+            if value not in {"—", "-"}:
+                match = re.fullmatch(r"`([^`]+)`", value)
+                if match is None:
+                    raise AssertionError(f"{source} has an ambiguous name template cell: {value!r}")
+                yield DocumentedTemplate(source, match.group(1), contexts[heading])
+            index += 1
+
+
+def _templates_in_configuration_json():
+    """Yield templates from JSON request payloads in the configuration guide."""
+    source = "docs/configuration.md"
+    text = (_PROJECT_ROOT / source).read_text(encoding="utf-8")
+    for payload in re.findall(r"-d\s+'(\{[^\n]+\})'", text):
+        yield from _templates_in(json.loads(payload), source)
+
+
+def _templates_in_help_text():
+    """Yield model field examples with the naming context of their field."""
+    source = "netbox_interface_name_rules/models.py"
+    for name, context in (
+        ("name_template", NamingContext.MODULE_MEMBER),
+        ("parent_name_template", NamingContext.MODULE_PARENT),
+    ):
+        help_text = str(InterfaceNameRule._meta.get_field(name).help_text)
+        for template in _HELP_TEXT_EXAMPLE.findall(help_text):
+            yield DocumentedTemplate(source, template, context)
+
+
+def _templates_in_rule_list_examples():
+    """Yield explicitly marked name templates from the rule list help panel."""
+    source = _UI_LIST
+    text = (_PROJECT_ROOT / source).read_text(encoding="utf-8")
+    for context, template in _HTML_TEMPLATE.findall(text):
+        yield DocumentedTemplate(source, template, NamingContext(context))
+
+
+def _templates_in_e2e_script():
+    """Yield rule payload templates from the end-to-end development script's syntax tree."""
+    source = ".devcontainer/scripts/test-e2e.py"
+    path = _PROJECT_ROOT / source
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute) or node.func.attr != "dumps":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Dict):
+            continue
+        values = {
+            key.value: value
+            for key, value in zip(node.args[0].keys, node.args[0].values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        template = values.get("name_template")
+        if not isinstance(template, ast.Constant) or not isinstance(template.value, str):
+            continue
+        device_rule = values.get("applies_to_device_interfaces")
+        context = (
+            NamingContext.DEVICE_INTERFACE
+            if isinstance(device_rule, ast.Constant) and device_rule.value is True
+            else NamingContext.MODULE_MEMBER
+        )
+        yield DocumentedTemplate(source, template.value, context)
 
 
 def _documented_templates():
-    """Return every name template the plugin ships or documents, grouped by the source it came from.
+    """Return every shipped and documented template with its declared naming context.
 
-    The value is read from the key that defines a rule, the way `_shipped_patterns` reads a
-    pattern. Scanning prose for braces was tried over two review rounds and abandoned:
-    documentation also holds counter-examples the engine must reject, NetBox's own
-    `{vc_position:0}` token syntax, placeholders such as `{N}`, regex quantifiers such as `{0,3}`
-    and a literal stray `{`, and no filter separated those from a template reliably. The examples
-    that live in prose are pinned by text in `_PINNED_EXAMPLES` instead.
+    Readers use structured YAML, JSON, Markdown table columns, marked HTML elements, or Python
+    syntax. They do not scan prose for braces. The guides also contain invalid counter-examples,
+    NetBox tokens, placeholders, regex quantifiers, and a literal stray brace.
     """
-    found = {source: [] for source in _TEMPLATE_SOURCES}
+    found = []
     for path in sorted((_PROJECT_ROOT / "contrib").glob("*.yaml")):
-        found["contrib/*.yaml"].extend(
-            (path.name, template) for template in _templates_in(yaml.safe_load(path.read_text(encoding="utf-8")))
-        )
-    for source in ("docs/*.md", "contrib/*.md"):
-        directory, pattern = source.split("/")
-        for path in sorted((_PROJECT_ROOT / directory).glob(pattern)):
-            found[source].extend((path.name, template) for template in _templates_in_markdown(path))
-    for name in ("name_template", "parent_name_template"):
-        help_text = str(InterfaceNameRule._meta.get_field(name).help_text)
-        found["models.py"].extend(("models.py", t) for t in _HELP_TEXT_EXAMPLE.findall(help_text))
-    return found
+        source = str(path.relative_to(_PROJECT_ROOT))
+        found.extend(_templates_in(yaml.safe_load(path.read_text(encoding="utf-8")), source))
+    for directory in ("docs", "contrib"):
+        for path in sorted((_PROJECT_ROOT / directory).glob("*.md")):
+            source = str(path.relative_to(_PROJECT_ROOT))
+            found.extend(_templates_in_markdown(path, source))
+    for source, contexts in _MARKDOWN_TABLE_CONTEXTS.items():
+        found.extend(_templates_in_markdown_tables(_PROJECT_ROOT / source, source, contexts))
+    found.extend(_templates_in_configuration_json())
+    found.extend(_templates_in_help_text())
+    found.extend(_templates_in_rule_list_examples())
+    found.extend(_templates_in_e2e_script())
+    for source, anchor, templates in _PINNED_EXAMPLES:
+        text = (_PROJECT_ROOT / source).read_text(encoding="utf-8")
+        if text.count(anchor) != 1:
+            raise AssertionError(f"{source} must hold {anchor!r} exactly once")
+        found.extend(DocumentedTemplate(source, template, context) for template, context in templates)
+    return tuple(found)
 
 
-def _example_variables():
-    """Return the variables a documented template is read against, from a composed bay.
-
-    The position is path-shaped because a device type may compose the parent into it, which is
-    what makes a template that reads a raw position inside arithmetic fail here. Neither call
-    reaches the database: the resolvers read the position and parent of the bay and the
-    virtual-chassis fields of the device.
-    """
+def _example_variables(context):
+    """Return representative values limited to one naming context."""
     composed = ModuleBay(position="Gi3/2/1", parent=ModuleBay(position="Gi3/2"))
     variables = build_variables(composed, Device(virtual_chassis_id=1, vc_position=1))
     variables.update({"base": "et-0/0/1", "channel": "0", "port": "1"})
-    return variables
+    available = {variable.name for variable in variables_for_context(context)}
+    return {name: value for name, value in variables.items() if name in available}
+
+
+def _acx7024_guide_rules():
+    """Return every module rule in the ACX7024 overview table."""
+    text = _visible_markdown(_PROJECT_ROOT / "docs/examples.md")
+    section = text.split("### Rule overview for ACX7024", 1)[1].split("### YAML", 1)[0]
+    rules = set()
+    for line in section.splitlines():
+        if not line.startswith("|") or "Module type pattern" in line or line.startswith("|---"):
+            continue
+        pattern, template, channels, _result = [cell.strip() for cell in line.strip("|").split("|")]
+        exact = pattern.endswith(" (exact)")
+        selector = pattern.removesuffix(" (exact)").strip("`")
+        channel_count = 0 if channels == "—" else int(channels.split()[0])
+        rules.add(("module_type" if exact else "module_type_pattern", selector, template.strip("`"), channel_count))
+    return rules
+
+
+def _acx7024_shipped_rules():
+    """Return every ACX7024 module rule shipped in the Juniper catalogue."""
+    rules = yaml.safe_load((_PROJECT_ROOT / "contrib" / "juniper.yaml").read_text(encoding="utf-8"))
+    found = set()
+    for rule in rules:
+        if rule.get("device_type") != "ACX7024" or rule.get("applies_to_device_interfaces"):
+            continue
+        key = "module_type_pattern" if "module_type_pattern" in rule else "module_type"
+        found.add((key, rule[key], rule["name_template"], rule.get("channel_count", 0)))
+    return found
 
 
 class DocumentedTemplateTest(unittest.TestCase):
-    """Every name template the plugin ships or documents must be one the engine can evaluate.
-
-    The converter-offset example restates the variable contract on six surfaces, and the
-    correction that moved it to the numeric variables reached only the UI table. Two shapes go
-    wrong: a bare identifier inside a brace group, which the engine never substitutes and then
-    rejects, and a raw position inside arithmetic, which reaches the expression as a path.
-    """
+    """Every shipped and documented name template must fit its naming context."""
 
     def test_the_example_positions_stay_path_shaped(self):
         """If they became numeric, every raw-position example would start passing silently."""
-        variables = _example_variables()
+        variables = _example_variables(NamingContext.MODULE_MEMBER)
 
         for name in ("slot", "bay_position", "parent_bay_position"):
             with self.subTest(name=name):
                 self.assertFalse(str(variables[name]).isdigit())
 
     def test_every_source_still_defines_templates(self):
-        """A moved directory or a renamed key would otherwise drop a source with a green suite."""
-        for source, templates in _documented_templates().items():
+        """A moved file, renamed key, or empty reader must change the exact source set."""
+        self.assertEqual({item.source for item in _documented_templates()}, _DOCUMENTED_TEMPLATE_SOURCES)
+
+    def test_configuration_json_payload_is_read(self):
+        templates = [item.template for item in _documented_templates() if item.source == "docs/configuration.md"]
+
+        self.assertEqual(templates, ["et-0/0/{bay_position}"])
+
+    def test_markdown_template_tables_are_read(self):
+        expected = {
+            "README.md": {
+                "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
+                "et-0/0/{bay_position}:{channel}",
+                "et-0/0/{bay_position}",
+                "swp{bay_position_num}s{channel}",
+            },
+            "docs/index.md": {
+                "GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
+                "et-0/0/{bay_position}",
+                "xe-0/0/{bay_position}:{channel}",
+                "swp{bay_position_num}",
+                "eth{bay_position_num}",
+                "ens{slot}f{bay_position_num}",
+            },
+            "docs/examples.md": {
+                "et-0/0/{bay_position}",
+                "et-0/0/{bay_position}:{channel}",
+                "ge-0/0/{bay_position}",
+                "xe-0/0/{bay_position}",
+                "xe-0/0/{bay_position}:{channel}",
+                "ge-{vc_position}/0/{port}",
+                "xe-{vc_position}/1/{port}",
+            },
+        }
+
+        for source, contexts in _MARKDOWN_TABLE_CONTEXTS.items():
+            rows = _templates_in_markdown_tables(_PROJECT_ROOT / source, source, contexts)
             with self.subTest(source=source):
-                self.assertTrue(templates, f"{source} defines no template, so its examples are unchecked")
+                self.assertEqual({row.template for row in rows}, expected[source])
 
-    def test_every_documented_template_evaluates(self):
-        """`{slot_num // 2}` reads like arithmetic, but the engine never substitutes a bare name."""
-        variables = _example_variables()
+    def test_rule_list_help_reads_all_eight_marked_examples(self):
+        templates = tuple(_templates_in_rule_list_examples())
 
-        for source, templates in _documented_templates().items():
-            for name, template in templates:
-                with self.subTest(source=source, name=name, template=template):
-                    evaluate_name_template(template, variables)
+        self.assertEqual(len(templates), 8)
+        self.assertEqual(
+            [item.context for item in templates],
+            [NamingContext.MODULE_MEMBER] * 5 + [NamingContext.DEVICE_INTERFACE] * 3,
+        )
 
-    def test_every_pinned_example_is_present_and_evaluates(self):
-        """The prose examples are pinned, because reading them out of prose is what failed."""
-        variables = _example_variables()
+    def test_end_to_end_rule_payloads_are_read_from_python_syntax(self):
+        self.assertEqual(
+            tuple(_templates_in_e2e_script()),
+            (
+                DocumentedTemplate(
+                    ".devcontainer/scripts/test-e2e.py",
+                    "Gi{vc_position}/{bay_position_num}",
+                    NamingContext.MODULE_MEMBER,
+                ),
+                DocumentedTemplate(
+                    ".devcontainer/scripts/test-e2e.py",
+                    "Gi{vc_position}/{port}",
+                    NamingContext.DEVICE_INTERFACE,
+                ),
+            ),
+        )
 
-        for name, anchor, templates in _PINNED_EXAMPLES:
-            text = (_PROJECT_ROOT / name).read_text(encoding="utf-8")
-            with self.subTest(name=name, anchor=anchor):
-                self.assertEqual(text.count(anchor), 1, f"{name} must hold {anchor!r} exactly once")
-            for template in templates:
-                with self.subTest(name=name, template=template):
-                    evaluate_name_template(template, variables)
+    def test_every_documented_template_uses_variables_from_its_naming_context(self):
+        for documented in _documented_templates():
+            available = {variable.name for variable in variables_for_context(documented.context)}
+            referenced = set(_TEMPLATE_VARIABLE.findall(documented.template))
+            with self.subTest(source=documented.source, template=documented.template, context=documented.context):
+                self.assertLessEqual(referenced, available)
 
-    def test_the_tester_variable_table_lists_what_the_preview_derives(self):
-        """This diff had to add two rows to that table, and no test read it."""
-        from netbox_interface_name_rules.tests.conftest import _preview_key_contract
+    def test_every_documented_template_evaluates_in_its_naming_context(self):
+        for documented in _documented_templates():
+            with self.subTest(source=documented.source, template=documented.template, context=documented.context):
+                evaluate_name_template(documented.template, _example_variables(documented.context))
 
-        _, variables = _preview_key_contract()
-        path = _PROJECT_ROOT / _UI / "rule_test.html"
+    def test_generated_markers_leave_their_content_visible_to_the_markdown_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text(
+                "<!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->\n"
+                "```yaml\nname_template: 'eth{bay_position_num}'\n```\n"
+                "<!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->\n",
+                encoding="utf-8",
+            )
 
-        listed = _first_table_variables(path, _VARIABLE_TABLES[0][1])
+            self.assertEqual(
+                tuple(_templates_in_markdown(path, "guide.md")),
+                (DocumentedTemplate("guide.md", "eth{bay_position_num}", NamingContext.MODULE_MEMBER),),
+            )
 
-        self.assertEqual(listed, set(variables))
+    def test_a_commented_out_template_is_not_audited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text(
+                "```yaml\nname_template: 'eth{bay_position_num}'\n```\n"
+                "<!-- ```yaml\nname_template: '{retired}'\n``` -->\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                tuple(_templates_in_markdown(path, "guide.md")),
+                (DocumentedTemplate("guide.md", "eth{bay_position_num}", NamingContext.MODULE_MEMBER),),
+            )
+
+    def test_examples_guide_matches_all_shipped_acx7024_module_rules(self):
+        self.assertEqual(_acx7024_guide_rules(), _acx7024_shipped_rules())

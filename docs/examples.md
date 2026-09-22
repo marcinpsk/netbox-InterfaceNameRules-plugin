@@ -14,7 +14,6 @@ the `FPC/PIC/port` convention — for pizza-box ACX devices this simplifies to
 
 | Module type pattern | Name template | Channels | Result |
 |---|---|---|---|
-| `QSFP-DD-400G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/4` |
 | `QSFP-100G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/7` |
 | `QSFP28-100G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/2` |
 | `QSFP-4X10G-.*` | `xe-0/0/{bay_position}:{channel}` | 4 (start 0) | `xe-0/0/4:0` … `xe-0/0/4:3` |

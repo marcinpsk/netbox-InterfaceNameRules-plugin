@@ -37,10 +37,12 @@ class TemplateVariableCondition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TemplateVariable:
-    """Describe one template variable and its providers."""
+    """Describe one template variable and its naming-context metadata."""
 
     name: str
     providers: tuple[tuple[NamingContext, TemplateVariableSource], ...]
+    descriptions: tuple[tuple[NamingContext, str], ...]
+    example: str
     condition: TemplateVariableCondition | None = None
 
 
@@ -69,25 +71,105 @@ _BUILT = TemplateVariableSource.MODULE_BAY_CHAIN
 _CALLER = TemplateVariableSource.RENAME_CALLER
 
 TEMPLATE_VARIABLES = (
-    TemplateVariable("slot", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("slot_num", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("bay_position", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("bay_position_num", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("parent_bay_position", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("parent_bay_position_num", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("sfp_slot", ((_MEMBER, _BUILT), (_PARENT, _BUILT))),
-    TemplateVariable("base", ((_MEMBER, _CALLER), (_PARENT, _CALLER), (_DEVICE, _CALLER))),
+    TemplateVariable(
+        "slot",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        ((_MEMBER, "Top-level module bay position."), (_PARENT, "Top-level module bay position.")),
+        "Slot 3",
+    ),
+    TemplateVariable(
+        "slot_num",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Numeric suffix of the top-level module bay position."),
+            (_PARENT, "Numeric suffix of the top-level module bay position."),
+        ),
+        "3",
+    ),
+    TemplateVariable(
+        "bay_position",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Position of the bay that holds the module."),
+            (_PARENT, "Position of the bay that holds the module."),
+        ),
+        "swp1",
+    ),
+    TemplateVariable(
+        "bay_position_num",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Numeric suffix of the module bay position."),
+            (_PARENT, "Numeric suffix of the module bay position."),
+        ),
+        "1",
+    ),
+    TemplateVariable(
+        "parent_bay_position",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Position of the parent module's bay."),
+            (_PARENT, "Position of the parent module's bay."),
+        ),
+        "TenGigabitEthernet3/2",
+    ),
+    TemplateVariable(
+        "parent_bay_position_num",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Numeric suffix of the parent module's bay position."),
+            (_PARENT, "Numeric suffix of the parent module's bay position."),
+        ),
+        "2",
+    ),
+    TemplateVariable(
+        "sfp_slot",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, "Numeric sub-bay index within the parent module."),
+            (_PARENT, "Numeric sub-bay index within the parent module."),
+        ),
+        "0",
+    ),
+    TemplateVariable(
+        "base",
+        ((_MEMBER, _CALLER), (_PARENT, _CALLER), (_DEVICE, _CALLER)),
+        (
+            (_MEMBER, "Raw template name before any rule applies."),
+            (_PARENT, "Raw template name before any rule applies."),
+            (_DEVICE, "Current interface name before the rule applies."),
+        ),
+        "et-0/0/1",
+    ),
     TemplateVariable(
         "vc_position",
         ((_MEMBER, _BUILT), (_PARENT, _BUILT), (_DEVICE, _CALLER)),
-        TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER,
+        (
+            (_MEMBER, "Virtual Chassis member position. Available only on a member device."),
+            (_PARENT, "Virtual Chassis member position. Available only on a member device."),
+            (_DEVICE, "Virtual Chassis member position. Available only on a member device."),
+        ),
+        "2",
+        condition=TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER,
     ),
     TemplateVariable(
         "channel",
         ((_MEMBER, _CALLER),),
-        TemplateVariableCondition.RULE_DECLARES_CHANNELS,
+        ((_MEMBER, "Breakout channel number. Available when the rule declares channels."),),
+        "0",
+        condition=TemplateVariableCondition.RULE_DECLARES_CHANNELS,
     ),
-    TemplateVariable("port", ((_DEVICE, _CALLER),)),
+    TemplateVariable(
+        "port",
+        ((_DEVICE, _CALLER),),
+        (
+            (
+                _DEVICE,
+                "Segment after the last slash in the current interface name. Uses the full name when no slash is present.",
+            ),
+        ),
+        "1",
+    ),
 )
 
 

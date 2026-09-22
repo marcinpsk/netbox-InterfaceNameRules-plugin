@@ -130,7 +130,7 @@ class RuleTestForm(forms.Form):
         required=False,
         initial="Ethernet1",
         max_length=_INTERFACE_NAME_MAX_LENGTH,
-        label="{base} (current interface name)",
+        label="{base} (raw template name)",
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
 

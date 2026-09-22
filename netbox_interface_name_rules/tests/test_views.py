@@ -2,6 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for plugin views: list, detail, toggle, duplicate, test, apply."""
 
+import re
 from unittest.mock import ANY, MagicMock, patch
 
 from dcim.models import (
@@ -19,6 +20,7 @@ from django.urls import path, re_path, reverse
 from rest_framework.test import APIClient
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.helpers import make_device
 from netbox_interface_name_rules.views import RuleTestView
 
@@ -41,6 +43,12 @@ _PREVIEW_VARIABLES = frozenset(
         "channel",
     }
 )
+_REFERENCE_ROW = re.compile(rb'<tr data-naming-contexts="([^"]+)" data-template-variable="([^"]+)">')
+
+
+def _rendered_variable_rows(response):
+    """Return the naming contexts and variable name carried by each reference row."""
+    return [(contexts.decode().split(), name.decode()) for contexts, name in _REFERENCE_ROW.findall(response.content)]
 
 
 def _echo_body(request):
@@ -172,6 +180,34 @@ class RuleListViewTest(ViewTestBase):
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_variable_reference_groups_equal_module_rule_rows(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+        rows = _rendered_variable_rows(response)
+        rows_by_name = {}
+        for contexts, name in rows:
+            rows_by_name.setdefault(name, []).append(contexts)
+
+        self.assertEqual(set(rows_by_name), {variable.name for variable in TEMPLATE_VARIABLES})
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(
+            rows_by_name["base"],
+            [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT], [NamingContext.DEVICE_INTERFACE]],
+        )
+        self.assertEqual(
+            rows_by_name["parent_bay_position"],
+            [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT]],
+        )
+        self.assertContains(response, "<th>Rule type</th>", html=True)
+        self.assertContains(response, "<th>Example</th>", html=True)
+        self.assertContains(response, "Module: Name Template, Parent Name Template")
+
+    def test_variable_reference_names_each_rule_field(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+
+        self.assertContains(response, "Module rules use these variables in the Name Template field.")
+        self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
+        self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
     def test_list_view_unauthenticated_redirects(self):
         """Unauthenticated access to list view redirects to login."""
@@ -518,6 +554,14 @@ class RuleTestViewTest(ViewTestBase):
         """GET to rule test view returns 200."""
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)
+
+    def test_variable_reference_lists_only_variables_the_preview_can_derive(self):
+        response = self.client.get(self._url())
+
+        self.assertEqual(
+            {(tuple(contexts), name) for contexts, name in _rendered_variable_rows(response)},
+            {((NamingContext.MODULE_MEMBER,), name) for name in _PREVIEW_VARIABLES},
+        )
 
     def test_test_view_post_simple_template(self):
         """POST to rule test view with a simple template returns a result."""

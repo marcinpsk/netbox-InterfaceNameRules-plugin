@@ -31,20 +31,9 @@ class InterfaceNameRule(NetBoxModel):
     the correct interface name, such as converter offset (CVR-X2-SFP)
     or breakout transceivers (QSFP+ 4x10G).
 
-    The name_template substitutes these variables, then evaluates any brace group left over
-    as integer arithmetic. It is not str.format: conversions and format specifications are
-    not part of the language.
-      {slot}               - Slot number from parent module bay position
-      {slot_num}           - Numeric suffix of slot
-      {bay_position}       - Position of the bay this module is installed into
-      {bay_position_num}   - Numeric suffix of bay position (e.g., "swp1" → "1")
-      {parent_bay_position} - Position of the parent module's bay
-      {parent_bay_position_num} - Numeric suffix of the parent bay position
-      {sfp_slot}           - Sub-bay index within the parent module
-      {base}               - Base interface name from NetBox position resolution
-      {channel}            - Channel number (iterated for breakout)
-      {vc_position}        - Virtual Chassis member position, for a member device only
-      {port}               - Segment after the last "/" of a device interface name
+    ``name_template.TEMPLATE_VARIABLES`` is the catalogue for the variables available in each
+    naming context. The language substitutes those variables, then evaluates supported integer
+    arithmetic in each remaining brace group.
 
     A device type may compose the parent into a bay position, so a position can be
     path-shaped, such as "TenGigabitEthernet3/2/1". Arithmetic takes the _num form.
