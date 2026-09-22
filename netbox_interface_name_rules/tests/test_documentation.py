@@ -42,6 +42,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
 
+_CONVERTER_OFFSET_SCENARIO = re.compile(
+    r"^# Slot (?P<slot_num>\d+), parent bay (?P<parent_bay_position_num>\d+), "
+    r"SFP slot (?P<sfp_slot>\d+) → (?P<expected_name>\S+)$",
+    re.MULTILINE,
+)
+
 
 class TemplateVariableCatalogueTest(unittest.TestCase):
     """The catalogue describes the reference shown to operators and agents."""
@@ -850,6 +856,23 @@ def _shipped_converter_offset_template():
     return template
 
 
+def _documented_converter_offset_scenario():
+    """Return the converter-offset inputs and result stated identically in both guides."""
+    documented = []
+    for source in ("docs/examples.md", "docs/template-variables.md"):
+        text = (_PROJECT_ROOT / source).read_text(encoding="utf-8")
+        matches = tuple(_CONVERTER_OFFSET_SCENARIO.finditer(text))
+        if len(matches) != 1:
+            raise AssertionError(f"{source} must state one converter-offset scenario, found {len(matches)}")
+        documented.append((source, matches[0]))
+
+    if documented[0][1].group(0) != documented[1][1].group(0):
+        raise AssertionError(f"{documented[0][0]} and {documented[1][0]} must state the same converter-offset scenario")
+    values = documented[0][1].groupdict()
+    expected_name = values.pop("expected_name")
+    return values, expected_name
+
+
 class DocumentedTemplateTest(unittest.TestCase):
     """Every shipped and documented name template must fit its naming context."""
 
@@ -1173,6 +1196,14 @@ class DocumentedTemplateTest(unittest.TestCase):
                     1,
                     f"{source} must restate the shipped converter-offset template {template!r} exactly once",
                 )
+
+    def test_converter_offset_template_produces_the_documented_name(self):
+        variables, expected_name = _documented_converter_offset_scenario()
+
+        self.assertEqual(
+            evaluate_name_template(_shipped_converter_offset_template(), variables),
+            expected_name,
+        )
 
     def test_examples_guide_matches_all_shipped_acx7024_module_rules(self):
         self.assertEqual(_acx7024_guide_rules(), _acx7024_shipped_rules())
