@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.3 (2026-09-21)
+
+### Bug Fixes
+
+- Support composed bay positions and surface rules that match no m…
+  ([#93](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/93),
+  [`aeb1247`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/aeb1247b1cabe0e1511411aa4e466e62c90e4f95))
+
+### Chores
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#91](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/91),
+  [`6638f09`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6638f09295b57e9a41340db3a7ba1742bbf497b0))
+
+### Testing
+
+- Isolate the suite per worker and enforce two conventions mechanically
+  ([#86](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/86),
+  [`c23614d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c23614d0f3ec429ad1c0371c3f49f368e65e63fc))
+
+
 ## v1.5.2 (2026-09-09)
 
 ### Chores
