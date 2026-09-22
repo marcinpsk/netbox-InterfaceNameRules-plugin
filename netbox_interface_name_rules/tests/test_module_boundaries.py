@@ -9,6 +9,7 @@ that imports a submodule instead binds itself to an internal layout the package 
 import ast
 import pathlib
 import tempfile
+import tomllib
 from importlib.util import resolve_name
 
 from django.test import SimpleTestCase
@@ -25,6 +26,7 @@ EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
 SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
+PYPROJECT = PACKAGE.parent / "pyproject.toml"
 
 
 def _family_submodules() -> set[str]:
@@ -178,6 +180,23 @@ def _unisolated_reverse_classes(path: pathlib.Path) -> set[str]:
     return found
 
 
+def _private_module_names(path: pathlib.Path) -> set[str]:
+    """Return the private names *path* defines at module level."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) and node.name.startswith("_")
+    }
+
+
+def _banned_api_names() -> set[str]:
+    """Return the qualified names ruff's banned-api table refuses."""
+    with PYPROJECT.open("rb") as handle:
+        config = tomllib.load(handle)
+    return set(config["tool"]["ruff"]["lint"]["flake8-tidy-imports"]["banned-api"])
+
+
 class FamilySeamTest(SimpleTestCase):
     """Modules outside the family package import the package, not its parts."""
 
@@ -326,3 +345,21 @@ class UnisolatedReverseTest(SimpleTestCase):
             path.write_text(source, encoding="utf-8")
 
             self.assertEqual(_unisolated_reverse_classes(path), set())
+
+
+class BannedPrivateLanguageNameTest(SimpleTestCase):
+    """Ruff's banned-api table must name every private helper the language module defines.
+
+    The table is hand-written, so a new private helper would otherwise be reachable from any
+    adapter by module-qualified access. Deriving the expectation from the module keeps the two
+    from drifting.
+    """
+
+    def test_every_private_language_name_is_banned(self):
+        prefix = f"netbox_interface_name_rules.{LANGUAGE_MODULE.stem}"
+        expected = {f"{prefix}.{name}" for name in _private_module_names(LANGUAGE_MODULE)}
+
+        self.assertEqual(expected - _banned_api_names(), set())
+
+    def test_the_language_module_defines_private_names(self):
+        self.assertNotEqual(_private_module_names(LANGUAGE_MODULE), set())
