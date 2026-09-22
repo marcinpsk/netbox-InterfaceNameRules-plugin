@@ -135,8 +135,8 @@ TEMPLATE_VARIABLES = (
         "base",
         ((_MEMBER, _CALLER), (_PARENT, _CALLER), (_DEVICE, _CALLER)),
         (
-            (_MEMBER, "Raw template name before any rule applies."),
-            (_PARENT, "Raw template name before any rule applies."),
+            (_MEMBER, "Raw template name on first apply. Current name of the family's base interface on reapply."),
+            (_PARENT, "Raw template name on first apply. Current name of the family's base interface on reapply."),
             (_DEVICE, "Current interface name before the rule applies."),
         ),
         "et-0/0/1",

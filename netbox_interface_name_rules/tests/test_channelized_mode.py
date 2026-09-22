@@ -30,6 +30,7 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
     FLAT,
@@ -176,6 +177,19 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
         module, _ = self._install(self.base_type, "7")
 
         self.assertEqual(self._parent(module).name, "7-parent")
+
+    def test_module_base_description_matches_reapplication_behavior(self):
+        """A module starts from the raw name, then a reapply sees the installed parent's current name."""
+        module, bay = self._install(self.base_type, "7")
+
+        self.assertEqual(self._parent(module).name, "7-parent")
+        self.assertEqual(apply_interface_name_rules(module, bay), 1)
+        self.assertEqual(self._parent(module).name, "7-parent-parent")
+        base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
+        descriptions = dict(base.descriptions)
+        expected = "Raw template name on first apply. Current name of the family's base interface on reapply."
+        self.assertEqual(descriptions[NamingContext.MODULE_MEMBER], expected)
+        self.assertEqual(descriptions[NamingContext.MODULE_PARENT], expected)
 
     def test_the_parent_rename_does_not_override_configured_channel_names(self):
         """NetBox's deferred conventional rename must not replace the rule's final child names."""

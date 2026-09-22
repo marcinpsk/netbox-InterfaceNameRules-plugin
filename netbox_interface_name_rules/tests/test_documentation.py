@@ -58,8 +58,12 @@ class TemplateVariableCatalogueTest(unittest.TestCase):
         self.assertEqual(
             dict(base.descriptions),
             {
-                NamingContext.MODULE_MEMBER: "Raw template name before any rule applies.",
-                NamingContext.MODULE_PARENT: "Raw template name before any rule applies.",
+                NamingContext.MODULE_MEMBER: (
+                    "Raw template name on first apply. Current name of the family's base interface on reapply."
+                ),
+                NamingContext.MODULE_PARENT: (
+                    "Raw template name on first apply. Current name of the family's base interface on reapply."
+                ),
                 NamingContext.DEVICE_INTERFACE: "Current interface name before the rule applies.",
             },
         )
@@ -216,6 +220,19 @@ class ConversionDocumentationTest(unittest.TestCase):
             for reason in _PREFLIGHT_REASONS:
                 with self.subTest(reason=reason, sentence=sentence):
                     self.assertNotIn(reason, sentence)
+
+
+class ChannelizedFamilyDocumentationTest(unittest.TestCase):
+    """Keep the installed channelized-family description consistent with reapplication."""
+
+    def test_base_is_documented_as_the_installed_parent_name(self):
+        guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for\n"
+            "the parent and for every channel alike.",
+            guide,
+        )
 
 
 class PerformanceDocumentationTest(unittest.TestCase):
