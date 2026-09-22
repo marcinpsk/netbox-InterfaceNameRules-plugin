@@ -23,6 +23,7 @@ PERMITTED_SUBMODULE_IMPORTS = {("engine.py", "template_names")}
 PRIVATE_PLUGIN_IMPORT_PERMITS = frozenset()
 EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
+SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 
 
@@ -132,6 +133,51 @@ def _ast_imports(path: pathlib.Path) -> list[int]:
     ]
 
 
+def _test_modules() -> list[pathlib.Path]:
+    """Return the test modules of this package."""
+    return sorted(path for path in (PACKAGE / "tests").glob("*.py") if path.stem != "__init__")
+
+
+def _is_simple_test_case(node: ast.ClassDef) -> bool:
+    """Return whether *node* derives directly from `SimpleTestCase`."""
+    return any(
+        (isinstance(base, ast.Name) and base.id == "SimpleTestCase")
+        or (isinstance(base, ast.Attribute) and base.attr == "SimpleTestCase")
+        for base in node.bases
+    )
+
+
+def _overrides_root_urlconf(node: ast.ClassDef) -> bool:
+    """Return whether *node* is decorated with an `override_settings` that names `ROOT_URLCONF`."""
+    return any(
+        isinstance(decorator, ast.Call) and any(keyword.arg == "ROOT_URLCONF" for keyword in decorator.keywords)
+        for decorator in node.decorator_list
+    )
+
+
+def _is_reverse_call(node: ast.AST) -> bool:
+    """Return whether *node* calls `reverse`, by either spelling."""
+    if not isinstance(node, ast.Call):
+        return False
+    return (isinstance(node.func, ast.Name) and node.func.id == "reverse") or (
+        isinstance(node.func, ast.Attribute) and node.func.attr == "reverse"
+    )
+
+
+def _unisolated_reverse_classes(path: pathlib.Path) -> set[str]:
+    """Return the `SimpleTestCase` classes in *path* that reverse against the real root URLconf."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or not _is_simple_test_case(node):
+            continue
+        if _overrides_root_urlconf(node):
+            continue
+        if any(_is_reverse_call(child) for child in ast.walk(node)):
+            found.add(node.name)
+    return found
+
+
 class FamilySeamTest(SimpleTestCase):
     """Modules outside the family package import the package, not its parts."""
 
@@ -239,3 +285,44 @@ class PluginModuleBoundaryTest(SimpleTestCase):
             path.write_text("import ast as syntax_tree\n", encoding="utf-8")
 
             self.assertEqual(_ast_imports(path), [1])
+
+
+class UnisolatedReverseTest(SimpleTestCase):
+    """A `SimpleTestCase` must not resolve a URL against NetBox's real root URLconf.
+
+    Loading that URLconf queries the database on some NetBox releases, which `SimpleTestCase`
+    forbids. Commit 5a8248f already fixed one CI failure of this shape on 4.3.7 and 4.5.3. A test
+    that needs the configured path belongs on `TestCase`; one that does not belongs under an
+    `override_settings(ROOT_URLCONF=...)`.
+    """
+
+    def test_no_simple_test_case_reverses_against_the_real_root_urlconf(self):
+        violations = set()
+        for path in _test_modules():
+            relative = path.relative_to(PACKAGE)
+            for name in _unisolated_reverse_classes(path):
+                violation = (str(relative), name)
+                if violation not in SIMPLE_TEST_CASE_REVERSE_PERMITS:
+                    violations.add(violation)
+
+        self.assertEqual(violations, set())
+
+    def test_the_detector_catches_a_constructed_violation(self):
+        source = "class Sample(SimpleTestCase):\n    def test_x(self):\n        reverse('name')\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_unisolated_reverse_classes(path), {"Sample"})
+
+    def test_an_isolated_root_urlconf_is_permitted(self):
+        source = (
+            "@override_settings(ROOT_URLCONF=_Conf)\n"
+            "class Sample(SimpleTestCase):\n"
+            "    def test_x(self):\n        reverse('name')\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_unisolated_reverse_classes(path), set())

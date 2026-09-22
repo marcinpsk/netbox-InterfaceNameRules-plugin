@@ -1400,7 +1400,7 @@ class PreviewPostGuardViewTest(ViewTestBase):
 @override_settings(
     MIDDLEWARE=("netbox_interface_name_rules.tests.test_views._route_to_unrelated_view",),
 )
-class PreviewPostGuardMiddlewareDiversionTest(SimpleTestCase):
+class PreviewPostGuardMiddlewareDiversionTest(TestCase):
     """The preview guard follows middleware routing away from the configured preview path."""
 
     def test_a_configured_preview_path_routed_elsewhere_is_left_alone(self):
@@ -1426,7 +1426,7 @@ class PreviewPostGuardMiddlewareSelectionTest(SimpleTestCase):
 @override_settings(
     MIDDLEWARE=("netbox_interface_name_rules.tests.test_views._select_streaming_response_urlconf",),
 )
-class PreviewPostGuardURLConfStateTest(SimpleTestCase):
+class PreviewPostGuardURLConfStateTest(TestCase):
     """The preview guard ignores URLconf state left by an open streaming response."""
 
     def test_an_open_streaming_response_cannot_disable_the_preview_guard(self):
