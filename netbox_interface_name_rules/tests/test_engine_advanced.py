@@ -24,7 +24,6 @@ from dcim.models import (
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
-    _extract_trailing_digits,
     _matching_moduletype_pks,
     apply_interface_name_rules,
     apply_rule_to_existing,
@@ -36,6 +35,7 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.family import FamilyStatus
 from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.naming import _extract_trailing_digits
 
 
 class EngineAdvancedFixtures(TestCase):

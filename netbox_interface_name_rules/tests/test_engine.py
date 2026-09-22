@@ -154,7 +154,7 @@ class EvaluateNameTemplateTest(TestCase):
 
     def test_bay_position_num_non_numeric_uses_zero(self):
         """When bay_position has no trailing digits, bay_position_num falls back to '0'."""
-        from netbox_interface_name_rules.engine import _resolve_bay_position
+        from netbox_interface_name_rules.naming import _resolve_bay_position
 
         class FakeBay:
             position = "abc"

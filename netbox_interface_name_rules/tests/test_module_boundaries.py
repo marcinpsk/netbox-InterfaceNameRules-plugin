@@ -15,6 +15,7 @@ from importlib.util import resolve_name
 from django.test import SimpleTestCase
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
+PLUGIN_PACKAGE = PACKAGE.name
 FAMILY_PACKAGE = "family"
 
 # The family package does not export the template-name helpers the engine needs, so the engine
@@ -22,6 +23,7 @@ FAMILY_PACKAGE = "family"
 # belongs in its own commit; until then this is the one import allowed through.
 PERMITTED_SUBMODULE_IMPORTS = {("engine.py", "template_names")}
 PRIVATE_PLUGIN_IMPORT_PERMITS = frozenset()
+PRIVATE_PLUGIN_ATTRIBUTE_PERMITS = frozenset()
 EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
 SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
@@ -85,7 +87,7 @@ def _private_plugin_imports(path: pathlib.Path, module_name: str | None = None) 
             imported_module = resolve_name("." * node.level + (node.module or ""), package)
         else:
             imported_module = node.module or ""
-        if imported_module == module_name or not imported_module.startswith("netbox_interface_name_rules"):
+        if imported_module == module_name or not imported_module.startswith(PLUGIN_PACKAGE):
             continue
         for alias in node.names:
             if alias.name.startswith("_"):
@@ -199,6 +201,66 @@ def _banned_api_names() -> set[str]:
     with PYPROJECT.open("rb") as handle:
         config = tomllib.load(handle)
     return set(config["tool"]["ruff"]["lint"]["flake8-tidy-imports"]["banned-api"])
+
+
+def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, str]:
+    """Map each name bound in *tree* to the plugin module it refers to."""
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            base = "." * node.level + (node.module or "")
+            module = resolve_name(base, package) if node.level else (node.module or "")
+            if not module.startswith(PLUGIN_PACKAGE):
+                continue
+            for alias in node.names:
+                if not alias.name.startswith("_"):
+                    aliases[alias.asname or alias.name] = f"{module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if not alias.name.startswith(PLUGIN_PACKAGE):
+                    continue
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    aliases[alias.name.split(".")[0]] = alias.name.split(".")[0]
+    return aliases
+
+
+def _dotted_parts(node: ast.AST) -> list[str] | None:
+    """Return the dotted name *node* spells, or None when it is not a plain dotted name."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    parts.reverse()
+    return parts
+
+
+def _private_plugin_attributes(path: pathlib.Path, module_name: str | None = None) -> set[str]:
+    """Return the private names *path* reads from another plugin module by attribute access."""
+    module_name = module_name or _module_name(path)
+    package = module_name.rpartition(".")[0] or module_name
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    aliases = _module_alias_targets(tree, package)
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or not node.attr.startswith("_"):
+            continue
+        if node.attr.startswith("__") and node.attr.endswith("__"):
+            continue
+        parts = _dotted_parts(node)
+        if parts is None or len(parts) < 2:
+            continue
+        target = aliases.get(parts[0])
+        if target is None:
+            continue
+        owner = ".".join([target, *parts[1:-1]])
+        if owner.startswith(PLUGIN_PACKAGE) and owner != module_name:
+            found.add(f"{owner}.{node.attr}")
+    return found
 
 
 class FamilySeamTest(SimpleTestCase):
@@ -367,3 +429,57 @@ class BannedPrivateLanguageNameTest(SimpleTestCase):
 
     def test_the_language_module_defines_private_names(self):
         self.assertNotEqual(_private_module_names(LANGUAGE_MODULE), set())
+
+
+class PrivateAttributeBoundaryTest(SimpleTestCase):
+    """A production module must not read another plugin module's private name.
+
+    `_private_plugin_imports` sees the import spelling only. A module can also hold a public
+    reference to a sibling and reach a private name through it, which no guard saw before.
+    """
+
+    def test_production_modules_do_not_read_private_plugin_attributes(self):
+        violations = set()
+        for path in _production_modules():
+            relative = path.relative_to(PACKAGE)
+            for name in _private_plugin_attributes(path):
+                violation = (str(relative), name)
+                if violation not in PRIVATE_PLUGIN_ATTRIBUTE_PERMITS:
+                    violations.add(violation)
+
+        self.assertEqual(violations, set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = (
+            "from netbox_interface_name_rules import naming\nnaming._resolve_slot(1, 2, 3)",
+            "from . import naming\nnaming._resolve_slot(1, 2, 3)",
+            "from netbox_interface_name_rules import naming as renamed\nrenamed._resolve_slot(1, 2, 3)",
+            "import netbox_interface_name_rules.naming as renamed\nrenamed._resolve_slot(1, 2, 3)",
+            "import netbox_interface_name_rules\nnetbox_interface_name_rules.naming._resolve_slot(1, 2, 3)",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source in spellings:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    found = _private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.sample")
+
+                    self.assertEqual(found, {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_modules_own_private_name_is_not_a_violation(self):
+        source = "import netbox_interface_name_rules.naming\nnetbox_interface_name_rules.naming._resolve_slot(1, 2, 3)"
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            found = _private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.naming")
+
+            self.assertEqual(found, set())
+
+    def test_a_dunder_on_a_sibling_module_is_not_a_violation(self):
+        source = "from netbox_interface_name_rules import naming\nprint(naming.__name__)"
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_private_plugin_attributes(path, module_name=f"{PLUGIN_PACKAGE}.sample"), set())

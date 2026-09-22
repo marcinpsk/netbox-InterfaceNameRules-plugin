@@ -29,21 +29,6 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     return rule_selection.find_matching_rule(module_type, parent_module_type, device_type, platform)
 
 
-def _extract_trailing_digits(value: str) -> str:
-    """Delegate trailing-digit extraction while preserving the engine helper."""
-    return naming._extract_trailing_digits(value)
-
-
-def _resolve_bay_position(module_bay):
-    """Delegate bay-position resolution while preserving the engine helper."""
-    return naming._resolve_bay_position(module_bay)
-
-
-def _resolve_slot(module_bay, bay_position, parent_bay_position):
-    """Delegate slot resolution while preserving the engine helper."""
-    return naming._resolve_slot(module_bay, bay_position, parent_bay_position)
-
-
 def build_variables(module_bay, device=None):
     """Delegate naming-variable construction while preserving the engine entry point."""
     return naming.build_variables(module_bay, device=device)
