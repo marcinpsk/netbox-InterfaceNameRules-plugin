@@ -3,6 +3,7 @@
 """Tests for plugin views: list, detail, toggle, duplicate, test, apply."""
 
 import re
+from html.parser import HTMLParser
 from unittest.mock import ANY, MagicMock, patch
 
 from dcim.models import (
@@ -21,6 +22,10 @@ from rest_framework.test import APIClient
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
+from netbox_interface_name_rules.template_variable_reference import (
+    rule_tester_variable_rows,
+    variable_reference_rows,
+)
 from netbox_interface_name_rules.tests.helpers import make_device
 from netbox_interface_name_rules.views import RuleTestView
 
@@ -43,12 +48,61 @@ _PREVIEW_VARIABLES = frozenset(
         "channel",
     }
 )
-_REFERENCE_ROW = re.compile(rb'<tr data-naming-contexts="([^"]+)" data-template-variable="([^"]+)">')
+_HTML_COMMENT = re.compile(rb"<!--.*?-->", re.DOTALL)
+
+
+class _ReferenceRowParser(HTMLParser):
+    """Read the attributes and visible cells of rendered variable-reference rows."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "tr" and "data-naming-contexts" in attributes and "data-template-variable" in attributes:
+            self._row = (attributes["data-naming-contexts"].split(), attributes["data-template-variable"], [])
+        elif tag == "td" and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "td" and self._cell is not None:
+            self._row[2].append("".join(self._cell).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append((*self._row[:2], *self._row[2]))
+            self._row = None
 
 
 def _rendered_variable_rows(response):
-    """Return the naming contexts and variable name carried by each reference row."""
-    return [(contexts.decode().split(), name.decode()) for contexts, name in _REFERENCE_ROW.findall(response.content)]
+    """Return the attributes and visible cells of each rendered reference row."""
+    content = _HTML_COMMENT.sub(b"", response.content)
+    if b"<!--" in content:
+        raise ValueError("response holds an unterminated comment, so its variable rows cannot be read")
+    parser = _ReferenceRowParser()
+    parser.feed(content.decode())
+    return parser.rows
+
+
+class RenderedVariableRowTest(SimpleTestCase):
+    def test_a_commented_out_row_is_not_rendered(self):
+        response = HttpResponse(
+            b'<!-- <tr data-naming-contexts="module_member" data-template-variable="retired">'
+            b"<td><code>{retired}</code></td><td>Retired</td><td><code>0</code></td></tr> -->"
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code></td><td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+        )
+
+        self.assertEqual(
+            _rendered_variable_rows(response),
+            [(["module_member"], "slot", "{slot}", "Top-level slot.", "Slot 3")],
+        )
 
 
 def _echo_body(request):
@@ -184,8 +238,22 @@ class RuleListViewTest(ViewTestBase):
     def test_variable_reference_groups_equal_module_rule_rows(self):
         response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
         rows = _rendered_variable_rows(response)
+        self.assertEqual(
+            rows,
+            [
+                (
+                    [context.value for context in row.contexts],
+                    row.name,
+                    row.token,
+                    row.rule_type_label,
+                    row.description,
+                    row.example,
+                )
+                for row in variable_reference_rows()
+            ],
+        )
         rows_by_name = {}
-        for contexts, name in rows:
+        for contexts, name, *_cells in rows:
             rows_by_name.setdefault(name, []).append(contexts)
 
         self.assertEqual(set(rows_by_name), {variable.name for variable in TEMPLATE_VARIABLES})
@@ -557,9 +625,23 @@ class RuleTestViewTest(ViewTestBase):
 
     def test_variable_reference_lists_only_variables_the_preview_can_derive(self):
         response = self.client.get(self._url())
+        rows = _rendered_variable_rows(response)
 
         self.assertEqual(
-            {(tuple(contexts), name) for contexts, name in _rendered_variable_rows(response)},
+            rows,
+            [
+                (
+                    [context.value for context in row.contexts],
+                    row.name,
+                    row.token,
+                    row.description,
+                    row.example,
+                )
+                for row in rule_tester_variable_rows()
+            ],
+        )
+        self.assertEqual(
+            {(tuple(contexts), name) for contexts, name, *_cells in rows},
             {((NamingContext.MODULE_MEMBER,), name) for name in _PREVIEW_VARIABLES},
         )
 

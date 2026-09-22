@@ -447,6 +447,7 @@ _FORM_EXAMPLE = "e.g. et-0/0/{bay_position} or {base}:{channel}"
 _PARENT_FORM_EXAMPLE = "parent interface, e.g. et-0/0/{bay_position}"
 _UI_LIST = f"{_UI}/interfacenamerule_list.html"
 _MARKDOWN_YAML_BLOCK = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
+_MARKDOWN_TEMPLATE_KEY = re.compile(r"^\s*-?\s*(?:parent_)?name_template\s*:", re.MULTILINE)
 _HTML_TEMPLATE = re.compile(r'<code data-name-template-context="([^"]+)">([^<]+)</code>')
 _TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 _MARKDOWN_TABLE_CONTEXTS = {
@@ -545,9 +546,20 @@ def _visible_markdown(path):
 
 
 def _templates_in_markdown(path, source):
-    """Yield templates from complete YAML blocks; keys outside fences are intentionally out of scope."""
-    for block in _MARKDOWN_YAML_BLOCK.findall(_visible_markdown(path)):
-        yield from _templates_in(yaml.safe_load(block), source)
+    """Yield templates from complete YAML blocks and reject visible keys outside them."""
+    visible = _visible_markdown(path)
+    templates = tuple(
+        template
+        for block in _MARKDOWN_YAML_BLOCK.findall(visible)
+        for template in _templates_in(yaml.safe_load(block), source)
+    )
+    visible_key_count = len(_MARKDOWN_TEMPLATE_KEY.findall(visible))
+    if visible_key_count != len(templates):
+        raise AssertionError(
+            f"{source} has {visible_key_count} visible name-template keys but "
+            f"{len(templates)} inside fenced YAML blocks"
+        )
+    yield from templates
 
 
 def _templates_in_markdown_tables(path, source, contexts):
@@ -702,6 +714,24 @@ def _acx7024_shipped_rules():
     return found
 
 
+def _shipped_converter_offset_template():
+    """Return the converter-offset template from the shipped rule that defines it."""
+    rules = yaml.safe_load((_PROJECT_ROOT / "contrib" / "converters.yaml").read_text(encoding="utf-8"))
+    matches = [
+        rule
+        for rule in rules
+        if rule.get("module_type") == "SFP-1G-T" and rule.get("parent_module_type") == "CVR-X2-SFP"
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"contrib/converters.yaml must define one SFP-1G-T in CVR-X2-SFP rule, found {len(matches)}"
+        )
+    template = matches[0].get("name_template")
+    if not isinstance(template, str):
+        raise TypeError(f"converter-offset name_template is not a string: {template!r}")
+    return template
+
+
 class DocumentedTemplateTest(unittest.TestCase):
     """Every shipped and documented name template must fit its naming context."""
 
@@ -820,6 +850,40 @@ class DocumentedTemplateTest(unittest.TestCase):
                 tuple(_templates_in_markdown(path, "guide.md")),
                 (DocumentedTemplate("guide.md", "eth{bay_position_num}", NamingContext.MODULE_MEMBER),),
             )
+
+    def test_a_template_key_outside_a_yaml_fence_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guide.md"
+            path.write_text(
+                "```yaml\nname_template: 'eth{bay_position_num}'\n```\n```\nname_template: '{unknown_variable}'\n```\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                AssertionError,
+                "guide.md has 2 visible name-template keys but 1 inside fenced YAML blocks",
+            ):
+                tuple(_templates_in_markdown(path, "guide.md"))
+
+    def test_converter_offset_surfaces_match_the_shipped_rule(self):
+        template = _shipped_converter_offset_template()
+        yaml_anchor = f'name_template: "{template}"'
+        restatements = (
+            ("contrib/README.md", yaml_anchor),
+            ("docs/examples.md", yaml_anchor),
+            ("docs/template-variables.md", yaml_anchor),
+            (_UI_LIST, f'<code data-name-template-context="module_member">{template}</code>'),
+            ("netbox_interface_name_rules/models.py", f"'{template}'"),
+        )
+
+        for source, anchor in restatements:
+            text = (_PROJECT_ROOT / source).read_text(encoding="utf-8")
+            with self.subTest(source=source):
+                self.assertEqual(
+                    text.count(anchor),
+                    1,
+                    f"{source} must restate the shipped converter-offset template {template!r} exactly once",
+                )
 
     def test_examples_guide_matches_all_shipped_acx7024_module_rules(self):
         self.assertEqual(_acx7024_guide_rules(), _acx7024_shipped_rules())
