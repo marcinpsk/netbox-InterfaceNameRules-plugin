@@ -44,8 +44,11 @@ _PREVIEW_VARIABLES = frozenset(
 
 
 def _echo_body(request):
-    """Return the request body from an unrelated test view."""
-    return HttpResponse(request.body)
+    """Return the request body from an unrelated test view.
+
+    `text/plain` keeps the echo out of CodeQL's reflected-XSS sink; the default is `text/html`.
+    """
+    return HttpResponse(request.body, content_type="text/plain")
 
 
 class _UnrelatedPostURLConf:
