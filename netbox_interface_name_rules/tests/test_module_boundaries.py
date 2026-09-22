@@ -7,6 +7,7 @@ that imports a submodule instead binds itself to an internal layout the package 
 """
 
 import ast
+import functools
 import pathlib
 import tempfile
 import tomllib
@@ -260,9 +261,24 @@ def _dotted_parts(node: ast.AST) -> list[str] | None:
     return parts
 
 
+@functools.lru_cache(maxsize=1)
+def _plugin_modules() -> frozenset[str]:
+    """Return every module and subpackage name the plugin defines."""
+    names = set()
+    for path in PACKAGE.rglob("*.py"):
+        name = _module_name(path)
+        names.add(name.removesuffix(".__init__"))
+    return frozenset(names)
+
+
 def _referenced_modules(parts: list[str], aliases: dict[str, set[str]]) -> set[str]:
-    """Return every plugin module the dotted name *parts* can refer to."""
-    return {".".join([root, *parts[1:]]) for root in aliases.get(parts[0], set())}
+    """Return every plugin module the dotted name *parts* can refer to.
+
+    Candidates are intersected with the modules that exist, so a dotted name that walks into a
+    class or a function yields nothing. That also bounds the alias fixed point to a finite set.
+    """
+    candidates = {".".join([root, *parts[1:]]) for root in aliases.get(parts[0], set())}
+    return candidates & _plugin_modules()
 
 
 def _is_private_name(name: str) -> bool:
@@ -538,6 +554,17 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
         for source in (sequential, scoped):
             with self.subTest(source=source):
                 self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_self_rebinding_assignment_terminates(self):
+        """A name reassigned to one of its own attributes must not grow the candidates forever."""
+        source = 'from . import naming\nnaming = naming.numeric_suffix\nnaming("3")'
+
+        self.assertEqual(self._found(source), set())
+
+    def test_a_private_name_on_an_imported_class_is_not_a_module_violation(self):
+        source = "from netbox_interface_name_rules.name_template import NamingContext\nNamingContext._member_map_"
+
+        self.assertEqual(self._found(source), set())
 
     def test_a_modules_own_private_name_is_not_a_violation(self):
         source = "import netbox_interface_name_rules.naming\nnetbox_interface_name_rules.naming._resolve_slot(1, 2, 3)"
