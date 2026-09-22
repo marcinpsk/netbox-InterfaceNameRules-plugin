@@ -65,6 +65,22 @@ _Avoid_: Engine layer, core
 An operator-provided RE2 expression saved on an Interface Name Rule. It matches the complete module type model or current device-interface name, depending on the rule mode.
 _Avoid_: Python regex, partial regex
 
+**Name template**:
+An operator-provided expression saved on an Interface Name Rule and evaluated to produce an interface name. A brace group holds one template variable or integer arithmetic over already-substituted values. It is not a Python format string: conversions and format specifications are not part of the language.
+_Avoid_: Format string, raw template name
+
+**Template variable**:
+A named value that a name template substitutes before it evaluates the arithmetic that remains. A variable is available only in the naming contexts that provide it.
+_Avoid_: Placeholder, token
+
+**Naming context**:
+The set of template variables available where a name template is evaluated. There are three: a module member name, a module parent name, and a device interface name. A variable used outside its naming context never resolves.
+_Avoid_: Rule type, scope
+
+**Raw template name**:
+The name that NetBox's own interface template resolves to for a module, before any rule applies. It reaches a name template as the base variable.
+_Avoid_: Name template, original name
+
 **Unsupported topology**:
 An interface-family topology that the active NetBox data model cannot represent.
 _Avoid_: Legacy fallback
