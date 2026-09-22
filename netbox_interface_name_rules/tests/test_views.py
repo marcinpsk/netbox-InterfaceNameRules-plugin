@@ -1379,6 +1379,7 @@ class PreviewPostGuardTest(SimpleTestCase):
         dict_response = client.post("/echo/", data={"bay_position": "3"})
 
         self.assertEqual(raw_response.content, b"bay_position=3")
+        self.assertEqual(raw_response["Content-Type"], "text/plain")
         self.assertEqual(dict_response.status_code, 200)
 
 
