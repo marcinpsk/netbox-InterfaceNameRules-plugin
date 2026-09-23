@@ -19,7 +19,7 @@ from .domain import (
     MemberRole,
     PlannedMember,
 )
-from .raw_bases import BASE_MARKER, RawBases
+from .raw_bases import BASE_MARKER, GivenRawNames, RawBases
 from .targets import (
     UNCLAIMED_BASE_REASON,
     channelized_family_targets,
@@ -327,6 +327,11 @@ def module_raw_bases(module, rule, variables, interfaces) -> RawBases:
     """Return the raw template name behind each of *module*'s interfaces outside a channel."""
     names = [interface.name for interface in interfaces if not _is_channel(interface)]
     return RawBases(module, rule, variables, names, TemplateNames(module))
+
+
+def given_raw_names(module, rule, variables, names) -> GivenRawNames:
+    """Return bases for *names* a caller gives as the module's raw template names."""
+    return GivenRawNames(RawBases(module, rule, variables, names, TemplateNames(module)))
 
 
 def plan_installed_flat_families(module, rule, variables, interfaces, bases) -> list[InstalledFamilyPlan]:

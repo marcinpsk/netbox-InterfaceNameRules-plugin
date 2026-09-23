@@ -18,6 +18,7 @@ from netbox_interface_name_rules.engine import (
     apply_rule_to_existing,
     find_convertible_families,
     find_interfaces_for_rule,
+    predict_rule_output,
     supports_channelization,
     supports_vc_position_token,
 )
@@ -222,6 +223,12 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["port3", "port3.2"])
         self.assertIn("'port3.2'", "\n".join(logs.output))
 
+    def test_prediction_keeps_the_names_install_keeps(self):
+        with self.assertLogs(PLUGIN_LOGGER, "WARNING"):
+            module, bay = self._install_on(self.device, self.overlap_type, "3")
+
+        self.assertEqual(predict_rule_output(module, bay, ["port3", "port3.2"]), ["port3", "port3.2"])
+
     def test_a_renamed_name_that_equals_another_raw_name_is_not_renamed_wrongly(self):
         module, _ = self._install_on(self.device, self.overlap_type, "3")
         port, port_two = Interface.objects.filter(module=module).order_by("pk")
@@ -333,7 +340,10 @@ class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
     @classmethod
     def setUpTestData(cls):
         manufacturer, cls.device = _build_device(
-            "RawBaseFlat", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbaseflat-vc"), vc_position=1
+            "RawBaseFlat",
+            ["3", "4"],
+            virtual_chassis=VirtualChassis.objects.create(name="rawbaseflat-vc"),
+            vc_position=1,
         )
         cls.module_type = _token_module_type(manufacturer, "RawBaseFlat-QSFP", "xe-{vc_position:0}/0/{module}")
         cls.rule = InterfaceNameRule.objects.create(
@@ -348,6 +358,13 @@ class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
         self._install_on(self.device, self.module_type, "3")
 
         self.assertEqual(find_interfaces_for_rule(self.rule)[0], [])
+
+    def test_a_limited_preview_counts_what_an_unlimited_one_counts(self):
+        for position in ("3", "4"):
+            self._install_on(self.device, self.module_type, position)
+        self._leave()
+
+        self.assertEqual(find_interfaces_for_rule(self.rule, limit=1)[1], find_interfaces_for_rule(self.rule)[1])
 
     def test_a_drifted_flat_family_previews_the_rename_apply_performs(self):
         module, _ = self._install_on(self.device, self.module_type, "3")

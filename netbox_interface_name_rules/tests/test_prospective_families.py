@@ -21,7 +21,6 @@ from netbox_interface_name_rules.engine import (
     supports_channelization,
 )
 from netbox_interface_name_rules.family import (
-    GIVEN_RAW_NAMES,
     FamilyStatus,
     FamilyTopology,
     MemberRole,
@@ -70,6 +69,17 @@ def _installed_projection(plan):
         plan.precondition_status,
         plan.precondition_reason,
     )
+
+
+class _NamesAreRaw:
+    """Bases for described template names, which are raw by construction."""
+
+    @staticmethod
+    def base_for(name):
+        return name
+
+
+_NAMES_ARE_RAW = _NamesAreRaw()
 
 
 class ProspectivePlanSetLookupTest(SimpleTestCase):
@@ -125,7 +135,7 @@ class ProspectivePlanTestCase(ChannelizationTestCase):
             rule,
             build_variables(bay, device=self.device),
             describe_template_interfaces(templates, names),
-            GIVEN_RAW_NAMES,
+            _NAMES_ARE_RAW,
         )
 
 
@@ -168,7 +178,7 @@ class ProspectiveFlatPlanTest(ProspectivePlanTestCase):
             self.rule,
             build_variables(bay, device=self.device),
             interfaces,
-            GIVEN_RAW_NAMES,
+            _NAMES_ARE_RAW,
         )
 
         self.assertEqual(
@@ -515,7 +525,7 @@ class ProspectivePlanningIsReadOnlyTest(ChannelizationTestCase):
             self.rule,
             build_variables(bay, device=self.device),
             describe_template_interfaces(resolved_template_names(module), ["3"]),
-            GIVEN_RAW_NAMES,
+            _NAMES_ARE_RAW,
         )
 
         self.assertEqual(list(Interface.objects.filter(module=module).values_list("pk", "name")), before)

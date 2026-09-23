@@ -273,12 +273,13 @@ def predict_rule_output(module, module_bay, raw_names):
     if not rule:
         return list(raw_names)
 
+    variables = build_variables(module_bay, device=module.device)
     plan_set = family_ops.plan_prospective_families(
         module,
         rule,
-        build_variables(module_bay, device=module.device),
+        variables,
         family_ops.describe_module_interfaces(module, raw_names),
-        family_ops.GIVEN_RAW_NAMES,
+        family_ops.given_raw_names(module, rule, variables, raw_names),
     )
     return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
@@ -626,7 +627,8 @@ def _process_module(rule, module, ifaces, variables, limit, results, module_qs, 
     plan_set = family_ops.plan_prospective_families(
         module, rule, variables, family_ops.describe_interfaces(rows), bases
     )
-    checked = len(installed) + len(plan_set.plans)
+    # A flat family counts its members, as the scan of unvisited modules counts interfaces.
+    checked = sum(len(plan.members) for plan in installed) + len(plan_set.plans)
     if not checked:
         return 0, False
     rows_by_pk = {iface.pk: iface for iface in ifaces}

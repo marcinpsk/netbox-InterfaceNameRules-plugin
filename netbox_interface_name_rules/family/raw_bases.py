@@ -96,20 +96,32 @@ class RawBases:
         self._reads_base = rule_reads_base(rule)
         self._claimed = False
         self._by_name = None
+        self._ambiguous = frozenset()
 
     def base_for(self, name):
         """Return the raw template name *name* stands for, or None when no single template claims it."""
         if not self._reads_base:
             return name
-        if not self._claimed:
-            self._by_name = self._claim()
-            self._claimed = True
+        self._load()
         if self._by_name is None:
             return name
         return self._by_name.get(name)
 
+    def is_ambiguous(self, name):
+        """Return whether more than one template claims *name*, or its template claims another name too."""
+        if not self._reads_base:
+            return False
+        self._load()
+        return name in self._ambiguous
+
+    def _load(self):
+        """Compute the claims on first use."""
+        if not self._claimed:
+            self._by_name, self._ambiguous = self._claim()
+            self._claimed = True
+
     def _claim(self):
-        """Map every name exactly one template claims to its raw name, or return None without templates.
+        """Return ``(raw name by claimed name, ambiguous names)``, or ``(None, empty)`` without templates.
 
         A template claims its raw name, its historical raw forms and the names the rule gives it. A
         raw name beats another template's historical form, as in the drift guard, but never a
@@ -121,7 +133,7 @@ class RawBases:
             if template.channel_id is None
         ]
         if not claimants:
-            return None
+            return None, frozenset()
         raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
         renaming = _renaming_templates(self._rule)
         claims = []
@@ -144,16 +156,20 @@ class RawBases:
         accepted, messages = resolve_template_claims(claims, module=self._module, label_kind="raw base")
         for message in messages:
             logger.warning("%s", message)
-        return {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
+        by_name = {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
+        return by_name, frozenset(label for claim in claims for label in claim.labels) - by_name.keys()
 
 
 class GivenRawNames:
-    """Bases for names that are already raw template names, such as the names prediction receives."""
+    """Bases for names a caller gives as raw template names, such as the names prediction receives.
 
-    @staticmethod
-    def base_for(name):
-        """Return *name*: it is its own raw template name."""
-        return name
+    A given name is its own base, so a stale name is predicted from itself. A name the claim finds
+    ambiguous has no base, because installation would not rename it either.
+    """
 
+    def __init__(self, bases):
+        self._bases = bases
 
-GIVEN_RAW_NAMES = GivenRawNames()
+    def base_for(self, name):
+        """Return *name*, or None when the claim over the given names finds it ambiguous."""
+        return None if self._bases.is_ambiguous(name) else name
