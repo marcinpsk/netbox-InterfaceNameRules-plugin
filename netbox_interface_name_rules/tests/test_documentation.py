@@ -30,6 +30,7 @@ from netbox_interface_name_rules.name_template import (
 )
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.template_variable_reference import (
+    GENERATED_REFERENCE_REGIONS,
     GENERATED_REGION_BEGIN,
     GENERATED_REGION_END,
     GeneratedReferenceRegion,
@@ -74,6 +75,18 @@ class TemplateVariableCatalogueTest(unittest.TestCase):
                 NamingContext.DEVICE_INTERFACE: "Current interface name before the rule applies.",
             },
         )
+
+
+def _line_after_generated_region(text):
+    """Return the first nonblank line after the generated region, or an empty string at the end."""
+    return text.split(GENERATED_REGION_END, 1)[1].lstrip("\n").split("\n", 1)[0]
+
+
+def _closes_generated_region(line, region):
+    """Return whether a line ends the region's outermost section instead of joining its last table."""
+    outer_level = region.heading_level - 1 if region.title else region.heading_level
+    heading = re.match(r"(#+) ", line)
+    return not line or (heading is not None and len(heading.group(1)) <= outer_level)
 
 
 class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
@@ -173,6 +186,25 @@ class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
             self.assertIn(str(missing), str(raised.exception))
             self.assertIn("source checkout", str(raised.exception))
             self.assertEqual(path.read_text(encoding="utf-8"), stale)
+
+    def test_each_generated_region_ends_where_its_section_closes(self):
+        for region in GENERATED_REFERENCE_REGIONS:
+            with self.subTest(path=str(region.path.relative_to(_PROJECT_ROOT))):
+                line = _line_after_generated_region(region.path.read_text(encoding="utf-8"))
+                self.assertTrue(_closes_generated_region(line, region), f"{line!r} reads as part of the last table")
+
+    def test_region_end_check_refuses_text_under_the_last_table(self):
+        untitled = GeneratedReferenceRegion(Path("guide.md"), 3)
+        titled = GeneratedReferenceRegion(Path("guide.md"), 4, "Template variables")
+
+        self.assertTrue(_closes_generated_region("", untitled))
+        self.assertTrue(_closes_generated_region("### Next section", untitled))
+        self.assertTrue(_closes_generated_region("## Next chapter", titled))
+        self.assertFalse(_closes_generated_region("A paragraph.", untitled))
+        self.assertFalse(_closes_generated_region("- A list item", titled))
+        self.assertFalse(_closes_generated_region("#### Deeper heading", untitled))
+        self.assertFalse(_closes_generated_region("#### Sibling of the context headings", titled))
+        self.assertEqual(_line_after_generated_region(f"{GENERATED_REGION_END}\n\n## Next\n"), "## Next")
 
     def test_malformed_generated_region_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

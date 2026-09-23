@@ -89,6 +89,10 @@ The `reuse-lint` pre-commit hook validates compliance on every commit.
 
 - All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents. Non-model forms are the exception: NetBox 4.x dropped `BootstrapMixin` and styles every form through its own widget templates (`FORM_RENDERER = TemplatesSetting`), so a plain form subclasses `django.forms.Form`, exactly as NetBox's own `ConfirmationForm`/`BulkRenameForm` do.
 - Use the public surface in `name_template.py` for the name-template language. Do not restate or reimplement its parsing rules.
+- The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.
+- Rule matching uses two tiers. Exact module-type rules take priority over regex rules. Within each tier, `rule_selection.py` applies the parent, device, and platform scope score, then the documented tie breakers.
+- Add new rules to the appropriate vendor-specific file under `contrib/` (`cisco.yaml`, `juniper.yaml`, `linux.yaml`, `ufispace.yaml`, `ufispace-device-type.yaml`, `converters.yaml`) — keep them updated when adding new rule patterns.
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format, enforced by pre-commit hook.
 
 <!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->
 ### Template variables
@@ -136,8 +140,3 @@ Device-interface rules use these variables in the Name Template field.
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 | `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
 <!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
-
-- The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.
-- Rule matching uses two tiers. Exact module-type rules take priority over regex rules. Within each tier, `rule_selection.py` applies the parent, device, and platform scope score, then the documented tie breakers.
-- Add new rules to the appropriate vendor-specific file under `contrib/` (`cisco.yaml`, `juniper.yaml`, `linux.yaml`, `ufispace.yaml`, `ufispace-device-type.yaml`, `converters.yaml`) — keep them updated when adding new rule patterns.
-- Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format, enforced by pre-commit hook.

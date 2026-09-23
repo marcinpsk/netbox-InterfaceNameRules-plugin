@@ -47,6 +47,10 @@ Device-interface rules use these variables in the Name Template field.
 | `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
 <!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
 
+### Device interface rule filter
+
+The **Module Type Pattern** field in device interface rules acts as a **regex filter on interface names** (not a module type selector). Only interfaces whose current name matches the pattern are renamed.
+
 ### What `{base}` starts from
 
 For a flat breakout family, `{base}` is the module's raw template name on every apply. The rule
@@ -57,8 +61,6 @@ For an installed channelized family, `{base}` is the installed parent's current 
 and every channel receive that same base value.
 
 For a plain interface rename, `{base}` is the interface's current name.
-
-The **Module Type Pattern** field in device interface rules acts as a **regex filter on interface names** (not a module type selector). Only interfaces whose current name matches the pattern are renamed.
 
 ## Arithmetic Expressions
 

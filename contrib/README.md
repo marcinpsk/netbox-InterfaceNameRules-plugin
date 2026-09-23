@@ -112,6 +112,8 @@ Device-interface rules use these variables in the Name Template field.
 | `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
 <!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
 
+### Breakout channels
+
 `channel_count` is a rule configuration field (not a template variable) that enables breakout mode.
 Set it to the number of sub-interfaces to create per module, e.g.:
 
@@ -125,6 +127,8 @@ Set it to the number of sub-interfaces to create per module, e.g.:
 
 With `channel_count: 4` and `{base}` resolving to `et-0/0/1`, this creates
 `et-0/0/1:0`, `et-0/0/1:1`, `et-0/0/1:2`, and `et-0/0/1:3`.
+
+### Arithmetic expressions
 
 Arithmetic expressions are supported inside `name_template`.
 Variables like `{parent_bay_position_num}` and `{sfp_slot}` are substituted first,
