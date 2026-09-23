@@ -941,6 +941,31 @@ def _shipped_converter_offset_template():
     return template
 
 
+_UFISPACE_HELP_EXAMPLE = re.compile(
+    r"<strong>UfiSpace breakout:</strong> (?P<module_type>\S+) on (?P<device_type>\S+) &rarr;\s*"
+    r"<code[^>]*>(?P<template>[^<]+)</code> \(Channels=(?P<count>\d+), Ch\. Start=(?P<start>\d+)\)"
+)
+
+
+def _shipped_rule_for_ufispace_help_example():
+    """Return the help panel's UfiSpace example and the one shipped rule it names."""
+    matches = tuple(_UFISPACE_HELP_EXAMPLE.finditer((_PROJECT_ROOT / _UI_LIST).read_text(encoding="utf-8")))
+    if len(matches) != 1:
+        raise AssertionError(f"{_UI_LIST} must state one UfiSpace breakout example, found {len(matches)}")
+    example = matches[0]
+    rules = yaml.safe_load((_PROJECT_ROOT / "contrib" / "ufispace-device-type.yaml").read_text(encoding="utf-8"))
+    shipped = [
+        rule
+        for rule in rules
+        if rule.get("device_type") == example["device_type"]
+        and rule.get("name_template") == example["template"]
+        and re2.fullmatch(rule["module_type_pattern"], example["module_type"])
+    ]
+    if len(shipped) != 1:
+        raise AssertionError(f"one shipped UfiSpace rule must match the help example, found {len(shipped)}")
+    return example, shipped[0]
+
+
 def _documented_converter_offset_scenario():
     """Return the converter-offset inputs and result stated identically in both guides."""
     documented = []
@@ -1281,6 +1306,14 @@ class DocumentedTemplateTest(unittest.TestCase):
                     1,
                     f"{source} must restate the shipped converter-offset template {template!r} exactly once",
                 )
+
+    def test_ufispace_help_example_states_the_shipped_channels(self):
+        example, rule = _shipped_rule_for_ufispace_help_example()
+
+        self.assertEqual(
+            (int(example["count"]), int(example["start"])),
+            (rule["channel_count"], rule["channel_start"]),
+        )
 
     def test_converter_offset_template_produces_the_documented_name(self):
         variables, expected_name = _documented_converter_offset_scenario()
