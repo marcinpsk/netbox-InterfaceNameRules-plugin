@@ -368,6 +368,8 @@ def _plugin_modules() -> frozenset[str]:
 
 def _module_path(module_name: str) -> pathlib.Path | None:
     """Return the file that defines *module_name*, or None when the plugin does not define it."""
+    if module_name == PLUGIN_PACKAGE:
+        return PACKAGE / "__init__.py"
     relative = pathlib.Path(*module_name.split(".")[1:])
     for candidate in (PACKAGE / relative.with_suffix(".py"), PACKAGE / relative / "__init__.py"):
         if candidate.exists():
@@ -822,3 +824,11 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
         source = "from . import naming\nnaming.numeric_suffix('3')"
 
         self.assertEqual(self._found(source), set())
+
+    def test_a_reference_to_the_root_package_resolves_its_attributes(self):
+        """A copied root reference must allow public reads and report private reads."""
+        public = "import netbox_interface_name_rules\nplugin = netbox_interface_name_rules\nconfig = plugin.config"
+        private = "import netbox_interface_name_rules\nplugin = netbox_interface_name_rules\nplugin._private"
+
+        self.assertEqual(self._found(public), set())
+        self.assertEqual(self._found(private), {f"{PLUGIN_PACKAGE}._private"})
