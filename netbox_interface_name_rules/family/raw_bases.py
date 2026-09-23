@@ -111,8 +111,9 @@ class RawBases:
     def _claim(self):
         """Map every name exactly one template claims to its raw name, or return None without templates.
 
-        A name that is some template's raw name now belongs to that template, as in the drift guard,
-        so only the other names and templates go through the renamed and historical forms.
+        A template claims its raw name, its historical raw forms and the names the rule gives it. A
+        raw name beats another template's historical form, as in the drift guard, but never a
+        renamed form: that overlap is ambiguous, so neither template claims the name.
         """
         claimants = [
             (template.pk, template.template_name, template.resolved, template.historical_pattern)
@@ -121,28 +122,29 @@ class RawBases:
         ]
         if not claimants:
             return None
-        exact = {raw: raw for _claimant_id, _template_name, raw, _historical in claimants if raw in self._names}
-        names = [name for name in self._names if name not in exact]
+        raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
         renaming = _renaming_templates(self._rule)
         claims = []
         raw_by_claimant = {}
         for claimant_id, template_name, raw, historical in claimants:
-            if raw in exact:
-                continue
-            patterns = [
+            renamed = [
                 pattern
                 for template in renaming
                 if (pattern := _renamed_pattern(template, self._variables, raw, historical)) is not None
             ]
-            if historical is not None:
-                patterns.append(historical)
-            labels = tuple(name for name in names if any(pattern.fullmatch(name) for pattern in patterns))
+            labels = tuple(
+                name
+                for name in self._names
+                if name == raw
+                or (historical is not None and name not in raw_names and historical.fullmatch(name))
+                or any(pattern.fullmatch(name) for pattern in renamed)
+            )
             claims.append(TemplateClaim(claimant_id, template_name, labels))
             raw_by_claimant[claimant_id] = raw
         accepted, messages = resolve_template_claims(claims, module=self._module, label_kind="raw base")
         for message in messages:
             logger.warning("%s", message)
-        return exact | {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
+        return {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
 
 
 class GivenRawNames:

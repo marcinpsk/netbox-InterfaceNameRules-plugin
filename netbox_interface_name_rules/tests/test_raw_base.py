@@ -58,6 +58,10 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         InterfaceTemplate.objects.create(module_type=cls.twin_type, name="{module}", type=PLAIN_TYPE)
         InterfaceTemplate.objects.create(module_type=cls.twin_type, name="{module}1", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.twin_type, name_template="p{base}{vc_position}")
+        cls.overlap_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-OVERLAP")
+        InterfaceTemplate.objects.create(module_type=cls.overlap_type, name="port{module}", type=PLAIN_TYPE)
+        InterfaceTemplate.objects.create(module_type=cls.overlap_type, name="port{module}.2", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(module_type=cls.overlap_type, name_template="{base}.{vc_position}")
         cls.flat_type = _plain_module_type(manufacturer, "RawBase-FLAT", PLAIN_TYPE)
         cls.flat_rule = InterfaceNameRule.objects.create(
             module_type=cls.flat_type,
@@ -194,6 +198,25 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
         self.assertEqual(self._names(module), ["custom"])
         self.assertIn("no single interface template claims", "\n".join(logs.output))
+
+    def test_a_raw_name_another_template_renames_to_is_not_claimed_on_install(self):
+        with self.assertLogs(PLUGIN_LOGGER, "WARNING") as logs:
+            module, _ = self._install_on(self.device, self.overlap_type, "3")
+
+        # 'port3.2' is raw 'port3.2' and also raw 'port3' renamed at position 2.
+        self.assertEqual(self._names(module), ["port3", "port3.2"])
+        self.assertIn("'port3.2'", "\n".join(logs.output))
+
+    def test_a_renamed_name_that_equals_another_raw_name_is_not_renamed_wrongly(self):
+        module, _ = self._install_on(self.device, self.overlap_type, "3")
+        port, port_two = Interface.objects.filter(module=module).order_by("pk")
+        # The names both templates had after an apply at position 2.
+        rename_out_of_band(port_two, "port3.2.2")
+        rename_out_of_band(port, "port3.2")
+
+        self._renumber(3)
+
+        self.assertEqual(self._names(module), ["port3.2", "port3.2.2"])
 
     def test_a_rule_without_base_still_renames_a_hand_renamed_interface(self):
         module, _ = self._install_on(self.device, self.fixed_type, "7")

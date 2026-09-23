@@ -326,6 +326,10 @@ class BaseVariableDocumentationTest(unittest.TestCase):
             ),
             "An interface that no template claims, or that more than one template claims, keeps its name.",
             (
+                "A raw name wins over another template's earlier virtual-chassis form, but not over the name the "
+                "rule gives another template"
+            ),
+            (
                 "A module type without interface templates has no raw names, so there `{base}` is the "
                 "interface's current name."
             ),
