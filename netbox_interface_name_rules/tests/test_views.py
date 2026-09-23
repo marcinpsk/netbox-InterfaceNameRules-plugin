@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for plugin views: list, detail, toggle, duplicate, test, apply."""
 
+import re
+from html.parser import HTMLParser
 from unittest.mock import ANY, MagicMock, patch
 
 from dcim.models import (
@@ -19,6 +21,11 @@ from django.urls import path, re_path, reverse
 from rest_framework.test import APIClient
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
+from netbox_interface_name_rules.template_variable_reference import (
+    rule_tester_variable_rows,
+    variable_reference_rows,
+)
 from netbox_interface_name_rules.tests.helpers import make_device
 from netbox_interface_name_rules.views import RuleTestView
 
@@ -41,6 +48,125 @@ _PREVIEW_VARIABLES = frozenset(
         "channel",
     }
 )
+_HTML_COMMENT = re.compile(rb"<!--.*?-->", re.DOTALL)
+
+
+class _ReferenceRowParser(HTMLParser):
+    """Read the attributes and visible cells of rendered variable-reference rows."""
+
+    def __init__(self, table_id):
+        super().__init__()
+        self.table_id = table_id
+        self.rows = []
+        self.table_count = 0
+        self._table_depth = 0
+        self._in_body = False
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "table":
+            if attributes.get("id") == self.table_id:
+                self.table_count += 1
+            if self._table_depth or attributes.get("id") == self.table_id:
+                self._table_depth += 1
+        elif tag == "tbody" and self._table_depth == 1:
+            self._in_body = True
+        elif tag == "tr" and self._in_body:
+            if self._row is not None:
+                raise AssertionError(f"{self.table_id} contains a nested row")
+            if "data-naming-contexts" not in attributes or "data-template-variable" not in attributes:
+                raise AssertionError(f"{self.table_id} contains a row that is not a catalogue row")
+            self._row = (attributes["data-naming-contexts"].split(), attributes["data-template-variable"], [])
+        elif tag == "td" and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "td" and self._cell is not None:
+            self._row[2].append("".join(self._cell).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append((*self._row[:2], *self._row[2]))
+            self._row = None
+        elif tag == "tbody" and self._in_body and self._table_depth == 1:
+            self._in_body = False
+        elif tag == "table" and self._table_depth:
+            self._table_depth -= 1
+            if not self._table_depth:
+                self._in_body = False
+
+
+def _rendered_variable_rows(response, table_id):
+    """Return the attributes and visible cells of each rendered reference row."""
+    content = _HTML_COMMENT.sub(b"", response.content)
+    if b"<!--" in content:
+        raise ValueError("response holds an unterminated comment, so its variable rows cannot be read")
+    parser = _ReferenceRowParser(table_id)
+    parser.feed(content.decode())
+    parser.close()
+    if parser.table_count != 1:
+        raise AssertionError(f"expected one {table_id} table, found {parser.table_count}")
+    return parser.rows
+
+
+class RenderedVariableRowTest(SimpleTestCase):
+    def test_a_commented_out_row_is_not_rendered(self):
+        response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
+            b'<!-- <tr data-naming-contexts="module_member" data-template-variable="retired">'
+            b"<td><code>{retired}</code></td><td>Retired</td><td><code>0</code></td></tr> -->"
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code></td><td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"</tbody></table>"
+        )
+
+        self.assertEqual(
+            _rendered_variable_rows(response, "variable-reference"),
+            [(["module_member"], "slot", "{slot}", "Top-level slot.", "Slot 3")],
+        )
+
+    def test_an_unmarked_row_in_the_reference_table_is_rejected(self):
+        response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
+            b"<tr><td><code>{unknown_variable}</code></td><td>Unsupported variable</td><td>0</td></tr>"
+            b"</tbody></table>"
+        )
+
+        with self.assertRaisesRegex(AssertionError, "variable-reference"):
+            _rendered_variable_rows(response, "variable-reference")
+
+    def test_rows_outside_the_reference_table_are_ignored(self):
+        response = HttpResponse(
+            b'<table><tbody><tr data-naming-contexts="device_interface" data-template-variable="unrelated">'
+            b"<td><code>{unrelated}</code></td></tr></tbody></table>"
+            b'<table id="variable-reference"><tbody>'
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code></td><td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"</tbody></table>"
+        )
+
+        self.assertEqual(
+            _rendered_variable_rows(response, "variable-reference"),
+            [(["module_member"], "slot", "{slot}", "Top-level slot.", "Slot 3")],
+        )
+
+    def test_a_nested_table_does_not_end_the_reference_table_body(self):
+        response = HttpResponse(
+            b'<table id="variable-reference"><tbody>'
+            b'<tr data-naming-contexts="module_member" data-template-variable="slot">'
+            b"<td><code>{slot}</code><table><tbody></tbody></table></td>"
+            b"<td>Top-level slot.</td><td><code>Slot 3</code></td></tr>"
+            b"<tr><td><code>{unknown_variable}</code></td><td>Unsupported variable</td><td>0</td></tr>"
+            b"</tbody></table>"
+        )
+
+        with self.assertRaisesRegex(AssertionError, "variable-reference"):
+            _rendered_variable_rows(response, "variable-reference")
 
 
 def _echo_body(request):
@@ -172,6 +298,48 @@ class RuleListViewTest(ViewTestBase):
         url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_variable_reference_groups_equal_module_rule_rows(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+        rows = _rendered_variable_rows(response, "rule-list-variable-reference")
+        self.assertEqual(
+            rows,
+            [
+                (
+                    [context.value for context in row.contexts],
+                    row.name,
+                    row.token,
+                    row.rule_type_label,
+                    row.description,
+                    row.example,
+                )
+                for row in variable_reference_rows()
+            ],
+        )
+        rows_by_name = {}
+        for contexts, name, *_cells in rows:
+            rows_by_name.setdefault(name, []).append(contexts)
+
+        self.assertEqual(set(rows_by_name), {variable.name for variable in TEMPLATE_VARIABLES})
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(
+            rows_by_name["base"],
+            [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT], [NamingContext.DEVICE_INTERFACE]],
+        )
+        self.assertEqual(
+            rows_by_name["parent_bay_position"],
+            [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT]],
+        )
+        self.assertContains(response, "<th>Rule type</th>", html=True)
+        self.assertContains(response, "<th>Example</th>", html=True)
+        self.assertContains(response, "Module: Name Template, Parent Name Template")
+
+    def test_variable_reference_names_each_rule_field(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+
+        self.assertContains(response, "Module rules use these variables in the Name Template field.")
+        self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
+        self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
     def test_list_view_unauthenticated_redirects(self):
         """Unauthenticated access to list view redirects to login."""
@@ -518,6 +686,28 @@ class RuleTestViewTest(ViewTestBase):
         """GET to rule test view returns 200."""
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)
+
+    def test_variable_reference_lists_only_variables_the_preview_can_derive(self):
+        response = self.client.get(self._url())
+        rows = _rendered_variable_rows(response, "rule-tester-variable-reference")
+
+        self.assertEqual(
+            rows,
+            [
+                (
+                    [context.value for context in row.contexts],
+                    row.name,
+                    row.token,
+                    row.description,
+                    row.example,
+                )
+                for row in rule_tester_variable_rows()
+            ],
+        )
+        self.assertEqual(
+            {(tuple(contexts), name) for contexts, name, *_cells in rows},
+            {((NamingContext.MODULE_MEMBER,), name) for name in _PREVIEW_VARIABLES},
+        )
 
     def test_test_view_post_simple_template(self):
         """POST to rule test view with a simple template returns a result."""

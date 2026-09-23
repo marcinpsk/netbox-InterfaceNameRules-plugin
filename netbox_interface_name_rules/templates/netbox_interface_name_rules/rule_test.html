@@ -131,18 +131,14 @@
 
           <details class="mt-3">
             <summary class="text-muted small" style="cursor:pointer">Variable reference <i class="mdi mdi-information-outline"></i></summary>
-            <table class="table table-sm table-bordered mt-2 small">
+            <table id="rule-tester-variable-reference" class="table table-sm table-bordered mt-2 small">
               <thead class="table-light"><tr><th>Variable</th><th>Description</th><th>Example</th></tr></thead>
               <tbody>
-                <tr><td><code>{slot}</code></td><td>Top-level slot from parent bay position</td><td><code>0</code>, <code>2</code></td></tr>
-                <tr><td><code>{slot_num}</code></td><td>Numeric suffix of slot</td><td><code>3</code></td></tr>
-                <tr><td><code>{bay_position}</code></td><td>Bay position string from NetBox</td><td><code>swp1</code>, <code>TenGigabitEthernet3/2/1</code></td></tr>
-                <tr><td><code>{bay_position_num}</code></td><td>Numeric suffix of bay position</td><td><code>1</code> (from <code>swp1</code>)</td></tr>
-                <tr><td><code>{parent_bay_position}</code></td><td>Parent module bay's position</td><td><code>2</code>, <code>TenGigabitEthernet3/2</code></td></tr>
-                <tr><td><code>{parent_bay_position_num}</code></td><td>Numeric suffix of parent bay position</td><td><code>2</code></td></tr>
-                <tr><td><code>{sfp_slot}</code></td><td>Sub-bay index within parent module</td><td><code>0</code>, <code>1</code></td></tr>
-                <tr><td><code>{base}</code></td><td>Current interface name from NetBox</td><td><code>Ethernet1</code>, <code>et-0/0/0</code></td></tr>
-                <tr><td><code>{channel}</code></td><td>Channel number (auto-set for breakout)</td><td><code>0</code>, <code>1</code>, <code>2</code></td></tr>
+                {% for row in template_variable_rows %}
+                <tr data-naming-contexts="{{ row.context_values }}" data-template-variable="{{ row.name }}">
+                  <td><code>{{ row.token }}</code></td><td>{{ row.description }}</td><td><code>{{ row.example }}</code></td>
+                </tr>
+                {% endfor %}
               </tbody>
             </table>
             <p class="text-muted small mt-1 mb-0">

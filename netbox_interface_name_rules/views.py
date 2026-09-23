@@ -28,6 +28,7 @@ from .forms import (
 )
 from .models import InterfaceNameRule, csv_export_entry
 from .tables import InterfaceNameRuleTable
+from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,13 @@ class InterfaceNameRuleListView(generic.ObjectListView):
     template_name = "netbox_interface_name_rules/interfacenamerule_list.html"
     if _LIST_VIEW_ACTIONS is not None:
         actions = _LIST_VIEW_ACTIONS
+
+    def get_extra_context(self, request):
+        """Add the catalogue-backed template-variable reference."""
+        return {
+            "template_naming_contexts": naming_context_reference(),
+            "template_variable_rows": variable_reference_rows(),
+        }
 
     def export_yaml(self):
         """Export all rules as a single YAML list (overrides NetBox's per-object concatenation)."""
@@ -253,7 +261,15 @@ class RuleTestView(BaseMultiObjectView):
                 }
             except (InterfaceNameRule.DoesNotExist, ValueError):
                 pass
-        return render(request, self.template_name, {"form": RuleTestForm(initial=initial), "loaded_rule": loaded_rule})
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": RuleTestForm(initial=initial),
+                "loaded_rule": loaded_rule,
+                "template_variable_rows": rule_tester_variable_rows(),
+            },
+        )
 
     def post(self, request):
         """Evaluate the submitted template and return a preview or redirect to save."""
@@ -282,6 +298,7 @@ class RuleTestView(BaseMultiObjectView):
                 "db_preview": db_preview,
                 "db_total": db_total,
                 "error": error,
+                "template_variable_rows": rule_tester_variable_rows(),
             },
         )
 

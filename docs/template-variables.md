@@ -2,32 +2,61 @@
 
 ## Available Variables
 
-### Module Interface Rules
+<!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->
+### Module member names
 
-These variables are available in rules that rename **module-installed interfaces** (triggered by `post_save` on `dcim.Module`):
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `{bay_position}` | Raw bay position string | `0`, `swp1`, `TenGigabitEthernet3/2/1` |
-| `{bay_position_num}` | Numeric suffix of bay position | `0`, `1` |
-| `{slot}` | Top-level slot/module bay position | `3` |
-| `{slot_num}` | Numeric suffix of slot | `3` |
-| `{parent_bay_position}` | Parent module's bay position | `2`, `TenGigabitEthernet3/2` |
-| `{parent_bay_position_num}` | Numeric suffix of parent bay position | `2` |
-| `{sfp_slot}` | Sub-bay index within parent module | `1` |
-| `{base}` | Original interface name from NetBox template | `Interface 0` |
-| `{channel}` | Breakout channel number (requires `channel_count`) | `0`, `1`, `2` |
-| `{vc_position}` | Virtual Chassis member position (`device.vc_position`) | `1`, `2` |
-
-### Device Interface Rules
-
-These variables are available in rules with **Applies to Device Interfaces** enabled (triggered by `post_save` on `dcim.Device` — VC position change):
+Module rules use these variables in the Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{vc_position}` | Virtual Chassis member position (`device.vc_position`) | `1`, `2` |
-| `{base}` | Current full interface name (before renaming) | `Gi0/1`, `ge-0/0/3` |
-| `{port}` | Segment after the last `/` in the interface name; full name if no `/` | `1` (from `Gi0/1`), `3` (from `ge-0/0/3`) |
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
+
+### Module parent names
+
+Module rules use these variables in the Parent Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+
+### Device interface names
+
+Device-interface rules use these variables in the Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{base}` | Current interface name before the rule applies. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
+<!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
+
+### What `{base}` starts from
+
+For a flat breakout family, `{base}` is the module's raw template name on every apply. The rule
+therefore derives the same member names when it runs again. It does not apply the template to a
+renamed member name.
+
+For an installed channelized family, `{base}` is the installed parent's current name. The parent
+and every channel receive that same base value.
+
+For a plain interface rename, `{base}` is the interface's current name.
 
 The **Module Type Pattern** field in device interface rules acts as a **regex filter on interface names** (not a module type selector). Only interfaces whose current name matches the pattern are renamed.
 
@@ -186,8 +215,7 @@ channel_start: 0
 minus `{channel}` — the parent is the one interface in the family without a channel number, and a
 `{channel}` in it is rejected in every spelling, including inside an expression (`{channel + 1}`).
 Braces must balance, so a stray `{` is refused on save instead of ending up in an interface name.
-Blank leaves the parent the name NetBox gave it. `{base}` is the base interface's current name, for
-the parent and for every channel alike.
+Blank leaves the parent the name NetBox gave it.
 
 The complete family is checked before anything is written: one occupied name — the parent's or any
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
