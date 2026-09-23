@@ -332,6 +332,14 @@ def module_raw_bases(module, rule, variables, interfaces) -> RawBases:
     return RawBases(module, rule, variables, names, TemplateNames(module))
 
 
+def plan_installed_flat_families(module, rule, variables, interfaces, bases) -> list[InstalledFamilyPlan]:
+    """Return a plan for every installed flat family a flat-mode rule renames on *module*."""
+    return [
+        _flat_plan(module, target_names, members)
+        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, bases.catalog)
+    ]
+
+
 def plan_installed_families(module, rule, variables) -> InstalledFamilyPlanSet:
     """Return immutable plans for the installed families owned by *module*, reading its interfaces."""
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -347,9 +355,6 @@ def plan_installed_families_from(module, rule, variables, interfaces, bases) -> 
     reads them once rather than once per module.
     """
     plans = _channelized_plans(module, rule, variables, interfaces, bases)
-    plans.extend(
-        _flat_plan(module, target_names, members)
-        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, bases.catalog)
-    )
+    plans.extend(plan_installed_flat_families(module, rule, variables, interfaces, bases))
     plans.sort(key=lambda plan: plan.member_pks[0])
     return InstalledFamilyPlanSet(module_id=module.pk, plans=tuple(plans))

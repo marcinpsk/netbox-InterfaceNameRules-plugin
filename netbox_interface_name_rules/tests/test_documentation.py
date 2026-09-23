@@ -320,6 +320,7 @@ class BaseVariableDocumentationTest(unittest.TestCase):
         for statement in (
             "In a module rule, `{base}` is the raw template name of the interface the rule renames:",
             "A flat breakout family, an installed channelized family and a plain interface rename all read it",
+            "A `{vc_position}` inside an arithmetic expression matches only the current position.",
             "An interface that no template claims, or that more than one template claims, keeps its name.",
             (
                 "A module type without interface templates has no raw names, so there `{base}` is the "

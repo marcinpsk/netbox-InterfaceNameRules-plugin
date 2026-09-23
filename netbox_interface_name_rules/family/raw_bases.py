@@ -36,23 +36,43 @@ def _renaming_templates(rule):
     return ()
 
 
+def _marked_evaluation(template, variables, raw):
+    """Return the template evaluated with markers for ``{base}`` and ``{vc_position}``, or None.
+
+    Arithmetic cannot take a marker, so a variable used in arithmetic gets its real value instead.
+    """
+    vc_values = (_VC_MARK, variables["vc_position"]) if "vc_position" in variables else (None,)
+    for vc_position in vc_values:
+        for base in (_BASE_MARK, raw):
+            marked_variables = {**variables, "base": base}
+            if vc_position is not None:
+                marked_variables["vc_position"] = vc_position
+            try:
+                return evaluate_name_template(template, marked_variables)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _renamed_pattern(template, variables, raw, historical):
     """Return a matcher for the name *template* gives *raw*, at any virtual-chassis position."""
-    marked_variables = {**variables, "base": _BASE_MARK}
-    if "vc_position" in variables:
-        marked_variables["vc_position"] = _VC_MARK
-    try:
-        marked = evaluate_name_template(template, marked_variables)
-    except (TypeError, ValueError):
-        # Arithmetic cannot take a marker, so match only the name the current variables give.
-        try:
-            return re.compile(re.escape(evaluate_name_template(template, {**variables, "base": raw})))
-        except (TypeError, ValueError):
-            return None
-    base = re.escape(raw) if historical is None else f"(?:{re.escape(raw)}|{historical.pattern})"
-    pattern = re.escape(marked).replace(_BASE_MARK, f"(?P<base>{base})", 1).replace(_BASE_MARK, "(?P=base)")
-    pattern = pattern.replace(_VC_MARK, f"(?P<vc>{_VC_POSITION})", 1).replace(_VC_MARK, "(?P=vc)")
-    return re.compile(pattern)
+    marked = _marked_evaluation(template, variables, raw)
+    if marked is None:
+        return None
+    groups = {
+        _BASE_MARK: ("base", re.escape(raw) if historical is None else f"(?:{re.escape(raw)}|{historical.pattern})"),
+        _VC_MARK: ("vc", _VC_POSITION),
+    }
+    pattern = []
+    opened = set()
+    for part in re.split(f"({_BASE_MARK}|{_VC_MARK})", marked):
+        if part not in groups:
+            pattern.append(re.escape(part))
+            continue
+        name, alternatives = groups[part]
+        pattern.append(f"(?P={name})" if name in opened else f"(?P<{name}>{alternatives})")
+        opened.add(name)
+    return re.compile("".join(pattern))
 
 
 class RawBases:

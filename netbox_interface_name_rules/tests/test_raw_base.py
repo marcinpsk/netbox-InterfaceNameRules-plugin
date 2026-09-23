@@ -16,6 +16,7 @@ from netbox_interface_name_rules.engine import (
     apply_rule_to_existing,
     find_interfaces_for_rule,
     supports_channelization,
+    supports_vc_position_token,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
@@ -27,7 +28,11 @@ from netbox_interface_name_rules.tests.test_channelization import (
     _build_device,
     _channelized_module_type,
 )
-from netbox_interface_name_rules.tests.test_vc_drift import VcDriftTestCase
+from netbox_interface_name_rules.tests.test_vc_drift import (
+    REQUIRES_VC_POSITION_TOKEN,
+    VcDriftTestCase,
+    _token_module_type,
+)
 
 
 class RawBasePlainRenameTest(VcDriftTestCase):
@@ -63,6 +68,13 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         )
         cls.arithmetic_type = _plain_module_type(manufacturer, "RawBase-ARITH", PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.arithmetic_type, name_template="{{base} + 100}")
+        cls.vc_arithmetic_type = _plain_module_type(manufacturer, "RawBase-VCARITH", PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=cls.vc_arithmetic_type, name_template="{{base} + 100}.{vc_position}"
+        )
+        cls.marker_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-MARK")
+        InterfaceTemplate.objects.create(module_type=cls.marker_type, name="InrRawBaseMark", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(module_type=cls.marker_type, name_template="{base}-x")
         cls.unevaluable_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-UNEVAL")
         InterfaceTemplate.objects.create(module_type=cls.unevaluable_type, name="xe-{module}", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.unevaluable_type, name_template="{{base} + 1}")
@@ -126,6 +138,21 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
         self.assertEqual(self._names(module), ["104"])
+
+    def test_a_renumber_moves_an_arithmetic_name_to_the_new_position(self):
+        module, _ = self._install_on(self.device, self.vc_arithmetic_type, "4")
+        self.assertEqual(self._names(module), ["104.1"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["104.2"])
+
+    def test_a_raw_name_that_spells_the_claim_marker_is_claimed(self):
+        module, bay = self._install_on(self.device, self.marker_type, "3")
+        self.assertEqual(self._names(module), ["InrRawBaseMark-x"])
+
+        self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
+        self.assertEqual(self._names(module), ["InrRawBaseMark-x"])
 
     def test_a_raw_name_the_rule_cannot_evaluate_claims_no_renamed_form(self):
         module, bay = self._install_on(self.device, self.unevaluable_type, "4")
@@ -228,3 +255,40 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
         self._assert_reapplies_rename_nothing(
             self.lockstep_rule, module, bay, ["3-l", "3-l:1", "3-l:2", "3-l:3", "3-l:4"]
         )
+
+
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
+    """The Apply Rules preview offers an installed flat family the rename that Apply Rules performs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "RawBaseFlat", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbaseflat-vc"), vc_position=1
+        )
+        cls.module_type = _token_module_type(manufacturer, "RawBaseFlat-QSFP", "xe-{vc_position:0}/0/{module}")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="brk-{base}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def test_an_installed_flat_family_previews_nothing_after_install(self):
+        self._install_on(self.device, self.module_type, "3")
+
+        self.assertEqual(find_interfaces_for_rule(self.rule)[0], [])
+
+    def test_a_drifted_flat_family_previews_the_rename_apply_performs(self):
+        module, _ = self._install_on(self.device, self.module_type, "3")
+        self._leave()
+
+        results, _total = find_interfaces_for_rule(self.rule)
+
+        self.assertEqual(
+            [(entry["current_name"], entry["new_names"]) for entry in results],
+            [("brk-xe-1/0/3:0", ["brk-xe-0/0/3:0", "brk-xe-0/0/3:1"])],
+        )
+        apply_rule_to_existing(self.rule, interface_ids=[results[0]["interface"].pk])
+        self.assertEqual(self._names(module), ["brk-xe-0/0/3:0", "brk-xe-0/0/3:1"])

@@ -50,6 +50,7 @@ from .installed import (
     module_raw_bases,
     plan_device_interface_rename,
     plan_installed_families,
+    plan_installed_flat_families,
     plan_interface_rename,
 )
 from .prospective import (
@@ -123,6 +124,7 @@ __all__ = (
     "plan_device_interface_rename",
     "plan_flat_family",
     "plan_installed_families",
+    "plan_installed_flat_families",
     "plan_interface_rename",
     "plan_module_conversions",
     "plan_module_families",

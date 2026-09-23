@@ -598,19 +598,46 @@ def _preview_plans(rule, plan_set) -> list:
     return [creations[index] for index in kept]
 
 
+def _installed_flat_entry(module, plan, interface) -> dict | None:
+    """Build the preview entry for an installed flat family, or None when it keeps its names."""
+    if all(member.target_name == member.snapshot.name for member in plan.members):
+        return None
+    role = "channel" if len(plan.members) > 1 else "interface"
+    details = [family_ops.PlannedName(member.target_name, role) for member in plan.members]
+    return {
+        "module": module,
+        "interface": interface,
+        "current_name": interface.name,
+        "new_names": [detail.name for detail in details],
+        "name_details": details,
+    }
+
+
 def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Preview one module from its family plans.  Returns (checked_count, should_stop)."""
+    """Preview one module from its family plans.  Returns (checked_count, should_stop).
+
+    An installed flat family is previewed from the plan Apply Rules executes, because its members
+    carry names no template describes.
+    """
     bases = family_ops.module_raw_bases(module, rule, variables, ifaces)
+    installed = family_ops.plan_installed_flat_families(module, rule, variables, ifaces, bases)
+    installed_pks = {pk for plan in installed for pk in plan.member_pks}
+    rows = [iface for iface in ifaces if iface.pk not in installed_pks]
     plan_set = family_ops.plan_prospective_families(
-        module, rule, variables, family_ops.describe_interfaces(ifaces), bases
+        module, rule, variables, family_ops.describe_interfaces(rows), bases
     )
-    checked = len(plan_set.plans)
+    checked = len(installed) + len(plan_set.plans)
     if not checked:
         return 0, False
+    rows_by_pk = {iface.pk: iface for iface in ifaces}
     rows_by_name = {iface.name: iface for iface in ifaces}
     existing_names = frozenset(rows_by_name)
-    for plan in _preview_plans(rule, plan_set):
-        entry = _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+    entries = [_installed_flat_entry(module, plan, rows_by_pk[plan.member_pks[0]]) for plan in installed]
+    entries.extend(
+        _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+        for plan in _preview_plans(rule, plan_set)
+    )
+    for entry in entries:
         if entry is None:
             continue
         results.append(entry)
