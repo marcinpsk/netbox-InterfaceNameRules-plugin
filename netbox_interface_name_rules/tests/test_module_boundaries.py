@@ -143,20 +143,38 @@ def _test_modules() -> list[pathlib.Path]:
     return sorted(path for path in (PACKAGE / "tests").glob("*.py") if path.stem != "__init__")
 
 
-def _is_simple_test_case(node: ast.ClassDef) -> bool:
-    """Return whether *node* derives directly from `SimpleTestCase`."""
-    return any(
-        (isinstance(base, ast.Name) and base.id == "SimpleTestCase")
-        or (isinstance(base, ast.Attribute) and base.attr == "SimpleTestCase")
+def _base_names(node: ast.ClassDef) -> set[str]:
+    """Return the class names spelled by the bases of *node*."""
+    return {
+        base.id if isinstance(base, ast.Name) else base.attr
         for base in node.bases
+        if isinstance(base, ast.Name | ast.Attribute)
+    }
+
+
+def _is_simple_test_case(node: ast.ClassDef, classes: dict[str, list[ast.ClassDef]], seen=None) -> bool:
+    """Return whether *node* derives from `SimpleTestCase` through known test classes."""
+    seen = set() if seen is None else seen
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+    bases = _base_names(node)
+    return "SimpleTestCase" in bases or any(
+        _is_simple_test_case(base, classes, seen) for name in bases for base in classes.get(name, ())
     )
 
 
-def _overrides_root_urlconf(node: ast.ClassDef) -> bool:
-    """Return whether *node* is decorated with an `override_settings` that names `ROOT_URLCONF`."""
+def _overrides_root_urlconf(node: ast.ClassDef, classes: dict[str, list[ast.ClassDef]], seen=None) -> bool:
+    """Return whether *node* or a known base overrides `ROOT_URLCONF`."""
+    seen = set() if seen is None else seen
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
     return any(
         isinstance(decorator, ast.Call) and any(keyword.arg == "ROOT_URLCONF" for keyword in decorator.keywords)
         for decorator in node.decorator_list
+    ) or any(
+        _overrides_root_urlconf(base, classes, seen) for name in _base_names(node) for base in classes.get(name, ())
     )
 
 
@@ -169,16 +187,34 @@ def _is_reverse_call(node: ast.AST) -> bool:
     )
 
 
-def _unisolated_reverse_classes(path: pathlib.Path) -> set[str]:
+def _test_class_index(paths: list[pathlib.Path]) -> dict[pathlib.Path, list[ast.ClassDef]]:
+    """Collect classes from every scanned test module."""
+    return {
+        path: [
+            node
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+            if isinstance(node, ast.ClassDef)
+        ]
+        for path in paths
+    }
+
+
+def _unisolated_reverse_classes(
+    path: pathlib.Path, class_index: dict[pathlib.Path, list[ast.ClassDef]] | None = None
+) -> set[str]:
     """Return the `SimpleTestCase` classes in *path* that reverse against the real root URLconf."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    class_index = class_index if class_index is not None else _test_class_index([path])
+    classes: dict[str, list[ast.ClassDef]] = {}
+    for nodes in class_index.values():
+        for node in nodes:
+            classes.setdefault(node.name, []).append(node)
     found = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef) or not _is_simple_test_case(node):
+    for node in class_index[path]:
+        if not _is_simple_test_case(node, classes):
             continue
-        if _overrides_root_urlconf(node):
+        if _overrides_root_urlconf(node, classes):
             continue
-        if any(_is_reverse_call(child) for child in ast.walk(node)):
+        if any(_is_reverse_call(child) for statement in node.body for child in ast.walk(statement)):
             found.add(node.name)
     return found
 
@@ -502,9 +538,10 @@ class UnisolatedReverseTest(SimpleTestCase):
 
     def test_no_simple_test_case_reverses_against_the_real_root_urlconf(self):
         violations = set()
-        for path in _test_modules():
+        class_index = _test_class_index(_test_modules())
+        for path in class_index:
             relative = path.relative_to(PACKAGE)
-            for name in _unisolated_reverse_classes(path):
+            for name in _unisolated_reverse_classes(path, class_index):
                 violation = (str(relative), name)
                 if violation not in SIMPLE_TEST_CASE_REVERSE_PERMITS:
                     violations.add(violation)
@@ -524,6 +561,41 @@ class UnisolatedReverseTest(SimpleTestCase):
             "@override_settings(ROOT_URLCONF=_Conf)\n"
             "class Sample(SimpleTestCase):\n"
             "    def test_x(self):\n        reverse('name')\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_unisolated_reverse_classes(path), set())
+
+    def test_an_indirect_simple_test_case_is_reported(self):
+        source = (
+            "class Base(SimpleTestCase):\n    pass\n"
+            "class Sample(Base):\n    def test_x(self):\n        reverse('name')\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_unisolated_reverse_classes(path), {"Sample"})
+
+    def test_an_indirect_simple_test_case_from_another_module_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory) / "base.py"
+            base.write_text("class Base(SimpleTestCase):\n    pass\n", encoding="utf-8")
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "from base import Base\nclass Sample(Base):\n    def test_x(self):\n        reverse('name')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_unisolated_reverse_classes(path, _test_class_index([base, path])), {"Sample"})
+
+    def test_an_isolated_base_also_isolates_its_subclass(self):
+        source = (
+            "@override_settings(ROOT_URLCONF=_Conf)\n"
+            "class Base(SimpleTestCase):\n    pass\n"
+            "class Sample(Base):\n    def test_x(self):\n        reverse('name')\n"
         )
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "sample.py"
