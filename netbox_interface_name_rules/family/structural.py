@@ -225,11 +225,6 @@ def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
     return _install_family(plan)  # pragma: no cover - requires channelization support
 
 
-def install_channelized_family(module, rule, variables, base) -> FamilyOutcome:
-    """Build the channelized family *rule* describes on plain interface *base*."""
-    return execute_structural_family(plan_structural_family(module, rule, variables, base, base.name))
-
-
 # ---------------------------------------------------------------------------
 # Flat breakout families
 # ---------------------------------------------------------------------------

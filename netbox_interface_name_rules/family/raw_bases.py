@@ -13,13 +13,13 @@ import re
 from ..choices import BreakoutModeChoices
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
+from .template_names import VC_POSITION_DIGITS
 
 logger = logging.getLogger(__name__)
 
-# NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
-_VC_POSITION = r"\d{1,10}"
 # PostgreSQL text cannot hold NUL, so no stored name, template or value can spell these markers.
-_MARKERS = {"base": "\x00base\x00", "vc_position": "\x00vc_position\x00"}
+BASE_MARKER = "\x00base\x00"
+_MARKERS = {"base": BASE_MARKER, "vc_position": "\x00vc_position\x00"}
 
 
 def rule_reads_base(rule) -> bool:
@@ -64,7 +64,7 @@ def _renamed_pattern(template, variables, raw, historical):
             "base",
             re.escape(raw) if historical is None else f"(?:{re.escape(raw)}|{historical.pattern})",
         ),
-        _MARKERS["vc_position"]: ("vc", _VC_POSITION),
+        _MARKERS["vc_position"]: ("vc", VC_POSITION_DIGITS),
     }
     pattern = []
     opened = set()

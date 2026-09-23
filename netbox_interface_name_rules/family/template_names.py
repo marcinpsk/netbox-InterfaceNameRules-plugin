@@ -32,7 +32,7 @@ BAY_CHAIN_RELATIONS = (
 _VC_SENTINEL = "InrVcPositionSentinel{}End"
 _VC_SENTINEL_RE = re.compile(r"InrVcPositionSentinel(\d+)End")
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
-_VC_POSITION_DIGITS = r"\d{1,10}"
+VC_POSITION_DIGITS = r"\d{1,10}"
 
 RawMatcher = namedtuple("RawMatcher", ("template_name", "resolved", "pattern"))
 RawNames = namedtuple("RawNames", ("names", "matchers"))
@@ -63,8 +63,8 @@ def vc_position_re():
 def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-chassis token support
     """Return every value represented by one virtual-chassis position token."""
     if fallback is None:
-        return _VC_POSITION_DIGITS
-    return f"(?:{_VC_POSITION_DIGITS}|{re.escape(fallback)})"
+        return VC_POSITION_DIGITS
+    return f"(?:{VC_POSITION_DIGITS}|{re.escape(fallback)})"
 
 
 def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support

@@ -10,10 +10,13 @@ real module installs, real ``Device.save()`` calls and the real Apply Rules entr
 from unittest import skipUnless
 
 from dcim.models import Interface, InterfaceTemplate, ModuleType, VirtualChassis
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
+    find_convertible_families,
     find_interfaces_for_rule,
     supports_channelization,
     supports_vc_position_token,
@@ -111,6 +114,18 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         self.assertEqual(find_interfaces_for_rule(self.rule), ([], 1))
         self.assertEqual(apply_rule_to_existing(self.rule).changed_count, 0)
         self.assertEqual(self._names(module), ["3-x"])
+
+    def test_the_preview_reads_one_module_types_templates_once(self):
+        for position in ("3", "4", "5"):
+            self._install_on(self.device, self.module_type, position)
+
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(find_interfaces_for_rule(self.rule), ([], 3))
+
+        template_reads = [
+            query["sql"] for query in queries.captured_queries if "dcim_interfacetemplate" in query["sql"]
+        ]
+        self.assertEqual(len(template_reads), 1)
 
     def test_a_renumber_moves_the_name_to_the_new_position(self):
         module, _ = self._install_on(self.device, self.vc_type, "4")
@@ -375,3 +390,30 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
 
         self.assertEqual([entry["new_names"] for entry in preview], [["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"]])
         self.assertEqual(self._names(module), ["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"])
+
+    def test_a_drifted_flat_family_whose_rule_spells_a_text_sentinel_is_offered_for_conversion(self):
+        drift_type = _token_module_type(
+            ModuleType.objects.get(pk=self.module_type.pk).manufacturer,
+            "RawBaseFlat-SENT",
+            "xe-{vc_position:0}/0/{module}",
+        )
+        rule = InterfaceNameRule.objects.create(
+            module_type=drift_type,
+            name_template="brk-{base}-InrBaseSentinelEnd:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        module, _ = self._install_on(self.device, drift_type, "3")
+        self._renumber(2)
+        rule.breakout_mode = CHANNELIZED
+        rule.parent_name_template = "et-0/0/{bay_position}"
+        rule.save()
+
+        candidates = find_convertible_families(rule).candidates
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(
+            list(candidates[0].current_names), [f"brk-xe-1/0/3-InrBaseSentinelEnd:{channel}" for channel in range(2)]
+        )
+        self.assertEqual(self._names(module), [f"brk-xe-1/0/3-InrBaseSentinelEnd:{channel}" for channel in range(2)])

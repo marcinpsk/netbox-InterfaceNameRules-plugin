@@ -19,7 +19,7 @@ from .domain import (
     MemberRole,
     PlannedMember,
 )
-from .raw_bases import RawBases
+from .raw_bases import BASE_MARKER, RawBases
 from .targets import (
     UNCLAIMED_BASE_REASON,
     channelized_family_targets,
@@ -30,8 +30,6 @@ from .targets import (
 from .template_names import TemplateNames
 
 logger = logging.getLogger(__name__)
-
-_BASE_SENTINEL = "InrBaseSentinelEnd"
 
 
 def is_plain_interface(interface) -> bool:
@@ -60,15 +58,14 @@ def _historical_bases(rule, variables, template, interfaces):  # pragma: no cove
     try:
         marked = evaluate_name_template(
             rule.name_template,
-            {**variables, "base": _BASE_SENTINEL, "channel": str(rule.channel_start)},
+            {**variables, "base": BASE_MARKER, "channel": str(rule.channel_start)},
         )
     except (TypeError, ValueError):
         return ()
-    if _BASE_SENTINEL not in marked:
+    if BASE_MARKER not in marked:
         return ()
-    escaped = re.escape(marked)
-    head, _, tail = escaped.partition(_BASE_SENTINEL)
-    tail = tail.replace(_BASE_SENTINEL, "(?P=base)")
+    head, _, tail = re.escape(marked).partition(re.escape(BASE_MARKER))
+    tail = tail.replace(re.escape(BASE_MARKER), "(?P=base)")
     pattern = re.compile(f"{head}(?P<base>{template.historical_pattern.pattern}){tail}")
     bases = {
         match.group("base") for interface in interfaces if (match := pattern.fullmatch(interface.name)) is not None

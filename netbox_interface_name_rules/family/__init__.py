@@ -65,7 +65,6 @@ from .structural import (
     execute_flat_family,
     execute_structural_family,
     has_flat_expansion,
-    install_channelized_family,
     plan_flat_family,
     plan_structural_family,
 )
@@ -115,7 +114,6 @@ __all__ = (
     "execute_module_families",
     "execute_structural_family",
     "has_flat_expansion",
-    "install_channelized_family",
     "interfaces_by_module",
     "is_channelized_parent",
     "module_raw_bases",

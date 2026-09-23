@@ -682,29 +682,28 @@ def find_interfaces_for_rule(rule, limit=None):
 
     module_qs = _build_module_qs(rule).select_related(
         "module_type",
-        "device",
         "device__device_type",
         "device__platform",
-        "device__virtual_chassis",
-        "module_bay",
-        "module_bay__parent",
+        *family_template_names.BAY_CHAIN_RELATIONS,
     )
     # Batch-load all interfaces for matching modules to avoid N+1 queries.
     ifaces_by_module = defaultdict(list)
     for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
         ifaces_by_module[iface.module_id].append(iface)
 
+    modules = list(module_qs)
     processed_pks = set()
     results = []
     total_checked = 0
-    for module in module_qs:
-        processed_pks.add(module.pk)
-        variables = build_variables(module.module_bay, device=module.device)
-        ifaces = ifaces_by_module.get(module.pk, [])
-        checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
-        total_checked += checked
-        if stop:
-            return results, total_checked
+    with family_ops.pinned_template_cache(modules):
+        for module in modules:
+            processed_pks.add(module.pk)
+            variables = build_variables(module.module_bay, device=module.device)
+            ifaces = ifaces_by_module.get(module.pk, [])
+            checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+            total_checked += checked
+            if stop:
+                return results, total_checked
 
     return results, total_checked
 
