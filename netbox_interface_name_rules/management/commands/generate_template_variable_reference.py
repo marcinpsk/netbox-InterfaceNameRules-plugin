@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Regenerate template-variable reference regions."""
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from netbox_interface_name_rules.template_variable_reference import write_generated_regions
 
@@ -14,7 +14,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Write each generated region and report what changed."""
-        changed = write_generated_regions()
+        try:
+            changed = write_generated_regions()
+        except FileNotFoundError as error:
+            raise CommandError(str(error)) from error
         if changed:
             self.stdout.write("Updated " + ", ".join(changed))
         else:

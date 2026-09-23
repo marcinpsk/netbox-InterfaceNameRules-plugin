@@ -166,6 +166,11 @@ def outdated_generated_regions():
 
 def write_generated_regions():
     """Regenerate every catalogue-backed documentation region and return changed paths."""
+    missing_paths = tuple(region.path for region in GENERATED_REFERENCE_REGIONS if not region.path.exists())
+    if missing_paths:
+        paths = ", ".join(str(path) for path in missing_paths)
+        raise FileNotFoundError(f"Reference regions exist only in a source checkout. Missing paths: {paths}")
+
     changed = []
     for region in GENERATED_REFERENCE_REGIONS:
         current = region.path.read_text(encoding="utf-8")
