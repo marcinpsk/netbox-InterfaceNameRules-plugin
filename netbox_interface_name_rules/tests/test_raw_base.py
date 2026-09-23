@@ -76,6 +76,10 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         InterfaceNameRule.objects.create(
             module_type=cls.literal_marker_type, name_template="{base}-InrRawBaseMark0.{vc_position}"
         )
+        cls.assembled_marker_type = _plain_module_type(manufacturer, "RawBase-ASSEMBLED", PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=cls.assembled_marker_type, name_template="{base}-InrRawBaseMark{0}.{vc_position}"
+        )
         cls.marker_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-MARK")
         InterfaceTemplate.objects.create(module_type=cls.marker_type, name="InrRawBaseMark", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.marker_type, name_template="{base}-x")
@@ -89,6 +93,13 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
         self.assertEqual(self._names(module), ["3-x"])
+        self.assertFalse(self.rule.tags.filter(slug="potentially-deprecated").exists())
+
+    def test_a_forced_reapply_of_an_applied_rule_does_not_flag_it(self):
+        module, bay = self._install_on(self.device, self.fixed_type, "7")
+
+        self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
+        self.assertFalse(self.fixed_rule.tags.filter(slug="potentially-deprecated").exists())
 
     def test_apply_rules_renames_nothing_and_previews_nothing(self):
         module, _ = self._install_on(self.device, self.module_type, "3")
@@ -160,6 +171,14 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
     def test_a_rule_that_spells_the_claim_marker_still_follows_a_renumber(self):
         module, _ = self._install_on(self.device, self.literal_marker_type, "4")
+        self.assertEqual(self._names(module), ["4-InrRawBaseMark0.1"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["4-InrRawBaseMark0.2"])
+
+    def test_a_marker_the_rule_assembles_does_not_break_a_renumber(self):
+        module, _ = self._install_on(self.device, self.assembled_marker_type, "4")
         self.assertEqual(self._names(module), ["4-InrRawBaseMark0.1"])
 
         self._renumber(2)

@@ -239,7 +239,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     ]
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if leftover and renamed == 0 and not blocked and not families_seen:
+    if not force_reapply and leftover and renamed == 0 and not blocked and not families_seen:
         # All interfaces already have the names the rule would produce — flag as
         # potentially obsolete (e.g., newer NetBox generates correct names natively).
         # Skipped when the 0-count was caused by name collisions (a different reason
