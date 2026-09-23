@@ -171,10 +171,12 @@ def write_generated_regions():
         paths = ", ".join(str(path) for path in missing_paths)
         raise FileNotFoundError(f"Reference regions exist only in a source checkout. Missing paths: {paths}")
 
+    documents = tuple(
+        (region, region.path.read_text(encoding="utf-8"), regenerated_document(region))
+        for region in GENERATED_REFERENCE_REGIONS
+    )
     changed = []
-    for region in GENERATED_REFERENCE_REGIONS:
-        current = region.path.read_text(encoding="utf-8")
-        generated = regenerated_document(region)
+    for region, current, generated in documents:
         if current == generated:
             continue
         region.path.write_text(generated, encoding="utf-8")

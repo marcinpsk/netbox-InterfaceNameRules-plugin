@@ -16,7 +16,7 @@ class Command(BaseCommand):
         """Write each generated region and report what changed."""
         try:
             changed = write_generated_regions()
-        except FileNotFoundError as error:
+        except (FileNotFoundError, ValueError) as error:
             raise CommandError(str(error)) from error
         if changed:
             self.stdout.write("Updated " + ", ".join(changed))

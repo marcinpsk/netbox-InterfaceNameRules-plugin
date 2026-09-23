@@ -187,6 +187,25 @@ class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
             self.assertIn("source checkout", str(raised.exception))
             self.assertEqual(path.read_text(encoding="utf-8"), stale)
 
+    def test_writer_rejects_malformed_region_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "guide.md"
+            stale = f"{GENERATED_REGION_BEGIN}\nstale\n{GENERATED_REGION_END}\n"
+            path.write_text(stale, encoding="utf-8")
+            malformed = root / "malformed.md"
+            malformed.write_text("No generated region.\n", encoding="utf-8")
+            regions = (GeneratedReferenceRegion(path, 3), GeneratedReferenceRegion(malformed, 3))
+            with (
+                patch.object(template_variable_reference, "PROJECT_ROOT", root),
+                patch.object(template_variable_reference, "GENERATED_REFERENCE_REGIONS", regions),
+            ):
+                with self.assertRaises(CommandError) as raised:
+                    call_command("generate_template_variable_reference")
+
+            self.assertIn(str(malformed), str(raised.exception))
+            self.assertEqual(path.read_text(encoding="utf-8"), stale)
+
     def test_each_generated_region_ends_where_its_section_closes(self):
         for region in GENERATED_REFERENCE_REGIONS:
             with self.subTest(path=str(region.path.relative_to(_PROJECT_ROOT))):
