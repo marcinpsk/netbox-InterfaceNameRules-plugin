@@ -69,6 +69,7 @@ _PARENT = NamingContext.MODULE_PARENT
 _DEVICE = NamingContext.DEVICE_INTERFACE
 _BUILT = TemplateVariableSource.MODULE_BAY_CHAIN
 _CALLER = TemplateVariableSource.RENAME_CALLER
+_VC_POSITION_DESCRIPTION = "Virtual Chassis member position. Available only on a member device."
 
 TEMPLATE_VARIABLES = (
     TemplateVariable(
@@ -151,9 +152,9 @@ TEMPLATE_VARIABLES = (
         "vc_position",
         ((_MEMBER, _BUILT), (_PARENT, _BUILT), (_DEVICE, _CALLER)),
         (
-            (_MEMBER, "Virtual Chassis member position. Available only on a member device."),
-            (_PARENT, "Virtual Chassis member position. Available only on a member device."),
-            (_DEVICE, "Virtual Chassis member position. Available only on a member device."),
+            (_MEMBER, _VC_POSITION_DESCRIPTION),
+            (_PARENT, _VC_POSITION_DESCRIPTION),
+            (_DEVICE, _VC_POSITION_DESCRIPTION),
         ),
         "2",
         condition=TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER,
@@ -217,34 +218,40 @@ def _reference_brace_fields(template):
     return tuple(reference_fields)
 
 
-def _evaluated_brace_fields(template):
-    """Return nonempty groups from their first opening brace and the balance state."""
-    evaluated_fields = []
-    evaluation_start = None
+def _braces_balanced(template):
+    """Return whether every closing brace matches an earlier opening brace and none stay open."""
     depth = 0
-    unbalanced = False
-    for index, char in enumerate(template):
+    for char in template:
         if char == "{":
             depth += 1
-            if evaluation_start is None:
-                evaluation_start = index
         elif char == "}":
-            if depth:
-                depth -= 1
-            else:
-                unbalanced = True
-            if evaluation_start is not None:
-                expression = template[evaluation_start + 1 : index]
-                if expression:
-                    evaluated_fields.append(_EvaluatedField(evaluation_start, index + 1, expression))
-                evaluation_start = None
-    return tuple(evaluated_fields), not unbalanced and depth == 0
+            if not depth:
+                return False
+            depth -= 1
+    return depth == 0
+
+
+def _evaluated_brace_fields(template):
+    """Return nonempty groups from their first opening brace to the next closing brace."""
+    evaluated_fields = []
+    evaluation_start = None
+    for index, char in enumerate(template):
+        if char == "{" and evaluation_start is None:
+            evaluation_start = index
+        elif char == "}" and evaluation_start is not None:
+            if index > evaluation_start + 1:
+                evaluated_fields.append(
+                    _EvaluatedField(evaluation_start, index + 1, template[evaluation_start + 1 : index])
+                )
+            evaluation_start = None
+    return tuple(evaluated_fields)
 
 
 def _parse_brace_groups(template):
     """Return the reference, evaluation, and balance views of a template."""
-    evaluated_fields, balanced = _evaluated_brace_fields(template)
-    return _ParsedBraceGroups(_reference_brace_fields(template), evaluated_fields, balanced)
+    return _ParsedBraceGroups(
+        _reference_brace_fields(template), _evaluated_brace_fields(template), _braces_balanced(template)
+    )
 
 
 def _parse_expression(expression):
