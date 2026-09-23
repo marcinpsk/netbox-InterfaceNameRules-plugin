@@ -12,6 +12,7 @@ import pathlib
 import tempfile
 import tomllib
 from importlib.util import resolve_name
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
@@ -314,7 +315,9 @@ def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, set[str]]:
                 continue
             for alias in node.names:
                 if not alias.name.startswith("_"):
-                    aliases.setdefault(alias.asname or alias.name, set()).add(f"{module}.{alias.name}")
+                    aliases.setdefault(alias.asname or alias.name, set()).update(
+                        _walk_module_chain({module}, [alias.name])
+                    )
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if not alias.name.startswith(PLUGIN_PACKAGE):
@@ -378,17 +381,17 @@ def _module_path(module_name: str) -> pathlib.Path | None:
 
 
 @functools.cache
-def _module_import_aliases(module_name: str) -> frozenset[tuple[str, str]]:
+def _module_import_aliases(
+    module_name: str, seen: frozenset[tuple[str, str]] = frozenset()
+) -> frozenset[tuple[str, str]]:
     """Return the (bound name, plugin module) pairs *module_name* imports.
 
     A module that imports a sibling re-exposes it as an attribute, so `engine.naming` is `naming`.
     """
-    path = _module_path(module_name)
-    if path is None:
+    if (path := _module_path(module_name)) is None:
         return frozenset()
     package = module_name.rpartition(".")[0] or module_name
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    modules = _plugin_modules()
     pairs = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -397,21 +400,24 @@ def _module_import_aliases(module_name: str) -> frozenset[tuple[str, str]]:
             if not imported.startswith(PLUGIN_PACKAGE):
                 continue
             for alias in node.names:
-                if f"{imported}.{alias.name}" in modules:
-                    pairs.add((alias.asname or alias.name, f"{imported}.{alias.name}"))
+                bound = alias.asname or alias.name
+                if (module_name, bound) in seen:
+                    continue
+                for target in _walk_module_chain({imported}, [alias.name], seen | {(module_name, bound)}):
+                    pairs.add((bound, target))
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
                 target = alias.name if alias.asname else alias.name.split(".")[0]
-                if target in modules:
+                if target in _plugin_modules():
                     pairs.add((bound, target))
     return frozenset(pairs)
 
 
-def _walk_module_chain(start: set[str], parts: list[str]) -> set[str]:
+def _walk_module_chain(start: set[str], parts: list[str], seen: frozenset[tuple[str, str]] = frozenset()) -> set[str]:
     """Follow *parts* from each module in *start*, through submodules and re-exported modules.
 
-    Every step lands on a module the plugin defines, so the walk is bounded by a finite set.
+    Every step lands on a plugin module. A repeated import binding ends a re-export cycle.
     """
     current = set(start)
     for part in parts:
@@ -420,7 +426,7 @@ def _walk_module_chain(start: set[str], parts: list[str]) -> set[str]:
             if f"{module}.{part}" in _plugin_modules():
                 following.add(f"{module}.{part}")
                 continue
-            following.update(target for bound, target in _module_import_aliases(module) if bound == part)
+            following.update(target for bound, target in _module_import_aliases(module, seen) if bound == part)
         current = following
         if not current:
             break
@@ -764,6 +770,53 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
         for source in spellings:
             with self.subTest(source=source):
                 self.assertEqual(self._found(source), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"})
+
+    def test_a_from_import_follows_a_reexported_module(self):
+        """A module imported from another module keeps its original owner."""
+        source = "from .engine import naming\nnaming._resolve_slot(None)"
+
+        self.assertEqual(
+            self._found(source, module_name=f"{PLUGIN_PACKAGE}.views"), {f"{PLUGIN_PACKAGE}.naming._resolve_slot"}
+        )
+
+    def test_a_public_name_on_a_from_imported_module_is_allowed(self):
+        """A public access through a re-export does not cross the private boundary."""
+        source = "from .engine import naming\nnaming.numeric_suffix('3')"
+
+        self.assertEqual(self._found(source, module_name=f"{PLUGIN_PACKAGE}.views"), set())
+
+    def test_reexport_chains_and_cycles(self):
+        """Follow nested re-exports and stop when module imports form a cycle."""
+        with tempfile.TemporaryDirectory() as directory:
+            package = pathlib.Path(directory) / PLUGIN_PACKAGE
+            package.mkdir()
+            for name, source in {
+                "__init__": "",
+                "naming": "def _resolve_slot(): pass\n",
+                "base": "from . import naming\n",
+                "relay": "from .base import naming\n",
+                "round_trip": "from .returning import naming as forwarded\nfrom . import naming as original\n",
+                "returning": "from .round_trip import original as naming\n",
+                "first": "from .second import naming\n",
+                "second": "from .first import naming\n",
+            }.items():
+                (package / f"{name}.py").write_text(source, encoding="utf-8")
+            with patch(f"{__name__}.PACKAGE", package):
+                _plugin_modules.cache_clear()
+                _module_import_aliases.cache_clear()
+                try:
+                    self.assertEqual(
+                        self._found("from . import relay\nrelay.naming._resolve_slot()"),
+                        {f"{PLUGIN_PACKAGE}.naming._resolve_slot"},
+                    )
+                    self.assertEqual(
+                        self._found("from . import round_trip\nround_trip.forwarded._resolve_slot()"),
+                        {f"{PLUGIN_PACKAGE}.naming._resolve_slot"},
+                    )
+                    self.assertEqual(self._found("from . import first\nfirst.naming._resolve_slot()"), set())
+                finally:
+                    _plugin_modules.cache_clear()
+                    _module_import_aliases.cache_clear()
 
     def test_a_literal_getattr_is_a_violation(self):
         source = 'from . import naming\ngetattr(naming, "_resolve_slot")(1, 2, 3)'
