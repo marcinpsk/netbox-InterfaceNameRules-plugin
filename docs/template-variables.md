@@ -63,7 +63,7 @@ NetBox does not record which template created an interface. For a rule that uses
 plugin finds the template by the interface's name: the raw name itself, a name NetBox gave the
 interface at an earlier virtual-chassis position, or the name the rule gives the raw name at any
 virtual-chassis position. A `{vc_position}` inside an arithmetic expression matches only the current
-position. An interface that no template claims, or that more than one template claims, keeps its name. The plugin logs the reason. A module type without interface templates has
+position, and so does a `{base}` inside one when its template name uses the `{vc_position}` token. An interface that no template claims, or that more than one template claims, keeps its name. The plugin logs the reason. A module type without interface templates has
 no raw names, so there `{base}` is the interface's current name.
 
 In a device interface rule, `{base}` is the interface's current name.

@@ -135,7 +135,7 @@ def plan_module_conversions(
             continue
         claimed.add(rows[0].pk)
         try:
-            parent_name, _channels = channelized_family_names(rule, base_name, variables)
+            parent_name, _channels = channelized_family_names(rule, base_name, base_name, variables)
         except (TypeError, ValueError) as exc:
             # One family that cannot resolve must not lose the outcome the batch already accumulated.
             plan = _conversion_plan(module, "", channel_names, rows, channelization_supported)

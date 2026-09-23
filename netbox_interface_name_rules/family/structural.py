@@ -70,7 +70,7 @@ def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cove
     if base_name is None:
         return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
     try:
-        parent_target_name, channels = channelized_family_names(rule, base_name, variables)
+        parent_target_name, channels = channelized_family_names(rule, base.name, base_name, variables)
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)

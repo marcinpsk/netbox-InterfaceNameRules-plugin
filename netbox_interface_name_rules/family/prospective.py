@@ -238,7 +238,7 @@ def _modelled_structural_plan(rule, variables, base_name, base, context):  # pra
     if base is None:
         return _unclaimed(base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT)
     try:
-        parent_name, channels = channelized_family_names(rule, base, variables)
+        parent_name, channels = channelized_family_names(rule, base_name, base, variables)
     except (TypeError, ValueError) as error:
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.FAILED, str(error)

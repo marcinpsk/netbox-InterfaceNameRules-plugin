@@ -72,6 +72,10 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         InterfaceNameRule.objects.create(
             module_type=cls.vc_arithmetic_type, name_template="{{base} + 100}.{vc_position}"
         )
+        cls.literal_marker_type = _plain_module_type(manufacturer, "RawBase-LITERAL", PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=cls.literal_marker_type, name_template="{base}-InrRawBaseMark0.{vc_position}"
+        )
         cls.marker_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-MARK")
         InterfaceTemplate.objects.create(module_type=cls.marker_type, name="InrRawBaseMark", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.marker_type, name_template="{base}-x")
@@ -153,6 +157,14 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
         self.assertEqual(self._names(module), ["InrRawBaseMark-x"])
+
+    def test_a_rule_that_spells_the_claim_marker_still_follows_a_renumber(self):
+        module, _ = self._install_on(self.device, self.literal_marker_type, "4")
+        self.assertEqual(self._names(module), ["4-InrRawBaseMark0.1"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["4-InrRawBaseMark0.2"])
 
     def test_a_raw_name_the_rule_cannot_evaluate_claims_no_renamed_form(self):
         module, bay = self._install_on(self.device, self.unevaluable_type, "4")
@@ -292,3 +304,32 @@ class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
         )
         apply_rule_to_existing(self.rule, interface_ids=[results[0]["interface"].pk])
         self.assertEqual(self._names(module), ["brk-xe-0/0/3:0", "brk-xe-0/0/3:1"])
+
+
+@skipUnless(supports_channelization() and supports_vc_position_token(), REQUIRES_CHANNELIZATION)
+class RawBaseDriftedCreationTest(VcDriftTestCase):
+    """A family built on a drifted interface reads the raw name, but a blank parent keeps its own."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "RawBaseDrift", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbasedrift-vc"), vc_position=1
+        )
+        cls.module_type = _token_module_type(manufacturer, "RawBaseDrift-QSFP", "xe-{vc_position:0}/0/{module}")
+
+    def test_a_blank_parent_template_keeps_the_drifted_name(self):
+        module, _ = self._install_on(self.device, self.module_type, "3")
+        self._renumber(2)
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        preview = find_interfaces_for_rule(rule)[0]
+        apply_rule_to_existing(rule)
+
+        self.assertEqual([entry["new_names"] for entry in preview], [["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"]])
+        self.assertEqual(self._names(module), ["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"])

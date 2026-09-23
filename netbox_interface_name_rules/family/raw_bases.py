@@ -16,8 +16,6 @@ from .claims import TemplateClaim, resolve_template_claims
 
 logger = logging.getLogger(__name__)
 
-_BASE_MARK = "InrRawBaseMark"
-_VC_MARK = "InrVcPositionMark"
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
 _VC_POSITION = r"\d{1,10}"
 
@@ -36,14 +34,22 @@ def _renaming_templates(rule):
     return ()
 
 
-def _marked_evaluation(template, variables, raw):
-    """Return the template evaluated with markers for ``{base}`` and ``{vc_position}``, or None.
+def _free_marker(stem, texts):
+    """Return a marker that none of *texts* contains, so in an evaluated name it stands for one variable."""
+    suffix = 0
+    while any(f"{stem}{suffix}" in text for text in texts):
+        suffix += 1
+    return f"{stem}{suffix}"
+
+
+def _marked_evaluation(template, variables, raw, markers):
+    """Return the template evaluated with *markers* for ``{base}`` and ``{vc_position}``, or None.
 
     Arithmetic cannot take a marker, so a variable used in arithmetic gets its real value instead.
     """
-    vc_values = (_VC_MARK, variables["vc_position"]) if "vc_position" in variables else (None,)
+    vc_values = (markers["vc_position"], variables["vc_position"]) if "vc_position" in variables else (None,)
     for vc_position in vc_values:
-        for base in (_BASE_MARK, raw):
+        for base in (markers["base"], raw):
             marked_variables = {**variables, "base": base}
             if vc_position is not None:
                 marked_variables["vc_position"] = vc_position
@@ -55,17 +61,22 @@ def _marked_evaluation(template, variables, raw):
 
 
 def _renamed_pattern(template, variables, raw, historical):
-    """Return a matcher for the name *template* gives *raw*, at any virtual-chassis position."""
-    marked = _marked_evaluation(template, variables, raw)
+    """Return a matcher for the name *template* gives *raw*, at any virtual-chassis position, or None."""
+    texts = (template, raw, *(str(value) for value in variables.values()))
+    markers = {"base": _free_marker("InrRawBaseMark", texts), "vc_position": _free_marker("InrVcPositionMark", texts)}
+    marked = _marked_evaluation(template, variables, raw, markers)
     if marked is None:
         return None
     groups = {
-        _BASE_MARK: ("base", re.escape(raw) if historical is None else f"(?:{re.escape(raw)}|{historical.pattern})"),
-        _VC_MARK: ("vc", _VC_POSITION),
+        markers["base"]: (
+            "base",
+            re.escape(raw) if historical is None else f"(?:{re.escape(raw)}|{historical.pattern})",
+        ),
+        markers["vc_position"]: ("vc", _VC_POSITION),
     }
     pattern = []
     opened = set()
-    for part in re.split(f"({_BASE_MARK}|{_VC_MARK})", marked):
+    for part in re.split(f"({markers['base']}|{markers['vc_position']})", marked):
         if part not in groups:
             pattern.append(re.escape(part))
             continue

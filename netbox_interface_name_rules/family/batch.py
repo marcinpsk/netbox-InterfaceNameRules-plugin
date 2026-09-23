@@ -114,7 +114,9 @@ def _creation_plans(module, rule, variables, plain, bases):
     candidates = []
     for base in plain:
         base_name = bases.base_for(base.name)
-        target_names = (base.name,) if base_name is None else intended_family_names(rule, variables, base_name)
+        target_names = (
+            (base.name,) if base_name is None else intended_family_names(rule, variables, base.name, base_name)
+        )
         candidates.append((base, base_name, target_names))
     kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
