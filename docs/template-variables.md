@@ -16,7 +16,7 @@ Module rules use these variables in the Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 | `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
 
@@ -33,7 +33,7 @@ Module rules use these variables in the Parent Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 
 ### Device interface names
@@ -53,14 +53,22 @@ The **Module Type Pattern** field in device interface rules acts as a **regex fi
 
 ### What `{base}` starts from
 
-For a flat breakout family, `{base}` is the module's raw template name on every apply. The rule
-therefore derives the same member names when it runs again. It does not apply the template to a
-renamed member name.
+In a module rule, `{base}` is the raw template name of the interface the rule renames: the name
+the module type's interface template resolves to now. It does not change when the rule runs again,
+so a rule that uses `{base}` derives the same names on install and on every reapply. A flat
+breakout family, an installed channelized family and a plain interface rename all read it this way.
+The parent and every channel of a channelized family receive the parent's base value.
 
-For an installed channelized family, `{base}` is the installed parent's current name. The parent
-and every channel receive that same base value.
+NetBox does not record which template created an interface. For a rule that uses `{base}`, the
+plugin finds the template by the interface's name: the raw name itself, a name NetBox gave the
+interface at an earlier virtual-chassis position, or the name the rule gives the raw name at any
+virtual-chassis position. A `{vc_position}` inside an arithmetic expression matches only the current
+position, and so does a `{base}` inside one when its template name uses the `{vc_position}` token. An interface that no template claims, or that more than one template claims, keeps its name. The plugin logs the reason. A raw name wins over another template's earlier
+virtual-chassis form, but not over the name the rule gives another template, so a module type
+whose templates overlap under the rule keeps every overlapping name, on install too. A module type without interface templates has
+no raw names, so there `{base}` is the interface's current name.
 
-For a plain interface rename, `{base}` is the interface's current name.
+In a device interface rule, `{base}` is the interface's current name.
 
 ## Arithmetic Expressions
 

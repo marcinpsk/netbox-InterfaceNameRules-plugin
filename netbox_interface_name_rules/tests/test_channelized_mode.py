@@ -179,15 +179,15 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
         self.assertEqual(self._parent(module).name, "7-parent")
 
     def test_module_base_description_stays_true_of_reapplication_behavior(self):
-        """The catalogue names the common input role without claiming one reapply path."""
+        """{base} stays the raw template name on a reapply, as the catalogue says."""
         module, bay = self._install(self.base_type, "7")
 
         self.assertEqual(self._parent(module).name, "7-parent")
-        self.assertEqual(apply_interface_name_rules(module, bay), 1)
-        self.assertEqual(self._parent(module).name, "7-parent-parent")
+        self.assertEqual(apply_interface_name_rules(module, bay), 0)
+        self.assertEqual(self._parent(module).name, "7-parent")
         base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
         descriptions = dict(base.descriptions)
-        expected = "The name the rule starts from, which is the module's raw template name when the rule first applies."
+        expected = "The raw template name of the interface the rule renames."
         self.assertEqual(descriptions[NamingContext.MODULE_MEMBER], expected)
         self.assertEqual(descriptions[NamingContext.MODULE_PARENT], expected)
 

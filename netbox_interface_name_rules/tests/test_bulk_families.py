@@ -43,6 +43,7 @@ from netbox_interface_name_rules.family import (
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
+    module_raw_bases,
     pinned_template_cache,
     plan_flat_family,
     plan_prospective_families,
@@ -617,7 +618,7 @@ class FlatFamilyCreationTest(BulkTestCase):
 
     def _plan(self):
         """Plan the flat family the rule builds on this module's only interface."""
-        return plan_flat_family(self.module, self.rule, self.variables, self.base)
+        return plan_flat_family(self.module, self.rule, self.variables, self.base, self.base.name)
 
     def test_a_sibling_whose_name_is_taken_is_skipped_and_the_rest_are_created(self):
         """One sibling's collision is that sibling's own; the family keeps the names it can take."""
@@ -696,11 +697,14 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
 
     def _prospective_plan(self):
         """Return one prospective plan for this module: the object an interactive preview holds."""
+        variables = build_variables(self.module.module_bay, device=self.device)
+        rows = list(Interface.objects.filter(module=self.module))
         plan_set = plan_prospective_families(
             self.module,
             self.rule,
-            build_variables(self.module.module_bay, device=self.device),
-            describe_interfaces(Interface.objects.filter(module=self.module)),
+            variables,
+            describe_interfaces(rows),
+            module_raw_bases(self.module, self.rule, variables, rows),
         )
         return plan_set.plans[0]
 
@@ -723,6 +727,7 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             self.rule,
             build_variables(self.module.module_bay, device=self.device),
             base,
+            base.name,
         )
         installed = InstalledFamilyPlan(
             family_id=f"installed:{base.pk}",

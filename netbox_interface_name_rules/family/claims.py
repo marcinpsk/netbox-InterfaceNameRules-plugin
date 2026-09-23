@@ -5,6 +5,8 @@
 from collections import defaultdict
 from dataclasses import dataclass
 
+_DRIFT_CAUSE = "since this device's virtual-chassis position changed"
+
 
 @dataclass(frozen=True, slots=True)
 class TemplateClaim:
@@ -25,8 +27,8 @@ def resolve_template_claims(claims, *, module, label_kind):
     Repeated edges count once. Claimant IDs must be unique.
     The caller emits the messages through its own logger.
     """
-    if label_kind not in ("interface name", "family base"):
-        raise ValueError("label_kind must be 'interface name' or 'family base'")
+    if label_kind not in ("interface name", "family base", "raw base"):
+        raise ValueError("label_kind must be 'interface name', 'family base' or 'raw base'")
 
     by_id = {}
     claimants = defaultdict(list)
@@ -41,17 +43,18 @@ def resolve_template_claims(claims, *, module, label_kind):
             claimants[label].append(claim.claimant_id)
         if len(labels) > 1:
             ambiguous.add(claim.claimant_id)
+            cause = "as its raw name or its renamed form" if label_kind == "raw base" else _DRIFT_CAUSE
             messages.append(
                 f"Interface template {claim.template_name!r} of {module} could name any of {sorted(labels)} "
-                "since this device's virtual-chassis position changed; "
-                "skipping them all rather than renaming a guess."
+                f"{cause}; skipping them all rather than renaming a guess."
             )
 
-    subject = "Interface" if label_kind == "interface name" else "Family base"
+    subject = "Family base" if label_kind == "family base" else "Interface"
+    form = "raw or renamed name" if label_kind == "raw base" else "drifted name"
     for label, ids in claimants.items():
         if len(ids) > 1:
             messages.append(
-                f"{subject} {label!r} on {module} could be the drifted name of any of the templates "
+                f"{subject} {label!r} on {module} could be the {form} of any of the templates "
                 f"{sorted(by_id[claimant_id][0] for claimant_id in ids)}; "
                 "skipping it rather than renaming a guess."
             )

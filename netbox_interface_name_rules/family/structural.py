@@ -21,7 +21,7 @@ from .domain import (
     StructuralFamilyPlan,
 )
 from .names import COLLISION_REASON, is_name_collision, name_is_taken, reconcile_after_parent_cascade
-from .targets import channelized_family_names, flat_family_names
+from .targets import UNCLAIMED_BASE_REASON, channelized_family_names, flat_family_names
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +65,12 @@ def _plan(module, base, parent_target_name, channels, status=None, reason=""):
     )
 
 
-def _modelled_plan(module, rule, variables, base):  # pragma: no cover - channelization only
+def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cover - channelization only
     """Return the plan for a NetBox release that can hold the family."""
+    if base_name is None:
+        return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
     try:
-        parent_target_name, channels = channelized_family_names(rule, base.name, variables)
+        parent_target_name, channels = channelized_family_names(rule, base.name, base_name, variables)
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
@@ -79,11 +81,14 @@ def _modelled_plan(module, rule, variables, base):  # pragma: no cover - channel
     return _plan(module, base, parent_target_name, channels)
 
 
-def plan_structural_family(module, rule, variables, base) -> StructuralFamilyPlan:
-    """Return the immutable plan for the channelized family *rule* builds on plain interface *base*."""
+def plan_structural_family(module, rule, variables, base, base_name) -> StructuralFamilyPlan:
+    """Return the plan for the channelized family *rule* builds on plain interface *base*.
+
+    *base_name* is the value of ``{base}``, or None when no template claims *base*.
+    """
     if not supports_channelization():
         return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
-    return _modelled_plan(module, rule, variables, base)  # pragma: no cover - see above
+    return _modelled_plan(module, rule, variables, base, base_name)  # pragma: no cover - see above
 
 
 def _outcome(plan, status, members, reason=""):
@@ -220,11 +225,6 @@ def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
     return _install_family(plan)  # pragma: no cover - requires channelization support
 
 
-def install_channelized_family(module, rule, variables, base) -> FamilyOutcome:
-    """Build the channelized family *rule* describes on plain interface *base*."""
-    return execute_structural_family(plan_structural_family(module, rule, variables, base))
-
-
 # ---------------------------------------------------------------------------
 # Flat breakout families
 # ---------------------------------------------------------------------------
@@ -246,10 +246,15 @@ def _flat_creation_plan(module, base, target_names, status=None, reason=""):
     )
 
 
-def plan_flat_family(module, rule, variables, base) -> FlatCreationPlan:
-    """Return the immutable plan for the flat breakout family *rule* builds on plain interface *base*."""
+def plan_flat_family(module, rule, variables, base, base_name) -> FlatCreationPlan:
+    """Return the plan for the flat breakout family *rule* builds on plain interface *base*.
+
+    *base_name* is the value of ``{base}``, or None when no template claims *base*.
+    """
+    if base_name is None:
+        return _flat_creation_plan(module, base, (base.name,), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
     try:
-        target_names = flat_family_names(rule, variables, base.name)
+        target_names = flat_family_names(rule, variables, base_name)
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _flat_creation_plan(module, base, (base.name,), FamilyStatus.FAILED, reason)

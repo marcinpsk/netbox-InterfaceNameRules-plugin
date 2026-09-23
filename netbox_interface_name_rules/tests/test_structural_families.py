@@ -24,7 +24,6 @@ from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
     execute_structural_family,
-    install_channelized_family,
     plan_structural_family,
     structural,
 )
@@ -67,7 +66,7 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base)
+        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
         return module, bay, plan
 
 
@@ -112,16 +111,6 @@ class StructuralFamilyWithoutChannelizationTest(StructuralFamilyTestCase):
         self.assertEqual(member.current_name, "3")
         self.assertEqual(member.status, FamilyStatus.UNSUPPORTED)
         self.assertTrue(member.reason)
-
-    def test_the_install_entry_point_reaches_the_same_outcome(self):
-        module, bay = self._install(self.module_type, "4", run_rules=False)
-        base = Interface.objects.get(module=module)
-
-        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
-            outcome = install_channelized_family(module, self.rule, build_variables(bay, device=self.device), base)
-
-        self.assertEqual(outcome.status, FamilyStatus.UNSUPPORTED)
-        self.assertEqual(self._names(module), ["4"])
 
 
 class DeferredChannelNameReconciliationTest(TestCase):

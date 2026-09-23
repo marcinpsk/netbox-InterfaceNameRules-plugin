@@ -45,10 +45,13 @@ from .domain import (
 from .execution import execute_installed_plan, execute_installed_plan_set
 from .installed import (
     device_interface_families,
+    given_raw_names,
     interfaces_by_module,
     is_channelized_parent,
+    module_raw_bases,
     plan_device_interface_rename,
     plan_installed_families,
+    plan_installed_flat_families,
     plan_interface_rename,
 )
 from .prospective import (
@@ -62,7 +65,6 @@ from .structural import (
     execute_flat_family,
     execute_structural_family,
     has_flat_expansion,
-    install_channelized_family,
     plan_flat_family,
     plan_structural_family,
 )
@@ -110,15 +112,17 @@ __all__ = (
     "execute_installed_plan_set",
     "execute_module_families",
     "execute_structural_family",
+    "given_raw_names",
     "has_flat_expansion",
-    "install_channelized_family",
     "interfaces_by_module",
     "is_channelized_parent",
+    "module_raw_bases",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_device_interface_rename",
     "plan_flat_family",
     "plan_installed_families",
+    "plan_installed_flat_families",
     "plan_interface_rename",
     "plan_module_conversions",
     "plan_module_families",

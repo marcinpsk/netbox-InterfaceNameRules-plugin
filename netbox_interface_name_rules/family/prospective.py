@@ -23,7 +23,13 @@ from .domain import (
 )
 from .names import COLLISION_REASON
 from .structural import UNSUPPORTED_REASON, has_flat_expansion
-from .targets import channelized_family_names, channelized_family_targets, flat_family_names, template_channel_suffixes
+from .targets import (
+    UNCLAIMED_BASE_REASON,
+    channelized_family_names,
+    channelized_family_targets,
+    flat_family_names,
+    template_channel_suffixes,
+)
 from .template_names import resolved_template_names
 
 logger = logging.getLogger(__name__)
@@ -121,13 +127,14 @@ def _is_family_root(rule, interface, children):
     return bool(children)
 
 
-def _rename_plan(rule, variables, parent, children, suffixes):  # pragma: no cover - channelization only
+def _rename_plan(rule, variables, parent, children, suffixes, bases):  # pragma: no cover - channelization only
     """Plan the rename of a family the templates or rows already describe."""
     children = sorted(children, key=lambda child: child.channel_id)
     targets = channelized_family_targets(
         rule,
         variables,
         parent.name,
+        bases.base_for(parent.name),
         parent.channels,
         tuple((child.name, child.channel_id) for child in children),
         suffixes,
@@ -166,10 +173,17 @@ def _refused_creation(base_name, topology, role, status, reason):
     )
 
 
-def _simple_plan(rule, variables, base_name):
+def _unclaimed(base_name, topology, role):
+    """Plan a family that will not be built because no template gives *base_name* a raw name."""
+    return _refused_creation(base_name, topology, role, FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
+
+
+def _simple_plan(rule, variables, base_name, base):
     """Plan the rename of one interface that owns no family."""
+    if base is None:
+        return _unclaimed(base_name, FamilyTopology.FLAT, MemberRole.FLAT_MEMBER)
     try:
-        target_name = evaluate_name_template(rule.name_template, {**variables, "base": base_name})
+        target_name = evaluate_name_template(rule.name_template, {**variables, "base": base})
     except (TypeError, ValueError) as error:
         return _refused_creation(
             base_name, FamilyTopology.FLAT, MemberRole.FLAT_MEMBER, FamilyStatus.FAILED, str(error)
@@ -182,10 +196,12 @@ def _simple_plan(rule, variables, base_name):
     )
 
 
-def _flat_creation_plan(rule, variables, base_name):
+def _flat_creation_plan(rule, variables, base_name, base):
     """Plan the flat sibling family a breakout rule creates on one plain interface."""
+    if base is None:
+        return _unclaimed(base_name, FamilyTopology.FLAT, MemberRole.FLAT_MEMBER)
     try:
-        target_names = flat_family_names(rule, variables, base_name)
+        target_names = flat_family_names(rule, variables, base)
     except (TypeError, ValueError) as error:
         return _refused_creation(
             base_name, FamilyTopology.FLAT, MemberRole.FLAT_MEMBER, FamilyStatus.FAILED, str(error)
@@ -217,10 +233,12 @@ def _structural_refusal(base_name, flat_expansion, taken_names, target_names):  
     return None
 
 
-def _modelled_structural_plan(rule, variables, base_name, context):  # pragma: no cover - see below
+def _modelled_structural_plan(rule, variables, base_name, base, context):  # pragma: no cover - see below
     """Plan the channelized family for a NetBox release that can hold it."""
+    if base is None:
+        return _unclaimed(base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT)
     try:
-        parent_name, channels = channelized_family_names(rule, base_name, variables)
+        parent_name, channels = channelized_family_names(rule, base_name, base, variables)
     except (TypeError, ValueError) as error:
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.FAILED, str(error)
@@ -246,22 +264,22 @@ def _modelled_structural_plan(rule, variables, base_name, context):  # pragma: n
     )
 
 
-def _structural_plan(rule, variables, base_name, context):
+def _structural_plan(rule, variables, base_name, base, context):
     """Plan the channelized family a rule builds on one plain interface."""
     if not supports_channelization():
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON
         )
-    return _modelled_structural_plan(rule, variables, base_name, context)  # pragma: no cover - see above
+    return _modelled_structural_plan(rule, variables, base_name, base, context)  # pragma: no cover - see above
 
 
-def _plain_plan(rule, variables, base_name, context):
-    """Plan the family *rule* intends on one plain interface."""
+def _plain_plan(rule, variables, base_name, base, context):
+    """Plan the family *rule* intends on the plain interface *base_name*, with *base* as ``{base}``."""
     if rule.channel_count <= 0:
-        return _simple_plan(rule, variables, base_name)
+        return _simple_plan(rule, variables, base_name, base)
     if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED:
-        return _structural_plan(rule, variables, base_name, context)
-    return _flat_creation_plan(rule, variables, base_name)
+        return _structural_plan(rule, variables, base_name, base, context)
+    return _flat_creation_plan(rule, variables, base_name, base)
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,12 +314,13 @@ class _TemplateSuffixes:
         return self._suffixes.get(channel_id, default)
 
 
-def plan_prospective_families(module, rule, variables, interfaces) -> ProspectiveFamilyPlanSet:
+def plan_prospective_families(module, rule, variables, interfaces, bases) -> ProspectiveFamilyPlanSet:
     """Return one plan for each family *rule* intends on the described *interfaces*.
 
     *interfaces* are ``ProspectiveInterface`` values, so a name NetBox has not created yet is
     planned exactly like one it has and no row is written.  Collision checking covers the names
-    described here, because a prospective plan knows only the interfaces it was given.
+    described here, because a prospective plan knows only the interfaces it was given.  *bases*
+    gives each described name its ``{base}`` value.
     """
     interfaces = tuple(interfaces)
     roots, children = _partition(interfaces)
@@ -311,9 +330,9 @@ def plan_prospective_families(module, rule, variables, interfaces) -> Prospectiv
     )
     suffixes = _TemplateSuffixes(module)
     plans = tuple(
-        _rename_plan(rule, variables, root, family, suffixes)
+        _rename_plan(rule, variables, root, family, suffixes, bases)
         if _is_family_root(rule, root, family)
-        else _plain_plan(rule, variables, root.name, context)
+        else _plain_plan(rule, variables, root.name, bases.base_for(root.name), context)
         for root, family in families
     )
     return ProspectiveFamilyPlanSet(module_id=module.pk, plans=plans)

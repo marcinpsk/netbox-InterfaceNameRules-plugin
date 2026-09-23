@@ -63,9 +63,7 @@ class TemplateVariableCatalogueTest(unittest.TestCase):
 
     def test_base_description_matches_each_input_name(self):
         base = next(variable for variable in TEMPLATE_VARIABLES if variable.name == "base")
-        module_description = (
-            "The name the rule starts from, which is the module's raw template name when the rule first applies."
-        )
+        module_description = "The raw template name of the interface the rule renames."
 
         self.assertEqual(
             dict(base.descriptions),
@@ -319,18 +317,26 @@ class BaseVariableDocumentationTest(unittest.TestCase):
     def test_each_module_family_base_path_is_documented(self):
         guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "For a flat breakout family, `{base}` is the module's raw template name on every apply.",
-            guide,
-        )
-        self.assertIn(
-            "For an installed channelized family, `{base}` is the installed parent's current name.",
-            guide,
-        )
-        self.assertIn(
-            "For a plain interface rename, `{base}` is the interface's current name.",
-            guide,
-        )
+        for statement in (
+            "In a module rule, `{base}` is the raw template name of the interface the rule renames:",
+            "A flat breakout family, an installed channelized family and a plain interface rename all read it",
+            (
+                "A `{vc_position}` inside an arithmetic expression matches only the current position, and so does "
+                "a `{base}` inside one when its template name uses the `{vc_position}` token."
+            ),
+            "An interface that no template claims, or that more than one template claims, keeps its name.",
+            (
+                "A raw name wins over another template's earlier virtual-chassis form, but not over the name the "
+                "rule gives another template"
+            ),
+            (
+                "A module type without interface templates has no raw names, so there `{base}` is the "
+                "interface's current name."
+            ),
+            "In a device interface rule, `{base}` is the interface's current name.",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, " ".join(guide.split()))
 
 
 class PerformanceDocumentationTest(unittest.TestCase):
