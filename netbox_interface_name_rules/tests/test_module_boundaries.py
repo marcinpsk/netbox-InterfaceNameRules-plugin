@@ -143,28 +143,89 @@ def _test_modules() -> list[pathlib.Path]:
     return sorted(path for path in (PACKAGE / "tests").glob("*.py") if path.stem != "__init__")
 
 
-def _base_names(node: ast.ClassDef) -> set[str]:
-    """Return the class names spelled by the bases of *node*."""
-    return {
-        base.id if isinstance(base, ast.Name) else base.attr
-        for base in node.bases
-        if isinstance(base, ast.Name | ast.Attribute)
-    }
+def _reverse_class_bindings(class_index):
+    """Map each scanned module's class names and imports to their bindings."""
+    modules = {}
+    for path in class_index:
+        modules[path.stem] = path
+        if path.is_relative_to(PACKAGE.parent):
+            modules[_module_name(path)] = path
+    classes = {}
+    imports = {}
+    module_imports = {}
+    for path, nodes in class_index.items():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        top_level = {node.lineno for node in tree.body if isinstance(node, ast.ClassDef)}
+        classes[path] = {node.name: node for node in nodes if node.lineno in top_level}
+        imports[path] = {}
+        module_imports[path] = {}
+        package = _module_name(path).rpartition(".")[0] if path.is_relative_to(PACKAGE.parent) else path.parent.name
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                module = resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
+                for alias in node.names:
+                    target = modules.get(module)
+                    if target is None and node.level:
+                        target = modules.get((module or "").rpartition(".")[2])
+                    if target is not None:
+                        imports[path][alias.asname or alias.name] = (target, alias.name)
+                    elif node.level and node.module is None:
+                        target = modules.get(alias.name)
+                        if target is not None:
+                            module_imports[path][alias.asname or alias.name] = target
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    target = modules.get(alias.name)
+                    if target is not None:
+                        module_imports[path][alias.asname or alias.name.split(".", 1)[0]] = target
+    return classes, imports, module_imports
 
 
-def _is_simple_test_case(node: ast.ClassDef, classes: dict[str, list[ast.ClassDef]], seen=None) -> bool:
+def _resolved_reverse_class(path, name, bindings, seen=None):
+    """Resolve a class name through local definitions and scanned-module re-exports."""
+    classes, imports, _ = bindings
+    seen = set() if seen is None else seen
+    if (path, name) in seen:
+        return None
+    seen.add((path, name))
+    if name in classes[path]:
+        return path, classes[path][name]
+    imported = imports[path].get(name)
+    return _resolved_reverse_class(*imported, bindings, seen) if imported else None
+
+
+def _reverse_bases(path, node, bindings):
+    """Yield bases resolved to classes in scanned test modules."""
+    module_imports = bindings[2]
+    for base in node.bases:
+        if isinstance(base, ast.Name):
+            resolved = _resolved_reverse_class(path, base.id, bindings)
+        elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+            module = module_imports[path].get(base.value.id)
+            resolved = _resolved_reverse_class(module, base.attr, bindings) if module else None
+        else:
+            resolved = None
+        if resolved:
+            yield resolved
+
+
+def _is_simple_test_case(path, node: ast.ClassDef, bindings, seen=None) -> bool:
     """Return whether *node* derives from `SimpleTestCase` through known test classes."""
     seen = set() if seen is None else seen
     if id(node) in seen:
         return False
     seen.add(id(node))
-    bases = _base_names(node)
-    return "SimpleTestCase" in bases or any(
-        _is_simple_test_case(base, classes, seen) for name in bases for base in classes.get(name, ())
+    return any(
+        (isinstance(base, ast.Name) and base.id == "SimpleTestCase")
+        or (isinstance(base, ast.Attribute) and base.attr == "SimpleTestCase")
+        for base in node.bases
+    ) or any(
+        _is_simple_test_case(base_path, base, bindings, seen)
+        for base_path, base in _reverse_bases(path, node, bindings)
     )
 
 
-def _overrides_root_urlconf(node: ast.ClassDef, classes: dict[str, list[ast.ClassDef]], seen=None) -> bool:
+def _overrides_root_urlconf(path, node: ast.ClassDef, bindings, seen=None) -> bool:
     """Return whether *node* or a known base overrides `ROOT_URLCONF`."""
     seen = set() if seen is None else seen
     if id(node) in seen:
@@ -174,7 +235,8 @@ def _overrides_root_urlconf(node: ast.ClassDef, classes: dict[str, list[ast.Clas
         isinstance(decorator, ast.Call) and any(keyword.arg == "ROOT_URLCONF" for keyword in decorator.keywords)
         for decorator in node.decorator_list
     ) or any(
-        _overrides_root_urlconf(base, classes, seen) for name in _base_names(node) for base in classes.get(name, ())
+        _overrides_root_urlconf(base_path, base, bindings, seen)
+        for base_path, base in _reverse_bases(path, node, bindings)
     )
 
 
@@ -204,15 +266,12 @@ def _unisolated_reverse_classes(
 ) -> set[str]:
     """Return the `SimpleTestCase` classes in *path* that reverse against the real root URLconf."""
     class_index = class_index if class_index is not None else _test_class_index([path])
-    classes: dict[str, list[ast.ClassDef]] = {}
-    for nodes in class_index.values():
-        for node in nodes:
-            classes.setdefault(node.name, []).append(node)
+    bindings = _reverse_class_bindings(class_index)
     found = set()
     for node in class_index[path]:
-        if not _is_simple_test_case(node, classes):
+        if not _is_simple_test_case(path, node, bindings):
             continue
-        if _overrides_root_urlconf(node, classes):
+        if _overrides_root_urlconf(path, node, bindings):
             continue
         if any(_is_reverse_call(child) for statement in node.body for child in ast.walk(statement)):
             found.add(node.name)
@@ -580,12 +639,57 @@ class UnisolatedReverseTest(SimpleTestCase):
             self.assertEqual(_unisolated_reverse_classes(path), {"Sample"})
 
     def test_an_indirect_simple_test_case_from_another_module_is_reported(self):
+        """An imported class keeps its ancestry under a local alias."""
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory) / "base.py"
             base.write_text("class Base(SimpleTestCase):\n    pass\n", encoding="utf-8")
             path = pathlib.Path(directory) / "sample.py"
             path.write_text(
-                "from base import Base\nclass Sample(Base):\n    def test_x(self):\n        reverse('name')\n",
+                "from base import Base as Parent\nclass Sample(Parent):\n    def test_x(self):\n        reverse('name')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_unisolated_reverse_classes(path, _test_class_index([base, path])), {"Sample"})
+
+    def test_an_unrelated_isolated_base_does_not_isolate_a_local_subclass(self):
+        """A same-named class in another module cannot change local ancestry."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "class Base(SimpleTestCase):\n    pass\n"
+                "class Sample(Base):\n    def test_x(self):\n        reverse('name')\n",
+                encoding="utf-8",
+            )
+            other = pathlib.Path(directory) / "other.py"
+            other.write_text(
+                "@override_settings(ROOT_URLCONF=_Conf)\nclass Base(SimpleTestCase):\n    pass\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_unisolated_reverse_classes(path, _test_class_index([path, other])), {"Sample"})
+
+    def test_an_unrelated_unisolated_base_does_not_change_local_isolation(self):
+        """A local isolated base takes precedence over another module's class."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "@override_settings(ROOT_URLCONF=_Conf)\nclass Base(SimpleTestCase):\n    pass\n"
+                "class Sample(Base):\n    def test_x(self):\n        reverse('name')\n",
+                encoding="utf-8",
+            )
+            other = pathlib.Path(directory) / "other.py"
+            other.write_text("class Base(SimpleTestCase):\n    pass\n", encoding="utf-8")
+
+            self.assertEqual(_unisolated_reverse_classes(path, _test_class_index([path, other])), set())
+
+    def test_an_imported_module_base_resolves_only_through_its_module(self):
+        """A module-qualified base uses only its imported test module."""
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory) / "base.py"
+            base.write_text("class Base(SimpleTestCase):\n    pass\n", encoding="utf-8")
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "import base as parent\nclass Sample(parent.Base):\n    def test_x(self):\n        reverse('name')\n",
                 encoding="utf-8",
             )
 
