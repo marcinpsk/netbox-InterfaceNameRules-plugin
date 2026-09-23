@@ -67,7 +67,7 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base)
+        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
         return module, bay, plan
 
 

@@ -34,7 +34,6 @@ from .domain import (
     MemberOutcome,
 )
 from .installed import (
-    TemplateNames,
     family_names_for,
     flat_family_bases,
     interfaces_by_module,
@@ -42,7 +41,7 @@ from .installed import (
 )
 from .names import COLLISION_REASON, is_name_collision, name_is_taken
 from .targets import builds_channelized_family, channelized_family_names
-from .template_names import pinned_template_cache
+from .template_names import TemplateNames, pinned_template_cache
 
 logger = logging.getLogger(__name__)
 

@@ -19,13 +19,15 @@ from .domain import (
     MemberRole,
     PlannedMember,
 )
+from .raw_bases import RawBases
 from .targets import (
+    UNCLAIMED_BASE_REASON,
     channelized_family_targets,
     flat_family_names,
     lockstep_family_targets,
     template_channel_suffixes,
 )
-from .template_names import resolved_template_names
+from .template_names import TemplateNames
 
 logger = logging.getLogger(__name__)
 
@@ -214,19 +216,20 @@ def _channelized_plan(device_id, module_id, parent, children, targets):  # pragm
     )
 
 
-def _module_family_targets(rule, variables, parent, children, suffixes):  # pragma: no cover
+def _module_family_targets(rule, variables, parent, base_name, children, suffixes):  # pragma: no cover
     """Return the names *rule* intends for a channelized family a module carries."""
     return channelized_family_targets(
         rule,
         variables,
         parent.name,
+        base_name,
         parent.channels,
         tuple((child.name, child.channel_id) for child in children),
         suffixes,
     )
 
 
-def _channelized_plans(module, rule, variables, interfaces, catalog):  # pragma: no cover
+def _channelized_plans(module, rule, variables, interfaces, bases):  # pragma: no cover
     """Return one plan for every structurally discovered channelized family."""
     parents = [interface for interface in interfaces if is_channelized_parent(interface)]
     if not parents:
@@ -235,28 +238,14 @@ def _channelized_plans(module, rule, variables, interfaces, catalog):  # pragma:
     for interface in interfaces:
         if _is_channel(interface) and interface.parent_id is not None:
             children_by_parent.setdefault(interface.parent_id, []).append(interface)
-    suffixes = template_channel_suffixes(catalog.get())
+    suffixes = template_channel_suffixes(bases.catalog.get())
     plans = []
     for parent in parents:
         children = children_by_parent.get(parent.pk, [])
         children.sort(key=lambda child: (child.channel_id, child.pk))
-        targets = _module_family_targets(rule, variables, parent, children, suffixes)
+        targets = _module_family_targets(rule, variables, parent, bases.base_for(parent.name), children, suffixes)
         plans.append(_channelized_plan(module.device_id, module.pk, parent, children, targets))
     return plans
-
-
-class TemplateNames:
-    """The module type's resolved template names, read only where a plan needs them."""
-
-    def __init__(self, module):
-        self._module = module
-        self._templates = None
-
-    def get(self):
-        """Return every resolved template name for the module, loading them once."""
-        if self._templates is None:
-            self._templates = resolved_template_names(self._module)
-        return self._templates
 
 
 def interfaces_by_module(modules):
@@ -285,13 +274,16 @@ def device_interface_families(interfaces):
     )
 
 
-def _interface_rename_plan(device_id, module_id, rule, variables, interface) -> InstalledFamilyPlan:
-    """Return a plan that renames one interface which belongs to no family."""
+def _interface_rename_plan(device_id, module_id, rule, variables, interface, base_name) -> InstalledFamilyPlan:
+    """Return a plan that renames one interface which belongs to no family, from *base_name* as ``{base}``."""
     status, reason, target_name = None, "", interface.name
-    try:
-        target_name = evaluate_name_template(rule.name_template, {**variables, "base": interface.name})
-    except (TypeError, ValueError) as error:
-        status, reason = FamilyStatus.FAILED, f"failed to evaluate the interface name: {error}"
+    if base_name is None:
+        status, reason = FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON
+    else:
+        try:
+            target_name = evaluate_name_template(rule.name_template, {**variables, "base": base_name})
+        except (TypeError, ValueError) as error:
+            status, reason = FamilyStatus.FAILED, f"failed to evaluate the interface name: {error}"
     return InstalledFamilyPlan(
         family_id=f"flat:{interface.pk}",
         topology=FamilyTopology.FLAT,
@@ -309,43 +301,55 @@ def _interface_rename_plan(device_id, module_id, rule, variables, interface) -> 
     )
 
 
-def plan_interface_rename(module, rule, variables, interface) -> InstalledFamilyPlan:
-    """Return the plan that renames one interface which belongs to no family."""
+def plan_interface_rename(module, rule, variables, interface, bases) -> InstalledFamilyPlan:
+    """Return the plan that renames one module interface which belongs to no family."""
     return _interface_rename_plan(
         module.device_id,
         module.pk,
         rule,
         variables,
         interface,
+        bases.base_for(interface.name),
     )
 
 
 def plan_device_interface_rename(device, rule, variables, interface, children=()) -> InstalledFamilyPlan:
     """Return the plan that renames one device-level interface family."""
     if not children and not is_channelized_parent(interface):
-        return _interface_rename_plan(device.pk, None, rule, variables, interface)
+        return _interface_rename_plan(device.pk, None, rule, variables, interface, interface.name)
     # A device rule never builds a family, so its channel count says nothing about this one: the
     # members keep the suffixes they carry under whatever name the parent takes.  A device-level
     # interface has no module template family, so there is no suffix to recover from one either.
     targets = lockstep_family_targets(
-        rule, variables, interface.name, tuple((child.name, child.channel_id) for child in children), {}
+        rule, variables, interface.name, interface.name, tuple((child.name, child.channel_id) for child in children), {}
     )
     return _channelized_plan(device.pk, None, interface, children, targets)
 
 
-def plan_installed_families(module, rule, variables, interfaces=None) -> InstalledFamilyPlanSet:
-    """Return immutable plans for the installed families owned by *module*.
+def module_raw_bases(module, rule, variables, interfaces) -> RawBases:
+    """Return the raw template name behind each of *module*'s interfaces outside a channel."""
+    names = [interface.name for interface in interfaces if not _is_channel(interface)]
+    return RawBases(module, rule, variables, names, TemplateNames(module))
+
+
+def plan_installed_families(module, rule, variables) -> InstalledFamilyPlanSet:
+    """Return immutable plans for the installed families owned by *module*, reading its interfaces."""
+    interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
+    return plan_installed_families_from(
+        module, rule, variables, interfaces, module_raw_bases(module, rule, variables, interfaces)
+    )
+
+
+def plan_installed_families_from(module, rule, variables, interfaces, bases) -> InstalledFamilyPlanSet:
+    """Return the installed family plans for *module*, reading ``{base}`` and templates from *bases*.
 
     A batch that already holds the module's interface rows passes them in, so planning a fleet
     reads them once rather than once per module.
     """
-    if interfaces is None:
-        interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
-    catalog = TemplateNames(module)
-    plans = _channelized_plans(module, rule, variables, interfaces, catalog)
+    plans = _channelized_plans(module, rule, variables, interfaces, bases)
     plans.extend(
         _flat_plan(module, target_names, members)
-        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, catalog)
+        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, bases.catalog)
     )
     plans.sort(key=lambda plan: plan.member_pks[0])
     return InstalledFamilyPlanSet(module_id=module.pk, plans=tuple(plans))

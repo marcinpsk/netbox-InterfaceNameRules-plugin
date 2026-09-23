@@ -110,7 +110,7 @@ Module rules use these variables in the Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 | `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
 
@@ -127,7 +127,7 @@ Module rules use these variables in the Parent Name Template field.
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The name the rule starts from, which is the module's raw template name when the rule first applies. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 
 #### Device interface names

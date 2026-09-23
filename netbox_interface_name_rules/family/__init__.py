@@ -47,6 +47,7 @@ from .installed import (
     device_interface_families,
     interfaces_by_module,
     is_channelized_parent,
+    module_raw_bases,
     plan_device_interface_rename,
     plan_installed_families,
     plan_interface_rename,
@@ -58,6 +59,7 @@ from .prospective import (
     describe_template_interfaces,
     plan_prospective_families,
 )
+from .raw_bases import GIVEN_RAW_NAMES
 from .structural import (
     execute_flat_family,
     execute_structural_family,
@@ -70,6 +72,7 @@ from .targets import channelized_family_names, one_family_per_name_set, template
 from .template_names import pinned_template_cache, resolved_template_names
 
 __all__ = (
+    "GIVEN_RAW_NAMES",
     "BatchOutcome",
     "ConversionCandidate",
     "ConversionMember",
@@ -114,6 +117,7 @@ __all__ = (
     "install_channelized_family",
     "interfaces_by_module",
     "is_channelized_parent",
+    "module_raw_bases",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_device_interface_rename",

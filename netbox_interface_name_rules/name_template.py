@@ -136,14 +136,8 @@ TEMPLATE_VARIABLES = (
         "base",
         ((_MEMBER, _CALLER), (_PARENT, _CALLER), (_DEVICE, _CALLER)),
         (
-            (
-                _MEMBER,
-                "The name the rule starts from, which is the module's raw template name when the rule first applies.",
-            ),
-            (
-                _PARENT,
-                "The name the rule starts from, which is the module's raw template name when the rule first applies.",
-            ),
+            (_MEMBER, "The raw template name of the interface the rule renames."),
+            (_PARENT, "The raw template name of the interface the rule renames."),
             (_DEVICE, "Current interface name before the rule applies."),
         ),
         "et-0/0/1",
@@ -284,6 +278,16 @@ def _expression_names_channel(field):
     return any(isinstance(node, ast.Name) and node.id == "channel" for node in ast.walk(tree))
 
 
+def variable_token(name):
+    """Return the exact text a name template substitutes for the variable *name*."""
+    return f"{{{name}}}"
+
+
+def references_variable(template, name):
+    """Return whether evaluating *template* substitutes the variable *name*."""
+    return variable_token(name) in template
+
+
 def references_channel(template):
     """Return whether a name template references the channel variable."""
     for field in _parse_brace_groups(template).reference_fields:
@@ -348,7 +352,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
     """
     result = template
     for key, value in variables.items():
-        result = result.replace(f"{{{key}}}", str(value))
+        result = result.replace(variable_token(key), str(value))
 
     def evaluate_expression(field):
         expr = field.expression.strip()

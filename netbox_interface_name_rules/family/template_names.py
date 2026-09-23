@@ -191,3 +191,17 @@ def resolved_template_names(module) -> tuple[ResolvedTemplateName, ...]:
     if resolved is not None:
         resolved[module.pk] = names
     return names
+
+
+class TemplateNames:
+    """The module type's resolved template names, read only where a plan needs them."""
+
+    def __init__(self, module):
+        self._module = module
+        self._templates = None
+
+    def get(self):
+        """Return every resolved template name for the module, loading them once."""
+        if self._templates is None:
+            self._templates = resolved_template_names(self._module)
+        return self._templates

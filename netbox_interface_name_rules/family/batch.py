@@ -21,7 +21,7 @@ from .domain import (
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
-from .installed import interfaces_by_module, plan_installed_families, plan_interface_rename
+from .installed import interfaces_by_module, module_raw_bases, plan_installed_families_from, plan_interface_rename
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
 from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
 from .template_names import pinned_template_cache
@@ -102,18 +102,22 @@ def _is_channel(interface) -> bool:
     return getattr(interface, "channel_id", None) is not None
 
 
-def _creation_plan(module, rule, variables, base):
+def _creation_plan(module, rule, variables, base, base_name):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
-        return plan_structural_family(module, rule, variables, base)
-    return plan_flat_family(module, rule, variables, base)
+        return plan_structural_family(module, rule, variables, base, base_name)
+    return plan_flat_family(module, rule, variables, base, base_name)
 
 
-def _creation_plans(module, rule, variables, plain):
+def _creation_plans(module, rule, variables, plain, bases):
     """Return one creation plan per family, so two bases of one family never build it twice."""
-    candidates = [(base, intended_family_names(rule, variables, base.name)) for base in plain]
-    kept = one_family_per_name_set([(base.name, target_names) for base, target_names in candidates])
-    return [_creation_plan(module, rule, variables, candidates[index][0]) for index in kept]
+    candidates = []
+    for base in plain:
+        base_name = bases.base_for(base.name)
+        target_names = (base.name,) if base_name is None else intended_family_names(rule, variables, base_name)
+        candidates.append((base, base_name, target_names))
+    kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
+    return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
 def plan_module_families(module, rule, variables, interfaces, admit_leftover=None) -> ModuleFamilyPlans:
@@ -126,13 +130,14 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
     """
-    installed = plan_installed_families(module, rule, variables, interfaces=interfaces)
+    bases = module_raw_bases(module, rule, variables, interfaces)
+    installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
     if admit_leftover is not None:
         plain = list(admit_leftover(plain))
     if rule.channel_count <= 0:
-        leftover = tuple(plan_interface_rename(module, rule, variables, interface) for interface in plain)
+        leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
         leftover = ()  # pragma: no cover - requires channelization support
@@ -143,7 +148,7 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
                 rule,
             )
     else:
-        leftover = tuple(_creation_plans(module, rule, variables, plain))
+        leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
     return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
 
 

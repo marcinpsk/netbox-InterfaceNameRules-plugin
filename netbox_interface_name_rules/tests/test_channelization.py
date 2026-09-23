@@ -734,18 +734,7 @@ class ChannelizedSuffixRecoveryTest(ChannelizationTestCase):
         self.assertTrue(any("1a:2" in line for line in logs.output), logs.output)
         self.assertEqual(
             self._names(module),
-            [
-                "1a-x-x",
-                "1a-x-x:1",
-                "1a-x-x:3",
-                "1a-x-x:4",
-                "1a:2",
-                "1b-x-x",
-                "1b-x-x.1",
-                "1b-x-x.2",
-                "1b-x-x.3",
-                "1b-x-x.4",
-            ],
+            ["1a-x", "1a-x:1", "1a-x:3", "1a-x:4", "1a:2", "1b-x", "1b-x.1", "1b-x.2", "1b-x.3", "1b-x.4"],
         )
 
     def test_single_family_recovery_still_heals_a_stranded_child(self):
@@ -755,8 +744,8 @@ class ChannelizedSuffixRecoveryTest(ChannelizationTestCase):
         apply_interface_name_rules(module, bay, force_reapply=True)
 
         stranded.refresh_from_db()
-        self.assertEqual(stranded.name, "2-x-x:2")
-        self.assertEqual(self._names(module), ["2-x-x", "2-x-x:1", "2-x-x:2", "2-x-x:3", "2-x-x:4"])
+        self.assertEqual(stranded.name, "2-x:2")
+        self.assertEqual(self._names(module), ["2-x", "2-x:1", "2-x:2", "2-x:3", "2-x:4"])
 
 
 class ChannelizationFeatureDetectionTest(TestCase):

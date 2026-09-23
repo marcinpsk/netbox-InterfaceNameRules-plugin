@@ -278,6 +278,7 @@ def predict_rule_output(module, module_bay, raw_names):
         rule,
         build_variables(module_bay, device=module.device),
         family_ops.describe_module_interfaces(module, raw_names),
+        family_ops.GIVEN_RAW_NAMES,
     )
     return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
@@ -599,7 +600,10 @@ def _preview_plans(rule, plan_set) -> list:
 
 def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
     """Preview one module from its family plans.  Returns (checked_count, should_stop)."""
-    plan_set = family_ops.plan_prospective_families(module, rule, variables, family_ops.describe_interfaces(ifaces))
+    bases = family_ops.module_raw_bases(module, rule, variables, ifaces)
+    plan_set = family_ops.plan_prospective_families(
+        module, rule, variables, family_ops.describe_interfaces(ifaces), bases
+    )
     checked = len(plan_set.plans)
     if not checked:
         return 0, False

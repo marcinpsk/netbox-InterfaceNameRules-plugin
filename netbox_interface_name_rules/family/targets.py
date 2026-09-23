@@ -14,6 +14,7 @@ from ..name_template import evaluate_name_template
 from .domain import FamilyStatus
 
 AMBIGUOUS_SUFFIX_REASON = "channel suffix is ambiguous or unavailable"
+UNCLAIMED_BASE_REASON = "no single interface template claims this name as its raw name or its renamed form"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +155,17 @@ def _failed(parent_name, children, error):  # pragma: no cover - requires channe
     )
 
 
-def _breakout_targets(rule, variables, parent_name, parent_channels, children):  # pragma: no cover
+def _unclaimed(parent_name, children):  # pragma: no cover - requires channelization support
+    """Return targets that leave a family alone because no template gives it a raw name."""
+    return FamilyTargets(
+        parent_name=parent_name,
+        channels=tuple((child_name, UNCLAIMED_BASE_REASON) for child_name, _channel_id in children),
+        status=FamilyStatus.BLOCKED,
+        reason=UNCLAIMED_BASE_REASON,
+    )
+
+
+def _breakout_targets(rule, variables, parent_name, base_name, parent_channels, children):  # pragma: no cover
     """Return the names a breakout rule intends for an existing channelized family."""
     if parent_channels != rule.channel_count:
         reason = f"installed parent declares {parent_channels} channels but the rule defines {rule.channel_count}"
@@ -175,12 +186,12 @@ def _breakout_targets(rule, variables, parent_name, parent_channels, children): 
     try:
         parent_target = parent_name
         if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
-            parent_target = evaluate_name_template(rule.parent_name_template, {**variables, "base": parent_name})
+            parent_target = evaluate_name_template(rule.parent_name_template, {**variables, "base": base_name})
         channels = tuple(
             (
                 evaluate_name_template(
                     rule.name_template,
-                    {**variables, "base": parent_name, "channel": str(rule.channel_start + channel_id - 1)},
+                    {**variables, "base": base_name, "channel": str(rule.channel_start + channel_id - 1)},
                 ),
                 "",
             )
@@ -191,14 +202,14 @@ def _breakout_targets(rule, variables, parent_name, parent_channels, children): 
     return FamilyTargets(parent_name=parent_target, channels=channels)
 
 
-def lockstep_family_targets(rule, variables, parent_name, children, suffixes):  # pragma: no cover
+def lockstep_family_targets(rule, variables, parent_name, base_name, children, suffixes):  # pragma: no cover
     """Return the names a simple rule intends for a family renamed in lockstep with its parent.
 
     The rule's channel count says nothing here: this family already exists, and every member keeps
     the suffix it carries under whatever name the parent takes.
     """
     try:
-        parent_target = evaluate_name_template(rule.name_template, {**variables, "base": parent_name})
+        parent_target = evaluate_name_template(rule.name_template, {**variables, "base": base_name})
     except (TypeError, ValueError) as error:
         return _failed(parent_name, children, error)
     channels = tuple(
@@ -209,14 +220,17 @@ def lockstep_family_targets(rule, variables, parent_name, children, suffixes):  
 
 
 def channelized_family_targets(  # pragma: no cover - requires channelization support
-    rule, variables, parent_name, parent_channels, children, suffixes
+    rule, variables, parent_name, base_name, parent_channels, children, suffixes
 ) -> FamilyTargets:
     """Return the names *rule* intends for the channelized family named *parent_name*.
 
+    *base_name* is the value of ``{base}``, or None when no template claims the parent.
     *children* pairs each channel's current name with its channel identifier, in channel order.
     A breakout rule renames the channels it describes; any other rule carries the family along with
     its parent, keeping each channel's own suffix.
     """
+    if base_name is None:
+        return _unclaimed(parent_name, children)
     if rule.channel_count > 0:
-        return _breakout_targets(rule, variables, parent_name, parent_channels, children)
-    return lockstep_family_targets(rule, variables, parent_name, children, suffixes)
+        return _breakout_targets(rule, variables, parent_name, base_name, parent_channels, children)
+    return lockstep_family_targets(rule, variables, parent_name, base_name, children, suffixes)
