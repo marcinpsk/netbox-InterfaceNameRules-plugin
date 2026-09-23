@@ -390,7 +390,7 @@ def _module_import_aliases(
     """
     if (path := _module_path(module_name)) is None:
         return frozenset()
-    package = module_name.rpartition(".")[0] or module_name
+    package = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0] or module_name
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     pairs = set()
     for node in ast.walk(tree):
@@ -814,6 +814,48 @@ class PrivateAttributeBoundaryTest(SimpleTestCase):
                         {f"{PLUGIN_PACKAGE}.naming._resolve_slot"},
                     )
                     self.assertEqual(self._found("from . import first\nfirst.naming._resolve_slot()"), set())
+                finally:
+                    _plugin_modules.cache_clear()
+                    _module_import_aliases.cache_clear()
+
+    def test_a_subpackage_reexport_keeps_its_module_owner(self):
+        """Resolve a relative re-export from a package against that package."""
+        with tempfile.TemporaryDirectory() as directory:
+            package = pathlib.Path(directory) / PLUGIN_PACKAGE
+            subpackage = package / "sub"
+            subpackage.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (subpackage / "__init__.py").write_text("from . import inner as alias\n", encoding="utf-8")
+            (subpackage / "inner.py").write_text("def _private(): pass\n", encoding="utf-8")
+
+            with patch(f"{__name__}.PACKAGE", package):
+                _plugin_modules.cache_clear()
+                _module_import_aliases.cache_clear()
+                try:
+                    self.assertEqual(
+                        self._found("from . import sub\nsub.alias._private()"),
+                        {f"{PLUGIN_PACKAGE}.sub.inner._private"},
+                    )
+                    self.assertEqual(self._found("from . import sub\nsub.alias.public()"), set())
+                finally:
+                    _plugin_modules.cache_clear()
+                    _module_import_aliases.cache_clear()
+
+    def test_a_scanned_subpackage_initializer_resolves_relative_imports(self):
+        """Scan relative imports in a package initializer against its package."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / PLUGIN_PACKAGE / "sub" / "__init__.py"
+            path.parent.mkdir(parents=True)
+            (path.parents[1] / "__init__.py").write_text("", encoding="utf-8")
+            (path.parent / "inner.py").write_text("def _private(): pass\n", encoding="utf-8")
+            path.write_text("from . import inner\nfrom .inner import _private\ninner._private()\n", encoding="utf-8")
+
+            with patch(f"{__name__}.PACKAGE", path.parents[1]):
+                _plugin_modules.cache_clear()
+                _module_import_aliases.cache_clear()
+                try:
+                    self.assertEqual(_private_plugin_imports(path), {f"{PLUGIN_PACKAGE}.sub.inner._private"})
+                    self.assertEqual(_private_plugin_attributes(path), {f"{PLUGIN_PACKAGE}.sub.inner._private"})
                 finally:
                     _plugin_modules.cache_clear()
                     _module_import_aliases.cache_clear()
