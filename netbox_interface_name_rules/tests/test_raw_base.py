@@ -390,6 +390,21 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
             "RawBaseDrift", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbasedrift-vc"), vc_position=1
         )
         cls.module_type = _token_module_type(manufacturer, "RawBaseDrift-QSFP", "xe-{vc_position:0}/0/{module}")
+        cls.dotted_type = _channelized_module_type(
+            manufacturer,
+            "RawBaseDrift-DOTTED",
+            channels=2,
+            child_channel_ids=(1, 2),
+            child_names={1: "{module}.10", 2: "{module}.20"},
+        )
+        InterfaceNameRule.objects.create(module_type=cls.dotted_type, name_template="{base}.{vc_position}")
+
+    def test_prediction_does_not_let_a_channel_compete_with_its_parent(self):
+        self._renumber(2)
+        module, bay = self._install_on(self.device, self.dotted_type, "3")
+        self.assertEqual(self._names(module), ["3.2", "3.2.10", "3.2.20"])
+
+        self.assertEqual(predict_rule_output(module, bay, ["3", "3.10", "3.20"]), ["3.2", "3.2.10", "3.2.20"])
 
     def test_a_blank_parent_template_keeps_the_drifted_name(self):
         module, _ = self._install_on(self.device, self.module_type, "3")

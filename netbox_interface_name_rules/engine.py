@@ -274,12 +274,11 @@ def predict_rule_output(module, module_bay, raw_names):
         return list(raw_names)
 
     variables = build_variables(module_bay, device=module.device)
+    described = family_ops.describe_module_interfaces(module, raw_names)
+    channel_names = {interface.name for interface in described if interface.channel_id is not None}
+    base_names = [name for name in raw_names if name not in channel_names]
     plan_set = family_ops.plan_prospective_families(
-        module,
-        rule,
-        variables,
-        family_ops.describe_module_interfaces(module, raw_names),
-        family_ops.given_raw_names(module, rule, variables, raw_names),
+        module, rule, variables, described, family_ops.given_raw_names(module, rule, variables, base_names)
     )
     return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
