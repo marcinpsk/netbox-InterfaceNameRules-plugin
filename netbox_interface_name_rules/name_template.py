@@ -116,18 +116,28 @@ _UNARY_OPERATORS = {
 _FORMAT_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\s*(?:![rsa]|:[^{}]*)$")
 
 
-def _parse_brace_groups(template):
-    """Parse brace groups once while preserving both existing consumer views."""
+def _reference_brace_fields(template):
+    """Return fields from each closed group, starting at its last opening brace."""
     reference_fields = []
-    evaluated_fields = []
     reference_start = None
+    for index, char in enumerate(template):
+        if char == "{":
+            reference_start = index
+        elif char == "}" and reference_start is not None:
+            reference_fields.append(template[reference_start + 1 : index])
+            reference_start = None
+    return tuple(reference_fields)
+
+
+def _evaluated_brace_fields(template):
+    """Return nonempty groups from their first opening brace and the balance state."""
+    evaluated_fields = []
     evaluation_start = None
     depth = 0
     unbalanced = False
     for index, char in enumerate(template):
         if char == "{":
             depth += 1
-            reference_start = index
             if evaluation_start is None:
                 evaluation_start = index
         elif char == "}":
@@ -135,15 +145,18 @@ def _parse_brace_groups(template):
                 depth -= 1
             else:
                 unbalanced = True
-            if reference_start is not None:
-                reference_fields.append(template[reference_start + 1 : index])
-                reference_start = None
             if evaluation_start is not None:
                 expression = template[evaluation_start + 1 : index]
                 if expression:
                     evaluated_fields.append(_EvaluatedField(evaluation_start, index + 1, expression))
                 evaluation_start = None
-    return _ParsedBraceGroups(tuple(reference_fields), tuple(evaluated_fields), not unbalanced and depth == 0)
+    return tuple(evaluated_fields), not unbalanced and depth == 0
+
+
+def _parse_brace_groups(template):
+    """Return the reference, evaluation, and balance views of a template."""
+    evaluated_fields, balanced = _evaluated_brace_fields(template)
+    return _ParsedBraceGroups(_reference_brace_fields(template), evaluated_fields, balanced)
 
 
 def _parse_expression(expression):

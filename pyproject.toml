@@ -154,11 +154,13 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._UNARY_OPERATORS".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._EvaluatedField".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._ParsedBraceGroups".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._evaluated_brace_fields".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
 "netbox_interface_name_rules.name_template._expression_names_channel".msg = "Use name_template.references_channel."
 "netbox_interface_name_rules.name_template._has_unbalanced_braces".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._parse_brace_groups".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._parse_expression".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._reference_brace_fields".msg = "Use the name_template public interface."
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]

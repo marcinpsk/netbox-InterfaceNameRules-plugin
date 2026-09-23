@@ -192,6 +192,17 @@ class BreakoutModeValidationTest(TestCase):
         self.assertFalse(references_channel("et-0/0/{bay_position!r}"))
         self.assertTrue(references_channel("et-0/0/{channel!r}"))
 
+    def test_channel_references_in_partial_and_nested_brace_groups(self):
+        """The reference view keeps its last-open-brace behavior on unusual input."""
+        for template, expected in (
+            ("{{channel}", True),
+            ("}{channel}", True),
+            ("{}", False),
+            ("{channel", False),
+        ):
+            with self.subTest(template=template):
+                self.assertEqual(references_channel(template), expected)
+
     def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
         """The rule is 'no channel', not 'no expressions' — arithmetic parent names must still save."""
         rule = self._rule(
