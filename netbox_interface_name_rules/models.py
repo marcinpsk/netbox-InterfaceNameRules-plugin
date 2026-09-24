@@ -8,7 +8,7 @@ from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
-from .name_template import validate_breakout_topology
+from .name_template import validate_rule
 from .regex_safety import compile_module_type_pattern
 
 
@@ -21,7 +21,9 @@ def csv_export_entry(headers, values):
     }
 
 
-_TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
+_RULE_VALIDATION_FIELDS = frozenset(
+    {"applies_to_device_interfaces", "breakout_mode", "channel_count", "name_template", "parent_name_template"}
+)
 
 
 class InterfaceNameRule(NetBoxModel):
@@ -181,11 +183,16 @@ class InterfaceNameRule(NetBoxModel):
             self.module_type_pattern = ""
             if not self.module_type:
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        validate_breakout_topology(
-            self.breakout_mode,
-            self.channel_count,
-            self.parent_name_template,
-            self.applies_to_device_interfaces,
+        self._validate_rule()
+
+    def _validate_rule(self):
+        """Check the topology and both templates against the rule's naming context."""
+        validate_rule(
+            breakout_mode=self.breakout_mode,
+            channel_count=self.channel_count,
+            name_template=self.name_template,
+            parent_name_template=self.parent_name_template,
+            applies_to_device_interfaces=self.applies_to_device_interfaces,
         )
 
     def get_absolute_url(self):
@@ -288,8 +295,7 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.CheckConstraint(
-                # The implications validate_breakout_topology() enforces over enum and integer
-                # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
+                # Enforce the enum and integer implications of validate_rule() as ~P | Q.
                 condition=(
                     models.Q(breakout_mode__in=[BreakoutModeChoices.FLAT, BreakoutModeChoices.CHANNELIZED])
                     & (
@@ -323,20 +329,15 @@ class InterfaceNameRule(NetBoxModel):
         ]
 
     def save(self, *args, **kwargs):
-        """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
+        """Validate topology and templates before a plain ORM write."""
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
             # one, and it skips the write when update_fields is empty.
             update_fields = frozenset(update_fields)
             kwargs["update_fields"] = update_fields
-        if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
-            validate_breakout_topology(
-                self.breakout_mode,
-                self.channel_count,
-                self.parent_name_template,
-                self.applies_to_device_interfaces,
-            )
+        if update_fields is None or _RULE_VALIDATION_FIELDS.intersection(update_fields):
+            self._validate_rule()
         return super().save(*args, **kwargs)
 
     def __str__(self):

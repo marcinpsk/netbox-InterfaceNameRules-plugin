@@ -803,12 +803,13 @@ class BreakoutTemplateValueErrorTest(TestCase):
 
     def test_an_unevaluable_template_builds_nothing_and_renames_nothing(self):
         """``{undefined_var}`` is not a naming variable, so every family reports the failure."""
-        rule = InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{undefined_var}:{channel}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
         Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
@@ -1018,12 +1019,13 @@ class PreviewTemplateErrorTest(TestCase):
 
     def test_an_unevaluable_template_previews_one_error_placeholder(self):
         """An undefined variable raises for real, so the family previews as a single placeholder."""
-        rule = InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{base}:{channel}:{undefined_var}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
 
@@ -1644,10 +1646,11 @@ class PredictRuleOutputTest(EngineAdvancedFixtures):
         """When evaluate_name_template raises, the raw name is kept in the output."""
         from netbox_interface_name_rules.engine import predict_rule_output
 
-        InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{nonexistent_variable}",
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = predict_rule_output(module, self.bay0, ["fallback-me"])
         self.assertEqual(result, ["fallback-me"])

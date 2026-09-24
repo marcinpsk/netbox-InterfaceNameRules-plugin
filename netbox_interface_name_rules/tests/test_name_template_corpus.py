@@ -37,12 +37,25 @@ class TemplateCase:
     breakout_mode: str = BreakoutModeChoices.FLAT
     channel_count: int = 0
     applies_to_device_interfaces: bool = False
+    error_field: str = "name_template"
+    error_message: str = ""
 
 
 ACCEPTED = AdapterVerdicts(True, True, True, True, True, True)
 REFUSED = AdapterVerdicts(False, False, False, False, False, False)
 
 NAME_TEMPLATE_CORPUS = (
+    TemplateCase("module names port", "{port}", REFUSED),
+    TemplateCase("device names channel", "{channel}", REFUSED, applies_to_device_interfaces=True),
+    TemplateCase("module names virtual chassis position", "{vc_position}", ACCEPTED),
+    TemplateCase(
+        "parent names unknown variable",
+        "{base}",
+        REFUSED,
+        parent_name_template="{unknown}",
+        breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        channel_count=4,
+    ),
     TemplateCase("module member variables", "{base}-{slot_num}/{bay_position_num}", ACCEPTED),
     TemplateCase(
         "module member channel",
@@ -61,24 +74,35 @@ NAME_TEMPLATE_CORPUS = (
     TemplateCase(
         "device interface variables",
         "{base}-{vc_position}-{port}",
-        ACCEPTED,
+        AdapterVerdicts(True, True, True, False, True, True),
         applies_to_device_interfaces=True,
     ),
     TemplateCase(
         "device interface names a module variable",
         "{base}-{bay_position}",
-        ACCEPTED,
+        AdapterVerdicts(False, False, False, True, False, False),
         applies_to_device_interfaces=True,
+        error_message="{bay_position} is not available in a device-level rule's name template. "
+        "Available: {base}, {port}, {vc_position}.",
     ),
-    TemplateCase("unbalanced name template", "xe-{bay_position", ACCEPTED),
-    TemplateCase("unknown template variable", "xe-{unknown}", ACCEPTED),
+    TemplateCase("unbalanced name template", "xe-{bay_position", REFUSED),
+    TemplateCase(
+        "unknown template variable",
+        "xe-{unknown}",
+        REFUSED,
+        error_message="{unknown} is not available in a module rule's name template. "
+        "Available: {base}, {bay_position}, {bay_position_num}, {parent_bay_position}, "
+        "{parent_bay_position_num}, {sfp_slot}, {slot}, {slot_num}, {vc_position}.",
+    ),
     TemplateCase("format conversion", "xe-{bay_position!r}", ACCEPTED),
-    TemplateCase("channel without declared channels", "xe-{channel}", ACCEPTED),
+    TemplateCase("channel without declared channels", "xe-{channel}", REFUSED),
     TemplateCase(
         "module parent names channel",
         "{base}:{channel}",
         REFUSED,
         parent_name_template="parent-{channel}",
+        error_field="parent_name_template",
+        error_message="The parent interface has no channel number; remove {channel}.",
         breakout_mode=BreakoutModeChoices.CHANNELIZED,
         channel_count=4,
     ),
@@ -94,7 +118,7 @@ NAME_TEMPLATE_CORPUS = (
 
 
 class NameTemplateCorpusTest(APITestCase):
-    """Pin every current name-template verdict without correcting it."""
+    """Validate naming-context membership through every rule adapter."""
 
     model = InterfaceNameRule
     view_namespace = "plugins-api:netbox_interface_name_rules"
@@ -166,6 +190,8 @@ class NameTemplateCorpusTest(APITestCase):
                 if accepted:
                     form.save()
                 self.assertEqual(accepted, case.verdicts.edit_form, form.errors)
+                if case.error_message and not case.verdicts.edit_form:
+                    self.assertIn(case.error_message, form.errors[case.error_field])
 
     def test_rest_api_verdicts(self):
         url = self._get_list_url()
@@ -175,6 +201,8 @@ class NameTemplateCorpusTest(APITestCase):
                 response = self.client.post(url, fields, format="json", **self.header)
                 accepted = response.status_code == 201
                 self.assertEqual(accepted, case.verdicts.rest_api, response.data)
+                if case.error_message and not case.verdicts.rest_api:
+                    self.assertIn(case.error_message, response.data[case.error_field])
 
     def test_bulk_import_form_verdicts(self):
         for index, case in enumerate(NAME_TEMPLATE_CORPUS):
@@ -185,6 +213,8 @@ class NameTemplateCorpusTest(APITestCase):
                 if accepted:
                     form.save()
                 self.assertEqual(accepted, case.verdicts.bulk_import, form.errors)
+                if case.error_message and not case.verdicts.bulk_import:
+                    self.assertIn(case.error_message, form.errors[case.error_field])
 
     def test_rule_tester_verdicts(self):
         for index, case in enumerate(NAME_TEMPLATE_CORPUS):
@@ -192,6 +222,8 @@ class NameTemplateCorpusTest(APITestCase):
                 fields = self._rule_fields(case, "tester", index)
                 form = RuleTestForm(data=self._tester_data(fields))
                 self.assertEqual(form.is_valid(), case.verdicts.rule_tester, form.errors)
+                if case.error_message and not case.verdicts.rule_tester:
+                    self.assertIn(case.error_message, form.errors[case.error_field])
 
     def test_model_validation_verdicts(self):
         for index, case in enumerate(NAME_TEMPLATE_CORPUS):

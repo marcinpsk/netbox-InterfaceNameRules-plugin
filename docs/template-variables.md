@@ -1,5 +1,18 @@
 # Template Variables
 
+A save refuses a template variable that the rule's naming context does not provide.
+The error names the variable and lists the available variables. Module rules can use
+`{channel}` only when they declare channels. Device rules cannot use module variables,
+and module rules cannot use `{port}`. Braces must balance in both template fields.
+These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
+The rule tester checks every template as a module rule.
+
+`{vc_position}` is accepted at save in every context that lists it. If the device does
+not provide a position at rename time, that rename is skipped and logged.
+
+An upgrade reports stored rules that these checks refuse and changes none of them.
+See [Installation](installation.md#run-database-migrations).
+
 ## Available Variables
 
 <!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->

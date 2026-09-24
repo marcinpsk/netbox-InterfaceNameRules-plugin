@@ -44,6 +44,7 @@ class TemplateVariable:
     descriptions: tuple[tuple[NamingContext, str], ...]
     example: str
     condition: TemplateVariableCondition | None = None
+    refusals: tuple[tuple[NamingContext, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,7 @@ TEMPLATE_VARIABLES = (
         ((_MEMBER, "Breakout channel number. Available when the rule declares channels."),),
         "0",
         condition=TemplateVariableCondition.RULE_DECLARES_CHANNELS,
+        refusals=((_PARENT, "The parent interface has no channel number; remove {channel}."),),
     ),
     TemplateVariable(
         "port",
@@ -197,6 +199,8 @@ _UNARY_OPERATORS = {
     ast.USub: operator.neg,
 }
 _FORMAT_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\s*(?:![rsa]|:[^{}]*)$")
+_NAMED_HEAD_RE = re.compile(r"([A-Za-z_]\w*)(?=$|\.|\[)")
+_IDENTIFIER_RE = re.compile(r"(?<!\w)[A-Za-z_]\w*")
 
 
 def _reference_brace_fields(template):
@@ -275,15 +279,6 @@ def _evaluate_arithmetic(node):
     raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
 
 
-def _expression_names_channel(field):
-    """Return whether one brace-group expression names the channel variable."""
-    try:
-        tree = _parse_expression(field.strip())
-    except (SyntaxError, ValueError):
-        return False
-    return any(isinstance(node, ast.Name) and node.id == "channel" for node in ast.walk(tree))
-
-
 def variable_token(name):
     """Return the exact text a name template substitutes for the variable *name*."""
     return f"{{{name}}}"
@@ -294,28 +289,34 @@ def references_variable(template, name):
     return variable_token(name) in template
 
 
-def references_channel(template):
-    """Return whether a name template references the channel variable."""
+def referenced_variables(template):
+    """Return distinct variable names in order of first appearance."""
+    names = {}
     for field in _parse_brace_groups(template).reference_fields:
-        name = field.split("!", 1)[0].split(":", 1)[0].strip()
-        if name == "channel" or name.startswith(("channel.", "channel[")):
-            return True
-        if _expression_names_channel(field):
-            return True
-    return False
+        head = field.split("!", 1)[0].split(":", 1)[0].strip()
+        match = _NAMED_HEAD_RE.match(head)
+        if match:
+            names.setdefault(match[1], None)
+        for source in (field.strip(), head):
+            try:
+                tree = _parse_expression(source)
+            except (SyntaxError, ValueError):
+                continue
+            references = sorted(
+                (node for node in ast.walk(tree) if isinstance(node, ast.Name)),
+                key=lambda node: (node.lineno, node.col_offset),
+            )
+            for node in references:
+                names.setdefault(node.id, None)
+            break
+        else:
+            # A group that does not parse names every identifier in it, so the check fails closed.
+            for name in _IDENTIFIER_RE.findall(head):
+                names.setdefault(name, None)
+    return tuple(names)
 
 
-def _has_unbalanced_braces(template):
-    """Return whether a name template has unpaired braces."""
-    return not _parse_brace_groups(template).balanced
-
-
-def validate_breakout_topology(
-    breakout_mode,
-    channel_count,
-    parent_name_template,
-    applies_to_device_interfaces=False,
-):
+def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces):
     """Check that the mode, channel count, and parent template describe one topology."""
     channelized = breakout_mode == BreakoutModeChoices.CHANNELIZED
     if applies_to_device_interfaces:
@@ -325,21 +326,54 @@ def validate_breakout_topology(
             raise ValidationError(
                 {"parent_name_template": "Parent name template is not available for device-level interface rules."}
             )
-    if parent_name_template:
-        if not channelized:
-            raise ValidationError(
-                {"parent_name_template": "Parent name template requires the channelized breakout mode."}
-            )
-        if _has_unbalanced_braces(parent_name_template):
-            raise ValidationError(
-                {"parent_name_template": "Unbalanced braces — every '{' in the template needs a '}'."}
-            )
-        if references_channel(parent_name_template):
-            raise ValidationError(
-                {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
-            )
+    if parent_name_template and not channelized:
+        raise ValidationError({"parent_name_template": "Parent name template requires the channelized breakout mode."})
     if channelized and not channel_count:
         raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
+
+
+_CONTEXT_LABELS = {
+    NamingContext.DEVICE_INTERFACE: "device-level rule's name template",
+    NamingContext.MODULE_MEMBER: "module rule's name template",
+    NamingContext.MODULE_PARENT: "module rule's parent name template",
+}
+_REFUSALS = {
+    (context, variable.name): message for variable in TEMPLATE_VARIABLES for context, message in variable.refusals
+}
+
+
+def _template_errors(template, context, channel_count):
+    """Return brace and context errors for one template."""
+    if not _parse_brace_groups(template).balanced:
+        return ["Unbalanced braces — every '{' in the template needs a '}'."]
+    available = {
+        variable.name
+        for variable in variables_for_context(context)
+        if variable.condition != TemplateVariableCondition.RULE_DECLARES_CHANNELS or channel_count > 0
+    }
+    available_text = ", ".join(variable_token(name) for name in sorted(available))
+    return [
+        _REFUSALS.get((context, name))
+        or f"{variable_token(name)} is not available in a {_CONTEXT_LABELS[context]}. Available: {available_text}."
+        for name in referenced_variables(template)
+        if name not in available
+    ]
+
+
+def validate_rule(*, breakout_mode, channel_count, name_template, parent_name_template, applies_to_device_interfaces):
+    """Validate topology first, then collect both templates' brace and context errors."""
+    _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces)
+    context = NamingContext.DEVICE_INTERFACE if applies_to_device_interfaces else NamingContext.MODULE_MEMBER
+    errors = {}
+    for field, template, naming_context in (
+        ("name_template", name_template, context),
+        ("parent_name_template", parent_name_template, NamingContext.MODULE_PARENT),
+    ):
+        messages = _template_errors(template, naming_context, channel_count)
+        if messages:
+            errors[field] = messages
+    if errors:
+        raise ValidationError(errors)
 
 
 def evaluate_name_template(template: str, variables: dict) -> str:

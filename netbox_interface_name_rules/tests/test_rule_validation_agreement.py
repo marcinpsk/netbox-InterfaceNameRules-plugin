@@ -233,6 +233,12 @@ class RefuseImplicitMigrationDatabase:
         raise AssertionError("Migration must select the schema editor database")
 
 
+# The template audit reports against the live language, so it must not hold a second parser.
+LIVE_IMPORT_PERMITS = frozenset(
+    {("0017_audit_name_templates.py", "netbox_interface_name_rules.name_template", (("validate_rule", None),))}
+)
+
+
 class RuleNormalizationMigrationTest(TestCase):
     """The 0015 data migration must repair the rows that predate its constraints."""
 
@@ -241,7 +247,7 @@ class RuleNormalizationMigrationTest(TestCase):
         "interfacenamerule_breakout_topology_check",
     )
 
-    def test_migrations_have_no_live_application_imports(self):
+    def test_migrations_only_import_the_shared_template_audit_validator(self):
         migrations = Path(__file__).resolve().parents[1] / "migrations"
         for migration in sorted(migrations.rglob("*.py")):
             with self.subTest(migration=migration.name):
@@ -254,6 +260,9 @@ class RuleNormalizationMigrationTest(TestCase):
                             0,
                             f"{migration.name} uses a relative import; migrations must not use relative imports",
                         )
+                        permit = (migration.name, node.module, tuple((a.name, a.asname) for a in node.names))
+                        if permit in LIVE_IMPORT_PERMITS:
+                            continue
                         imports.append(node.module)
                     elif isinstance(node, ast.Import):
                         imports.extend(alias.name for alias in node.names)

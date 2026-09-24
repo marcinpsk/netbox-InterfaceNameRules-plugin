@@ -16,7 +16,7 @@ from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .choices import BreakoutModeChoices
 from .models import InterfaceNameRule
-from .name_template import validate_breakout_topology
+from .name_template import validate_rule
 
 # A preview variable holds a real position or interface name, so the model fields bound them.
 _POSITION_MAX_LENGTH = ModuleBay._meta.get_field("position").max_length
@@ -137,7 +137,7 @@ class RuleTestForm(forms.Form):
     def clean(self):
         """Validate regex/exact module-type exclusivity and the breakout topology."""
         cleaned_data = super().clean()
-        self._clean_breakout_topology(cleaned_data)
+        self._clean_rule(cleaned_data)
         module_type_is_regex = cleaned_data.get("module_type_is_regex", False)
         module_type = cleaned_data.get("module_type")
         module_type_pattern = cleaned_data.get("module_type_pattern", "")
@@ -161,13 +161,15 @@ class RuleTestForm(forms.Form):
 
         return cleaned_data
 
-    def _clean_breakout_topology(self, cleaned_data):
-        """Reject mode/channel-count/parent-template combinations the model would refuse on save."""
+    def _clean_rule(self, cleaned_data):
+        """Validate the templates and topology as a module rule."""
         try:
-            validate_breakout_topology(
-                cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT,
-                cleaned_data.get("channel_count") or 0,
-                cleaned_data.get("parent_name_template") or "",
+            validate_rule(
+                breakout_mode=cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT,
+                channel_count=cleaned_data.get("channel_count") or 0,
+                name_template=cleaned_data.get("name_template") or "",
+                parent_name_template=cleaned_data.get("parent_name_template") or "",
+                applies_to_device_interfaces=False,
             )
         except ValidationError as exc:
             for field, messages in exc.message_dict.items():
@@ -319,6 +321,26 @@ class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
         FieldSet("description", name="Description"),
     )
     nullable_fields = ("parent_module_type", "device_type", "platform", "parent_name_template", "description")
+
+    def clean(self):
+        """Refuse a bulk change before any selected rule is written."""
+        cleaned_data = super().clean()
+        if self.errors:
+            return cleaned_data
+        nullified = self.data.getlist("_nullify")
+        for rule in cleaned_data.get("pk", ()):
+            fields = {
+                name: cleaned_data[name] if name in self.changed_data else getattr(rule, name)
+                for name in ("breakout_mode", "channel_count", "name_template", "parent_name_template")
+            }
+            if "parent_name_template" in nullified:
+                fields["parent_name_template"] = ""
+            try:
+                validate_rule(**fields, applies_to_device_interfaces=rule.applies_to_device_interfaces)
+            except ValidationError as exc:
+                for message in exc.messages:
+                    self.add_error(None, f"Rule {rule.pk} ({rule}): {message}")
+        return cleaned_data
 
 
 class InterfaceNameRuleFilterForm(NetBoxModelFilterSetForm):
