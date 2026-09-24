@@ -133,6 +133,39 @@ class ChannelizationTestCase(TestCase):
         return Interface.objects.get(module=module, channel_id=channel_id)
 
 
+class LiteralBaseInstallTest(ChannelizationTestCase):
+    """Keep raw template braces literal through installation and reapplication."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("LiteralBase", ["3"])
+        cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="LiteralBase-SFP")
+
+    def test_install_and_reapply_preserve_arithmetic_braces_in_base(self):
+        InterfaceTemplate.objects.create(module_type=self.module_type, name="Eth{1+1}", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="named-{base}")
+
+        module, bay = self._install(self.module_type, "3")
+
+        self.assertEqual(self._names(module), ["named-Eth{1+1}"])
+        with self.assertNoLogs(PLUGIN_LOGGER, level="WARNING"):
+            self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
+        self.assertEqual(self._names(module), ["named-Eth{1+1}"])
+
+    def test_breakout_preserves_channel_token_in_base(self):
+        InterfaceTemplate.objects.create(module_type=self.module_type, name="Eth{channel}", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type, name_template="{base}:{channel}", channel_count=2, channel_start=0
+        )
+
+        module, bay = self._install(self.module_type, "3")
+
+        self.assertEqual(self._names(module), ["Eth{channel}:0", "Eth{channel}:1"])
+        with self.assertNoLogs(PLUGIN_LOGGER, level="WARNING"):
+            self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
+        self.assertEqual(self._names(module), ["Eth{channel}:0", "Eth{channel}:1"])
+
+
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ChannelizedSimpleRuleTest(ChannelizationTestCase):
     """A simple (non-breakout) rule renames a channelized family in lockstep with its parent."""

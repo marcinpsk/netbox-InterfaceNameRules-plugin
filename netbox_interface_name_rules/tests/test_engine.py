@@ -11,6 +11,20 @@ from netbox_interface_name_rules.engine import evaluate_name_template
 class EvaluateNameTemplateTest(TestCase):
     """Test evaluate_name_template with various template patterns."""
 
+    def test_substituted_tokens_are_literal_in_either_variable_order(self):
+        variables = {"base": "Eth{channel}", "channel": "2"}
+        forward = evaluate_name_template("{base}:{channel}", variables)
+        reverse = evaluate_name_template("{base}:{channel}", dict(reversed(variables.items())))
+        self.assertEqual(forward, "Eth{channel}:2")
+        self.assertEqual(reverse, forward)
+
+    def test_substituted_braces_cannot_close_arithmetic_groups(self):
+        for value in ("2}suffix", "2{", "\x00base\x00", "letters"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as caught:
+                    evaluate_name_template("{1 + {base}}", {"base": value})
+                self.assertEqual(str(caught.exception), f"Unsafe expression in name template: 1 + {value}")
+
     def test_simple_variable_substitution(self):
         result = evaluate_name_template(
             "et-0/0/{bay_position}",

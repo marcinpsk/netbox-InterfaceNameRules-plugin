@@ -225,11 +225,17 @@ def _braces_balanced(template):
     return depth == 0
 
 
-def _evaluated_brace_fields(template):
+def _evaluated_brace_fields(template, literal_spans=()):
     """Return nonempty groups from their first opening brace to the next closing brace."""
     evaluated_fields = []
     evaluation_start = None
+    spans = iter(literal_spans)
+    span = next(spans, None)
     for index, char in enumerate(template):
+        while span is not None and index >= span[1]:
+            span = next(spans, None)
+        if span is not None and index >= span[0]:
+            continue
         if char == "{" and evaluation_start is None:
             evaluation_start = index
         elif char == "}" and evaluation_start is not None:
@@ -241,10 +247,10 @@ def _evaluated_brace_fields(template):
     return tuple(evaluated_fields)
 
 
-def _parse_brace_groups(template):
+def _parse_brace_groups(template, literal_spans=()):
     """Return the reference, evaluation, and balance views of a template."""
     return _ParsedBraceGroups(
-        _reference_brace_fields(template), _evaluated_brace_fields(template), _braces_balanced(template)
+        _reference_brace_fields(template), _evaluated_brace_fields(template, literal_spans), _braces_balanced(template)
     )
 
 
@@ -343,6 +349,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
     substituted values. This is not ``str.format``: braces nest for arithmetic, and ``str.format``
     conversions (``!r``) and format specifications (``:>2``) are not part of the language.
 
+    Substituted values are literal text, not template syntax.
     Variables are substituted before remaining brace-enclosed arithmetic is evaluated. True
     division is not allowed. Arithmetic results become integers so interface names contain whole
     numbers.
@@ -350,9 +357,22 @@ def evaluate_name_template(template: str, variables: dict) -> str:
     For example, ``GigabitEthernet{slot_num}/{8 + {sfp_slot}}`` substitutes the variables before
     evaluating the arithmetic expression.
     """
+    replacements = {variable_token(key): str(value) for key, value in variables.items()}
+    literal_spans = []
+    offset = 0
+
+    def substitute(match):
+        nonlocal offset
+        value = replacements[match.group()]
+        start = match.start() + offset
+        literal_spans.append((start, start + len(value)))
+        offset += len(value) - len(match.group())
+        return value
+
     result = template
-    for key, value in variables.items():
-        result = result.replace(variable_token(key), str(value))
+    if replacements:
+        pattern = "|".join(re.escape(token) for token in sorted(replacements, key=lambda token: (-len(token), token)))
+        result = re.sub(pattern, substitute, template)
 
     def evaluate_expression(field):
         expr = field.expression.strip()
@@ -369,7 +389,7 @@ def evaluate_name_template(template: str, variables: dict) -> str:
         except (SyntaxError, TypeError, ZeroDivisionError) as exc:
             raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
 
-    parsed = _parse_brace_groups(result)
+    parsed = _parse_brace_groups(result, literal_spans)
     parts = []
     end = 0
     for field in parsed.evaluated_fields:
