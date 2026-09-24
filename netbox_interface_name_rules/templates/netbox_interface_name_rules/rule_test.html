@@ -60,12 +60,14 @@
             <div class="form-text">{{ form.module_type.help_text }}</div>
             {% if form.module_type.errors %}<div class="invalid-feedback d-block">{{ form.module_type.errors }}</div>{% endif %}
           </div>
-          <div class="mb-3" id="regex-mt-row" {% if not form.applies_to_device_interfaces.value and not form.module_type_is_regex.value %}hidden{% endif %}>
-            <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{% if form.applies_to_device_interfaces.value %}Interface-name filter (RE2){% else %}{{ form.module_type_pattern.label }}{% endif %}</label>
+          {% with module_label=form.module_type_pattern.label module_help=form.module_type_pattern.help_text device_label=form.device_pattern_label device_help=form.device_pattern_help_text %}
+          <div class="mb-3" id="regex-mt-row" data-module-label="{{ module_label }}" data-module-help="{{ module_help }}" data-device-label="{{ device_label }}" data-device-help="{{ device_help }}" {% if not form.applies_to_device_interfaces.value and not form.module_type_is_regex.value %}hidden{% endif %}>
+            <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{% if form.applies_to_device_interfaces.value %}{{ device_label }}{% else %}{{ module_label }}{% endif %}</label>
             {{ form.module_type_pattern }}
-            <div class="form-text">{% if form.applies_to_device_interfaces.value %}Optional RE2 pattern matched against the complete interface name{% else %}{{ form.module_type_pattern.help_text }}{% endif %}</div>
+            <div class="form-text">{% if form.applies_to_device_interfaces.value %}{{ device_help }}{% else %}{{ module_help }}{% endif %}</div>
             {% if form.module_type_pattern.errors %}<div class="invalid-feedback d-block">{{ form.module_type_pattern.errors }}</div>{% endif %}
           </div>
+          {% endwith %}
           <hr class="my-2">
           <p class="text-muted small mb-2">Optional scoping — leave blank to match any:</p>
           <div class="mb-3" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
@@ -86,7 +88,7 @@
             <div class="form-text">{{ form.platform.help_text }}</div>
             {% if form.platform.errors %}<div class="invalid-feedback d-block">{{ form.platform.errors }}</div>{% endif %}
           </div>
-          <hr class="my-2">
+          <hr class="my-2" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
           <div class="mb-3" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             <label class="form-label" for="{{ form.breakout_mode.id_for_label }}">{{ form.breakout_mode.label }}</label>
             {{ form.breakout_mode }}
@@ -126,7 +128,7 @@
              These supply the naming context for the selected rule kind.</p>
           {% for field in form %}
             {% if field.name|slice:":4" == "var_" %}
-              <div class="mb-2 row" {% if field.name == "var_slot" or field.name == "var_bay_position" or field.name == "var_parent_bay_position" %}data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}{% endif %}>
+              <div class="mb-2 row" {% if field.name in module_only_variable_fields %}data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}{% endif %}>
                 <label class="col-sm-5 col-form-label" for="{{ field.id_for_label }}"><code>{{ field.label }}</code></label>
                 <div class="col-sm-7">{{ field }}{% if field.errors %}<div class="invalid-feedback d-block">{{ field.errors }}</div>{% endif %}<div class="form-text">{{ field.help_text }}</div></div>
               </div>
@@ -299,10 +301,10 @@
       exactRow.querySelector('select').disabled = exactRow.hidden;
       regexRow.hidden = !deviceRule && !useRegex;
       regexRow.querySelector('input').disabled = regexRow.hidden;
-      regexRow.querySelector('label').textContent = deviceRule ? 'Interface-name filter (RE2)' : 'Module Type Pattern (RE2)';
+      regexRow.querySelector('label').textContent = deviceRule ? regexRow.dataset.deviceLabel : regexRow.dataset.moduleLabel;
       regexRow.querySelector('.form-text').textContent = deviceRule
-        ? 'Optional RE2 pattern matched against the complete interface name'
-        : 'RE2 pattern matched against the complete ModuleType.model value';
+        ? regexRow.dataset.deviceHelp
+        : regexRow.dataset.moduleHelp;
       document.querySelectorAll('[data-variable-table]').forEach(table => {
         table.hidden = (table.dataset.variableTable === 'device') !== deviceRule;
       });

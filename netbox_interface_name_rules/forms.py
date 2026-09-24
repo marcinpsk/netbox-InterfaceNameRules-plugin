@@ -30,6 +30,9 @@ _INTERFACE_NAME_MAX_LENGTH = Interface._meta.get_field("name").max_length
 class RuleTestForm(forms.Form):
     """Standalone form for previewing interface name rule output without saving."""
 
+    device_pattern_label = "Interface-name filter (RE2)"
+    device_pattern_help_text = "Optional RE2 pattern matched against the complete interface name"
+
     applies_to_device_interfaces = forms.BooleanField(
         required=False,
         label="Device-level interfaces",
@@ -41,7 +44,9 @@ class RuleTestForm(forms.Form):
         min_value=_VC_POSITION_MIN,
         max_value=_VC_POSITION_MAX,
         label="{vc_position}",
-        help_text="Leave blank for a device outside a virtual chassis.",
+        help_text=(
+            "Module rules: leave blank for a device outside a virtual chassis. Device rules require a position."
+        ),
         widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
 
@@ -169,24 +174,12 @@ class RuleTestForm(forms.Form):
             if cleaned_data.get("var_vc_position") is None and "var_vc_position" not in self.errors:
                 self.add_error("var_vc_position", "A virtual-chassis position is required for a device rule.")
             if module_type_pattern:
-                from .regex_safety import compile_module_type_pattern
-
-                try:
-                    compile_module_type_pattern(module_type_pattern)
-                except ValidationError as exc:
-                    for field, messages in exc.message_dict.items():
-                        self.add_error(field, messages)
+                self._clean_pattern(module_type_pattern)
         elif module_type_is_regex:
             if not module_type_pattern:
                 self.add_error("module_type_pattern", "A regex pattern is required when regex mode is enabled.")
             else:
-                from .regex_safety import compile_module_type_pattern
-
-                try:
-                    compile_module_type_pattern(module_type_pattern)
-                except ValidationError as exc:
-                    for field, messages in exc.message_dict.items():
-                        self.add_error(field, messages)
+                self._clean_pattern(module_type_pattern)
             if module_type:
                 self.add_error("module_type", "Module Type (exact) must be empty when regex mode is enabled.")
         else:
@@ -194,6 +187,16 @@ class RuleTestForm(forms.Form):
                 self.add_error("module_type_pattern", "Module Type Pattern must be empty when regex mode is disabled.")
 
         return cleaned_data
+
+    def _clean_pattern(self, pattern):
+        """Report pattern compile errors on their form fields."""
+        from .regex_safety import compile_module_type_pattern
+
+        try:
+            compile_module_type_pattern(pattern)
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                self.add_error(field, messages)
 
     def _clean_rule(self, cleaned_data):
         """Validate the templates and topology for the selected rule kind."""

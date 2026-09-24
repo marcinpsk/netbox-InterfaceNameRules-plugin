@@ -27,7 +27,7 @@ from .forms import (
     RuleTestForm,
 )
 from .models import InterfaceNameRule, csv_export_entry
-from .name_template import NamingContext
+from .name_template import NamingContext, variables_for_context
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
 
@@ -307,7 +307,13 @@ class RuleTestView(BaseMultiObjectView):
 
     @staticmethod
     def _variable_reference():
+        device_variables = {variable.name for variable in variables_for_context(NamingContext.DEVICE_INTERFACE)}
         return {
+            "module_only_variable_fields": {
+                f"var_{variable.name}"
+                for variable in variables_for_context(NamingContext.MODULE_MEMBER)
+                if variable.name not in device_variables
+            },
             "module_variable_rows": rule_tester_variable_rows(NamingContext.MODULE_MEMBER),
             "device_variable_rows": rule_tester_variable_rows(NamingContext.DEVICE_INTERFACE),
         }

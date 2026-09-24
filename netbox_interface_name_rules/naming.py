@@ -69,14 +69,20 @@ def _resolve_slot(module_bay, bay_position, parent_bay_position):
     return own_digits
 
 
+def _filter_variables(context, source, values, vc_position):
+    """Select catalogue values whose condition is satisfied."""
+    return {
+        variable.name: values[variable.name]
+        for variable in variables_for_context(context, source=source)
+        if variable.condition is None
+        or (variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER and vc_position is not None)
+    }
+
+
 def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_position=None, *, bay_position_num=None):
     """Build the catalogue entries derived from resolved module-bay positions."""
     if bay_position_num is None:
         bay_position_num = numeric_suffix(bay_position)
-    variables = variables_for_context(
-        NamingContext.MODULE_MEMBER,
-        source=TemplateVariableSource.MODULE_BAY_CHAIN,
-    )
     values = {
         "slot": slot,
         "slot_num": numeric_suffix(slot),
@@ -87,12 +93,7 @@ def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_positi
         "sfp_slot": bay_position_num,
         "vc_position": str(vc_position),
     }
-    return {
-        variable.name: values[variable.name]
-        for variable in variables
-        if variable.condition is None
-        or (variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER and vc_position is not None)
-    }
+    return _filter_variables(NamingContext.MODULE_MEMBER, TemplateVariableSource.MODULE_BAY_CHAIN, values, vc_position)
 
 
 def build_variables(module_bay, device=None):
@@ -136,8 +137,4 @@ def build_variables(module_bay, device=None):
 def build_device_interface_variables(interface_name, vc_position):
     """Build device-interface variables from the current name and VC position."""
     values = {"base": interface_name, "port": interface_name.rsplit("/", 1)[-1], "vc_position": str(vc_position)}
-    return {
-        variable.name: values[variable.name]
-        for variable in variables_for_context(NamingContext.DEVICE_INTERFACE)
-        if variable.condition is None or vc_position is not None
-    }
+    return _filter_variables(NamingContext.DEVICE_INTERFACE, None, values, vc_position)

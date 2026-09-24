@@ -830,7 +830,69 @@ class RuleTestViewTest(ViewTestBase):
                     other.feed(response.content.decode())
                     self.assertIn("hidden", other.table_attributes)
 
-    def test_device_preview_ignores_stored_channel_count(self):
+    def test_device_variable_inputs_hide_only_module_fields(self):
+        response = self.client.post(
+            self._url(),
+            {"applies_to_device_interfaces": "on", "name_template": "{base}", "var_vc_position": "2"},
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        for name in ("slot", "bay_position", "parent_bay_position", "vc_position", "base"):
+            with self.subTest(name=name):
+                row = re.search(r'<div class="mb-2 row"([^>]*)>\s*<label[^>]*for="id_var_' + name + '"', content)
+                self.assertIsNotNone(row)
+                module_only = name in {"slot", "bay_position", "parent_bay_position"}
+                self.assertEqual("data-module-only" in row[1], module_only)
+                self.assertEqual("hidden" in row[1], module_only)
+
+    def test_breakout_divider_follows_rule_kind(self):
+        for device_rule in (False, True):
+            with self.subTest(device_rule=device_rule):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on" if device_rule else "",
+                        "name_template": "{base}",
+                        "var_vc_position": "2",
+                    },
+                )
+                dividers = re.findall(r'<hr class="my-2"([^>]*)>', response.content.decode())
+                self.assertEqual(len(dividers), 2)
+                self.assertNotIn("data-module-only", dividers[0])
+                self.assertIn("data-module-only", dividers[1])
+                self.assertEqual("hidden" in dividers[1], device_rule)
+
+    def test_pattern_text_matches_rule_kind_and_toggle_data(self):
+        for device_rule in (False, True):
+            with self.subTest(device_rule=device_rule):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on" if device_rule else "",
+                        "module_type_is_regex": "on",
+                        "module_type_pattern": "Ethernet.*",
+                        "name_template": "{base}",
+                        "var_vc_position": "2",
+                    },
+                )
+                form = response.context["form"]
+                pairs = {
+                    "module": (form["module_type_pattern"].label, form["module_type_pattern"].help_text),
+                    "device": (
+                        "Interface-name filter (RE2)",
+                        "Optional RE2 pattern matched against the complete interface name",
+                    ),
+                }
+                for kind, (label, help_text) in pairs.items():
+                    self.assertContains(response, f'data-{kind}-label="{label}"')
+                    self.assertContains(response, f'data-{kind}-help="{help_text}"')
+                label, help_text = pairs["device" if device_rule else "module"]
+                self.assertContains(
+                    response, f'<label class="form-label" for="id_module_type_pattern">{label}</label>', html=True
+                )
+                self.assertContains(response, f'<div class="form-text">{help_text}</div>', html=True)
+
+    def test_device_preview_ignores_channel_count(self):
         response = self.client.post(
             self._url(),
             {
