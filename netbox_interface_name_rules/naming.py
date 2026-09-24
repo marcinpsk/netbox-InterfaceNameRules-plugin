@@ -131,3 +131,13 @@ def build_variables(module_bay, device=None):
         vc_position=vc_position,
         bay_position_num=bay_position_num,
     )
+
+
+def build_device_interface_variables(interface_name, vc_position):
+    """Build device-interface variables from the current name and VC position."""
+    values = {"base": interface_name, "port": interface_name.rsplit("/", 1)[-1], "vc_position": str(vc_position)}
+    return {
+        variable.name: values[variable.name]
+        for variable in variables_for_context(NamingContext.DEVICE_INTERFACE)
+        if variable.condition is None or vc_position is not None
+    }

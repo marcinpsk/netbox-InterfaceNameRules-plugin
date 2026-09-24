@@ -27,6 +27,7 @@ from .forms import (
     RuleTestForm,
 )
 from .models import InterfaceNameRule, csv_export_entry
+from .name_template import NamingContext
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
 
@@ -54,6 +55,7 @@ class RulePreview:
     channel_start: int
     parent_name_template: str = ""
     breakout_mode: str = BreakoutModeChoices.FLAT
+    applies_to_device_interfaces: bool = False
 
 
 try:
@@ -247,6 +249,7 @@ class RuleTestView(BaseMultiObjectView):
                     .get(pk=int(rule_id))
                 )
                 initial = {
+                    "applies_to_device_interfaces": loaded_rule.applies_to_device_interfaces,
                     "name_template": loaded_rule.name_template,
                     "parent_name_template": loaded_rule.parent_name_template,
                     "breakout_mode": loaded_rule.breakout_mode,
@@ -267,7 +270,7 @@ class RuleTestView(BaseMultiObjectView):
             {
                 "form": RuleTestForm(initial=initial),
                 "loaded_rule": loaded_rule,
-                "template_variable_rows": rule_tester_variable_rows(),
+                **self._variable_reference(),
             },
         )
 
@@ -298,19 +301,31 @@ class RuleTestView(BaseMultiObjectView):
                 "db_preview": db_preview,
                 "db_total": db_total,
                 "error": error,
-                "template_variable_rows": rule_tester_variable_rows(),
+                **self._variable_reference(),
             },
         )
+
+    @staticmethod
+    def _variable_reference():
+        return {
+            "module_variable_rows": rule_tester_variable_rows(NamingContext.MODULE_MEMBER),
+            "device_variable_rows": rule_tester_variable_rows(NamingContext.DEVICE_INTERFACE),
+        }
 
     def _find_existing_rule(self, cd, user=None):
         """Return the first existing rule matching the form data, or None."""
         module_type_is_regex = cd.get("module_type_is_regex", False)
         qs = InterfaceNameRule.objects.restrict(user, "view") if user else InterfaceNameRule.objects.all()
-        if module_type_is_regex:
+        device_rule = cd.get("applies_to_device_interfaces", False)
+        qs = qs.filter(applies_to_device_interfaces=device_rule)
+        if device_rule:
+            qs = qs.filter(module_type_pattern=cd.get("module_type_pattern", ""))
+        elif module_type_is_regex:
             qs = qs.filter(module_type_is_regex=True, module_type_pattern=cd.get("module_type_pattern", ""))
         else:
             qs = qs.filter(module_type_is_regex=False, module_type=cd.get("module_type"))
-        for field in ("parent_module_type", "device_type", "platform"):
+        scope_fields = ("device_type", "platform") if device_rule else ("parent_module_type", "device_type", "platform")
+        for field in scope_fields:
             val = cd.get(field)
             qs = qs.filter(**{field: val}) if val else qs.filter(**{f"{field}__isnull": True})
         return qs.first()
@@ -344,10 +359,11 @@ class RuleTestView(BaseMultiObjectView):
             "parent_name_template": cd.get("parent_name_template", ""),
             "breakout_mode": cd.get("breakout_mode") or BreakoutModeChoices.FLAT,
             "module_type_is_regex": "on" if module_type_is_regex else "",
+            "applies_to_device_interfaces": "on" if cd.get("applies_to_device_interfaces") else "",
             "channel_count": channel_count,
             "channel_start": channel_start,
         }
-        if module_type_is_regex:
+        if module_type_is_regex or cd.get("applies_to_device_interfaces"):
             params["module_type_pattern"] = cd.get("module_type_pattern", "")
         elif module_type:
             params["module_type"] = module_type.pk
@@ -365,7 +381,7 @@ class RuleTestView(BaseMultiObjectView):
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
         from .name_template import evaluate_name_template
-        from .naming import build_bay_chain_variables
+        from .naming import build_bay_chain_variables, build_device_interface_variables
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
@@ -373,15 +389,24 @@ class RuleTestView(BaseMultiObjectView):
         slot = cd.get("var_slot") or "1"
         bay_position = cd.get("var_bay_position") or "1"
         parent_bay_position = cd.get("var_parent_bay_position") or "1"
-        variables = build_bay_chain_variables(slot, bay_position, parent_bay_position)
-        variables["base"] = cd.get("var_base") or "Ethernet1"
+        if cd.get("applies_to_device_interfaces"):
+            variables = build_device_interface_variables(cd.get("var_base") or "Ethernet1", cd.get("var_vc_position"))
+        else:
+            variables = build_bay_chain_variables(slot, bay_position, parent_bay_position, cd.get("var_vc_position"))
+            variables["base"] = cd.get("var_base") or "Ethernet1"
 
         def row(result, role, channel=None):
             """Describe one previewed name."""
-            return {"source": variables["base"], "channel": channel, "result": result, "role": role}
+            return {
+                "source": variables["base"],
+                "channel": channel,
+                "result": result,
+                "role": role,
+                "port": variables.get("port"),
+            }
 
         try:
-            if channel_count > 0:
+            if channel_count > 0 and not cd.get("applies_to_device_interfaces"):
                 preview_results = []
                 if cd.get("breakout_mode") == BreakoutModeChoices.CHANNELIZED:
                     parent_template = cd.get("parent_name_template") or ""
@@ -407,6 +432,9 @@ class RuleTestView(BaseMultiObjectView):
     def _fetch_db_preview(self, cd):
         """Run find_interfaces_for_rule against the DB; return (db_preview, db_total, error)."""
         from .engine import find_interfaces_for_rule
+
+        if cd.get("applies_to_device_interfaces"):
+            return None, 0, None
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
