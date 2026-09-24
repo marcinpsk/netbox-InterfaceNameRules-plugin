@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## Unreleased
+
+### Features
+
+- Test and preview device-level rules in the Build Rule tester. Derive the port from
+  the interface name, accept a virtual-chassis position, and retain the rule kind
+  and interface-name filter when opening the add form.
+
 ## v1.5.3 (2026-09-21)
 
 ### Bug Fixes

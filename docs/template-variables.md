@@ -5,7 +5,17 @@ The error names the variable and lists the available variables. Module rules can
 `{channel}` only when they declare channels. Device rules cannot use module variables,
 and module rules cannot use `{port}`. Braces must balance in both template fields.
 These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
-The rule tester checks every template as a module rule.
+The rule tester applies the same checks for the selected rule kind.
+
+For a device rule, select **Device-level interfaces**, enter the current interface
+name in `{base}`, and supply `{vc_position}`. The tester derives `{port}` from the
+interface name and shows it beside the result. For example, `Ethernet1/5` at position
+`2` produces `eth2-5` with the name template `eth{vc_position}-{port}`.
+The optional interface-name filter uses RE2. The database preview covers module rules only.
+
+For a module rule, a blank `{vc_position}` simulates a device outside a virtual chassis.
+A template that uses that variable then shows an evaluation error. A device-rule preview
+requires a position because device rules rename only virtual-chassis members with a position.
 
 `{vc_position}` is accepted at save in every context that lists it. If the device does
 not provide a position at rename time, that rename is skipped and logged.
