@@ -54,9 +54,10 @@ The **Module Type Pattern** field in device interface rules acts as a **regex fi
 ### What `{base}` starts from
 
 In a module rule, `{base}` is the raw template name of the interface the rule renames: the name
-the module type's interface template resolves to now. It does not change when the rule runs again,
-so a rule that uses `{base}` derives the same names on install and on every reapply. A flat
-breakout family, an installed channelized family and a plain interface rename all read it this way.
+the module type's interface template resolves to now. The base value does not change when the rule
+runs again. The resulting name can still change when another variable changes: `Gi{vc_position}/{base}`
+gives a new name after a virtual-chassis position change. A flat breakout family, an installed
+channelized family and a plain interface rename all read it this way.
 The parent and every channel of a channelized family receive the parent's base value.
 
 NetBox does not record which template created an interface. For a rule that uses `{base}`, the
