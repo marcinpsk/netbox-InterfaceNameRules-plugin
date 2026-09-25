@@ -28,7 +28,7 @@ from netbox_interface_name_rules.name_template import (
     evaluate_name_template,
     variables_for_context,
 )
-from netbox_interface_name_rules.naming import build_variables
+from netbox_interface_name_rules.naming import build_variables, numeric_suffix
 from netbox_interface_name_rules.template_variable_reference import (
     GENERATED_REFERENCE_REGIONS,
     GENERATED_REGION_BEGIN,
@@ -1023,7 +1023,7 @@ class DocumentedTemplateTest(unittest.TestCase):
                 "xe-0/0/{bay_position}:{channel}",
                 "swp{bay_position_num}",
                 "eth{bay_position_num}",
-                "ens{slot}f{bay_position_num}",
+                "ens{slot_num}f{bay_position_num}",
             },
             "docs/examples.md": {
                 "et-0/0/{bay_position}",
@@ -1328,6 +1328,24 @@ class DocumentedTemplateTest(unittest.TestCase):
             evaluate_name_template(_shipped_converter_offset_template(), variables),
             expected_name,
         )
+
+    def test_predictable_linux_scenario_produces_its_documented_name(self):
+        text = (_PROJECT_ROOT / "docs" / "index.md").read_text(encoding="utf-8")
+        rows = re.findall(
+            r"^\| Linux server \(predictable\) \| `([^`]+)` \| (Slot \d+), bay (\d+) → `([^`]+)` \|$",
+            text,
+            re.MULTILINE,
+        )
+        self.assertEqual(len(rows), 1, "docs/index.md must state one predictable Linux scenario")
+        template, slot, bay, expected_name = rows[0]
+        variables = {
+            "slot": slot,
+            "slot_num": numeric_suffix(slot),
+            "bay_position": bay,
+            "bay_position_num": numeric_suffix(bay),
+        }
+
+        self.assertEqual(evaluate_name_template(template, variables), expected_name)
 
     def test_examples_guide_matches_all_shipped_acx7024_module_rules(self):
         self.assertEqual(_acx7024_guide_rules(), _acx7024_shipped_rules())

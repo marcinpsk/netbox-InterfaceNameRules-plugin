@@ -33,7 +33,7 @@ automatically apply renaming rules based on configurable templates.
 | Converter offset | `GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}` | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
 | Platform naming | `swp{bay_position_num}` | UfiSpace SONiC device bay 5 → `swp5` |
 | Linux server (traditional) | `eth{bay_position_num}` | Bay 0 → `eth0` |
-| Linux server (predictable) | `ens{slot}f{bay_position_num}` | Slot 3, bay 1 → `ens3f1` |
+| Linux server (predictable) | `ens{slot_num}f{bay_position_num}` | Slot 3, bay 1 → `ens3f1` |
 
 ## What a rule cannot do
 
