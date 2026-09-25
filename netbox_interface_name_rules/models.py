@@ -8,7 +8,7 @@ from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
-from .name_template import validate_breakout_topology
+from .name_template import validate_rule
 from .regex_safety import compile_module_type_pattern
 
 
@@ -21,7 +21,10 @@ def csv_export_entry(headers, values):
     }
 
 
-_TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
+DEVICE_RULE_PARENT_MODULE_TYPE_ERROR = "Parent module type must be empty for device-level interface rules."
+_RULE_VALIDATION_FIELDS = frozenset(
+    {"applies_to_device_interfaces", "breakout_mode", "channel_count", "name_template", "parent_name_template"}
+)
 
 
 class InterfaceNameRule(NetBoxModel):
@@ -79,7 +82,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         related_name="+",
         verbose_name="Parent Module Type",
-        help_text="If set, rule only applies when installed inside this parent module type",
+        help_text=(
+            "If set, rule only applies when installed inside this parent module type. "
+            "Must be empty for device-level interface rules."
+        ),
     )
     device_type = models.ForeignKey(
         DeviceType,
@@ -149,8 +155,8 @@ class InterfaceNameRule(NetBoxModel):
         help_text=(
             "When enabled, this rule renames device-level interfaces (module=None) when the device "
             "joins or changes position in a Virtual Chassis. "
-            "The Module Type field must be empty; the Module Type Pattern (if set) is used as a regex "
-            "to filter which interface names to rename."
+            "The Module Type and Parent Module Type fields must be empty; the Module Type Pattern (if set) "
+            "is used as a regex to filter which interface names to rename."
         ),
     )
 
@@ -165,6 +171,8 @@ class InterfaceNameRule(NetBoxModel):
             # Device-level rules must not reference a module type
             if self.module_type:
                 raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
+            if self.parent_module_type_id:
+                raise ValidationError({"parent_module_type": DEVICE_RULE_PARENT_MODULE_TYPE_ERROR})
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
                 compile_module_type_pattern(self.module_type_pattern)
@@ -181,11 +189,16 @@ class InterfaceNameRule(NetBoxModel):
             self.module_type_pattern = ""
             if not self.module_type:
                 raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        validate_breakout_topology(
-            self.breakout_mode,
-            self.channel_count,
-            self.parent_name_template,
-            self.applies_to_device_interfaces,
+        self._validate_rule()
+
+    def _validate_rule(self):
+        """Check the topology and both templates against the rule's naming context."""
+        validate_rule(
+            breakout_mode=self.breakout_mode,
+            channel_count=self.channel_count,
+            name_template=self.name_template,
+            parent_name_template=self.parent_name_template,
+            applies_to_device_interfaces=self.applies_to_device_interfaces,
         )
 
     def get_absolute_url(self):
@@ -235,6 +248,7 @@ class InterfaceNameRule(NetBoxModel):
           any possible regex score).
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
+        A device-level rule takes no parent_module_type, so its scope is at most 3.
         Two rules with the same score fall back to lowest pk (first created).
         """
         scope = (
@@ -288,8 +302,7 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.CheckConstraint(
-                # The implications validate_breakout_topology() enforces over enum and integer
-                # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
+                # Enforce the enum and integer implications of validate_rule() as ~P | Q.
                 condition=(
                     models.Q(breakout_mode__in=[BreakoutModeChoices.FLAT, BreakoutModeChoices.CHANNELIZED])
                     & (
@@ -301,6 +314,10 @@ class InterfaceNameRule(NetBoxModel):
                     & (~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED) | ~models.Q(channel_count=0))
                 ),
                 name="interfacenamerule_breakout_topology_check",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(applies_to_device_interfaces=False) | models.Q(parent_module_type__isnull=True),
+                name="interfacenamerule_device_rule_scope_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
@@ -323,20 +340,15 @@ class InterfaceNameRule(NetBoxModel):
         ]
 
     def save(self, *args, **kwargs):
-        """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
+        """Validate topology and templates before a plain ORM write."""
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
             # one, and it skips the write when update_fields is empty.
             update_fields = frozenset(update_fields)
             kwargs["update_fields"] = update_fields
-        if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
-            validate_breakout_topology(
-                self.breakout_mode,
-                self.channel_count,
-                self.parent_name_template,
-                self.applies_to_device_interfaces,
-            )
+        if update_fields is None or _RULE_VALIDATION_FIELDS.intersection(update_fields):
+            self._validate_rule()
         return super().save(*args, **kwargs)
 
     def __str__(self):

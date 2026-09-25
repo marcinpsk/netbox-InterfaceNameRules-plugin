@@ -141,8 +141,8 @@ max-complexity = 15
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "netbox_interface_name_rules.models._expression_names_channel".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.models._has_unbalanced_braces".msg = "Use the name_template public interface."
-"netbox_interface_name_rules.models._references_channel".msg = "Use name_template.references_channel."
-"netbox_interface_name_rules.models._validate_breakout_topology".msg = "Use name_template.validate_breakout_topology."
+"netbox_interface_name_rules.models._references_channel".msg = "Use name_template.referenced_variables."
+"netbox_interface_name_rules.models._validate_breakout_topology".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.naming._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
 "netbox_interface_name_rules.name_template._BINARY_OPERATORS".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._BUILT".msg = "Use the name_template public interface."
@@ -158,11 +158,15 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._braces_balanced".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._evaluated_brace_fields".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
-"netbox_interface_name_rules.name_template._expression_names_channel".msg = "Use name_template.references_channel."
-"netbox_interface_name_rules.name_template._has_unbalanced_braces".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._parse_brace_groups".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._parse_expression".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._reference_brace_fields".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._CONTEXT_LABELS".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._REFUSALS".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._NAMED_HEAD_RE".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._IDENTIFIER_RE".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._validate_breakout_topology".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._template_errors".msg = "Use name_template.validate_rule."
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]

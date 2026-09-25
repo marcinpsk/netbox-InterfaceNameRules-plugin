@@ -47,24 +47,30 @@
             {% if form.name_template.errors %}<div class="invalid-feedback d-block">{{ form.name_template.errors }}</div>{% endif %}
           </div>
           <div class="mb-3 form-check">
+            {{ form.applies_to_device_interfaces }}
+            <label class="form-check-label" for="{{ form.applies_to_device_interfaces.id_for_label }}">{{ form.applies_to_device_interfaces.label }}</label>
+          </div>
+          <div class="mb-3 form-check" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             {{ form.module_type_is_regex }}
             <label class="form-check-label" for="{{ form.module_type_is_regex.id_for_label }}">{{ form.module_type_is_regex.label }}</label>
           </div>
-          <div class="mb-3" id="exact-mt-row">
+          <div class="mb-3" id="exact-mt-row" {% if form.applies_to_device_interfaces.value or form.module_type_is_regex.value %}hidden{% endif %}>
             <label class="form-label" for="{{ form.module_type.id_for_label }}">{{ form.module_type.label }}</label>
             {{ form.module_type }}
             <div class="form-text">{{ form.module_type.help_text }}</div>
             {% if form.module_type.errors %}<div class="invalid-feedback d-block">{{ form.module_type.errors }}</div>{% endif %}
           </div>
-          <div class="mb-3" id="regex-mt-row" style="display:none">
-            <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{{ form.module_type_pattern.label }}</label>
+          {% with module_label=form.module_type_pattern.label module_help=form.module_type_pattern.help_text device_label=form.device_pattern_label device_help=form.device_pattern_help_text %}
+          <div class="mb-3" id="regex-mt-row" data-module-label="{{ module_label }}" data-module-help="{{ module_help }}" data-device-label="{{ device_label }}" data-device-help="{{ device_help }}" {% if not form.applies_to_device_interfaces.value and not form.module_type_is_regex.value %}hidden{% endif %}>
+            <label class="form-label" for="{{ form.module_type_pattern.id_for_label }}">{% if form.applies_to_device_interfaces.value %}{{ device_label }}{% else %}{{ module_label }}{% endif %}</label>
             {{ form.module_type_pattern }}
-            <div class="form-text">{{ form.module_type_pattern.help_text }}</div>
+            <div class="form-text">{% if form.applies_to_device_interfaces.value %}{{ device_help }}{% else %}{{ module_help }}{% endif %}</div>
             {% if form.module_type_pattern.errors %}<div class="invalid-feedback d-block">{{ form.module_type_pattern.errors }}</div>{% endif %}
           </div>
+          {% endwith %}
           <hr class="my-2">
           <p class="text-muted small mb-2">Optional scoping — leave blank to match any:</p>
-          <div class="mb-3">
+          <div class="mb-3" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             <label class="form-label" for="{{ form.parent_module_type.id_for_label }}">{{ form.parent_module_type.label }}</label>
             {{ form.parent_module_type }}
             <div class="form-text">{{ form.parent_module_type.help_text }}</div>
@@ -82,20 +88,20 @@
             <div class="form-text">{{ form.platform.help_text }}</div>
             {% if form.platform.errors %}<div class="invalid-feedback d-block">{{ form.platform.errors }}</div>{% endif %}
           </div>
-          <hr class="my-2">
-          <div class="mb-3">
+          <hr class="my-2" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
+          <div class="mb-3" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             <label class="form-label" for="{{ form.breakout_mode.id_for_label }}">{{ form.breakout_mode.label }}</label>
             {{ form.breakout_mode }}
             <div class="form-text">{{ form.breakout_mode.help_text }}</div>
             {% if form.breakout_mode.errors %}<div class="invalid-feedback d-block">{{ form.breakout_mode.errors }}</div>{% endif %}
           </div>
-          <div class="mb-3">
+          <div class="mb-3" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             <label class="form-label" for="{{ form.parent_name_template.id_for_label }}">{{ form.parent_name_template.label }}</label>
             {{ form.parent_name_template }}
             <div class="form-text">{{ form.parent_name_template.help_text }}</div>
             {% if form.parent_name_template.errors %}<div class="invalid-feedback d-block">{{ form.parent_name_template.errors }}</div>{% endif %}
           </div>
-          <div class="row g-2">
+          <div class="row g-2" data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}>
             <div class="col-6">
               <label class="form-label" for="{{ form.channel_count.id_for_label }}">{{ form.channel_count.label }}</label>
               {{ form.channel_count }}
@@ -119,22 +125,32 @@
         <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-code-braces me-2"></i>Variable Values</h5></div>
         <div class="card-body">
           <p class="text-muted small">Set the template variable values used for the manual preview.
-             These simulate what NetBox extracts from the module bay context at install time.</p>
+             These supply the naming context for the selected rule kind.</p>
           {% for field in form %}
             {% if field.name|slice:":4" == "var_" %}
-              <div class="mb-2 row">
+              <div class="mb-2 row" {% if field.name in module_only_variable_fields %}data-module-only {% if form.applies_to_device_interfaces.value %}hidden{% endif %}{% endif %}>
                 <label class="col-sm-5 col-form-label" for="{{ field.id_for_label }}"><code>{{ field.label }}</code></label>
-                <div class="col-sm-7">{{ field }}</div>
+                <div class="col-sm-7">{{ field }}{% if field.errors %}<div class="invalid-feedback d-block">{{ field.errors }}</div>{% endif %}<div class="form-text">{{ field.help_text }}</div></div>
               </div>
             {% endif %}
           {% endfor %}
 
           <details class="mt-3">
             <summary class="text-muted small" style="cursor:pointer">Variable reference <i class="mdi mdi-information-outline"></i></summary>
-            <table id="rule-tester-variable-reference" class="table table-sm table-bordered mt-2 small">
+            <table id="rule-tester-module-variable-reference" data-variable-table="module" {% if form.applies_to_device_interfaces.value %}hidden{% endif %} class="table table-sm table-bordered mt-2 small">
               <thead class="table-light"><tr><th>Variable</th><th>Description</th><th>Example</th></tr></thead>
               <tbody>
-                {% for row in template_variable_rows %}
+                {% for row in module_variable_rows %}
+                <tr data-naming-contexts="{{ row.context_values }}" data-template-variable="{{ row.name }}">
+                  <td><code>{{ row.token }}</code></td><td>{{ row.description }}</td><td><code>{{ row.example }}</code></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <table id="rule-tester-device-variable-reference" data-variable-table="device" {% if not form.applies_to_device_interfaces.value %}hidden{% endif %} class="table table-sm table-bordered mt-2 small">
+              <thead class="table-light"><tr><th>Variable</th><th>Description</th><th>Example</th></tr></thead>
+              <tbody>
+                {% for row in device_variable_rows %}
                 <tr data-naming-contexts="{{ row.context_values }}" data-template-variable="{{ row.name }}">
                   <td><code>{{ row.token }}</code></td><td>{{ row.description }}</td><td><code>{{ row.example }}</code></td>
                 </tr>
@@ -172,6 +188,9 @@
   </div>
 {% endif %}
 
+{% if form.applies_to_device_interfaces.value %}
+<p class="text-muted mt-3">The database preview covers module rules only.</p>
+{% endif %}
 {% if preview_results and not error %}
   <div class="card mt-4">
     <div class="card-header"><h5 class="card-title mb-0"><i class="mdi mdi-eye me-2"></i>Manual Variable Preview</h5></div>
@@ -182,6 +201,7 @@
             <th>#</th>
             {% if preview_results.0.channel is not None or preview_results.0.role == "parent" %}<th>Channel</th>{% endif %}
             <th>Source (base name)</th>
+            {% if form.applies_to_device_interfaces.value %}<th>Derived port</th>{% endif %}
             <th></th>
             <th>Result</th>
           </tr>
@@ -193,6 +213,7 @@
               {% if entry.channel is not None %}<td><code>{{ entry.channel }}</code></td>
               {% elif entry.role == "parent" %}<td><span class="badge text-bg-secondary">parent</span></td>{% endif %}
               <td><code class="text-muted">{{ entry.source }}</code></td>
+              {% if form.applies_to_device_interfaces.value %}<td><code>{{ entry.port }}</code></td>{% endif %}
               <td><i class="mdi mdi-arrow-right text-muted"></i></td>
               <td><code class="text-success">{{ entry.result }}</code></td>
             </tr>
@@ -265,15 +286,31 @@
 <script>
   (function () {
     const regexCheck = document.getElementById('id_module_type_is_regex');
+    const kindCheck = document.getElementById('id_applies_to_device_interfaces');
     const exactRow = document.getElementById('exact-mt-row');
     const regexRow = document.getElementById('regex-mt-row');
 
     function toggle() {
+      const deviceRule = kindCheck.checked;
       const useRegex = regexCheck.checked;
-      exactRow.style.display = useRegex ? 'none' : '';
-      regexRow.style.display = useRegex ? '' : 'none';
+      document.querySelectorAll('[data-module-only]').forEach(row => {
+        row.hidden = deviceRule;
+        row.querySelectorAll('input, select').forEach(input => { input.disabled = deviceRule; });
+      });
+      exactRow.hidden = deviceRule || useRegex;
+      exactRow.querySelector('select').disabled = exactRow.hidden;
+      regexRow.hidden = !deviceRule && !useRegex;
+      regexRow.querySelector('input').disabled = regexRow.hidden;
+      regexRow.querySelector('label').textContent = deviceRule ? regexRow.dataset.deviceLabel : regexRow.dataset.moduleLabel;
+      regexRow.querySelector('.form-text').textContent = deviceRule
+        ? regexRow.dataset.deviceHelp
+        : regexRow.dataset.moduleHelp;
+      document.querySelectorAll('[data-variable-table]').forEach(table => {
+        table.hidden = (table.dataset.variableTable === 'device') !== deviceRule;
+      });
     }
     regexCheck.addEventListener('change', toggle);
+    kindCheck.addEventListener('change', toggle);
     toggle();
   })();
 </script>

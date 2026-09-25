@@ -404,7 +404,12 @@ class StructuralFamilyTemplateFailureTest(StructuralFamilyTestCase):
     """A rule whose channel template cannot be evaluated builds nothing and says why."""
 
     PREFIX = "StructTpl"
-    NAME_TEMPLATE = "xe-0/0/{bay_position}:{missing_variable}"
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.rule.name_template = "xe-0/0/{bay_position}:{missing_variable}"
+        InterfaceNameRule.objects.filter(pk=cls.rule.pk).update(name_template=cls.rule.name_template)
 
     def test_the_plan_carries_the_template_failure_instead_of_raising(self):
         _module, _bay, plan = self._plan()

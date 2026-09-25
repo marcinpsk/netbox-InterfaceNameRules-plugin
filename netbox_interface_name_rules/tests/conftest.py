@@ -25,19 +25,13 @@ def django_db_modify_db_settings(django_db_modify_db_settings):
 
 @functools.lru_cache(maxsize=1)
 def _preview_key_contract():
-    """Return the rule-test form's fields and the variable names its preview derives.
-
-    `build_variables` is called without a device, which is the set `RuleTestView` rebuilds; it adds
-    `base` always and `channel` when `channel_count` is positive. `vc_position` is deliberately not
-    in it: the preview never derives it and it is a live NetBox device form key.
-    """
-    from dcim.models import ModuleBay
-
+    """Return form fields and every variable declared by a naming context."""
     from netbox_interface_name_rules.forms import RuleTestForm
-    from netbox_interface_name_rules.naming import build_variables
+    from netbox_interface_name_rules.name_template import NamingContext, variables_for_context
 
     fields = frozenset(RuleTestForm().fields)
-    return fields, frozenset(build_variables(ModuleBay())) | frozenset({"base", "channel"})
+    variables = frozenset(variable.name for context in NamingContext for variable in variables_for_context(context))
+    return fields, variables
 
 
 def dropped_preview_keys(data):

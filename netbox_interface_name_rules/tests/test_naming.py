@@ -8,6 +8,7 @@ from unittest.mock import patch
 from dcim.models import (
     Device,
     DeviceType,
+    Interface,
     Manufacturer,
     Module,
     ModuleBay,
@@ -28,6 +29,7 @@ from netbox_interface_name_rules.name_template import (
 )
 from netbox_interface_name_rules.naming import (
     build_bay_chain_variables,
+    build_device_interface_variables,
     build_variables,
     numeric_suffix,
 )
@@ -168,6 +170,23 @@ class NamingTest(TestCase):
             module_type=module_type,
             name_template="xe-{vc_position}/{slot}/{bay_position_num}",
         )
+
+    def test_preview_builders_cover_each_naming_context(self):
+        interface = Interface.objects.create(device=self.device, name="Ethernet1/5", type="1000base-t")
+        device_variables = build_device_interface_variables(interface.name, self.device.vc_position)
+        module_variables = {
+            **build_variables(self.bay, self.device),
+            "base": interface.name,
+            "channel": "0",
+        }
+        for context, variables in (
+            (NamingContext.DEVICE_INTERFACE, device_variables),
+            (NamingContext.MODULE_MEMBER, module_variables),
+        ):
+            with self.subTest(context=context):
+                self.assertEqual(set(variables), {v.name for v in variables_for_context(context)})
+        self.assertEqual(device_variables, {"base": "Ethernet1/5", "port": "5", "vc_position": "3"})
+        self.assertEqual(build_device_interface_variables(interface.name, None), {"base": "Ethernet1/5", "port": "5"})
 
     def test_real_module_context_builds_and_evaluates_the_rule_name(self):
         variables = build_variables(self.module.module_bay, device=self.module.device)
