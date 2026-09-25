@@ -28,7 +28,7 @@ from netbox_interface_name_rules.name_template import (
     evaluate_name_template,
     variables_for_context,
 )
-from netbox_interface_name_rules.naming import build_variables, numeric_suffix
+from netbox_interface_name_rules.naming import build_bay_chain_variables, build_variables, numeric_suffix
 from netbox_interface_name_rules.template_variable_reference import (
     GENERATED_REFERENCE_REGIONS,
     GENERATED_REGION_BEGIN,
@@ -1346,6 +1346,16 @@ class DocumentedTemplateTest(unittest.TestCase):
         }
 
         self.assertEqual(evaluate_name_template(template, variables), expected_name)
+
+    def test_shipped_predictable_linux_rules_read_the_slot_number(self):
+        rules = yaml.safe_load((_PROJECT_ROOT / "contrib" / "linux.yaml").read_text(encoding="utf-8"))
+        templates = [rule["name_template"] for rule in rules if rule["name_template"].startswith("ens")]
+        self.assertEqual(len(templates), 3, "contrib/linux.yaml must ship three predictable Linux rules")
+        for slot in ("Slot 3", "3"):
+            variables = build_bay_chain_variables(slot, "1", "")
+            for template in templates:
+                with self.subTest(slot=slot, template=template):
+                    self.assertEqual(evaluate_name_template(template, variables), "ens3f1")
 
     def test_examples_guide_matches_all_shipped_acx7024_module_rules(self):
         self.assertEqual(_acx7024_guide_rules(), _acx7024_shipped_rules())

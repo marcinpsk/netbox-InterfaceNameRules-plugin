@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-from dcim.models import DeviceType, Interface, ModuleBay, ModuleType, Platform
+from dcim.models import Device, DeviceType, Interface, ModuleBay, ModuleType, Platform
 from django import forms
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelFilterSetForm,
@@ -15,16 +16,39 @@ from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .choices import BreakoutModeChoices
-from .models import InterfaceNameRule
+from .models import DEVICE_RULE_PARENT_MODULE_TYPE_ERROR, InterfaceNameRule
 from .name_template import validate_rule
 
 # A preview variable holds a real position or interface name, so the model fields bound them.
 _POSITION_MAX_LENGTH = ModuleBay._meta.get_field("position").max_length
+_VC_POSITION_VALIDATORS = Device._meta.get_field("vc_position").validators
+_VC_POSITION_MIN = max(v.limit_value for v in _VC_POSITION_VALIDATORS if isinstance(v, MinValueValidator))
+_VC_POSITION_MAX = min(v.limit_value for v in _VC_POSITION_VALIDATORS if isinstance(v, MaxValueValidator))
 _INTERFACE_NAME_MAX_LENGTH = Interface._meta.get_field("name").max_length
 
 
 class RuleTestForm(forms.Form):
     """Standalone form for previewing interface name rule output without saving."""
+
+    device_pattern_label = "Interface-name filter (RE2)"
+    device_pattern_help_text = "Optional RE2 pattern matched against the complete interface name"
+
+    applies_to_device_interfaces = forms.BooleanField(
+        required=False,
+        label="Device-level interfaces",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    var_vc_position = forms.IntegerField(
+        required=False,
+        initial=1,
+        min_value=_VC_POSITION_MIN,
+        max_value=_VC_POSITION_MAX,
+        label="{vc_position}",
+        help_text=(
+            "Module rules: leave blank for a device outside a virtual chassis. Device rules require a position."
+        ),
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
 
     # --- Rule definition ---
     module_type_is_regex = forms.BooleanField(
@@ -131,28 +155,32 @@ class RuleTestForm(forms.Form):
         initial="Ethernet1",
         max_length=_INTERFACE_NAME_MAX_LENGTH,
         label="{base} (interface name)",
+        help_text="Device rules derive {port} from the segment after the last slash, or the full name without a slash.",
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
 
     def clean(self):
-        """Validate regex/exact module-type exclusivity and the breakout topology."""
+        """Validate rule matching, templates, and the selected breakout topology."""
         cleaned_data = super().clean()
         self._clean_rule(cleaned_data)
         module_type_is_regex = cleaned_data.get("module_type_is_regex", False)
         module_type = cleaned_data.get("module_type")
         module_type_pattern = cleaned_data.get("module_type_pattern", "")
 
-        if module_type_is_regex:
+        if cleaned_data.get("applies_to_device_interfaces"):
+            cleaned_data["module_type_is_regex"] = False
+            cleaned_data["parent_module_type"] = None
+            if module_type:
+                self.add_error("module_type", "Module type must be empty for device-level interface rules.")
+            if cleaned_data.get("var_vc_position") is None and "var_vc_position" not in self.errors:
+                self.add_error("var_vc_position", "A virtual-chassis position is required for a device rule.")
+            if module_type_pattern:
+                self._clean_pattern(module_type_pattern)
+        elif module_type_is_regex:
             if not module_type_pattern:
                 self.add_error("module_type_pattern", "A regex pattern is required when regex mode is enabled.")
             else:
-                from .regex_safety import compile_module_type_pattern
-
-                try:
-                    compile_module_type_pattern(module_type_pattern)
-                except ValidationError as exc:
-                    for field, messages in exc.message_dict.items():
-                        self.add_error(field, messages)
+                self._clean_pattern(module_type_pattern)
             if module_type:
                 self.add_error("module_type", "Module Type (exact) must be empty when regex mode is enabled.")
         else:
@@ -161,15 +189,25 @@ class RuleTestForm(forms.Form):
 
         return cleaned_data
 
+    def _clean_pattern(self, pattern):
+        """Report pattern compile errors on their form fields."""
+        from .regex_safety import compile_module_type_pattern
+
+        try:
+            compile_module_type_pattern(pattern)
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                self.add_error(field, messages)
+
     def _clean_rule(self, cleaned_data):
-        """Validate the templates and topology as a module rule."""
+        """Validate the templates and topology for the selected rule kind."""
         try:
             validate_rule(
                 breakout_mode=cleaned_data.get("breakout_mode") or BreakoutModeChoices.FLAT,
                 channel_count=cleaned_data.get("channel_count") or 0,
                 name_template=cleaned_data.get("name_template") or "",
                 parent_name_template=cleaned_data.get("parent_name_template") or "",
-                applies_to_device_interfaces=False,
+                applies_to_device_interfaces=cleaned_data.get("applies_to_device_interfaces", False),
             )
         except ValidationError as exc:
             for field, messages in exc.message_dict.items():
@@ -218,7 +256,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
         help_texts = {
             "parent_module_type": (
                 "Optional. Restricts this rule to modules installed inside the given parent module type. "
-                "Setting this raises the priority score by 400 (regex) or keeps exact priority at 1000+."
+                "Setting this raises the priority score by 400 (regex) or keeps exact priority at 1000+. "
+                "Must be empty for device-level interface rules."
             ),
             "device_type": (
                 "Optional. Restricts this rule to modules installed in this device model. "
@@ -328,7 +367,10 @@ class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
         if self.errors:
             return cleaned_data
         nullified = self.data.getlist("_nullify")
+        sets_parent = "parent_module_type" in self.changed_data and cleaned_data.get("parent_module_type")
         for rule in cleaned_data.get("pk", ()):
+            if sets_parent and rule.applies_to_device_interfaces:
+                self.add_error(None, f"Rule {rule.pk} ({rule}): {DEVICE_RULE_PARENT_MODULE_TYPE_ERROR}")
             fields = {
                 name: cleaned_data[name] if name in self.changed_data else getattr(rule, name)
                 for name in ("breakout_mode", "channel_count", "name_template", "parent_name_template")

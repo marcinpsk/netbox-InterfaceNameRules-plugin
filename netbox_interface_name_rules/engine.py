@@ -357,8 +357,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
-        port = interface.name.rsplit("/", 1)[-1]
-        variables = {"vc_position": vc_position, "base": interface.name, "port": port}
+        variables = naming.build_device_interface_variables(interface.name, vc_position)
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         try:
             outcome = family_ops.execute_installed_plan(plan)

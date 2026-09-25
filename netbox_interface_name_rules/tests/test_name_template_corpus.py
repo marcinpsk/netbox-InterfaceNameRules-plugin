@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from dcim.models import Manufacturer, ModuleType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.urls import reverse
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
-from netbox_interface_name_rules.forms import InterfaceNameRuleForm, InterfaceNameRuleImportForm, RuleTestForm
+from netbox_interface_name_rules.forms import InterfaceNameRuleForm, InterfaceNameRuleImportForm
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 
@@ -21,7 +22,6 @@ class AdapterVerdicts:
     edit_form: bool
     rest_api: bool
     bulk_import: bool
-    rule_tester: bool
     model_validation: bool
     direct_write: bool
 
@@ -41,8 +41,8 @@ class TemplateCase:
     error_message: str = ""
 
 
-ACCEPTED = AdapterVerdicts(True, True, True, True, True, True)
-REFUSED = AdapterVerdicts(False, False, False, False, False, False)
+ACCEPTED = AdapterVerdicts(True, True, True, True, True)
+REFUSED = AdapterVerdicts(False, False, False, False, False)
 
 NAME_TEMPLATE_CORPUS = (
     TemplateCase("module names port", "{port}", REFUSED),
@@ -74,13 +74,13 @@ NAME_TEMPLATE_CORPUS = (
     TemplateCase(
         "device interface variables",
         "{base}-{vc_position}-{port}",
-        AdapterVerdicts(True, True, True, False, True, True),
+        ACCEPTED,
         applies_to_device_interfaces=True,
     ),
     TemplateCase(
         "device interface names a module variable",
         "{base}-{bay_position}",
-        AdapterVerdicts(False, False, False, True, False, False),
+        REFUSED,
         applies_to_device_interfaces=True,
         error_message="{bay_position} is not available in a device-level rule's name template. "
         "Available: {base}, {port}, {vc_position}.",
@@ -165,22 +165,6 @@ class NameTemplateCorpusTest(APITestCase):
             data["module_type"] = module_type.model
         return data
 
-    @staticmethod
-    def _tester_data(fields):
-        """Return the subset of one corpus entry that the rule tester can express."""
-        return {
-            name: value
-            for name, value in fields.items()
-            if name
-            in {
-                "name_template",
-                "parent_name_template",
-                "breakout_mode",
-                "channel_count",
-                "channel_start",
-            }
-        }
-
     def test_rule_edit_form_verdicts(self):
         for index, case in enumerate(NAME_TEMPLATE_CORPUS):
             with self.subTest(case=case.label):
@@ -217,12 +201,16 @@ class NameTemplateCorpusTest(APITestCase):
                     self.assertIn(case.error_message, form.errors[case.error_field])
 
     def test_rule_tester_verdicts(self):
+        self.client.force_login(self.user)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
         for index, case in enumerate(NAME_TEMPLATE_CORPUS):
             with self.subTest(case=case.label):
                 fields = self._rule_fields(case, "tester", index)
-                form = RuleTestForm(data=self._tester_data(fields))
-                self.assertEqual(form.is_valid(), case.verdicts.rule_tester, form.errors)
-                if case.error_message and not case.verdicts.rule_tester:
+                response = self.client.post(url, {**self._form_data(fields), "action": "check", "var_vc_position": "2"})
+                self.assertEqual(response.status_code, 200)
+                form = response.context["form"]
+                self.assertEqual(form.is_valid(), case.verdicts.edit_form, form.errors)
+                if case.error_message and not case.verdicts.edit_form:
                     self.assertIn(case.error_message, form.errors[case.error_field])
 
     def test_model_validation_verdicts(self):

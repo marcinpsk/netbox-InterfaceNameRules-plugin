@@ -21,7 +21,7 @@ from django.urls import path, re_path, reverse
 from rest_framework.test import APIClient
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
+from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext, variables_for_context
 from netbox_interface_name_rules.template_variable_reference import (
     rule_tester_variable_rows,
     variable_reference_rows,
@@ -34,20 +34,7 @@ User = get_user_model()
 TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 # The preview variables and override fields the conftest guard is expected to know about.
-_VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base"})
-_PREVIEW_VARIABLES = frozenset(
-    {
-        "slot",
-        "slot_num",
-        "bay_position",
-        "bay_position_num",
-        "parent_bay_position",
-        "parent_bay_position_num",
-        "sfp_slot",
-        "base",
-        "channel",
-    }
-)
+_VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base", "vc_position"})
 _HTML_COMMENT = re.compile(rb"<!--.*?-->", re.DOTALL)
 
 
@@ -59,6 +46,7 @@ class _ReferenceRowParser(HTMLParser):
         self.table_id = table_id
         self.rows = []
         self.table_count = 0
+        self.table_attributes = {}
         self._table_depth = 0
         self._in_body = False
         self._row = None
@@ -69,6 +57,7 @@ class _ReferenceRowParser(HTMLParser):
         if tag == "table":
             if attributes.get("id") == self.table_id:
                 self.table_count += 1
+                self.table_attributes = attributes
             if self._table_depth or attributes.get("id") == self.table_id:
                 self._table_depth += 1
         elif tag == "tbody" and self._table_depth == 1:
@@ -682,6 +671,311 @@ class RuleTestViewTest(ViewTestBase):
     def _url(self):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
 
+    def test_device_preview_derives_port(self):
+        response = self.client.post(
+            self._url(),
+            {
+                "action": "check",
+                "applies_to_device_interfaces": "on",
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+                "var_base": "Ethernet1/5",
+            },
+        )
+        self.assertFalse(response.context["form"].errors)
+        self.assertEqual(response.context["preview_results"][0]["result"], "eth2-5")
+        self.assertContains(response, "eth2-5")
+        self.assertContains(response, "<td><code>5</code></td>", html=True)
+        self.assertContains(response, "Derived port")
+        self.assertContains(response, "database preview covers module rules only")
+
+    def test_device_preview_matches_real_rename(self):
+        from dcim.models import VirtualChassis
+
+        from netbox_interface_name_rules.engine import apply_device_interface_rules
+
+        vc = VirtualChassis.objects.create(name="preview-vc")
+        device = make_device("preview-device", self.device_type, virtual_chassis=vc, vc_position=2)
+        interface = Interface.objects.create(device=device, name="Ethernet1/5", type="1000base-t")
+        InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="eth{vc_position}-{port}")
+        response = self.client.post(
+            self._url(),
+            {
+                "applies_to_device_interfaces": "on",
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+                "var_base": interface.name,
+            },
+        )
+        self.assertEqual(apply_device_interface_rules(device), 1)
+        interface.refresh_from_db()
+        self.assertEqual(response.context["preview_results"][0]["result"], interface.name)
+
+    def test_vc_position_is_required_only_for_device_preview(self):
+        for device_rule, position, expected in ((True, "", None), (False, "", None), (False, "3", "eth3")):
+            with self.subTest(device_rule=device_rule, position=position):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on" if device_rule else "",
+                        "name_template": "eth{vc_position}",
+                        "var_vc_position": position,
+                    },
+                )
+                if device_rule:
+                    self.assertIn("var_vc_position", response.context["form"].errors)
+                    self.assertContains(response, "A virtual-chassis position is required")
+                elif expected:
+                    self.assertEqual(response.context["preview_results"][0]["result"], expected)
+                else:
+                    self.assertFalse(response.context["form"].errors)
+                    self.assertIsNone(response.context["preview_results"])
+                    self.assertTrue(response.context["error"])
+
+    def test_device_save_handoff_creates_tested_rule(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        response = self.client.post(
+            self._url(),
+            {
+                "action": "save_rule",
+                "applies_to_device_interfaces": "on",
+                "module_type_is_regex": "on",
+                "module_type_pattern": "Ethernet.*",
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        url = response.url
+        self.assertEqual(urlsplit(url).path, reverse("plugins:netbox_interface_name_rules:interfacenamerule_add"))
+        data = {key: values[0] for key, values in parse_qs(urlsplit(url).query).items()}
+        self.assertEqual(data["applies_to_device_interfaces"], "on")
+        loaded = self.client.get(url)
+        self.assertTrue(loaded.context["form"].initial["applies_to_device_interfaces"])
+        response = self.client.post(urlsplit(url).path, {**data, "enabled": "on"})
+        self.assertEqual(response.status_code, 302)
+        rule = InterfaceNameRule.objects.get(applies_to_device_interfaces=True)
+        self.assertEqual(rule.name_template, "eth{vc_position}-{port}")
+        self.assertEqual(rule.module_type_pattern, "Ethernet.*")
+        self.assertFalse(rule.module_type_is_regex)
+
+    def test_device_save_handoff_drops_the_parent_module_scope(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        response = self.client.post(
+            self._url(),
+            {
+                "action": "save_rule",
+                "applies_to_device_interfaces": "on",
+                "module_type_pattern": "Ethernet.*",
+                "parent_module_type": str(self.module_type.pk),
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        data = {key: values[0] for key, values in parse_qs(urlsplit(response.url).query).items()}
+        self.assertNotIn("parent_module_type", data)
+        response = self.client.post(urlsplit(response.url).path, {**data, "enabled": "on"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(InterfaceNameRule.objects.get(applies_to_device_interfaces=True).parent_module_type)
+
+    def test_module_save_does_not_match_device_rule(self):
+        InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="{base}")
+        response = self.client.post(self._url(), {"action": "save_rule", "name_template": "{base}"})
+        self.assertTrue(
+            response.url.startswith(reverse("plugins:netbox_interface_name_rules:interfacenamerule_add") + "?")
+        )
+
+    def test_device_existing_rule_matches_pattern_and_ignores_submitted_parent_scope(self):
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, name_template="{base}", module_type_pattern="other"
+        )
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            name_template="{base}",
+            module_type_pattern="Ethernet.*",
+        )
+        response = self.client.post(
+            self._url(),
+            {
+                "action": "save_rule",
+                "applies_to_device_interfaces": "on",
+                "name_template": "{base}",
+                "module_type_pattern": "Ethernet.*",
+                "parent_module_type": str(self.module_type.pk),
+                "var_vc_position": "2",
+            },
+        )
+        self.assertEqual(
+            response.url, reverse("plugins:netbox_interface_name_rules:interfacenamerule_edit", args=[rule.pk])
+        )
+
+    def test_variable_tables_follow_loaded_and_submitted_kind(self):
+        for device_rule in (False, True):
+            with self.subTest(device_rule=device_rule):
+                rule = (
+                    InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="{base}")
+                    if device_rule
+                    else self.rule
+                )
+                responses = (
+                    self.client.get(self._url(), {"rule_id": rule.pk}),
+                    self.client.post(
+                        self._url(),
+                        {
+                            "applies_to_device_interfaces": "on" if device_rule else "",
+                            "name_template": "{base}",
+                            "var_vc_position": "2",
+                        },
+                    ),
+                )
+                context = NamingContext.DEVICE_INTERFACE if device_rule else NamingContext.MODULE_MEMBER
+                kind = "device" if device_rule else "module"
+                for response in responses:
+                    self.assertEqual(
+                        bool(response.context["form"]["applies_to_device_interfaces"].value()), device_rule
+                    )
+                    rows = _rendered_variable_rows(response, f"rule-tester-{kind}-variable-reference")
+                    self.assertEqual({row[1] for row in rows}, {v.name for v in variables_for_context(context)})
+                    self.assertEqual(
+                        {row[1]: row[3] for row in rows},
+                        {v.name: dict(v.descriptions)[context] for v in variables_for_context(context)},
+                    )
+                    selected = _ReferenceRowParser(f"rule-tester-{kind}-variable-reference")
+                    selected.feed(response.content.decode())
+                    self.assertNotIn("hidden", selected.table_attributes)
+                    other_kind = "module" if device_rule else "device"
+                    other = _ReferenceRowParser(f"rule-tester-{other_kind}-variable-reference")
+                    other.feed(response.content.decode())
+                    self.assertIn("hidden", other.table_attributes)
+
+    def test_device_variable_inputs_hide_only_module_fields(self):
+        response = self.client.post(
+            self._url(),
+            {"applies_to_device_interfaces": "on", "name_template": "{base}", "var_vc_position": "2"},
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        for name in ("slot", "bay_position", "parent_bay_position", "vc_position", "base"):
+            with self.subTest(name=name):
+                row = re.search(r'<div class="mb-2 row"([^>]*)>\s*<label[^>]*for="id_var_' + name + '"', content)
+                self.assertIsNotNone(row)
+                module_only = name in {"slot", "bay_position", "parent_bay_position"}
+                self.assertEqual("data-module-only" in row[1], module_only)
+                self.assertEqual("hidden" in row[1], module_only)
+
+    def test_breakout_divider_follows_rule_kind(self):
+        for device_rule in (False, True):
+            with self.subTest(device_rule=device_rule):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on" if device_rule else "",
+                        "name_template": "{base}",
+                        "var_vc_position": "2",
+                    },
+                )
+                dividers = re.findall(r'<hr class="my-2"([^>]*)>', response.content.decode())
+                self.assertEqual(len(dividers), 2)
+                self.assertNotIn("data-module-only", dividers[0])
+                self.assertIn("data-module-only", dividers[1])
+                self.assertEqual("hidden" in dividers[1], device_rule)
+
+    def test_pattern_text_matches_rule_kind_and_toggle_data(self):
+        for device_rule in (False, True):
+            with self.subTest(device_rule=device_rule):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on" if device_rule else "",
+                        "module_type_is_regex": "on",
+                        "module_type_pattern": "Ethernet.*",
+                        "name_template": "{base}",
+                        "var_vc_position": "2",
+                    },
+                )
+                form = response.context["form"]
+                pairs = {
+                    "module": (form["module_type_pattern"].label, form["module_type_pattern"].help_text),
+                    "device": (
+                        "Interface-name filter (RE2)",
+                        "Optional RE2 pattern matched against the complete interface name",
+                    ),
+                }
+                for kind, (label, help_text) in pairs.items():
+                    self.assertContains(response, f'data-{kind}-label="{label}"')
+                    self.assertContains(response, f'data-{kind}-help="{help_text}"')
+                label, help_text = pairs["device" if device_rule else "module"]
+                self.assertContains(
+                    response, f'<label class="form-label" for="id_module_type_pattern">{label}</label>', html=True
+                )
+                self.assertContains(response, f'<div class="form-text">{help_text}</div>', html=True)
+
+    def test_device_preview_ignores_channel_count(self):
+        response = self.client.post(
+            self._url(),
+            {
+                "applies_to_device_interfaces": "on",
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+                "var_base": "Ethernet1/5",
+                "channel_count": "4",
+            },
+        )
+        self.assertFalse(response.context["form"].errors)
+        self.assertEqual([row["result"] for row in response.context["preview_results"]], ["eth2-5"])
+
+    def test_device_filter_and_module_type_validation(self):
+        cases = (
+            ({"module_type_is_regex": "on"}, None),
+            ({"module_type_pattern": "Ethernet.*"}, None),
+            ({"module_type_pattern": "["}, "module_type_pattern"),
+            ({"module_type": self.module_type.pk}, "module_type"),
+            ({"name_template": "{bay_position}"}, "name_template"),
+        )
+        for fields, error_field in cases:
+            with self.subTest(fields=fields):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on",
+                        "name_template": "{base}",
+                        "var_vc_position": "2",
+                        **fields,
+                    },
+                )
+                form = response.context["form"]
+                if error_field:
+                    self.assertIn(error_field, form.errors)
+                else:
+                    self.assertFalse(form.errors)
+                    self.assertFalse(form.cleaned_data["module_type_is_regex"])
+
+    def test_vc_position_uses_model_bounds(self):
+        from dcim.models import Device
+        from django.core.validators import MaxValueValidator, MinValueValidator
+
+        validators = Device._meta.get_field("vc_position").validators
+        lower = max(v.limit_value for v in validators if isinstance(v, MinValueValidator))
+        upper = min(v.limit_value for v in validators if isinstance(v, MaxValueValidator))
+        for value, accepted in ((lower, True), (upper, True), (lower - 1, False), (upper + 1, False)):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._url(),
+                    {
+                        "applies_to_device_interfaces": "on",
+                        "name_template": "{vc_position}",
+                        "var_vc_position": value,
+                    },
+                )
+                self.assertEqual(response.context["form"].is_valid(), accepted)
+                if accepted:
+                    self.assertEqual(response.context["preview_results"][0]["result"], str(value))
+                else:
+                    self.assertIn("var_vc_position", response.context["form"].errors)
+
     def test_test_view_get_200(self):
         """GET to rule test view returns 200."""
         response = self.client.get(self._url())
@@ -689,7 +983,7 @@ class RuleTestViewTest(ViewTestBase):
 
     def test_variable_reference_lists_only_variables_the_preview_can_derive(self):
         response = self.client.get(self._url())
-        rows = _rendered_variable_rows(response, "rule-tester-variable-reference")
+        rows = _rendered_variable_rows(response, "rule-tester-module-variable-reference")
 
         self.assertEqual(
             rows,
@@ -701,12 +995,15 @@ class RuleTestViewTest(ViewTestBase):
                     row.description,
                     row.example,
                 )
-                for row in rule_tester_variable_rows()
+                for row in rule_tester_variable_rows(NamingContext.MODULE_MEMBER)
             ],
         )
         self.assertEqual(
             {(tuple(contexts), name) for contexts, name, *_cells in rows},
-            {((NamingContext.MODULE_MEMBER,), name) for name in _PREVIEW_VARIABLES},
+            {
+                ((NamingContext.MODULE_MEMBER,), name)
+                for name in {v.name for v in variables_for_context(NamingContext.MODULE_MEMBER)}
+            },
         )
 
     def test_test_view_post_simple_template(self):
@@ -1529,7 +1826,7 @@ class PreviewKeyContractTest(TestCase):
         fields, variables = _preview_key_contract()
 
         self.assertEqual({name for name in fields if name.startswith("var_")}, {f"var_{n}" for n in _VAR_FIELDS})
-        self.assertEqual(variables, _PREVIEW_VARIABLES)
+        self.assertEqual(variables, {v.name for context in NamingContext for v in variables_for_context(context)})
 
     def test_a_key_the_form_declares_is_accepted(self):
         from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
@@ -1545,6 +1842,13 @@ class PreviewKeyContractTest(TestCase):
         from netbox_interface_name_rules.tests.conftest import dropped_preview_keys
 
         self.assertEqual(dropped_preview_keys({"bay_position": "3", "sfp_slot": "1"}), ["bay_position", "sfp_slot"])
+
+    def test_device_variable_names_are_refused_as_bare_keys(self):
+        from netbox_interface_name_rules.tests.conftest import refuse_dropped_preview_keys
+
+        for name in ("vc_position", "port"):
+            with self.subTest(name=name), self.assertRaisesRegex(AssertionError, name):
+                refuse_dropped_preview_keys({name: "2"})
 
     def test_an_unrelated_post_is_left_alone(self):
         from netbox_interface_name_rules.tests.conftest import dropped_preview_keys

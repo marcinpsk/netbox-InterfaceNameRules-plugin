@@ -8,7 +8,6 @@ from pathlib import Path
 from .name_template import (
     TEMPLATE_VARIABLES,
     NamingContext,
-    TemplateVariableCondition,
     variables_for_context,
 )
 
@@ -102,21 +101,16 @@ def variable_reference_rows():
     return tuple(rows)
 
 
-def rule_tester_variable_rows():
-    """Return variables the module-member preview can derive from operator input.
-
-    The preview has no live device, so it cannot derive a virtual-chassis position. The device-only
-    port variable belongs to a later device-rule preview. A declared channel count supplies channel.
-    """
+def rule_tester_variable_rows(context):
+    """Return the catalogue rows and descriptions for the preview's naming context."""
     return tuple(
         TemplateVariableReferenceRow(
-            contexts=(NamingContext.MODULE_MEMBER,),
+            contexts=(context,),
             name=variable.name,
-            description=dict(variable.descriptions)[NamingContext.MODULE_MEMBER],
+            description=dict(variable.descriptions)[context],
             example=variable.example,
         )
-        for variable in variables_for_context(NamingContext.MODULE_MEMBER)
-        if variable.condition is not TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
+        for variable in variables_for_context(context)
     )
 
 
