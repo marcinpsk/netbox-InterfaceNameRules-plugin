@@ -169,6 +169,7 @@ class RuleTestForm(forms.Form):
 
         if cleaned_data.get("applies_to_device_interfaces"):
             cleaned_data["module_type_is_regex"] = False
+            cleaned_data["parent_module_type"] = None
             if module_type:
                 self.add_error("module_type", "Module type must be empty for device-level interface rules.")
             if cleaned_data.get("var_vc_position") is None and "var_vc_position" not in self.errors:

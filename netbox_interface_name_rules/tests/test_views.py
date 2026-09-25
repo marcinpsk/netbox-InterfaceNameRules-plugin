@@ -760,6 +760,27 @@ class RuleTestViewTest(ViewTestBase):
         self.assertEqual(rule.module_type_pattern, "Ethernet.*")
         self.assertFalse(rule.module_type_is_regex)
 
+    def test_device_save_handoff_drops_the_parent_module_scope(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        response = self.client.post(
+            self._url(),
+            {
+                "action": "save_rule",
+                "applies_to_device_interfaces": "on",
+                "module_type_pattern": "Ethernet.*",
+                "parent_module_type": str(self.module_type.pk),
+                "name_template": "eth{vc_position}-{port}",
+                "var_vc_position": "2",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        data = {key: values[0] for key, values in parse_qs(urlsplit(response.url).query).items()}
+        self.assertNotIn("parent_module_type", data)
+        response = self.client.post(urlsplit(response.url).path, {**data, "enabled": "on"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(InterfaceNameRule.objects.get(applies_to_device_interfaces=True).parent_module_type)
+
     def test_module_save_does_not_match_device_rule(self):
         InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="{base}")
         response = self.client.post(self._url(), {"action": "save_rule", "name_template": "{base}"})
