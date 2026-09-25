@@ -28,13 +28,13 @@ def rule_reads_base(rule) -> bool:
     return any(references_variable(template, "base") for template in (rule.name_template, rule.parent_name_template))
 
 
-def _renaming_templates(rule):
-    """Return the templates that give a family's base interface its name under *rule*."""
+def _renaming_template(rule):
+    """Return the template that gives a family's base interface its name under *rule*, or None."""
     if rule.channel_count <= 0:
-        return (rule.name_template,)
+        return rule.name_template
     if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
-        return (rule.parent_name_template,)
-    return ()
+        return rule.parent_name_template
+    return None
 
 
 def _parent_name_needs_channels(rule):
@@ -149,16 +149,12 @@ class RawBases:
         if not claimants:
             return None, frozenset()
         raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
-        renaming = _renaming_templates(self._rule)
+        renaming = _renaming_template(self._rule)
         needs_channels = _parent_name_needs_channels(self._rule)
         claims = []
         raw_by_claimant = {}
         for claimant_id, template_name, raw, historical in claimants:
-            renamed = [
-                pattern
-                for template in renaming
-                if (pattern := _renamed_pattern(template, self._variables, raw, historical)) is not None
-            ]
+            renamed = None if renaming is None else _renamed_pattern(renaming, self._variables, raw, historical)
             channels = self._channel_patterns(raw, historical) if needs_channels else None
             labels = tuple(
                 name
@@ -190,7 +186,7 @@ class RawBases:
 
     def _is_renamed(self, name, renamed, channels):
         """Return whether *name* is a renamed form and, where *channels* is given, one of its channels is too."""
-        if not any(pattern.fullmatch(name) for pattern in renamed):
+        if renamed is None or not renamed.fullmatch(name):
             return False
         if channels is None:
             return True
