@@ -12,7 +12,7 @@ These YAML files can be imported directly into NetBox via **Interface Name Rules
 | `juniper-channelized.yaml` | The Juniper breakout families of `juniper.yaml` in `channelized` mode (NetBox 4.7+) — import instead of, not alongside |
 | `ufispace.yaml` | UfiSpace SONiC platforms (platform-scoped, requires "SONiC" Platform object) |
 | `ufispace-device-type.yaml` | UfiSpace SONiC platforms (device-type-scoped, no Platform required) |
-| `linux.yaml` | Linux servers — traditional eth0/eth1, systemd predictable ens{slot}f{N}, Mellanox breakout |
+| `linux.yaml` | Linux servers — traditional eth0/eth1, systemd predictable ens{slot_num}f{N}, Mellanox breakout |
 | `converters.yaml` | Media converter offset rules (CVR-X2-SFP, etc.) |
 
 ## Adding rules
