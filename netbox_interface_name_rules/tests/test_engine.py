@@ -136,6 +136,10 @@ class EvaluateNameTemplateTest(TestCase):
             evaluate_name_template("{bay_position!r}", {"bay_position": "2"})
         self.assertEqual(str(raised.exception), message)
 
+    def test_a_format_spec_field_on_a_non_ascii_name_names_the_unsupported_construct(self):
+        with self.assertRaisesRegex(ValueError, r"not str\.format conversions and format specifications: \{naïve!r\}"):
+            evaluate_name_template("{naïve!r}", {})
+
     def test_division_expression(self):
         result = evaluate_name_template(
             "port{10 // 3}",

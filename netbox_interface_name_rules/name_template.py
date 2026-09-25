@@ -198,7 +198,7 @@ _UNARY_OPERATORS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
-_FORMAT_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*\s*(?:![rsa]|:[^{}]*)$")
+_FORMAT_FIELD_RE = re.compile(r"[A-Za-z_]\w*\s*(?:![rsa]|:[^{}]*)$")
 _NAMED_HEAD_RE = re.compile(r"([A-Za-z_]\w*)(?=$|\.|\[)")
 _IDENTIFIER_RE = re.compile(r"(?<!\w)[A-Za-z_]\w*")
 
