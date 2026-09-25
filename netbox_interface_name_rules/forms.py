@@ -16,7 +16,7 @@ from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 from .choices import BreakoutModeChoices
-from .models import InterfaceNameRule
+from .models import DEVICE_RULE_PARENT_MODULE_TYPE_ERROR, InterfaceNameRule
 from .name_template import validate_rule
 
 # A preview variable holds a real position or interface name, so the model fields bound them.
@@ -256,7 +256,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
         help_texts = {
             "parent_module_type": (
                 "Optional. Restricts this rule to modules installed inside the given parent module type. "
-                "Setting this raises the priority score by 400 (regex) or keeps exact priority at 1000+."
+                "Setting this raises the priority score by 400 (regex) or keeps exact priority at 1000+. "
+                "Must be empty for device-level interface rules."
             ),
             "device_type": (
                 "Optional. Restricts this rule to modules installed in this device model. "
@@ -366,7 +367,10 @@ class InterfaceNameRuleBulkEditForm(NetBoxModelBulkEditForm):
         if self.errors:
             return cleaned_data
         nullified = self.data.getlist("_nullify")
+        sets_parent = "parent_module_type" in self.changed_data and cleaned_data.get("parent_module_type")
         for rule in cleaned_data.get("pk", ()):
+            if sets_parent and rule.applies_to_device_interfaces:
+                self.add_error(None, f"Rule {rule.pk} ({rule}): {DEVICE_RULE_PARENT_MODULE_TYPE_ERROR}")
             fields = {
                 name: cleaned_data[name] if name in self.changed_data else getattr(rule, name)
                 for name in ("breakout_mode", "channel_count", "name_template", "parent_name_template")

@@ -69,6 +69,15 @@ class RuleValidationAgreementTest(TestCase):
                 },
             ),
             (
+                "device rule carrying a parent module type",
+                {
+                    "applies_to_device_interfaces": True,
+                    "module_type": None,
+                    "parent_module_type": self.module_type,
+                    "name_template": "Gi{vc_position}/{port}",
+                },
+            ),
+            (
                 "parent template without the channelized mode",
                 {
                     "module_type": self.module_type,
@@ -199,6 +208,19 @@ class RuleValidationAgreementTest(TestCase):
         )
         with self.assertRaises(IntegrityError), transaction.atomic():
             InterfaceNameRule.objects.filter(pk=rule.pk).update(breakout_mode="bogus")
+
+    def test_queryset_update_refuses_a_parent_module_type_on_a_device_rule(self):
+        rule = InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="{base}")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.filter(pk=rule.pk).update(parent_module_type=self.module_type)
+
+    def test_clean_names_the_parent_module_type_field(self):
+        rule = InterfaceNameRule(
+            applies_to_device_interfaces=True, parent_module_type=self.module_type, name_template="{base}"
+        )
+        with self.assertRaises(ValidationError) as caught:
+            rule.clean()
+        self.assertEqual(list(caught.exception.message_dict), ["parent_module_type"])
 
     def test_a_valid_rule_of_each_shape_still_saves(self):
         """The constraints must not refuse the rules the plugin is built to store."""
@@ -355,3 +377,66 @@ class RuleNormalizationMigrationTest(TestCase):
         self.assertEqual(channelless.parent_name_template, "")
         # PostgreSQL validates every existing row here, so this only succeeds if the repair was complete.
         self._set_constraints(enabled=True)
+
+
+class DeviceRuleScopeMigrationTest(TestCase):
+    """The 0018 data migration must clear and report each device rule parent module type."""
+
+    MIGRATION = "netbox_interface_name_rules.migrations.0018_refuse_device_rule_parent_module_type"
+
+    def _set_constraint(self, migration, enabled):
+        """Drop or restore the 0018 check constraint inside this test's transaction."""
+        (operation,) = [op for op in migration.Migration.operations if isinstance(op, migrations.AddConstraint)]
+        with connection.cursor() as cursor:
+            cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            if enabled:
+                sql = operation.constraint.create_sql(InterfaceNameRule, connection.schema_editor())
+            else:
+                sql = operation.constraint.remove_sql(InterfaceNameRule, connection.schema_editor())
+            cursor.execute(str(sql))
+
+    def test_it_clears_and_logs_each_device_rule_parent_module_type(self):
+        migration = import_module(self.MIGRATION)
+        self._set_constraint(migration, enabled=False)
+        manufacturer = Manufacturer.objects.create(name="ScopeMfg", slug="scopemfg")
+        parent = ModuleType.objects.create(manufacturer=manufacturer, model="SCOPE-CVR", part_number="SCOPE-CVR")
+        module_type = ModuleType.objects.create(manufacturer=manufacturer, model="SCOPE-SFP", part_number="SCOPE-SFP")
+        device_rule, other_device_rule, module_rule = InterfaceNameRule.objects.bulk_create(
+            [
+                InterfaceNameRule(
+                    applies_to_device_interfaces=True,
+                    module_type_pattern="Gi.*",
+                    parent_module_type=parent,
+                    name_template="Gi{vc_position}/{port}",
+                ),
+                InterfaceNameRule(
+                    applies_to_device_interfaces=True,
+                    module_type_pattern="Te.*",
+                    parent_module_type=parent,
+                    name_template="Te{vc_position}/{port}",
+                ),
+                InterfaceNameRule(module_type=module_type, parent_module_type=parent, name_template="{base}"),
+            ]
+        )
+
+        with (
+            override_settings(DATABASE_ROUTERS=[RefuseImplicitMigrationDatabase()]),
+            self.assertLogs(migration.logger, "WARNING") as logs,
+        ):
+            migration.clear_device_rule_parent_module_types(global_apps, connection.schema_editor())
+
+        self.assertCountEqual(
+            logs.output,
+            [
+                f"WARNING:{migration.__name__}:InterfaceNameRule ID {rule.pk}: cleared parent module type "
+                f"{parent.pk} (SCOPE-CVR) from a device rule"
+                for rule in (device_rule, other_device_rule)
+            ],
+        )
+        for rule in (device_rule, other_device_rule, module_rule):
+            rule.refresh_from_db()
+        self.assertIsNone(device_rule.parent_module_type)
+        self.assertIsNone(other_device_rule.parent_module_type)
+        self.assertEqual(module_rule.parent_module_type, parent)
+        # PostgreSQL validates every existing row here, so this only succeeds if the clearing was complete.
+        self._set_constraint(migration, enabled=True)
