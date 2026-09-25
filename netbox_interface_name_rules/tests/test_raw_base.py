@@ -333,6 +333,67 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
         )
 
 
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class RawBaseBaseFreeParentTest(VcDriftTestCase):
+    """A parent template without ``{base}`` names no template, so the family's channels identify it."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "RawBaseFree", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbasefree-vc"), vc_position=1
+        )
+        cls.module_type = _channelized_module_type(manufacturer, "RawBaseFree-QSFP")
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="mgmt{module}", type=PLAIN_TYPE)
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="{base}/{channel}",
+            parent_name_template="et-{vc_position}/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_a_renumber_moves_the_parent_beside_another_template(self):
+        module, bay = self._install_on(self.device, self.module_type, "3")
+        self.assertEqual(self._names(module), ["3/0", "3/1", "3/2", "3/3", "et-1/0/3", "mgmt3"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["3/0", "3/1", "3/2", "3/3", "et-2/0/3", "mgmt3"])
+        with self.assertNoLogs(PLUGIN_LOGGER, "WARNING"):
+            self.assertEqual(apply_interface_name_rules(module, bay, force_reapply=True), 0)
+
+    def test_a_parent_whose_channels_carry_two_bases_keeps_its_names(self):
+        module, _ = self._install_on(self.device, self.module_type, "3")
+        rename_out_of_band(self._child(module, 2), "mgmt3/1")
+
+        with self.assertLogs(PLUGIN_LOGGER, "WARNING") as logs:
+            self._renumber(2)
+
+        self.assertEqual(self._names(module), ["3/0", "3/2", "3/3", "et-1/0/3", "mgmt3", "mgmt3/1"])
+        self.assertIn("'et-1/0/3'", "\n".join(logs.output))
+
+    def test_a_renumber_moves_a_built_parent_beside_another_template(self):
+        plain_type = _plain_module_type(ModuleType.objects.get(pk=self.module_type.pk).manufacturer, "RawBaseFree-SFP")
+        InterfaceTemplate.objects.create(module_type=plain_type, name="mgmt{module}", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=plain_type,
+            name_template="{base}/{channel}",
+            parent_name_template="et-{vc_position}/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+        # Only one family can take the parent name, so the second template keeps its raw name.
+        with self.assertLogs(PLUGIN_LOGGER, "WARNING"):
+            module, _ = self._install_on(self.device, plain_type, "3")
+        self.assertEqual(self._names(module), ["3/0", "3/1", "et-1/0/3", "mgmt3"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["3/0", "3/1", "et-2/0/3", "mgmt3"])
+
+
 @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
     """The Apply Rules preview offers an installed flat family the rename that Apply Rules performs."""

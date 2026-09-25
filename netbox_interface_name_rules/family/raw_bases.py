@@ -13,6 +13,7 @@ import re
 from ..choices import BreakoutModeChoices
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
+from .targets import builds_channelized_family
 from .template_names import VC_POSITION_DIGITS
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,15 @@ def _renaming_templates(rule):
     if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
         return (rule.parent_name_template,)
     return ()
+
+
+def _parent_name_needs_channels(rule):
+    """Return whether *rule* gives every parent one name, so only the family's channels carry its base."""
+    return (
+        builds_channelized_family(rule)
+        and bool(rule.parent_name_template)
+        and not references_variable(rule.parent_name_template, "base")
+    )
 
 
 def _marked_evaluation(template, variables, raw):
@@ -81,17 +91,19 @@ def _renamed_pattern(template, variables, raw, historical):
 class RawBases:
     """The raw template name each live interface name stands for under one module rule.
 
-    *names* are the module's interface names outside any channel. A rule that does not read
-    ``{base}`` takes every name as its own base, so its claims are never computed. So does a module
-    type without interface templates: it has no raw names to recover. *catalog* is shared with the
-    family planners, so the module's templates load once.
+    *families* maps each of the module's interface names outside any channel to its channels, as
+    ``(name, channel_id)`` pairs. A rule that does not read ``{base}`` takes every name as its own
+    base, so its claims are never computed. So does a module type without interface templates: it
+    has no raw names to recover. *catalog* is shared with the family planners, so the module's
+    templates load once.
     """
 
-    def __init__(self, module, rule, variables, names, catalog):
+    def __init__(self, module, rule, variables, families, catalog):
         self._module = module
         self._rule = rule
         self._variables = variables
-        self._names = tuple(names)
+        self._families = dict(families)
+        self._names = tuple(self._families)
         self.catalog = catalog
         self._reads_base = rule_reads_base(rule)
         self._claimed = False
@@ -125,7 +137,9 @@ class RawBases:
 
         A template claims its raw name, its historical raw forms and the names the rule gives it. A
         raw name beats another template's historical form, as in the drift guard, but never a
-        renamed form: that overlap is ambiguous, so neither template claims the name.
+        renamed form: that overlap is ambiguous, so neither template claims the name. A parent name
+        without ``{base}`` fits every template, so a template claims it only through a channel the
+        rule gave that template's base.
         """
         claimants = [
             (template.pk, template.template_name, template.resolved, template.historical_pattern)
@@ -136,6 +150,7 @@ class RawBases:
             return None, frozenset()
         raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
         renaming = _renaming_templates(self._rule)
+        needs_channels = _parent_name_needs_channels(self._rule)
         claims = []
         raw_by_claimant = {}
         for claimant_id, template_name, raw, historical in claimants:
@@ -144,12 +159,13 @@ class RawBases:
                 for template in renaming
                 if (pattern := _renamed_pattern(template, self._variables, raw, historical)) is not None
             ]
+            channels = self._channel_patterns(raw, historical) if needs_channels else None
             labels = tuple(
                 name
                 for name in self._names
                 if name == raw
                 or (historical is not None and name not in raw_names and historical.fullmatch(name))
-                or any(pattern.fullmatch(name) for pattern in renamed)
+                or self._is_renamed(name, renamed, channels)
             )
             claims.append(TemplateClaim(claimant_id, template_name, labels))
             raw_by_claimant[claimant_id] = raw
@@ -158,6 +174,30 @@ class RawBases:
             logger.warning("%s", message)
         by_name = {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
         return by_name, frozenset(label for claim in claims for label in claim.labels) - by_name.keys()
+
+    def _channel_patterns(self, raw, historical):
+        """Return, by channel id, a matcher or None for the channel name the rule gives *raw*'s family."""
+        rule = self._rule
+        return {
+            channel_id: _renamed_pattern(
+                rule.name_template,
+                {**self._variables, "channel": str(rule.channel_start + channel_id - 1)},
+                raw,
+                historical,
+            )
+            for channel_id in range(1, rule.channel_count + 1)
+        }
+
+    def _is_renamed(self, name, renamed, channels):
+        """Return whether *name* is a renamed form and, where *channels* is given, one of its channels is too."""
+        if not any(pattern.fullmatch(name) for pattern in renamed):
+            return False
+        if channels is None:
+            return True
+        return any(
+            (pattern := channels.get(channel_id)) is not None and pattern.fullmatch(channel_name)
+            for channel_name, channel_id in self._families[name]
+        )
 
 
 class GivenRawNames:

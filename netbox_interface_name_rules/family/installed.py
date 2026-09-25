@@ -257,7 +257,7 @@ def interfaces_by_module(modules):
 
 
 def device_interface_families(interfaces):
-    """Return each device-level base interface with its channel children."""
+    """Return each base interface outside a channel with its channel children, in channel order."""
     children_by_parent: dict[int, list] = {}
     for interface in interfaces:
         if _is_channel(interface) and interface.parent_id is not None:
@@ -325,13 +325,16 @@ def plan_device_interface_rename(device, rule, variables, interface, children=()
 
 def module_raw_bases(module, rule, variables, interfaces) -> RawBases:
     """Return the raw template name behind each of *module*'s interfaces outside a channel."""
-    names = [interface.name for interface in interfaces if not _is_channel(interface)]
-    return RawBases(module, rule, variables, names, TemplateNames(module))
+    families = {
+        interface.name: tuple((child.name, child.channel_id) for child in children)
+        for interface, children in device_interface_families(interfaces)
+    }
+    return RawBases(module, rule, variables, families, TemplateNames(module))
 
 
 def given_raw_names(module, rule, variables, names) -> GivenRawNames:
-    """Return bases for *names* a caller gives as the module's raw template names."""
-    return GivenRawNames(RawBases(module, rule, variables, names, TemplateNames(module)))
+    """Return bases for *names* a caller gives as the module's raw template names, without channels."""
+    return GivenRawNames(RawBases(module, rule, variables, dict.fromkeys(names, ()), TemplateNames(module)))
 
 
 def plan_installed_flat_families(module, rule, variables, interfaces, bases) -> list[InstalledFamilyPlan]:
