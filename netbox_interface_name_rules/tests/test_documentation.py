@@ -227,9 +227,10 @@ class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "guide.md"
             path.write_text("No generated region.\n", encoding="utf-8")
+            region = GeneratedReferenceRegion(path, 3)
 
             with self.assertRaisesRegex(ValueError, "must contain exactly one generated template-variable region"):
-                regenerated_document(GeneratedReferenceRegion(path, 3))
+                regenerated_document(region)
 
     def test_agent_instructions_name_the_language_owner(self):
         instructions = (_PROJECT_ROOT / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
@@ -892,6 +893,12 @@ def _documented_templates():
     return tuple(found)
 
 
+def _unavailable_variables(documented):
+    """Return the variables *documented* references that its naming context does not provide."""
+    available = {variable.name for variable in variables_for_context(documented.context)}
+    return set(_TEMPLATE_VARIABLE.findall(documented.template)) - available
+
+
 def _example_variables(context):
     """Return representative values limited to one naming context."""
     composed = ModuleBay(position="Gi3/2/1", parent=ModuleBay(position="Gi3/2"))
@@ -1081,14 +1088,10 @@ class DocumentedTemplateTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with (
-                patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root),
-                self.assertRaisesRegex(AssertionError, "unknown_variable"),
-            ):
-                for documented in _templates_in_rule_list_examples():
-                    available = {variable.name for variable in variables_for_context(documented.context)}
-                    referenced = set(_TEMPLATE_VARIABLE.findall(documented.template))
-                    self.assertLessEqual(referenced, available)
+            with patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root):
+                templates = tuple(_templates_in_rule_list_examples())
+
+            self.assertEqual([_unavailable_variables(documented) for documented in templates], [{"unknown_variable"}])
 
     def test_rule_list_help_rejects_an_unmarked_template_on_any_element(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1218,10 +1221,8 @@ class DocumentedTemplateTest(unittest.TestCase):
 
     def test_every_documented_template_uses_variables_from_its_naming_context(self):
         for documented in _documented_templates():
-            available = {variable.name for variable in variables_for_context(documented.context)}
-            referenced = set(_TEMPLATE_VARIABLE.findall(documented.template))
             with self.subTest(source=documented.source, template=documented.template, context=documented.context):
-                self.assertLessEqual(referenced, available)
+                self.assertEqual(_unavailable_variables(documented), set())
 
     def test_every_documented_template_evaluates_in_its_naming_context(self):
         for documented in _documented_templates():
