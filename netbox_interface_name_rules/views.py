@@ -330,8 +330,7 @@ class RuleTestView(BaseMultiObjectView):
             qs = qs.filter(module_type_is_regex=True, module_type_pattern=cd.get("module_type_pattern", ""))
         else:
             qs = qs.filter(module_type_is_regex=False, module_type=cd.get("module_type"))
-        scope_fields = ("device_type", "platform") if device_rule else ("parent_module_type", "device_type", "platform")
-        for field in scope_fields:
+        for field in ("parent_module_type", "device_type", "platform"):
             val = cd.get(field)
             qs = qs.filter(**{field: val}) if val else qs.filter(**{f"{field}__isnull": True})
         return qs.first()

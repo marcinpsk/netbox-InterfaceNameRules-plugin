@@ -788,7 +788,7 @@ class RuleTestViewTest(ViewTestBase):
             response.url.startswith(reverse("plugins:netbox_interface_name_rules:interfacenamerule_add") + "?")
         )
 
-    def test_device_existing_rule_matches_pattern_and_ignores_parent_scope(self):
+    def test_device_existing_rule_matches_pattern_and_ignores_submitted_parent_scope(self):
         InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, name_template="{base}", module_type_pattern="other"
         )
@@ -796,7 +796,6 @@ class RuleTestViewTest(ViewTestBase):
             applies_to_device_interfaces=True,
             name_template="{base}",
             module_type_pattern="Ethernet.*",
-            parent_module_type=self.module_type,
         )
         response = self.client.post(
             self._url(),
@@ -805,6 +804,7 @@ class RuleTestViewTest(ViewTestBase):
                 "applies_to_device_interfaces": "on",
                 "name_template": "{base}",
                 "module_type_pattern": "Ethernet.*",
+                "parent_module_type": str(self.module_type.pk),
                 "var_vc_position": "2",
             },
         )

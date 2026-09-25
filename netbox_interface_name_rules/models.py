@@ -21,6 +21,7 @@ def csv_export_entry(headers, values):
     }
 
 
+DEVICE_RULE_PARENT_MODULE_TYPE_ERROR = "Parent module type must be empty for device-level interface rules."
 _RULE_VALIDATION_FIELDS = frozenset(
     {"applies_to_device_interfaces", "breakout_mode", "channel_count", "name_template", "parent_name_template"}
 )
@@ -81,7 +82,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         related_name="+",
         verbose_name="Parent Module Type",
-        help_text="If set, rule only applies when installed inside this parent module type",
+        help_text=(
+            "If set, rule only applies when installed inside this parent module type. "
+            "Must be empty for device-level interface rules."
+        ),
     )
     device_type = models.ForeignKey(
         DeviceType,
@@ -151,8 +155,8 @@ class InterfaceNameRule(NetBoxModel):
         help_text=(
             "When enabled, this rule renames device-level interfaces (module=None) when the device "
             "joins or changes position in a Virtual Chassis. "
-            "The Module Type field must be empty; the Module Type Pattern (if set) is used as a regex "
-            "to filter which interface names to rename."
+            "The Module Type and Parent Module Type fields must be empty; the Module Type Pattern (if set) "
+            "is used as a regex to filter which interface names to rename."
         ),
     )
 
@@ -167,6 +171,8 @@ class InterfaceNameRule(NetBoxModel):
             # Device-level rules must not reference a module type
             if self.module_type:
                 raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
+            if self.parent_module_type_id:
+                raise ValidationError({"parent_module_type": DEVICE_RULE_PARENT_MODULE_TYPE_ERROR})
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
                 compile_module_type_pattern(self.module_type_pattern)
@@ -242,6 +248,7 @@ class InterfaceNameRule(NetBoxModel):
           any possible regex score).
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
+        A device-level rule takes no parent_module_type, so its scope is at most 3.
         Two rules with the same score fall back to lowest pk (first created).
         """
         scope = (
@@ -307,6 +314,10 @@ class InterfaceNameRule(NetBoxModel):
                     & (~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED) | ~models.Q(channel_count=0))
                 ),
                 name="interfacenamerule_breakout_topology_check",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(applies_to_device_interfaces=False) | models.Q(parent_module_type__isnull=True),
+                name="interfacenamerule_device_rule_scope_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
