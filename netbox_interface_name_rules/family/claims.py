@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 _DRIFT_CAUSE = "since this device's virtual-chassis position changed"
+_RAW_BASE = "raw base"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +28,8 @@ def resolve_template_claims(claims, *, module, label_kind):
     Repeated edges count once. Claimant IDs must be unique.
     The caller emits the messages through its own logger.
     """
-    if label_kind not in ("interface name", "family base", "raw base"):
-        raise ValueError("label_kind must be 'interface name', 'family base' or 'raw base'")
+    if label_kind not in ("interface name", "family base", _RAW_BASE):
+        raise ValueError(f"label_kind must be 'interface name', 'family base' or '{_RAW_BASE}'")
 
     by_id = {}
     claimants = defaultdict(list)
@@ -43,14 +44,14 @@ def resolve_template_claims(claims, *, module, label_kind):
             claimants[label].append(claim.claimant_id)
         if len(labels) > 1:
             ambiguous.add(claim.claimant_id)
-            cause = "as its raw name or its renamed form" if label_kind == "raw base" else _DRIFT_CAUSE
+            cause = "as its raw name or its renamed form" if label_kind == _RAW_BASE else _DRIFT_CAUSE
             messages.append(
                 f"Interface template {claim.template_name!r} of {module} could name any of {sorted(labels)} "
                 f"{cause}; skipping them all rather than renaming a guess."
             )
 
     subject = "Family base" if label_kind == "family base" else "Interface"
-    form = "raw or renamed name" if label_kind == "raw base" else "drifted name"
+    form = "raw or renamed name" if label_kind == _RAW_BASE else "drifted name"
     for label, ids in claimants.items():
         if len(ids) > 1:
             messages.append(
