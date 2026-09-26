@@ -538,6 +538,57 @@ class DataMigrationDocumentationTest(unittest.TestCase):
                 _changes_data(path)
 
 
+_MANAGE_PY_TEST = re.compile(r"manage\.py\s+test\b(.*)")
+_PLUGIN_TEST_LABEL = re.compile(r"\bnetbox_interface_name_rules(?:\.[\w.]*\w)?")
+_PERFORMANCE_RUNNER = ("performance/README.md", "netbox_interface_name_rules.tests.signal_performance")
+
+
+def _manage_py_test_labels(text):
+    """Return each plugin test label that a ``manage.py test`` command in *text* names."""
+    joined = re.sub(r"\\\r?\n\s*", " ", text)
+    return [label for match in _MANAGE_PY_TEST.finditer(joined) for label in _PLUGIN_TEST_LABEL.findall(match[1])]
+
+
+def _markdown_files():
+    """Return every Markdown file in the checkout; hidden directories other than ``.github`` are skipped."""
+    found = []
+    for directory, subdirectories, files in _PROJECT_ROOT.walk():
+        subdirectories[:] = [name for name in subdirectories if not name.startswith(".") or name == ".github"]
+        found.extend(directory / name for name in files if name.endswith(".md"))
+    return found
+
+
+class SuiteRunnerDocumentationTest(unittest.TestCase):
+    """The suite runs under pytest; ``manage.py test`` skips its conftest fixtures."""
+
+    def test_only_the_performance_runner_uses_manage_py_test_for_this_plugin(self):
+        found = {
+            (path.relative_to(_PROJECT_ROOT).as_posix(), label)
+            for path in _markdown_files()
+            for label in _manage_py_test_labels(path.read_text(encoding="utf-8"))
+        }
+
+        self.assertIn(_PERFORMANCE_RUNNER, found)
+        self.assertEqual(found - {_PERFORMANCE_RUNNER}, set())
+
+    def test_the_scan_reads_continued_and_inline_commands(self):
+        text = (
+            "python manage.py test \\\n  netbox_interface_name_rules.tests.signal_performance \\\n  --noinput\n"
+            "Run `python manage.py test netbox_interface_name_rules`.\n"
+            "python manage.py test netbox_interface_name_rules.tests.test_views.ViewTest\n"
+            "python manage.py test netbox_nso_plugin --keepdb\n"
+        )
+
+        self.assertEqual(
+            _manage_py_test_labels(text),
+            [
+                "netbox_interface_name_rules.tests.signal_performance",
+                "netbox_interface_name_rules",
+                "netbox_interface_name_rules.tests.test_views.ViewTest",
+            ],
+        )
+
+
 _PATTERN_KEY = re.compile(r"^[^\S\r\n]*-?[^\S\r\n]*module_type_pattern:[^\S\r\n]*(.+)$", re.MULTILINE)
 
 

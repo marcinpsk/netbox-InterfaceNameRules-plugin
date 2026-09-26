@@ -63,16 +63,21 @@ Key Ruff settings: line-length 120, ignores E501/F403/F405 globally, ignores F40
 
 ## Testing
 
+The suite runs under pytest only. `conftest.py` fixtures, such as the preview-key guard, do not load under
+`manage.py test`, so do not use it for this suite.
+
 ```bash
 # Run all plugin tests (inside devcontainer)
 netbox-test
 
-# Or manually from /opt/netbox/netbox:
-python manage.py test netbox_interface_name_rules
+# Run one test by its pytest node ID (inside devcontainer)
+netbox-test netbox_interface_name_rules/tests/test_views.py::TestClassName::test_method_name
 
-# Run a single test
-python manage.py test netbox_interface_name_rules.tests.TestClassName.test_method_name
+# Or run pytest from the plugin root; TEST_DB_NAME must start with test_
+TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=redis pytest netbox_interface_name_rules
 ```
+
+`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`.
 
 ## REUSE/SPDX compliance
 
