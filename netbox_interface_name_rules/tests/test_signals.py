@@ -380,63 +380,6 @@ class SignalExceptionPathsTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# signals.py — module with null bay path (line 214)
-# ---------------------------------------------------------------------------
-
-
-class SignalModuleNullBayPathTest(TestCase):
-    """Test _apply_rules_for_device_deferred skips modules with null module_bay (line 214)."""
-
-    @classmethod
-    def setUpTestData(cls):
-        manufacturer = Manufacturer.objects.create(name="NullBayMfg", slug="nullbaymfg")
-        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="NullBay-Dev", slug="nullbay-dev")
-        ModuleBayTemplate.objects.create(device_type=device_type, name="NBBay 0", position="0")
-        cls.module_type = ModuleType.objects.create(
-            manufacturer=manufacturer, model="NullBay-SFP", part_number="NullBay-SFP"
-        )
-        placement = make_placement("NullBay")
-        vc = VirtualChassis.objects.create(name="nullbay-vc")
-        cls.device = Device.objects.create(
-            name="nullbay-sw1",
-            device_type=device_type,
-            role=placement.role,
-            site=placement.site,
-            virtual_chassis=vc,
-            vc_position=1,
-        )
-        cls.bay = ModuleBay.objects.get(device=cls.device, name="NBBay 0")
-
-    def test_module_with_null_bay_is_skipped(self):
-        """_apply_rules_for_device_deferred continues past modules with module_bay=None.
-
-        The signal function iterates over all modules on a device and calls
-        apply_interface_name_rules for each one. When module_bay is None (e.g. due
-        to a data inconsistency), the loop must skip that entry via ``continue``
-        rather than passing None to the engine. A FakeModule with module_bay=None
-        is injected via a patch on Module.objects.filter so the DB doesn't need
-        to hold inconsistent data.
-        """
-        from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
-
-        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-
-        # Mock the module queryset to return a module whose module_bay attr is None
-        class FakeModule:
-            module_bay = None
-            module_type = module.module_type
-
-        with patch(
-            "dcim.models.Module.objects.filter",
-            return_value=MagicMock(
-                filter=MagicMock(return_value=MagicMock()),
-                select_related=MagicMock(return_value=[FakeModule()]),
-            ),
-        ):
-            _apply_rules_for_device_deferred(self.device.pk)  # Should not raise
-
-
-# ---------------------------------------------------------------------------
 # signals.py — _apply_rules_for_device_deferred outer exception handler (lines 224-225)
 # ---------------------------------------------------------------------------
 

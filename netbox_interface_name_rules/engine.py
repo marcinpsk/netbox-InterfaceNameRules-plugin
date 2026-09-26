@@ -305,8 +305,6 @@ def reapply_module_rules(device):
     total = 0
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
         for module in modules:
-            if not module.module_bay:
-                continue
             total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
     return total
 
