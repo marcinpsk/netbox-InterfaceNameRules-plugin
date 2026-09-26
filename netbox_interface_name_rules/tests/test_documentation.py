@@ -510,6 +510,27 @@ class DataMigrationDocumentationTest(unittest.TestCase):
         self.assertIn("logs the rule ID and the cleared module type", section)
         self.assertIn("A rollback of migration `0018` does not restore the cleared values", section)
 
+    def test_device_rule_regex_mode_note_states_the_ranking_change(self):
+        section = _migrations_section()
+
+        self.assertIn("Migration `0015` turns off regex mode and sets the breakout mode to flat", section)
+        self.assertIn(
+            "A device-interface rule never matched on regex mode, but the priority score of a device-interface "
+            "rule reads its regex mode, so the migration can change the rank of a device-interface rule.",
+            section,
+        )
+        self.assertIn(
+            "When two device-interface rules match the same interface, a different rule can rename it, "
+            "and the interface can get a different name.",
+            section,
+        )
+        self.assertIn(
+            "The breakout mode and **Parent Name Template** changes do not change the rank or the name of any "
+            "interface.",
+            section,
+        )
+        self.assertNotIn("The engine did not read these values", section)
+
     def test_the_scan_reads_each_row_write_and_keyword_forward_function(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "0099_sample.py"

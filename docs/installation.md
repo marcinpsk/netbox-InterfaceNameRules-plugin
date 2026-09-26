@@ -61,8 +61,13 @@ them, record them before the upgrade.
 - Migration `0015` turns off regex mode and sets the breakout mode to flat on
   every device-interface rule. It also sets a channelized rule with a channel
   count of 0 to flat, and clears the **Parent Name Template** of every rule that
-  is not channelized. The engine did not read these values, so no rule renames
-  differently. The migration does not log the rules it changes.
+  is not channelized. A device-interface rule never matched on regex mode, but
+  the priority score of a device-interface rule reads its regex mode, so the
+  migration can change the rank of a device-interface rule. When two
+  device-interface rules match the same interface, a different rule can rename
+  it, and the interface can get a different name. The breakout mode and
+  **Parent Name Template** changes do not change the rank or the name of any
+  interface. The migration does not log the rules it changes.
 - Migration `0016` sets every breakout mode other than flat or channelized to
   flat. It does not log the rules it changes.
 - Migration `0018` clears the **Parent Module Type** of every device-interface
