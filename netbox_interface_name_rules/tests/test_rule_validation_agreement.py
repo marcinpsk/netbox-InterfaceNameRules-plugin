@@ -158,6 +158,28 @@ class RuleValidationAgreementTest(TestCase):
         rule.refresh_from_db()
         self.assertFalse(rule.enabled)
 
+    def test_a_targeted_save_does_not_normalise_from_an_unsaved_mode(self):
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern="eth.*",
+            name_template="p{port}",
+        )
+        rule.applies_to_device_interfaces = False
+        rule.module_type_pattern = "xe.*"
+
+        rule.save(update_fields=["module_type_pattern"])
+
+        rule.refresh_from_db()
+        self.assertTrue(rule.applies_to_device_interfaces)
+        self.assertEqual(rule.module_type_pattern, "xe.*")
+
+    def test_save_refuses_positional_arguments(self):
+        """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+
+        with self.assertRaises(TypeError):
+            rule.save(False, False, None, ["description"])
+
     def test_a_generator_update_fields_still_writes_its_column(self):
         """The topology check must not consume update_fields, which would make Django skip the save."""
         rule = InterfaceNameRule.objects.create(

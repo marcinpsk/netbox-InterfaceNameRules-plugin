@@ -130,6 +130,33 @@ class InterfaceNameRuleAPITest(APITestCase):
         response = self.client.post(url, data, format="json", **self.header)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_create_module_type_rule_clears_a_stale_pattern(self):
+        data = {
+            "module_type": self.module_type2.pk,
+            "device_type": self.device_type.pk,
+            "module_type_pattern": "QSFP-.*",
+            "name_template": "port{bay_position}",
+        }
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["module_type_pattern"], "")
+        self.assertEqual(InterfaceNameRule.objects.get(pk=response.data["id"]).module_type_pattern, "")
+
+    def test_create_device_rule_turns_regex_mode_off(self):
+        data = {"applies_to_device_interfaces": True, "module_type_is_regex": True, "name_template": "p{port}"}
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(response.data["module_type_is_regex"])
+        self.assertFalse(InterfaceNameRule.objects.get(pk=response.data["id"]).module_type_is_regex)
+
+    def test_patch_module_type_rule_clears_an_added_pattern(self):
+        response = self.client.patch(
+            self._get_detail_url(self.rule3), {"module_type_pattern": "QSFP-.*"}, format="json", **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.rule3.refresh_from_db()
+        self.assertEqual(self.rule3.module_type_pattern, "")
+
     def test_update_rule_to_regex(self):
         """PATCH a rule to switch it to regex mode."""
         rule = InterfaceNameRule.objects.create(

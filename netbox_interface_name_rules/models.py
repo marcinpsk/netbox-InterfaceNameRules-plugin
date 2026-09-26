@@ -167,6 +167,7 @@ class InterfaceNameRule(NetBoxModel):
     def clean(self):
         """Validate regex/FK mode exclusivity and required fields."""
         super().clean()
+        self._normalise_mode()
         if self.applies_to_device_interfaces:
             # Device-level rules must not reference a module type
             if self.module_type:
@@ -176,20 +177,22 @@ class InterfaceNameRule(NetBoxModel):
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
                 compile_module_type_pattern(self.module_type_pattern)
-            # Force regex mode off — module_type_is_regex has no meaning here
-            self.module_type_is_regex = False
         elif self.module_type_is_regex:
             if not self.module_type_pattern:
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
                 raise ValidationError({"module_type": "Cannot set both module type FK and regex pattern. Choose one."})
             compile_module_type_pattern(self.module_type_pattern)
-        else:
-            # Clear any stale pattern so it does not persist when switching modes
-            self.module_type_pattern = ""
-            if not self.module_type:
-                raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
+        elif not self.module_type:
+            raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
         self._validate_rule()
+
+    def _normalise_mode(self):
+        """Clear the mode fields that the rule's mode gives no meaning."""
+        if self.applies_to_device_interfaces:
+            self.module_type_is_regex = False
+        elif not self.module_type_is_regex:
+            self.module_type_pattern = ""
 
     def _validate_rule(self):
         """Check the topology and both templates against the rule's naming context."""
@@ -339,17 +342,20 @@ class InterfaceNameRule(NetBoxModel):
             ),
         ]
 
-    def save(self, *args, **kwargs):
-        """Validate topology and templates before a plain ORM write."""
+    def save(self, **kwargs):
+        """Normalise the mode fields and validate topology and templates before a plain ORM write."""
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
             # one, and it skips the write when update_fields is empty.
             update_fields = frozenset(update_fields)
             kwargs["update_fields"] = update_fields
+        else:
+            # The API saves its validated attrs, not the instance clean() normalised.
+            self._normalise_mode()
         if update_fields is None or _RULE_VALIDATION_FIELDS.intersection(update_fields):
             self._validate_rule()
-        return super().save(*args, **kwargs)
+        return super().save(**kwargs)
 
     def __str__(self):
         if self.module_type_is_regex:

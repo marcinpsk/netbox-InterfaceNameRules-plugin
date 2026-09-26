@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interface-name filter when opening the add form. Module-rule previews now
   accept a `{vc_position}` value, and the module variable table lists it.
 
+### Bug Fixes
+
+- The REST API now clears the rule-mode fields the same way the web form does. A
+  device-level rule sent with `module_type_is_regex: true` no longer fails with a
+  server error; it saves with regex mode off. A module-type rule sent with a
+  `module_type_pattern` saves with the pattern cleared, instead of a 400 response.
+
 ## v1.5.3 (2026-09-21)
 
 ### Bug Fixes
