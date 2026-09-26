@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read as a variable. Before, a group like `{é é}` passed the rule check and failed
   only when the rule renamed an interface, and `{é!r}` got the generic unsafe
   expression error instead of the format-field error.
+- A device-interface rule can no longer store a Parent Module Type. Migration
+  `0018` clears the field on every existing device-interface rule and logs each
+  rule ID and cleared module type. The engine never matched a device rule on
+  this field, so only the rule ranking changes. A rollback does not restore the
+  cleared values. Record them before the upgrade if you need them.
 
 ## v1.5.3 (2026-09-21)
 

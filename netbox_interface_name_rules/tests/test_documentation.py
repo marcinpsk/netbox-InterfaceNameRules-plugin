@@ -458,6 +458,85 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
 
 
+_MIGRATIONS = _PROJECT_ROOT / "netbox_interface_name_rules" / "migrations"
+_ROW_WRITES = {"update", "delete", "save", "bulk_update", "bulk_create"}
+
+
+def _changes_data(path):
+    """Return whether a forward ``RunPython`` function of the migration at *path* writes rows."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    changes = False
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "RunPython"):
+            continue
+        code = node.args[0] if node.args else next(kw.value for kw in node.keywords if kw.arg == "code")
+        if not (isinstance(code, ast.Name) and code.id in functions):
+            raise AssertionError(f"{path.name}:{node.lineno} passes RunPython a forward function the scan cannot read")
+        changes |= any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr in _ROW_WRITES
+            for call in ast.walk(functions[code.id])
+        )
+    return changes
+
+
+def _migrations_section():
+    """Return the installation guide's migration section with whitespace collapsed."""
+    guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    section = guide.split("## Run Database Migrations", 1)[1].split("## Restart NetBox", 1)[0]
+    return " ".join(section.split())
+
+
+class DataMigrationDocumentationTest(unittest.TestCase):
+    """Each migration that rewrites stored rules is named in the upgrade guide."""
+
+    def test_the_data_changing_migrations_are_known(self):
+        found = {path.name[:4] for path in _MIGRATIONS.glob("[0-9]*.py") if _changes_data(path)}
+
+        self.assertEqual(found, {"0015", "0016", "0018"})
+
+    def test_each_data_changing_migration_is_named_in_the_upgrade_guide(self):
+        section = _migrations_section()
+        for path in sorted(_MIGRATIONS.glob("[0-9]*.py")):
+            if _changes_data(path):
+                with self.subTest(migration=path.name):
+                    self.assertIn(f"`{path.name[:4]}`", section)
+
+    def test_device_rule_parent_module_type_note_states_the_data_change(self):
+        section = _migrations_section()
+
+        self.assertIn("Migration `0018` clears the **Parent Module Type** of every device-interface rule", section)
+        self.assertIn("logs the rule ID and the cleared module type", section)
+        self.assertIn("A rollback of migration `0018` does not restore the cleared values", section)
+
+    def test_the_scan_reads_each_row_write_and_keyword_forward_function(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "0099_sample.py"
+            for write in sorted(_ROW_WRITES):
+                with self.subTest(write=write):
+                    path.write_text(
+                        f"def forward(apps, schema_editor):\n    rules.{write}()\n\n"
+                        "operations = [migrations.RunPython(code=forward)]\n",
+                        encoding="utf-8",
+                    )
+                    self.assertTrue(_changes_data(path))
+
+            path.write_text(
+                "def audit(apps, schema_editor):\n    rules.filter()\n\n"
+                "operations = [migrations.RunPython(audit, migrations.RunPython.noop)]\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(_changes_data(path))
+
+    def test_the_scan_refuses_a_forward_function_it_cannot_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "0099_sample.py"
+            path.write_text("operations = [migrations.RunPython(helpers.forward)]\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(AssertionError, "cannot read"):
+                _changes_data(path)
+
+
 _PATTERN_KEY = re.compile(r"^[^\S\r\n]*-?[^\S\r\n]*module_type_pattern:[^\S\r\n]*(.+)$", re.MULTILINE)
 
 
