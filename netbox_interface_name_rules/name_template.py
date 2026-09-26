@@ -199,7 +199,6 @@ _UNARY_OPERATORS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
-_FORMAT_FIELD_RE = re.compile(r"(.*?)\s*(?:![rsa]|:[^{}]*)")
 
 
 def _identifiers(text):
@@ -299,6 +298,15 @@ _FORMAT_FIELD_MESSAGE = (
 )
 
 
+def _is_format_field(expr):
+    """Return whether *expr* is a name followed by a str.format conversion or format specification."""
+    split = min((index for index in (expr.find("!"), expr.find(":")) if index >= 0), default=-1)
+    if split < 0 or not expr[:split].rstrip().isidentifier():
+        return False
+    rest = expr[split:]
+    return rest in ("!r", "!s", "!a") or (rest[0] == ":" and "{" not in rest and "}" not in rest)
+
+
 def _substitute_tokens(template, replacements):
     """Replace each exact token in *replacements* and return the text and the spans of the inserted values."""
     literal_spans = []
@@ -321,8 +329,7 @@ def _substitute_tokens(template, replacements):
 def _evaluate_group(expression):
     """Evaluate one brace group after substitution, or raise ValueError."""
     expr = expression.strip()
-    format_field = _FORMAT_FIELD_RE.fullmatch(expr)
-    if format_field and format_field[1].isidentifier():
+    if _is_format_field(expr):
         raise _FormatFieldError(_FORMAT_FIELD_MESSAGE.format(group=f"{{{expr}}}"))
     if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
         raise ValueError(f"Unsafe expression in name template: {expr}")

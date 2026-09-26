@@ -144,6 +144,13 @@ class EvaluateNameTemplateTest(TestCase):
                 ):
                     evaluate_name_template(f"{{{field}}}", {})
 
+    def test_a_field_that_only_resembles_a_format_field_gets_the_unsafe_expression_error(self):
+        for field in ("a" + " " * 5000 + "!", "a" + " " * 5000 + "b!r", "a!x:b", "a !rr", "1a!r", "!r", "a:{b"):
+            with self.subTest(field=field[:20]):
+                with self.assertRaises(ValueError) as raised:
+                    evaluate_name_template(f"{{{field}}}", {})
+                self.assertTrue(str(raised.exception).startswith("Unsafe expression in name template: "))
+
     def test_division_expression(self):
         result = evaluate_name_template(
             "port{10 // 3}",
