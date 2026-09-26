@@ -392,7 +392,7 @@ class ModelCleanExactModeTest(TestCase):
 
 
 class SerializerValidationTest(TestCase):
-    """Test InterfaceNameRuleSerializer.validate() XOR constraints."""
+    """Test the mode checks the serializer reaches through the model's full_clean()."""
 
     @classmethod
     def setUpTestData(cls):
@@ -406,21 +406,6 @@ class SerializerValidationTest(TestCase):
         from netbox_interface_name_rules.api.serializers import InterfaceNameRuleSerializer
 
         return InterfaceNameRuleSerializer(instance=instance, data=data)
-
-    def test_non_regex_with_pattern_fails(self):
-        """Non-regex rule with module_type_pattern set → validation error."""
-        s = self._get_serializer(
-            {
-                "module_type": self.module_type.pk,
-                "module_type_is_regex": False,
-                "module_type_pattern": "QSFP-.*",
-                "name_template": "port{bay_position}",
-                "channel_count": 0,
-                "channel_start": 0,
-            }
-        )
-        s.is_valid()
-        self.assertIn("module_type_pattern", s.errors)
 
     def test_regex_without_module_type_valid(self):
         """Regex rule with no module_type FK and valid pattern passes serializer."""

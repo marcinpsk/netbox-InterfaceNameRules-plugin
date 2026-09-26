@@ -16,7 +16,7 @@ from re import Pattern
 
 from dcim.models import InterfaceTemplate, Module
 
-from ..rule_selection import _compile_pattern
+from ..rule_selection import compile_stored_pattern
 
 BAY_CHAIN_RELATIONS = (
     "device",
@@ -32,7 +32,7 @@ BAY_CHAIN_RELATIONS = (
 _VC_SENTINEL = "InrVcPositionSentinel{}End"
 _VC_SENTINEL_RE = re.compile(r"InrVcPositionSentinel(\d+)End")
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
-_VC_POSITION_DIGITS = r"\d{1,10}"
+VC_POSITION_DIGITS = r"\d{1,10}"
 
 RawMatcher = namedtuple("RawMatcher", ("template_name", "resolved", "pattern"))
 RawNames = namedtuple("RawNames", ("names", "matchers"))
@@ -63,8 +63,8 @@ def vc_position_re():
 def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-chassis token support
     """Return every value represented by one virtual-chassis position token."""
     if fallback is None:
-        return _VC_POSITION_DIGITS
-    return f"(?:{_VC_POSITION_DIGITS}|{re.escape(fallback)})"
+        return VC_POSITION_DIGITS
+    return f"(?:{VC_POSITION_DIGITS}|{re.escape(fallback)})"
 
 
 def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
@@ -92,7 +92,7 @@ def _historical_pattern(template, module, token_re):  # pragma: no cover - requi
     pattern = literals[0]
     for index, literal in zip(indexes, literals[1:], strict=True):
         pattern += _vc_position_alternatives(fallbacks[int(index)]) + literal
-    return _compile_pattern(pattern)
+    return compile_stored_pattern(pattern)
 
 
 # One batch of modules shares its module chains, template rows and resolved names, thread-locally.
@@ -191,3 +191,17 @@ def resolved_template_names(module) -> tuple[ResolvedTemplateName, ...]:
     if resolved is not None:
         resolved[module.pk] = names
     return names
+
+
+class TemplateNames:
+    """The module type's resolved template names, read only where a plan needs them."""
+
+    def __init__(self, module):
+        self._module = module
+        self._templates = None
+
+    def get(self):
+        """Return every resolved template name for the module, loading them once."""
+        if self._templates is None:
+            self._templates = resolved_template_names(self._module)
+        return self._templates

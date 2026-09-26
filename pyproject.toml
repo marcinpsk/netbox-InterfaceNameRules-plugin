@@ -113,7 +113,7 @@ select = [
     "E", "F", "W", "D", "C901", "I", "RET", "UP",
     "A", "ASYNC", "B", "BLE", "C4", "DJ", "DTZ", "ERA", "EXE", "FLY", "FURB", "G",
     "ICN", "INP", "INT", "ISC", "LOG", "N", "PERF", "PGH", "PIE", "PLC", "PLE", "PLW",
-    "PTH", "Q", "RSE", "RUF", "S", "SIM", "SLOT", "T10", "T20", "TC", "TRY", "YTT",
+    "PTH", "Q", "RSE", "RUF", "S", "SIM", "SLOT", "T10", "T20", "TC", "TID", "TRY", "YTT",
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
@@ -126,6 +126,7 @@ ignore = [
     "D107",   # missing docstring in __init__
     "D203",   # 1 blank line before class docstring (conflicts with D211)
     "D213",   # multi-line summary second line (conflicts with D212)
+    "TID252",  # package modules use relative imports consistently
     "PLC0415",  # lazy imports are deliberate: Django app loading order
     "TRY003",   # the message in a raise is the operator wording
 ]
@@ -137,6 +138,35 @@ allowed-confusables = ["×", "–"]
 # Flag errors (`C901`) whenever the complexity level exceeds 15.
 max-complexity = 15
 
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"netbox_interface_name_rules.models._expression_names_channel".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.models._has_unbalanced_braces".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.models._references_channel".msg = "Use name_template.referenced_variables."
+"netbox_interface_name_rules.models._validate_breakout_topology".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.naming._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._BINARY_OPERATORS".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._BUILT".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._CALLER".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._DEVICE".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._FORMAT_FIELD_RE".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._MEMBER".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._PARENT".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._UNARY_OPERATORS".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._VC_POSITION_DESCRIPTION".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._EvaluatedField".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._ParsedBraceGroups".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._braces_balanced".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._evaluated_brace_fields".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._parse_brace_groups".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._parse_expression".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._reference_brace_fields".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._CONTEXT_LABELS".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._REFUSALS".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._identifiers".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._validate_breakout_topology".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._template_errors".msg = "Use name_template.validate_rule."
+
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
 # Django migrations declare mutable dependencies and operations.
@@ -145,6 +175,7 @@ max-complexity = 15
 "netbox_interface_name_rules/{__init__,choices,filters,forms,models,tables,views}.py" = ["RUF012"]
 # Serializer Meta fields are a framework contract.
 "netbox_interface_name_rules/api/serializers.py" = ["RUF012"]
+"netbox_interface_name_rules/name_template.py" = ["TID251"]
 "**/tests/*.py" = ["D", "N806", "S101", "SIM117", "B018", "PTH", "T20"]
 # Confusable characters are the fixture under test, not a mistake.
 "**/tests/test_regex.py" = ["RUF001"]

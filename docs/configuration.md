@@ -9,10 +9,10 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off and Applies to Device Interfaces is disabled) |
-| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type must be empty; Module Type Pattern can filter interface names |
+| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names |
 | Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name, or a device interface's current name when Applies to Device Interfaces is enabled |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
-| Parent Module Type | No | Restrict to modules inside this parent (e.g., converter) |
+| Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
 | Device Type | No | Restrict to devices of this type |
 | Platform | No | Restrict to devices running this software platform/OS |
 | Name Template | Yes | Interface name pattern with template variables |

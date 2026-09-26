@@ -140,18 +140,22 @@ class PerformancePackageTest(unittest.TestCase):
             self.assertIn(before_claim, readme)
 
     def test_comparison_separates_deterministic_counts_from_cache_metrics(self):
-        comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
-            encoding="utf-8"
-        )
-        introduction = comparison.split("## Environment", 1)[0]
+        kind = "[a-z_]+"
+        generated = re.escape(compare._COMPARISON_INTRO)
+        generated = generated.replace(re.escape("{before}"), kind).replace(re.escape("{after}"), kind)
+        comparisons = sorted((_PROJECT_ROOT / "performance" / "comparisons").glob("*.md"))
+        self.assertTrue(comparisons)
+        for path in comparisons:
+            with self.subTest(comparison=path.name):
+                introduction = path.read_text(encoding="utf-8").split("## Environment", 1)[0]
 
-        self.assertIn(compare._COMPARISON_INTRO, introduction)
-        self.assertIn("SQL statement counts are deterministic for equivalent inputs", introduction)
-        self.assertIn(
-            "Cache metrics depend on PostgreSQL buffer-cache state and concurrent activity",
-            introduction,
-        )
-        self.assertNotIn("Database work is deterministic", introduction)
+                self.assertRegex(introduction, generated)
+                self.assertIn("SQL statement counts are deterministic for equivalent inputs", introduction)
+                self.assertIn(
+                    "Cache metrics depend on PostgreSQL buffer-cache state and concurrent activity",
+                    introduction,
+                )
+                self.assertNotIn("Database work is deterministic", introduction)
 
     def test_comparison_machine_time_note_matches_the_load_it_reports(self):
         comparison = (_PROJECT_ROOT / "performance" / "comparisons" / "family-package-vs-existing.md").read_text(
@@ -223,6 +227,20 @@ class ComparisonDestinationTest(unittest.TestCase):
             self.assertIn("# Automatic naming performance comparison", destination.read_text(encoding="utf-8"))
             self.assertEqual(before.read_text(encoding="utf-8"), contents)
             self.assertEqual(after.read_text(encoding="utf-8"), contents)
+
+    def test_main_names_the_compared_runs_from_their_artifacts(self):
+        with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+            root = Path(directory)
+            before, after, destination = root / "before.json", root / "after.json", root / "report.md"
+            for path, kind in ((before, "pre_language_seam"), (after, "language_seam")):
+                artifact = _timed_artifact(_MACHINE_TIME)
+                artifact["baseline_kind"] = kind
+                path.write_text(json.dumps(artifact), encoding="utf-8")
+            compare.main(["compare.py", str(before), str(after), str(destination)])
+            introduction = destination.read_text(encoding="utf-8").split("## Environment", 1)[0]
+
+            self.assertIn("the `pre_language_seam` (before) and `language_seam` (after) artifacts", introduction)
+            self.assertNotIn("interface-family", introduction)
 
     def test_main_refuses_to_overwrite_either_input(self):
         for target in ("before.json", "after.json"):

@@ -439,7 +439,10 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         self.assertIn("xe-1/0/4", "\n".join(logs.output))
 
     def test_two_token_templates_that_do_not_overlap_both_rename(self):
-        """The guard is scoped to real ambiguity: distinct claims still each match their own interface."""
+        """The guard is scoped to real ambiguity: distinct claims still each match their own interface.
+
+        ``{base}`` is the raw name each template resolves to now, at position 6.
+        """
         self._renumber(5)  # instantiate away from position 1, where the two matchers would collide
         module, bay = self._install_on(self.device, self.overlap_type, "4")
         self.assertEqual(self._names(module), ["xe-1/5/4", "xe-5/0/4"])
@@ -447,7 +450,7 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         InterfaceNameRule.objects.create(module_type=self.overlap_type, name_template="et-{base}")
 
         self.assertEqual(apply_interface_name_rules(module, bay), 2)
-        self.assertEqual(self._names(module), ["et-xe-1/5/4", "et-xe-5/0/4"])
+        self.assertEqual(self._names(module), ["et-xe-1/6/4", "et-xe-6/0/4"])
 
 
 class VcPositionAdjacentTokenTest(VcDriftTestCase):

@@ -57,7 +57,7 @@ def module_types_matching_pattern(pattern):
     return tuple(model for model in ModuleType.objects.values_list("model", flat=True) if compiled.fullmatch(model))
 
 
-def _compile_pattern(pattern):
+def compile_stored_pattern(pattern):
     """Compile a stored pattern once, or return None when RE2 rejects it."""
     try:
         return compile_module_type_pattern(pattern)
@@ -159,7 +159,7 @@ def _get_enabled_rules():
             (rule for rule in rules if rule.module_type_is_regex),
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
-        regex = tuple((_compile_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
+        regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
         cache = {"version": version, "exact": exact, "regex": regex, "memo": {}}
         _RULE_CACHE = cache
 

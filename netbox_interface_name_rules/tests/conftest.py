@@ -25,19 +25,13 @@ def django_db_modify_db_settings(django_db_modify_db_settings):
 
 @functools.lru_cache(maxsize=1)
 def _preview_key_contract():
-    """Return the rule-test form's fields and the variable names its preview derives.
-
-    `build_variables` is called without a device, which is the set `RuleTestView` rebuilds; it adds
-    `base` always and `channel` when `channel_count` is positive. `vc_position` is deliberately not
-    in it: the preview never derives it and it is a live NetBox device form key.
-    """
-    from dcim.models import ModuleBay
-
+    """Return form fields and every variable declared by a naming context."""
     from netbox_interface_name_rules.forms import RuleTestForm
-    from netbox_interface_name_rules.naming import build_variables
+    from netbox_interface_name_rules.name_template import NamingContext, variables_for_context
 
     fields = frozenset(RuleTestForm().fields)
-    return fields, frozenset(build_variables(ModuleBay())) | frozenset({"base", "channel"})
+    variables = frozenset(variable.name for context in NamingContext for variable in variables_for_context(context))
+    return fields, variables
 
 
 def dropped_preview_keys(data):
@@ -60,21 +54,14 @@ def refuse_dropped_preview_keys(data):
 
 @pytest.fixture(autouse=True)
 def _refuse_dropped_preview_keys(monkeypatch):
-    """Fail a `django.test.Client.post` that carries a preview variable the form would drop.
+    """Fail any request that reaches the rule tester with a preview variable the form would drop."""
+    from netbox_interface_name_rules.views import RuleTestView
 
-    The check reads the dict that is actually sent, so a payload assembled from `**kwargs` is
-    covered as well as a literal. It does not reach DRF's `APIClient`, which defines its own
-    `post`, nor a non-dict body; neither submits the rule-test form.
-    """
-    from django.test import Client
-    from django.urls import reverse
+    original = RuleTestView.post
 
-    original = Client.post
-    preview_path = reverse("plugins:netbox_interface_name_rules:interfacenamerule_test")
+    @functools.wraps(original)
+    def post(self, request):
+        refuse_dropped_preview_keys(request.POST)
+        return original(self, request)
 
-    def post(self, path, data=None, *args, **kwargs):
-        if path.split("?", 1)[0] == preview_path and isinstance(data, dict):
-            refuse_dropped_preview_keys(data)
-        return original(self, path, data, *args, **kwargs)
-
-    monkeypatch.setattr(Client, "post", post)
+    monkeypatch.setattr(RuleTestView, "post", post)

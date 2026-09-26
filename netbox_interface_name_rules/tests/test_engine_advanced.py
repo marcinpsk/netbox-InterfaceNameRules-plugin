@@ -24,7 +24,6 @@ from dcim.models import (
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
-    _extract_trailing_digits,
     _matching_moduletype_pks,
     apply_interface_name_rules,
     apply_rule_to_existing,
@@ -36,6 +35,7 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.family import FamilyStatus
 from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.naming import _extract_trailing_digits
 
 
 class EngineAdvancedFixtures(TestCase):
@@ -670,24 +670,15 @@ class FlagPotentiallyDeprecatedTest(EngineAdvancedFixtures):
     """Test that _flag_rule_potentially_deprecated is called on no-op renames."""
 
     def test_no_op_rename_adds_deprecated_tag(self):
-        """When rule matches but all interfaces already have correct names, tag is added."""
-        rule = InterfaceNameRule.objects.create(
-            module_type=self.module_type,
-            name_template="et-0/0/{bay_position}",
-        )
+        """A rule whose output is the raw name the module already carries is tagged."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="{bay_position}")
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        # Create with the final correct name (so the rule renames nothing for it)
-        # But the name "et-0/0/0" is NOT in raw_names (raw = "0"), so this won't trigger deprecated.
-        # Instead, set force_reapply so it's in unrenamed but produces 0 renames.
-        iface = Interface.objects.create(device=self.device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
+        # The module type has no templates, so its raw name is the bay position "0".
+        Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
 
-        # force_reapply=True: unrenamed=[iface], but new_name=="et-0/0/0"==iface.name → renamed=0
-        apply_interface_name_rules(module, self.bay0, force_reapply=True)
+        self.assertEqual(apply_interface_name_rules(module, self.bay0), 0)
 
-        # The tag should have been added
-        iface.refresh_from_db()
-        tags = list(rule.tags.filter(slug="potentially-deprecated"))
-        self.assertEqual(len(tags), 1)
+        self.assertTrue(rule.tags.filter(slug="potentially-deprecated").exists())
 
 
 # ---------------------------------------------------------------------------
@@ -812,12 +803,13 @@ class BreakoutTemplateValueErrorTest(TestCase):
 
     def test_an_unevaluable_template_builds_nothing_and_renames_nothing(self):
         """``{undefined_var}`` is not a naming variable, so every family reports the failure."""
-        rule = InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{undefined_var}:{channel}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
         Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
@@ -1027,12 +1019,13 @@ class PreviewTemplateErrorTest(TestCase):
 
     def test_an_unevaluable_template_previews_one_error_placeholder(self):
         """An undefined variable raises for real, so the family previews as a single placeholder."""
-        rule = InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{base}:{channel}:{undefined_var}",  # The undefined variable raises ValueError.
             channel_count=2,
             channel_start=0,
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
 
@@ -1653,10 +1646,11 @@ class PredictRuleOutputTest(EngineAdvancedFixtures):
         """When evaluate_name_template raises, the raw name is kept in the output."""
         from netbox_interface_name_rules.engine import predict_rule_output
 
-        InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="{nonexistent_variable}",
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = predict_rule_output(module, self.bay0, ["fallback-me"])
         self.assertEqual(result, ["fallback-me"])

@@ -1,19 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-import ast
-import re
+import inspect
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, router, transaction
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
 from .choices import BreakoutModeChoices
+from .name_template import validate_rule
 from .regex_safety import compile_module_type_pattern
-
-_TEMPLATE_FIELD = re.compile(r"\{([^{}]*)\}")
 
 
 def csv_export_entry(headers, values):
@@ -25,88 +23,8 @@ def csv_export_entry(headers, values):
     }
 
 
-def _expression_names_channel(field):
-    """Return True when the brace group *field* parses as an expression naming ``channel``.
-
-    Mirrors how ``evaluate_name_template`` reads a brace group — ``ast.parse`` plus a walk — so
-    ``{channel + 1}`` is caught here instead of failing at evaluation time.  A group that is not an
-    expression at all is left to the plain-name check.
-    """
-    try:
-        tree = ast.parse(field.strip(), mode="eval")
-    except (SyntaxError, ValueError):
-        return False
-    return any(isinstance(node, ast.Name) and node.id == "channel" for node in ast.walk(tree))
-
-
-def _references_channel(template):
-    """Return True when *template* names ``{channel}`` in any spelling the engine can be handed.
-
-    Covers the plain form, the conversion and format-spec forms (``{channel!r}``, ``{channel:>2}``),
-    the nested-arithmetic one (``{{channel} + 1}``) and the identifier inside an arithmetic
-    expression (``{channel + 1}``).  ``string.Formatter().parse()`` is not used here: it rejects the
-    plugin's own arithmetic templates as malformed field names.
-    """
-    for field in _TEMPLATE_FIELD.findall(template):
-        name = field.split("!", 1)[0].split(":", 1)[0].strip()
-        if name == "channel" or name.startswith(("channel.", "channel[")):
-            return True
-        if _expression_names_channel(field):
-            return True
-    return False
-
-
-def _has_unbalanced_braces(template):
-    """Return True when *template*'s braces do not pair up.
-
-    Nested groups are the plugin's arithmetic form (``{8 + ({x} - 1) * 2}``), so depth is counted
-    rather than matched pairwise.
-    """
-    depth = 0
-    for char in template:
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth < 0:
-                return True
-    return depth != 0
-
-
-_TOPOLOGY_FIELDS = frozenset({"applies_to_device_interfaces", "breakout_mode", "channel_count", "parent_name_template"})
-
-
-def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces=False):
-    """Check that the mode, the channel count and the parent template describe one topology.
-
-    Raises ``ValidationError`` blaming the field that makes the combination impossible.  Shared by
-    the model's ``clean()`` and by ``RuleTestForm`` so the tester refuses exactly what a save would.
-    """
-    channelized = breakout_mode == BreakoutModeChoices.CHANNELIZED
-    if applies_to_device_interfaces:
-        # The device-level path renames existing interfaces; it never creates a family to name.
-        if channelized:
-            raise ValidationError({"breakout_mode": "Device-level interface rules cannot build a channelized family."})
-        if parent_name_template:
-            raise ValidationError(
-                {"parent_name_template": "Parent name template is not available for device-level interface rules."}
-            )
-    if parent_name_template:
-        if not channelized:
-            raise ValidationError(
-                {"parent_name_template": "Parent name template requires the channelized breakout mode."}
-            )
-        if _has_unbalanced_braces(parent_name_template):
-            # Parent template only: stray braces in name_template predate this and are already stored.
-            raise ValidationError(
-                {"parent_name_template": "Unbalanced braces — every '{' in the template needs a '}'."}
-            )
-        if _references_channel(parent_name_template):
-            raise ValidationError(
-                {"parent_name_template": "The parent interface has no channel number; remove {channel}."}
-            )
-    if channelized and not channel_count:
-        raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
+DEVICE_RULE_PARENT_MODULE_TYPE_ERROR = "Parent module type must be empty for device-level interface rules."
+_RULE_VALIDATION_FIELDS = frozenset(inspect.signature(validate_rule).parameters)
 
 
 class InterfaceNameRule(NetBoxModel):
@@ -116,20 +34,9 @@ class InterfaceNameRule(NetBoxModel):
     the correct interface name, such as converter offset (CVR-X2-SFP)
     or breakout transceivers (QSFP+ 4x10G).
 
-    The name_template substitutes these variables, then evaluates any brace group left over
-    as integer arithmetic. It is not str.format: conversions and format specifications are
-    not part of the language.
-      {slot}               - Slot number from parent module bay position
-      {slot_num}           - Numeric suffix of slot
-      {bay_position}       - Position of the bay this module is installed into
-      {bay_position_num}   - Numeric suffix of bay position (e.g., "swp1" → "1")
-      {parent_bay_position} - Position of the parent module's bay
-      {parent_bay_position_num} - Numeric suffix of the parent bay position
-      {sfp_slot}           - Sub-bay index within the parent module
-      {base}               - Base interface name from NetBox position resolution
-      {channel}            - Channel number (iterated for breakout)
-      {vc_position}        - Virtual Chassis member position, for a member device only
-      {port}               - Segment after the last "/" of a device interface name
+    ``name_template.TEMPLATE_VARIABLES`` is the catalogue for the variables available in each
+    naming context. The language substitutes those variables, then evaluates supported integer
+    arithmetic in each remaining brace group.
 
     A device type may compose the parent into a bay position, so a position can be
     path-shaped, such as "TenGigabitEthernet3/2/1". Arithmetic takes the _num form.
@@ -175,7 +82,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         related_name="+",
         verbose_name="Parent Module Type",
-        help_text="If set, rule only applies when installed inside this parent module type",
+        help_text=(
+            "If set, rule only applies when installed inside this parent module type. "
+            "Must be empty for device-level interface rules."
+        ),
     )
     device_type = models.ForeignKey(
         DeviceType,
@@ -245,8 +155,8 @@ class InterfaceNameRule(NetBoxModel):
         help_text=(
             "When enabled, this rule renames device-level interfaces (module=None) when the device "
             "joins or changes position in a Virtual Chassis. "
-            "The Module Type field must be empty; the Module Type Pattern (if set) is used as a regex "
-            "to filter which interface names to rename."
+            "The Module Type and Parent Module Type fields must be empty; the Module Type Pattern (if set) "
+            "is used as a regex to filter which interface names to rename."
         ),
     )
 
@@ -257,32 +167,43 @@ class InterfaceNameRule(NetBoxModel):
     def clean(self):
         """Validate regex/FK mode exclusivity and required fields."""
         super().clean()
+        self._normalise_mode()
         if self.applies_to_device_interfaces:
             # Device-level rules must not reference a module type
             if self.module_type:
                 raise ValidationError({"module_type": "Module type must be empty for device-level interface rules."})
+            if self.parent_module_type_id:
+                raise ValidationError({"parent_module_type": DEVICE_RULE_PARENT_MODULE_TYPE_ERROR})
             # module_type_pattern is an optional interface-name filter regex
             if self.module_type_pattern:
                 compile_module_type_pattern(self.module_type_pattern)
-            # Force regex mode off — module_type_is_regex has no meaning here
-            self.module_type_is_regex = False
         elif self.module_type_is_regex:
             if not self.module_type_pattern:
                 raise ValidationError({"module_type_pattern": "Regex pattern is required when regex mode is enabled."})
             if self.module_type:
                 raise ValidationError({"module_type": "Cannot set both module type FK and regex pattern. Choose one."})
             compile_module_type_pattern(self.module_type_pattern)
-        else:
-            # Clear any stale pattern so it does not persist when switching modes
+        elif not self.module_type:
+            raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
+        validate_rule(**self._rule_values())
+
+    def _normalise_mode(self):
+        """Clear the mode fields that the rule's mode gives no meaning."""
+        if self.applies_to_device_interfaces:
+            self.module_type_is_regex = False
+        elif not self.module_type_is_regex:
             self.module_type_pattern = ""
-            if not self.module_type:
-                raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        _validate_breakout_topology(
-            self.breakout_mode,
-            self.channel_count,
-            self.parent_name_template,
-            self.applies_to_device_interfaces,
-        )
+
+    def _rule_values(self, fields=_RULE_VALIDATION_FIELDS):
+        """Return the in-memory values of the named validate_rule() fields."""
+        return {field: getattr(self, field) for field in fields}
+
+    def _loaded_fields(self):
+        """Return the loaded fields Model.save() writes when a field is deferred, else None."""
+        fields = self._meta.concrete_fields
+        deferred = self.get_deferred_fields() - {field.attname for field in fields if field.generated}
+        loaded = {field.attname for field in fields if not field.primary_key} - deferred
+        return frozenset(loaded) if deferred and loaded else None
 
     def get_absolute_url(self):
         """Return the detail URL for this rule."""
@@ -331,6 +252,7 @@ class InterfaceNameRule(NetBoxModel):
           any possible regex score).
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
+        A device-level rule takes no parent_module_type, so its scope is at most 3.
         Two rules with the same score fall back to lowest pk (first created).
         """
         scope = (
@@ -384,8 +306,7 @@ class InterfaceNameRule(NetBoxModel):
                 name="interfacenamerule_module_type_mode_check",
             ),
             models.CheckConstraint(
-                # The implications _validate_breakout_topology() enforces over enum and integer
-                # columns, written as ~P | Q. Its parent-template grammar rules stay in save().
+                # Enforce the enum and integer implications of validate_rule() as ~P | Q.
                 condition=(
                     models.Q(breakout_mode__in=[BreakoutModeChoices.FLAT, BreakoutModeChoices.CHANNELIZED])
                     & (
@@ -397,6 +318,10 @@ class InterfaceNameRule(NetBoxModel):
                     & (~models.Q(breakout_mode=BreakoutModeChoices.CHANNELIZED) | ~models.Q(channel_count=0))
                 ),
                 name="interfacenamerule_breakout_topology_check",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(applies_to_device_interfaces=False) | models.Q(parent_module_type__isnull=True),
+                name="interfacenamerule_device_rule_scope_check",
             ),
             models.UniqueConstraint(
                 fields=["module_type", "parent_module_type", "device_type", "platform"],
@@ -418,22 +343,36 @@ class InterfaceNameRule(NetBoxModel):
             ),
         ]
 
-    def save(self, *args, **kwargs):
-        """Refuse a topology no check constraint can express, so a plain ORM write cannot store it."""
+    def save(self, **kwargs):
+        """Normalise the mode fields and validate topology and templates before a plain ORM write."""
+        using = kwargs.get("using") or router.db_for_write(self.__class__, instance=self)
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
             # one, and it skips the write when update_fields is empty.
             update_fields = frozenset(update_fields)
-            kwargs["update_fields"] = update_fields
-        if update_fields is None or _TOPOLOGY_FIELDS.intersection(update_fields):
-            _validate_breakout_topology(
-                self.breakout_mode,
-                self.channel_count,
-                self.parent_name_template,
-                self.applies_to_device_interfaces,
-            )
-        return super().save(*args, **kwargs)
+        elif not kwargs.get("force_insert") and using == self._state.db and self.pk is not None:
+            # Name Model.save()'s implicit update_fields now: a validation read would load the deferred fields.
+            update_fields = self._loaded_fields()
+        if update_fields is None:
+            # The API saves its validated attrs, not the instance clean() normalised.
+            self._normalise_mode()
+            validate_rule(**self._rule_values())
+            return super().save(**kwargs)
+        kwargs["update_fields"] = update_fields
+        if written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
+            # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
+            kwargs["using"] = using
+            with transaction.atomic(using=using):
+                stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
+                # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.
+                row = stored.order_by().values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()
+                # A missing row is left to Django, which refuses the update itself.
+                if row is not None:
+                    del row["pk"]
+                    validate_rule(**(self._rule_values(written) | row))
+                return super().save(**kwargs)
+        return super().save(**kwargs)
 
     def __str__(self):
         if self.module_type_is_regex:

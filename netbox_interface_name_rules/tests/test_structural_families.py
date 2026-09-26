@@ -24,7 +24,6 @@ from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
     execute_structural_family,
-    install_channelized_family,
     plan_structural_family,
     structural,
 )
@@ -67,7 +66,7 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base)
+        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
         return module, bay, plan
 
 
@@ -112,16 +111,6 @@ class StructuralFamilyWithoutChannelizationTest(StructuralFamilyTestCase):
         self.assertEqual(member.current_name, "3")
         self.assertEqual(member.status, FamilyStatus.UNSUPPORTED)
         self.assertTrue(member.reason)
-
-    def test_the_install_entry_point_reaches_the_same_outcome(self):
-        module, bay = self._install(self.module_type, "4", run_rules=False)
-        base = Interface.objects.get(module=module)
-
-        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
-            outcome = install_channelized_family(module, self.rule, build_variables(bay, device=self.device), base)
-
-        self.assertEqual(outcome.status, FamilyStatus.UNSUPPORTED)
-        self.assertEqual(self._names(module), ["4"])
 
 
 class DeferredChannelNameReconciliationTest(TestCase):
@@ -415,7 +404,12 @@ class StructuralFamilyTemplateFailureTest(StructuralFamilyTestCase):
     """A rule whose channel template cannot be evaluated builds nothing and says why."""
 
     PREFIX = "StructTpl"
-    NAME_TEMPLATE = "xe-0/0/{bay_position}:{missing_variable}"
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.rule.name_template = "xe-0/0/{bay_position}:{missing_variable}"
+        InterfaceNameRule.objects.filter(pk=cls.rule.pk).update(name_template=cls.rule.name_template)
 
     def test_the_plan_carries_the_template_failure_instead_of_raising(self):
         _module, _bay, plan = self._plan()

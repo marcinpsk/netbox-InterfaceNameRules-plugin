@@ -70,7 +70,7 @@ An operator-provided expression saved on an Interface Name Rule and evaluated to
 _Avoid_: Format string, raw template name
 
 **Template variable**:
-A named value that a name template substitutes before it evaluates the arithmetic that remains. A variable is available only in the naming contexts that provide it.
+A named value that a name template substitutes before it evaluates the arithmetic that remains. A variable is available only in the naming contexts that provide it. Substituted values are literal text, not template syntax.
 _Avoid_: Placeholder, token
 
 **Naming context**:

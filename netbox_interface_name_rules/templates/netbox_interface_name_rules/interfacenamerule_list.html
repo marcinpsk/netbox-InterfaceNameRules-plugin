@@ -34,22 +34,24 @@
                joins a stack or changes position. The <code>Module Type Pattern</code> field acts as an interface-name filter (regex) instead of a module type selector.</p>
 
             <h6 class="mt-3">Supported Template Variables</h6>
-            <table class="table table-sm table-bordered" style="max-width: 750px;">
+            <ul class="small">
+                {% for context in template_naming_contexts %}
+                <li><strong>{{ context.label }}:</strong> {{ context.summary }}</li>
+                {% endfor %}
+            </ul>
+            <table id="rule-list-variable-reference" class="table table-sm table-bordered" style="max-width: 900px;">
                 <thead>
-                    <tr><th style="width: 200px;">Variable</th><th>Rule type</th><th>Description</th></tr>
+                    <tr><th style="width: 150px;">Variable</th><th>Rule type</th><th>Description</th><th>Example</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td><code>{slot}</code></td><td>Module</td><td>Top-level slot/module bay position (from grandparent or parent)</td></tr>
-                    <tr><td><code>{slot_num}</code></td><td>Module</td><td>Numeric suffix of slot (e.g., "Slot 7" &rarr; "7")</td></tr>
-                    <tr><td><code>{bay_position}</code></td><td>Module</td><td>Position of the bay this module is installed into (raw, e.g., "swp1")</td></tr>
-                    <tr><td><code>{bay_position_num}</code></td><td>Module</td><td>Numeric suffix of bay position (e.g., "swp1" &rarr; "1")</td></tr>
-                    <tr><td><code>{parent_bay_position}</code></td><td>Module</td><td>Position of the parent module's bay</td></tr>
-                    <tr><td><code>{parent_bay_position_num}</code></td><td>Module</td><td>Numeric suffix of parent bay position (e.g., "TenGigabitEthernet3/2" &rarr; "2")</td></tr>
-                    <tr><td><code>{sfp_slot}</code></td><td>Module</td><td>Numeric sub-bay index within the parent module</td></tr>
-                    <tr><td><code>{base}</code></td><td>Both</td><td>Original interface name from the template (or current name for device-level rules)</td></tr>
-                    <tr><td><code>{port}</code></td><td>Device</td><td>Segment after the last "/" in the current interface name (e.g., "Gi0/1" &rarr; "1"); full name if no "/"</td></tr>
-                    <tr><td><code>{channel}</code></td><td>Module</td><td>Breakout channel number (iterated from Ch. Start to Ch. Start + Channels - 1)</td></tr>
-                    <tr><td><code>{vc_position}</code></td><td>Both</td><td>Virtual Chassis member position (<code>device.vc_position</code>); requires device to be in a VC</td></tr>
+                    {% for row in template_variable_rows %}
+                    <tr data-naming-contexts="{{ row.context_values }}" data-template-variable="{{ row.name }}">
+                        <td><code>{{ row.token }}</code></td>
+                        <td>{{ row.rule_type_label }}</td>
+                        <td>{{ row.description }}</td>
+                        <td><code>{{ row.example }}</code></td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
 
@@ -58,25 +60,25 @@
                <code>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></p>
 
             <h6 class="mt-3">Examples</h6>
-            <ul class="mb-0">
+            <ul id="interface-name-rule-examples" class="mb-0">
                 <li><strong>Converter offset:</strong> GLC-T in CVR-X2-SFP &rarr;
-                    <code>GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></li>
-                <li><strong>Breakout:</strong> QSFP-4X10G-LR &rarr; <code>{base}:{channel}</code>
+                    <code data-name-template-context="module_member">GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></li>
+                <li><strong>Breakout:</strong> QSFP-4X10G-LR &rarr; <code data-name-template-context="module_member">{base}:{channel}</code>
                     (Channels=4, Ch. Start=0)</li>
                 <li><strong>Platform naming:</strong> QSFP-100G-LR4 on ACX7024 &rarr;
-                    <code>et-0/0/{bay_position}</code> (scoped via Parent Device Type)</li>
+                    <code data-name-template-context="module_member">et-0/0/{bay_position}</code> (scoped via Parent Device Type)</li>
                 <li><strong>UfiSpace breakout:</strong> QSFP-100G-LR4 on S9610-36D &rarr;
-                    <code>swp{bay_position_num}s{channel}</code> (Channels=2, Ch. Start=1)</li>
+                    <code data-name-template-context="module_member">swp{bay_position_num}s{channel}</code> (Channels=4, Ch. Start=0)</li>
                 <li><strong>Virtual Chassis linecard:</strong> VC-LINECARD on stack member &rarr;
-                    <code>Gi{vc_position}/{bay_position_num}</code> (requires device to be in a Virtual Chassis)</li>
+                    <code data-name-template-context="module_member">Gi{vc_position}/{bay_position_num}</code> (requires device to be in a Virtual Chassis)</li>
                 <li><strong>VC device ports (Cisco):</strong> GigabitEthernet1/0/3 on stack member 2 &rarr;
-                    <code>GigabitEthernet{vc_position}/0/{port}</code> &rarr; GigabitEthernet2/0/3
+                    <code data-name-template-context="device_interface">GigabitEthernet{vc_position}/0/{port}</code> &rarr; GigabitEthernet2/0/3
                     (device-level rule, pattern <code>GigabitEthernet\d+/\d+/\d+</code>)</li>
                 <li><strong>VC device ports (Juniper):</strong> ge-0/0/2 on VC member 1 &rarr;
-                    <code>ge-{vc_position}/0/{port}</code> &rarr; ge-1/0/2
+                    <code data-name-template-context="device_interface">ge-{vc_position}/0/{port}</code> &rarr; ge-1/0/2
                     (device-level rule, pattern <code>ge-\d+/\d+/\d+</code>)</li>
                 <li><strong>VC device ports (Arista):</strong> Ethernet1/3 on VC member 2 &rarr;
-                    <code>Ethernet{vc_position}/{port}</code> &rarr; Ethernet2/3
+                    <code data-name-template-context="device_interface">Ethernet{vc_position}/{port}</code> &rarr; Ethernet2/3
                     (device-level rule, pattern <code>Ethernet\d+/\d+</code>)</li>
             </ul>
 
