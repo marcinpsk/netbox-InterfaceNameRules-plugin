@@ -26,6 +26,7 @@ from netbox_interface_name_rules.name_template import (
     TEMPLATE_VARIABLES,
     NamingContext,
     evaluate_name_template,
+    referenced_variables,
     variables_for_context,
 )
 from netbox_interface_name_rules.naming import build_bay_chain_variables, build_variables, numeric_suffix
@@ -672,7 +673,6 @@ _MARKDOWN_TEMPLATE_KEY = re.compile(
     r"^[^\S\r\n]*-?[^\S\r\n]*(?:parent_)?name_template[^\S\r\n]*:",
     re.MULTILINE,
 )
-_TEMPLATE_VARIABLE = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)\}")
 _MARKDOWN_TABLE_CONTEXTS = {
     "README.md": {"Supported scenarios": NamingContext.MODULE_MEMBER},
     "docs/index.md": {"Supported Scenarios": NamingContext.MODULE_MEMBER},
@@ -975,7 +975,7 @@ def _documented_templates():
 def _unavailable_variables(documented):
     """Return the variables *documented* references that its naming context does not provide."""
     available = {variable.name for variable in variables_for_context(documented.context)}
-    return set(_TEMPLATE_VARIABLE.findall(documented.template)) - available
+    return set(referenced_variables(documented.template)) - available
 
 
 def _example_variables(context):
@@ -1171,6 +1171,24 @@ class DocumentedTemplateTest(unittest.TestCase):
                 templates = tuple(_templates_in_rule_list_examples())
 
             self.assertEqual([_unavailable_variables(documented) for documented in templates], [{"unknown_variable"}])
+
+    def test_rule_list_help_reports_variables_the_template_parser_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / _UI_LIST
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                f'<ul id="{_UI_EXAMPLES_LIST_ID}">\n'
+                '<li><code data-name-template-context="module_parent">et-0/0/{channel + 1}</code></li>\n'
+                '<li><code data-name-template-context="module_member">eth{é}</code></li>\n'
+                "</ul>\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(importlib.import_module(__name__), "_PROJECT_ROOT", root):
+                templates = tuple(_templates_in_rule_list_examples())
+
+            self.assertEqual([_unavailable_variables(documented) for documented in templates], [{"channel"}, {"é"}])
 
     def test_rule_list_help_rejects_an_unmarked_template_on_any_element(self):
         with tempfile.TemporaryDirectory() as directory:
