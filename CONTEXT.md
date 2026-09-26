@@ -93,6 +93,18 @@ _Avoid_: Failed family operation
 The complete path from a NetBox model save, through the committed callback, to the resulting interface-family rows.
 _Avoid_: Signal handler performance
 
+**Rename trigger**:
+A saved change in NetBox after which the names a rule gives may be wrong, so the plugin must reapply its rules. The triggers are: a module is installed, a module's type changes, a module moves to another bay or device, an occupied module bay's position or name changes, and a device's virtual chassis or virtual-chassis position changes.
+_Avoid_: Signal, event
+
+**Reapply**:
+Running the rules again on interfaces that already exist. An operator reapplies with Apply Rules; a rename trigger reapplies automatically.
+_Avoid_: Re-run, refresh
+
+**Previous state**:
+The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change".
+_Avoid_: Old values, snapshot (NetBox's change-log snapshot is a different thing)
+
 **Signal-path performance baseline**:
 Test-suite measurements of the automatic naming signal path before an implementation change. The baseline includes query counts, PostgreSQL work profiles, scaling behavior, and repeated machine-time samples collected on the hardware used for the after measurement. Shared-runner elapsed time is not a recurring CI metric.
 _Avoid_: Runtime limit, CI speed
