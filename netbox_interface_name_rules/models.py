@@ -194,15 +194,16 @@ class InterfaceNameRule(NetBoxModel):
         elif not self.module_type_is_regex:
             self.module_type_pattern = ""
 
-    def _rule_values(self):
-        """Return the in-memory values that validate_rule() checks."""
-        return {
-            "breakout_mode": self.breakout_mode,
-            "channel_count": self.channel_count,
-            "name_template": self.name_template,
-            "parent_name_template": self.parent_name_template,
-            "applies_to_device_interfaces": self.applies_to_device_interfaces,
-        }
+    def _rule_values(self, fields=_RULE_VALIDATION_FIELDS):
+        """Return the in-memory values of the named validate_rule() fields."""
+        return {field: getattr(self, field) for field in fields}
+
+    def _loaded_fields(self):
+        """Return the loaded fields Model.save() writes when a field is deferred, else None."""
+        fields = self._meta.concrete_fields
+        deferred = self.get_deferred_fields() - {field.attname for field in fields if field.generated}
+        loaded = {field.attname for field in fields if not field.primary_key} - deferred
+        return frozenset(loaded) if deferred and loaded else None
 
     def get_absolute_url(self):
         """Return the detail URL for this rule."""
@@ -344,20 +345,24 @@ class InterfaceNameRule(NetBoxModel):
 
     def save(self, **kwargs):
         """Normalise the mode fields and validate topology and templates before a plain ORM write."""
+        using = kwargs.get("using") or router.db_for_write(self.__class__, instance=self)
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
             # one, and it skips the write when update_fields is empty.
             update_fields = frozenset(update_fields)
-            kwargs["update_fields"] = update_fields
-        else:
+        elif not kwargs.get("force_insert") and using == self._state.db and self.pk is not None:
+            # Name Model.save()'s implicit update_fields now: a validation read would load the deferred fields.
+            update_fields = self._loaded_fields()
+        if update_fields is None:
             # The API saves its validated attrs, not the instance clean() normalised.
             self._normalise_mode()
-        if update_fields is None:
             validate_rule(**self._rule_values())
-        elif written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
+            return super().save(**kwargs)
+        kwargs["update_fields"] = update_fields
+        if written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
             # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
-            using = kwargs["using"] = kwargs.get("using") or router.db_for_write(self.__class__, instance=self)
+            kwargs["using"] = using
             with transaction.atomic(using=using):
                 stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
                 # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.
@@ -365,7 +370,7 @@ class InterfaceNameRule(NetBoxModel):
                 # A missing row is left to Django, which refuses the update itself.
                 if row is not None:
                     del row["pk"]
-                    validate_rule(**(self._rule_values() | row))
+                    validate_rule(**(self._rule_values(written) | row))
                 return super().save(**kwargs)
         return super().save(**kwargs)
 

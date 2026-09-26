@@ -15,6 +15,7 @@ from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, IntegrityError, connection, migrations, transaction
+from django.db.models.signals import pre_save
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -237,8 +238,7 @@ class RuleValidationAgreementTest(TestCase):
         with CaptureQueriesContext(connection) as queries:
             rule.save(update_fields=["description"])
 
-        rule_reads = f'SELECT "{InterfaceNameRule._meta.db_table}".'
-        self.assertFalse([query["sql"] for query in queries if query["sql"].startswith(rule_reads)])
+        self.assertFalse(rule_reads(queries))
 
     def test_a_targeted_save_locks_the_row_it_validates_against(self):
         """A concurrent targeted save must not change the stored fields between this read and this write."""
@@ -248,8 +248,7 @@ class RuleValidationAgreementTest(TestCase):
         with CaptureQueriesContext(connection) as queries:
             rule.save(update_fields=["name_template"])
 
-        rule_reads = f'SELECT "{InterfaceNameRule._meta.db_table}".'
-        locked = [query["sql"] for query in queries if query["sql"].startswith(rule_reads)]
+        locked = rule_reads(queries)
         self.assertTrue(locked)
         self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in locked), locked)
 
@@ -263,6 +262,54 @@ class RuleValidationAgreementTest(TestCase):
             rule.save(update_fields=["name_template"])
 
         self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-0/{bay_position}")
+
+    def test_a_deferred_save_keeps_a_concurrent_change_to_a_field_it_did_not_load(self):
+        """Validation must not load the deferred fields, which Django then writes back over a concurrent change."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=4,
+            parent_name_template="et-0/0/{bay_position}",
+        )
+        deferred = load_deferred(rule, "name_template")
+        deferred.name_template = "xe-1/0/{bay_position}:{channel}"
+
+        def concurrent_save(sender, instance, **kwargs):
+            stored = InterfaceNameRule.objects.filter(pk=instance.pk)
+            stored.update(channel_count=8, parent_name_template="et-1/0/{bay_position}")
+
+        pre_save.connect(concurrent_save, sender=InterfaceNameRule, weak=False, dispatch_uid="concurrent_save")
+        self.addCleanup(pre_save.disconnect, sender=InterfaceNameRule, dispatch_uid="concurrent_save")
+        deferred.save()
+
+        stored = InterfaceNameRule.objects.get(pk=rule.pk)
+        self.assertEqual(stored.name_template, "xe-1/0/{bay_position}:{channel}")
+        self.assertEqual((stored.channel_count, stored.parent_name_template), (8, "et-1/0/{bay_position}"))
+
+    def test_a_deferred_save_validates_against_the_locked_stored_row(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        deferred = load_deferred(rule, "name_template")
+        deferred.name_template = "xe-{bay_position}:{channel}"
+
+        with CaptureQueriesContext(connection) as queries, self.assertRaises(ValidationError):
+            deferred.save()
+
+        reads = rule_reads(queries)
+        self.assertTrue(reads)
+        self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in reads), reads)
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_deferred_save_of_an_unrelated_field_does_not_query_the_rule(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        deferred = load_deferred(rule, "description")
+        deferred.description = "after"
+
+        with CaptureQueriesContext(connection) as queries:
+            deferred.save()
+
+        self.assertFalse(rule_reads(queries))
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "after")
 
     def test_save_refuses_positional_arguments(self):
         """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""
@@ -358,8 +405,8 @@ class RuleValidationAgreementTest(TestCase):
         self.assertEqual(InterfaceNameRule.objects.count(), 3)
 
 
-# Calls that read the instance and change no field: Django's router resolves save()'s write alias.
-SELF_ARGUMENT_PERMITS = frozenset({("save", "router.db_for_write")})
+# Calls that read the instance and change no field: the router resolves the write alias, getattr reads one field.
+SELF_ARGUMENT_PERMITS = frozenset({("save", "router.db_for_write"), ("_rule_values", "getattr")})
 
 
 class ModeNormalisationSeamTest(SimpleTestCase):
@@ -393,6 +440,17 @@ class ModeNormalisationSeamTest(SimpleTestCase):
                         isinstance(node.ctx, (ast.Store, ast.Del)) and node.attr in fields,
                         f"{method.name}() writes self.{node.attr}; change a field only in _normalise_mode()",
                     )
+
+
+def load_deferred(rule, *fields):
+    """Load the rule with only these fields and custom_field_data, which NetBox's save() reads."""
+    return InterfaceNameRule.objects.only(*fields, "custom_field_data").get(pk=rule.pk)
+
+
+def rule_reads(queries):
+    """Return the captured SELECT statements on the rule table."""
+    prefix = f'SELECT "{InterfaceNameRule._meta.db_table}".'
+    return [query["sql"] for query in queries if query["sql"].startswith(prefix)]
 
 
 class WriteToDefaultDatabase:
