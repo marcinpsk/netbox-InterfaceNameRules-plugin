@@ -43,6 +43,7 @@ from netbox_interface_name_rules.family import (
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
+    module_raw_bases,
     pinned_template_cache,
     plan_flat_family,
     plan_prospective_families,
@@ -406,6 +407,31 @@ class VirtualChassisReapplyTestCase(BulkTestCase):
 class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
     """Every module family the position names has to move with it."""
 
+    def test_missing_position_is_logged_while_another_device_is_renamed(self):
+        """A device with no position is skipped and logged; a member device is still renamed."""
+        unresolved = self._install("1")
+        member = Device.objects.create(
+            name="bulk-vc-member",
+            device_type=self.device_type,
+            role=self.role,
+            site=self.site,
+            virtual_chassis=self.virtual_chassis,
+            vc_position=2,
+        )
+        resolved = Module.objects.create(
+            device=member,
+            module_type=self.module_type,
+            module_bay=ModuleBay.objects.get(device=member, name="Bay 1"),
+        )
+        self.rule.full_clean()
+        self.rule.save()
+        with self.assertLogs("netbox_interface_name_rules", level="WARNING") as logs:
+            outcome = apply_rule_to_existing(self.rule)
+        self.assertEqual(outcome.changed_count, 1)
+        self.assertEqual(self._names(unresolved), ["1"])
+        self.assertEqual(self._names(resolved), ["et-2/0/1"])
+        self.assertIn("vc_position", " ".join(logs.output))
+
     def test_every_module_family_follows_the_new_position(self):
         modules = self._install_and_name(("1", "2", "3"))
 
@@ -617,7 +643,7 @@ class FlatFamilyCreationTest(BulkTestCase):
 
     def _plan(self):
         """Plan the flat family the rule builds on this module's only interface."""
-        return plan_flat_family(self.module, self.rule, self.variables, self.base)
+        return plan_flat_family(self.module, self.rule, self.variables, self.base, self.base.name)
 
     def test_a_sibling_whose_name_is_taken_is_skipped_and_the_rest_are_created(self):
         """One sibling's collision is that sibling's own; the family keeps the names it can take."""
@@ -654,7 +680,7 @@ class FlatFamilyCreationTest(BulkTestCase):
     def test_a_template_the_rule_cannot_evaluate_builds_nothing(self):
         """The plan carries the failure, so the executor writes nothing and says why."""
         self.rule.name_template = "{undefined_var}:{channel}"
-        self.rule.save()
+        InterfaceNameRule.objects.filter(pk=self.rule.pk).update(name_template=self.rule.name_template)
 
         outcome = execute_flat_family(self._plan())
 
@@ -664,6 +690,7 @@ class FlatFamilyCreationTest(BulkTestCase):
     def test_a_zero_channel_flat_plan_fails_without_touching_the_base(self):
         """A direct flat-family call with no target names must remain a safe no-op."""
         self.rule.channel_count = 0
+        self.rule.name_template = "{base}"
         self.rule.save()
 
         outcome = execute_flat_family(self._plan())
@@ -674,10 +701,11 @@ class FlatFamilyCreationTest(BulkTestCase):
 
     def test_a_simple_rule_the_engine_cannot_evaluate_is_reported_as_a_failure(self):
         """A one-interface rename carries its template failure the same way a family does."""
-        rule = InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule(
             module_type=self._module_type("BULK-SIMPLE-FAIL", ("{module}",)),
             name_template="{undefined_var}",
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         module = self._install("2", module_type=rule.module_type)
 
         outcome = apply_rule_to_existing(rule)
@@ -696,11 +724,14 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
 
     def _prospective_plan(self):
         """Return one prospective plan for this module: the object an interactive preview holds."""
+        variables = build_variables(self.module.module_bay, device=self.device)
+        rows = list(Interface.objects.filter(module=self.module))
         plan_set = plan_prospective_families(
             self.module,
             self.rule,
-            build_variables(self.module.module_bay, device=self.device),
-            describe_interfaces(Interface.objects.filter(module=self.module)),
+            variables,
+            describe_interfaces(rows),
+            module_raw_bases(self.module, self.rule, variables, rows),
         )
         return plan_set.plans[0]
 
@@ -723,6 +754,7 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             self.rule,
             build_variables(self.module.module_bay, device=self.device),
             base,
+            base.name,
         )
         installed = InstalledFamilyPlan(
             family_id=f"installed:{base.pk}",

@@ -7,14 +7,17 @@ clean(), so each one must also be unable to reach the table.
 """
 
 import ast
+import inspect
 from importlib import import_module
 from pathlib import Path
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, migrations, transaction
-from django.test import TestCase, override_settings
+from django.db import DatabaseError, IntegrityError, connection, migrations, transaction
+from django.db.models.signals import pre_save
+from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -65,6 +68,15 @@ class RuleValidationAgreementTest(TestCase):
                     "parent_name_template": "et-0/0/{port}",
                     "device_type": self.device_type,
                     "platform": self.platform,
+                    "name_template": "Gi{vc_position}/{port}",
+                },
+            ),
+            (
+                "device rule carrying a parent module type",
+                {
+                    "applies_to_device_interfaces": True,
+                    "module_type": None,
+                    "parent_module_type": self.module_type,
                     "name_template": "Gi{vc_position}/{port}",
                 },
             ),
@@ -149,6 +161,163 @@ class RuleValidationAgreementTest(TestCase):
         rule.refresh_from_db()
         self.assertFalse(rule.enabled)
 
+    def test_a_targeted_save_does_not_normalise_from_an_unsaved_mode(self):
+        rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            module_type_pattern="eth.*",
+            name_template="p{port}",
+        )
+        rule.applies_to_device_interfaces = False
+        rule.module_type_pattern = "xe.*"
+
+        rule.save(update_fields=["module_type_pattern"])
+
+        rule.refresh_from_db()
+        self.assertTrue(rule.applies_to_device_interfaces)
+        self.assertEqual(rule.module_type_pattern, "xe.*")
+
+    def test_a_targeted_save_validates_the_stored_mode_not_an_unsaved_one(self):
+        """A flat stored rule must not take a {channel} template from an unsaved channelized mode."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 4
+        rule.name_template = "xe-{bay_position}:{channel}"
+
+        with self.assertRaises(ValidationError):
+            rule.save(update_fields=["name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+        self.assertEqual(rule.name_template, "xe-{bay_position}")
+
+    def test_a_targeted_save_ignores_an_invalid_unsaved_mode(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 0
+        rule.name_template = "ge-{bay_position}"
+
+        rule.save(update_fields=["name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+        self.assertEqual(rule.name_template, "ge-{bay_position}")
+
+    def test_a_targeted_save_of_the_mode_fields_validates_their_new_values(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 0
+        rule.name_template = "xe-{bay_position}:{channel}"
+
+        with self.assertRaises(ValidationError):
+            rule.save(update_fields=["breakout_mode", "channel_count", "name_template"])
+
+        rule.channel_count = 4
+        rule.save(update_fields=["breakout_mode", "channel_count", "name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.CHANNELIZED)
+        self.assertEqual(rule.name_template, "xe-{bay_position}:{channel}")
+
+    def test_a_targeted_save_of_a_missing_row_keeps_the_django_error(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        InterfaceNameRule.objects.filter(pk=rule.pk).delete()
+
+        with self.assertRaisesMessage(DatabaseError, "did not affect any rows"):
+            rule.save(update_fields=["name_template"])
+
+    def test_a_targeted_save_of_an_unsaved_rule_keeps_the_django_error(self):
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="xe-{bay_position}")
+
+        with self.assertRaisesMessage(ValueError, "no primary key"):
+            rule.save(update_fields=["name_template"])
+
+    def test_a_targeted_save_of_an_unrelated_field_does_not_query_the_rule(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with CaptureQueriesContext(connection) as queries:
+            rule.save(update_fields=["description"])
+
+        self.assertFalse(rule_reads(queries))
+
+    def test_a_targeted_save_locks_the_row_it_validates_against(self):
+        """A concurrent targeted save must not change the stored fields between this read and this write."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with CaptureQueriesContext(connection) as queries:
+            rule.save(update_fields=["name_template"])
+
+        locked = rule_reads(queries)
+        self.assertTrue(locked)
+        self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in locked), locked)
+
+    def test_a_targeted_save_validates_on_the_database_the_router_writes_to(self):
+        """The validation read must use the alias Django writes to, not the one the rule was loaded from."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule._state.db = "unrouted"
+        rule.name_template = "xe-0/{bay_position}"
+
+        with override_settings(DATABASE_ROUTERS=[WriteToDefaultDatabase()]):
+            rule.save(update_fields=["name_template"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-0/{bay_position}")
+
+    def test_a_deferred_save_keeps_a_concurrent_change_to_a_field_it_did_not_load(self):
+        """Validation must not load the deferred fields, which Django then writes back over a concurrent change."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=4,
+            parent_name_template="et-0/0/{bay_position}",
+        )
+        deferred = load_deferred(rule, "name_template")
+        deferred.name_template = "xe-1/0/{bay_position}:{channel}"
+
+        def concurrent_save(sender, instance, **kwargs):
+            stored = InterfaceNameRule.objects.filter(pk=instance.pk)
+            stored.update(channel_count=8, parent_name_template="et-1/0/{bay_position}")
+
+        pre_save.connect(concurrent_save, sender=InterfaceNameRule, weak=False, dispatch_uid="concurrent_save")
+        self.addCleanup(pre_save.disconnect, sender=InterfaceNameRule, dispatch_uid="concurrent_save")
+        deferred.save()
+
+        stored = InterfaceNameRule.objects.get(pk=rule.pk)
+        self.assertEqual(stored.name_template, "xe-1/0/{bay_position}:{channel}")
+        self.assertEqual((stored.channel_count, stored.parent_name_template), (8, "et-1/0/{bay_position}"))
+
+    def test_a_deferred_save_validates_against_the_locked_stored_row(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        deferred = load_deferred(rule, "name_template")
+        deferred.name_template = "xe-{bay_position}:{channel}"
+
+        with CaptureQueriesContext(connection) as queries, self.assertRaises(ValidationError):
+            deferred.save()
+
+        reads = rule_reads(queries)
+        self.assertTrue(reads)
+        self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in reads), reads)
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_deferred_save_of_an_unrelated_field_does_not_query_the_rule(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        deferred = load_deferred(rule, "description")
+        deferred.description = "after"
+
+        with CaptureQueriesContext(connection) as queries:
+            deferred.save()
+
+        self.assertFalse(rule_reads(queries))
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "after")
+
+    def test_save_refuses_positional_arguments(self):
+        """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
+
+        with self.assertRaises(TypeError):
+            rule.save(False, False, None, ["description"])
+
     def test_a_generator_update_fields_still_writes_its_column(self):
         """The topology check must not consume update_fields, which would make Django skip the save."""
         rule = InterfaceNameRule.objects.create(
@@ -200,6 +369,19 @@ class RuleValidationAgreementTest(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             InterfaceNameRule.objects.filter(pk=rule.pk).update(breakout_mode="bogus")
 
+    def test_queryset_update_refuses_a_parent_module_type_on_a_device_rule(self):
+        rule = InterfaceNameRule.objects.create(applies_to_device_interfaces=True, name_template="{base}")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.filter(pk=rule.pk).update(parent_module_type=self.module_type)
+
+    def test_clean_names_the_parent_module_type_field(self):
+        rule = InterfaceNameRule(
+            applies_to_device_interfaces=True, parent_module_type=self.module_type, name_template="{base}"
+        )
+        with self.assertRaises(ValidationError) as caught:
+            rule.clean()
+        self.assertEqual(list(caught.exception.message_dict), ["parent_module_type"])
+
     def test_a_valid_rule_of_each_shape_still_saves(self):
         """The constraints must not refuse the rules the plugin is built to store."""
         InterfaceNameRule.objects.create(
@@ -223,6 +405,61 @@ class RuleValidationAgreementTest(TestCase):
         self.assertEqual(InterfaceNameRule.objects.count(), 3)
 
 
+# Calls that read the instance and change no field: the router resolves the write alias, getattr reads one field.
+SELF_ARGUMENT_PERMITS = frozenset({("save", "router.db_for_write"), ("_rule_values", "getattr")})
+
+
+class ModeNormalisationSeamTest(SimpleTestCase):
+    """Only _normalise_mode() may change a field, so the API and the web form store the same rule."""
+
+    def test_only_normalise_mode_writes_a_model_field(self):
+        fields = {name for field in InterfaceNameRule._meta.concrete_fields for name in (field.name, field.attname)}
+        source, first_line = inspect.getsourcelines(InterfaceNameRule)
+        (rule_class,) = ast.increment_lineno(ast.parse("".join(source)), first_line - 1).body
+        methods = [node for node in rule_class.body if isinstance(node, ast.FunctionDef)]
+        self.assertIn("_normalise_mode", [method.name for method in methods])
+        for method in methods:
+            if method.name == "_normalise_mode":
+                continue
+            attribute_owners = {id(node.value) for node in ast.walk(method) if isinstance(node, ast.Attribute)}
+            permitted = {
+                id(argument)
+                for node in ast.walk(method)
+                if isinstance(node, ast.Call) and (method.name, ast.unparse(node.func)) in SELF_ARGUMENT_PERMITS
+                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]
+            }
+            for node in ast.walk(method):
+                if isinstance(node, ast.Name) and node.id == "self":
+                    # A bare self (setattr, an alias, a helper argument) could change a field unseen.
+                    self.assertTrue(
+                        id(node) in attribute_owners | permitted,
+                        f"models.py:{node.lineno} {method.name}() uses self, not self.<attr>",
+                    )
+                elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+                    self.assertFalse(
+                        isinstance(node.ctx, (ast.Store, ast.Del)) and node.attr in fields,
+                        f"{method.name}() writes self.{node.attr}; change a field only in _normalise_mode()",
+                    )
+
+
+def load_deferred(rule, *fields):
+    """Load the rule with only these fields and custom_field_data, which NetBox's save() reads."""
+    return InterfaceNameRule.objects.only(*fields, "custom_field_data").get(pk=rule.pk)
+
+
+def rule_reads(queries):
+    """Return the captured SELECT statements on the rule table."""
+    prefix = f'SELECT "{InterfaceNameRule._meta.db_table}".'
+    return [query["sql"] for query in queries if query["sql"].startswith(prefix)]
+
+
+class WriteToDefaultDatabase:
+    """Send every write to the default database, whatever database the instance came from."""
+
+    def db_for_write(self, model, **hints):
+        return "default"
+
+
 class RefuseImplicitMigrationDatabase:
     """Refuse migration queries that do not select a database explicitly."""
 
@@ -233,6 +470,12 @@ class RefuseImplicitMigrationDatabase:
         raise AssertionError("Migration must select the schema editor database")
 
 
+# The template audit reports against the live language, so it must not hold a second parser.
+LIVE_IMPORT_PERMITS = frozenset(
+    {("0017_audit_name_templates.py", "netbox_interface_name_rules.name_template", (("validate_rule", None),))}
+)
+
+
 class RuleNormalizationMigrationTest(TestCase):
     """The 0015 data migration must repair the rows that predate its constraints."""
 
@@ -241,7 +484,7 @@ class RuleNormalizationMigrationTest(TestCase):
         "interfacenamerule_breakout_topology_check",
     )
 
-    def test_migrations_have_no_live_application_imports(self):
+    def test_migrations_only_import_the_shared_template_audit_validator(self):
         migrations = Path(__file__).resolve().parents[1] / "migrations"
         for migration in sorted(migrations.rglob("*.py")):
             with self.subTest(migration=migration.name):
@@ -254,6 +497,9 @@ class RuleNormalizationMigrationTest(TestCase):
                             0,
                             f"{migration.name} uses a relative import; migrations must not use relative imports",
                         )
+                        permit = (migration.name, node.module, tuple((a.name, a.asname) for a in node.names))
+                        if permit in LIVE_IMPORT_PERMITS:
+                            continue
                         imports.append(node.module)
                     elif isinstance(node, ast.Import):
                         imports.extend(alias.name for alias in node.names)
@@ -346,3 +592,66 @@ class RuleNormalizationMigrationTest(TestCase):
         self.assertEqual(channelless.parent_name_template, "")
         # PostgreSQL validates every existing row here, so this only succeeds if the repair was complete.
         self._set_constraints(enabled=True)
+
+
+class DeviceRuleScopeMigrationTest(TestCase):
+    """The 0018 data migration must clear and report each device rule parent module type."""
+
+    MIGRATION = "netbox_interface_name_rules.migrations.0018_refuse_device_rule_parent_module_type"
+
+    def _set_constraint(self, migration, enabled):
+        """Drop or restore the 0018 check constraint inside this test's transaction."""
+        (operation,) = [op for op in migration.Migration.operations if isinstance(op, migrations.AddConstraint)]
+        with connection.cursor() as cursor:
+            cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            if enabled:
+                sql = operation.constraint.create_sql(InterfaceNameRule, connection.schema_editor())
+            else:
+                sql = operation.constraint.remove_sql(InterfaceNameRule, connection.schema_editor())
+            cursor.execute(str(sql))
+
+    def test_it_clears_and_logs_each_device_rule_parent_module_type(self):
+        migration = import_module(self.MIGRATION)
+        self._set_constraint(migration, enabled=False)
+        manufacturer = Manufacturer.objects.create(name="ScopeMfg", slug="scopemfg")
+        parent = ModuleType.objects.create(manufacturer=manufacturer, model="SCOPE-CVR", part_number="SCOPE-CVR")
+        module_type = ModuleType.objects.create(manufacturer=manufacturer, model="SCOPE-SFP", part_number="SCOPE-SFP")
+        device_rule, other_device_rule, module_rule = InterfaceNameRule.objects.bulk_create(
+            [
+                InterfaceNameRule(
+                    applies_to_device_interfaces=True,
+                    module_type_pattern="Gi.*",
+                    parent_module_type=parent,
+                    name_template="Gi{vc_position}/{port}",
+                ),
+                InterfaceNameRule(
+                    applies_to_device_interfaces=True,
+                    module_type_pattern="Te.*",
+                    parent_module_type=parent,
+                    name_template="Te{vc_position}/{port}",
+                ),
+                InterfaceNameRule(module_type=module_type, parent_module_type=parent, name_template="{base}"),
+            ]
+        )
+
+        with (
+            override_settings(DATABASE_ROUTERS=[RefuseImplicitMigrationDatabase()]),
+            self.assertLogs(migration.logger, "WARNING") as logs,
+        ):
+            migration.clear_device_rule_parent_module_types(global_apps, connection.schema_editor())
+
+        self.assertCountEqual(
+            logs.output,
+            [
+                f"WARNING:{migration.__name__}:InterfaceNameRule ID {rule.pk}: cleared parent module type "
+                f"{parent.pk} (SCOPE-CVR) from a device rule"
+                for rule in (device_rule, other_device_rule)
+            ],
+        )
+        for rule in (device_rule, other_device_rule, module_rule):
+            rule.refresh_from_db()
+        self.assertIsNone(device_rule.parent_module_type)
+        self.assertIsNone(other_device_rule.parent_module_type)
+        self.assertEqual(module_rule.parent_module_type, parent)
+        # PostgreSQL validates every existing row here, so this only succeeds if the clearing was complete.
+        self._set_constraint(migration, enabled=True)

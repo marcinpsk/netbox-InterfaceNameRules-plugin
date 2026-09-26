@@ -71,22 +71,19 @@ class RuleSelectionTest(TestCase):
     def test_a_device_interface_rule_is_never_selected_for_a_module(self):
         """Module selection skips device-interface rules, and the row that used to leak cannot exist.
 
-        ``clean()`` forces ``module_type_is_regex`` off and ``objects.create()`` never runs it, so
-        the check constraint is what keeps that combination out of the table.
+        ``save()`` turns ``module_type_is_regex`` off on a device rule, and the check constraint
+        refuses a write that skips ``save()``.
         """
-        with self.assertRaises(IntegrityError), transaction.atomic():
-            InterfaceNameRule.objects.create(
-                applies_to_device_interfaces=True,
-                module_type_is_regex=True,
-                module_type_pattern="SELECTOR-.*",
-                name_template="leaked{vc_position}",
-            )
-
-        InterfaceNameRule.objects.create(
+        rule = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True,
+            module_type_is_regex=True,
             module_type_pattern="SELECTOR-.*",
             name_template="leaked{vc_position}",
         )
+        rule.refresh_from_db()
+        self.assertFalse(rule.module_type_is_regex)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InterfaceNameRule.objects.filter(pk=rule.pk).update(module_type_is_regex=True)
 
         self.assertIsNone(find_matching_rule(self.module_type, None, self.device_type))
 

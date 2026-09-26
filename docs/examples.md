@@ -14,7 +14,6 @@ the `FPC/PIC/port` convention — for pizza-box ACX devices this simplifies to
 
 | Module type pattern | Name template | Channels | Result |
 |---|---|---|---|
-| `QSFP-DD-400G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/4` |
 | `QSFP-100G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/7` |
 | `QSFP28-100G-.*` | `et-0/0/{bay_position}` | — | `et-0/0/2` |
 | `QSFP-4X10G-.*` | `xe-0/0/{bay_position}:{channel}` | 4 (start 0) | `xe-0/0/4:0` … `xe-0/0/4:3` |
@@ -272,12 +271,12 @@ determined by the host's naming scheme, not the transceiver type.
   name_template: "eth{bay_position_num}"
   description: "Linux server — SFP28 25G traditional naming (eth0, eth1, ...)"
 
-# systemd predictable: ens{slot}f{port}  (bare-metal with udev slot names)
-# {slot} = top-level module bay position (NIC card slot number)
+# systemd predictable: ens{slot_num}f{port}  (bare-metal with udev slot names)
+# {slot_num} = numeric suffix of the top-level module bay position (NIC card slot number)
 # {bay_position_num} = port index within the NIC
 - module_type_pattern: "SFP28-25G-.*"
   module_type_is_regex: true
-  name_template: "ens{slot}f{bay_position_num}"
+  name_template: "ens{slot_num}f{bay_position_num}"
   description: "Linux server — SFP28 25G systemd predictable naming (ens1f0, ens1f1, ...)"
 
 # Mellanox QSFP28 hardware breakout → 4×25G sub-ports (eth0d1 .. eth0d4)

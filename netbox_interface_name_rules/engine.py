@@ -12,7 +12,7 @@ from collections import defaultdict
 from django.core.exceptions import ValidationError
 
 from . import family as family_ops
-from . import naming, rule_selection
+from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 
@@ -29,21 +29,6 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
     return rule_selection.find_matching_rule(module_type, parent_module_type, device_type, platform)
 
 
-def _extract_trailing_digits(value: str) -> str:
-    """Delegate trailing-digit extraction while preserving the engine helper."""
-    return naming._extract_trailing_digits(value)
-
-
-def _resolve_bay_position(module_bay):
-    """Delegate bay-position resolution while preserving the engine helper."""
-    return naming._resolve_bay_position(module_bay)
-
-
-def _resolve_slot(module_bay, bay_position, parent_bay_position):
-    """Delegate slot resolution while preserving the engine helper."""
-    return naming._resolve_slot(module_bay, bay_position, parent_bay_position)
-
-
 def build_variables(module_bay, device=None):
     """Delegate naming-variable construction while preserving the engine entry point."""
     return naming.build_variables(module_bay, device=device)
@@ -51,7 +36,7 @@ def build_variables(module_bay, device=None):
 
 def evaluate_name_template(template: str, variables: dict) -> str:
     """Delegate template evaluation while preserving the engine entry point."""
-    return naming.evaluate_name_template(template, variables)
+    return name_template.evaluate_name_template(template, variables)
 
 
 def _get_parent_module_type(module_bay):
@@ -254,7 +239,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     ]
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if leftover and renamed == 0 and not blocked and not families_seen:
+    if not force_reapply and leftover and renamed == 0 and not blocked and not families_seen:
         # All interfaces already have the names the rule would produce — flag as
         # potentially obsolete (e.g., newer NetBox generates correct names natively).
         # Skipped when the 0-count was caused by name collisions (a different reason
@@ -288,11 +273,12 @@ def predict_rule_output(module, module_bay, raw_names):
     if not rule:
         return list(raw_names)
 
+    variables = build_variables(module_bay, device=module.device)
+    described = family_ops.describe_module_interfaces(module, raw_names)
+    channel_names = {interface.name for interface in described if interface.channel_id is not None}
+    base_names = [name for name in raw_names if name not in channel_names]
     plan_set = family_ops.plan_prospective_families(
-        module,
-        rule,
-        build_variables(module_bay, device=module.device),
-        family_ops.describe_module_interfaces(module, raw_names),
+        module, rule, variables, described, family_ops.given_raw_names(module, rule, variables, base_names)
     )
     return [name for raw_name in raw_names for name in plan_set.predicted_names(raw_name)]
 
@@ -371,8 +357,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
-        port = interface.name.rsplit("/", 1)[-1]
-        variables = {"vc_position": vc_position, "base": interface.name, "port": port}
+        variables = naming.build_device_interface_variables(interface.name, vc_position)
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         try:
             outcome = family_ops.execute_installed_plan(plan)
@@ -612,16 +597,47 @@ def _preview_plans(rule, plan_set) -> list:
     return [creations[index] for index in kept]
 
 
+def _installed_flat_entry(module, plan, interface) -> dict | None:
+    """Build the preview entry for an installed flat family, or None when it keeps its names."""
+    if all(member.target_name == member.snapshot.name for member in plan.members):
+        return None
+    role = "channel" if len(plan.members) > 1 else "interface"
+    details = [family_ops.PlannedName(member.target_name, role) for member in plan.members]
+    return {
+        "module": module,
+        "interface": interface,
+        "current_name": interface.name,
+        "new_names": [detail.name for detail in details],
+        "name_details": details,
+    }
+
+
 def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
-    """Preview one module from its family plans.  Returns (checked_count, should_stop)."""
-    plan_set = family_ops.plan_prospective_families(module, rule, variables, family_ops.describe_interfaces(ifaces))
-    checked = len(plan_set.plans)
+    """Preview one module from its family plans.  Returns (checked_count, should_stop).
+
+    An installed flat family is previewed from the plan Apply Rules executes, because its members
+    carry names no template describes.
+    """
+    bases = family_ops.module_raw_bases(module, rule, variables, ifaces)
+    installed = family_ops.plan_installed_flat_families(module, rule, variables, ifaces, bases)
+    installed_pks = {pk for plan in installed for pk in plan.member_pks}
+    rows = [iface for iface in ifaces if iface.pk not in installed_pks]
+    plan_set = family_ops.plan_prospective_families(
+        module, rule, variables, family_ops.describe_interfaces(rows), bases
+    )
+    # A flat family counts its members, as the scan of unvisited modules counts interfaces.
+    checked = sum(len(plan.members) for plan in installed) + len(plan_set.plans)
     if not checked:
         return 0, False
+    rows_by_pk = {iface.pk: iface for iface in ifaces}
     rows_by_name = {iface.name: iface for iface in ifaces}
     existing_names = frozenset(rows_by_name)
-    for plan in _preview_plans(rule, plan_set):
-        entry = _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+    entries = [_installed_flat_entry(module, plan, rows_by_pk[plan.member_pks[0]]) for plan in installed]
+    entries.extend(
+        _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
+        for plan in _preview_plans(rule, plan_set)
+    )
+    for entry in entries:
         if entry is None:
             continue
         results.append(entry)
@@ -666,29 +682,28 @@ def find_interfaces_for_rule(rule, limit=None):
 
     module_qs = _build_module_qs(rule).select_related(
         "module_type",
-        "device",
         "device__device_type",
         "device__platform",
-        "device__virtual_chassis",
-        "module_bay",
-        "module_bay__parent",
+        *family_template_names.BAY_CHAIN_RELATIONS,
     )
     # Batch-load all interfaces for matching modules to avoid N+1 queries.
     ifaces_by_module = defaultdict(list)
     for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
         ifaces_by_module[iface.module_id].append(iface)
 
+    modules = list(module_qs)
     processed_pks = set()
     results = []
     total_checked = 0
-    for module in module_qs:
-        processed_pks.add(module.pk)
-        variables = build_variables(module.module_bay, device=module.device)
-        ifaces = ifaces_by_module.get(module.pk, [])
-        checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
-        total_checked += checked
-        if stop:
-            return results, total_checked
+    with family_ops.pinned_template_cache(modules):
+        for module in modules:
+            processed_pks.add(module.pk)
+            variables = build_variables(module.module_bay, device=module.device)
+            ifaces = ifaces_by_module.get(module.pk, [])
+            checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+            total_checked += checked
+            if stop:
+                return results, total_checked
 
     return results, total_checked
 

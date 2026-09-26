@@ -21,18 +21,19 @@ automatically apply renaming rules based on configurable templates.
 - **Breakout support** — create multiple channel interfaces from a single port
 - **Bounded regex pattern matching** — match module types with RE2 patterns (e.g., `QSFP-DD-400G-.*`) to cover entire product families with a single rule; exact FK match takes priority over regex
 - **Scoping** — rules can target specific device types, parent module types, platforms, or be universal
-- **Build Rule tester** — interactive form to preview name output and test against installed interfaces before saving
+- **Build Rule tester**: preview module and device-interface names before saving. Module rules also preview matching installed interfaces.
 - **Apply Rules** — batch rename existing interfaces with live preview and background job support
 
 ## Supported Scenarios
 
-| Scenario | Example |
-|----------|---------|
-| Simple rename | QSFP-100G-LR4 on ACX7024 → `et-0/0/{bay_position}` |
-| Breakout channels | QSFP-4X10G-LR → `xe-0/0/4:0` through `xe-0/0/4:3` |
-| Converter offset | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
-| Platform naming | swp{bay_position_num} for UfiSpace SONiC devices |
-| Linux server | eth{bay_position_num} or ens{slot}f{bay_position_num} |
+| Scenario | Name template | Example result |
+|----------|---------------|----------------|
+| Simple rename | `et-0/0/{bay_position}` | QSFP-100G-LR4 on ACX7024 → `et-0/0/4` |
+| Breakout channels | `xe-0/0/{bay_position}:{channel}` | QSFP-4X10G-LR → `xe-0/0/4:0` through `xe-0/0/4:3` |
+| Converter offset | `GigabitEthernet{slot_num}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}` | GLC-T in CVR-X2-SFP → `GigabitEthernet3/10` |
+| Platform naming | `swp{bay_position_num}` | UfiSpace SONiC device bay 5 → `swp5` |
+| Linux server (traditional) | `eth{bay_position_num}` | Bay 0 → `eth0` |
+| Linux server (predictable) | `ens{slot_num}f{bay_position_num}` | Slot 3, bay 1 → `ens3f1` |
 
 ## What a rule cannot do
 

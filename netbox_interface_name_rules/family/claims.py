@@ -5,6 +5,9 @@
 from collections import defaultdict
 from dataclasses import dataclass
 
+_DRIFT_CAUSE = "since this device's virtual-chassis position changed"
+_RAW_BASE = "raw base"
+
 
 @dataclass(frozen=True, slots=True)
 class TemplateClaim:
@@ -25,33 +28,27 @@ def resolve_template_claims(claims, *, module, label_kind):
     Repeated edges count once. Claimant IDs must be unique.
     The caller emits the messages through its own logger.
     """
-    if label_kind not in ("interface name", "family base"):
-        raise ValueError("label_kind must be 'interface name' or 'family base'")
+    if label_kind not in ("interface name", "family base", _RAW_BASE):
+        raise ValueError(f"label_kind must be 'interface name', 'family base' or '{_RAW_BASE}'")
 
-    by_id = {}
-    claimants = defaultdict(list)
+    by_id, claimants = _index_claims(claims)
     ambiguous = set()
     messages = []
-    for claim in claims:
-        if claim.claimant_id in by_id:
-            raise ValueError(f"Duplicate claimant_id: {claim.claimant_id}")
-        labels = tuple(dict.fromkeys(claim.labels))
-        by_id[claim.claimant_id] = (claim.template_name, labels)
-        for label in labels:
-            claimants[label].append(claim.claimant_id)
+    cause = "as its raw name or its renamed form" if label_kind == _RAW_BASE else _DRIFT_CAUSE
+    for claimant_id, (template_name, labels) in by_id.items():
         if len(labels) > 1:
-            ambiguous.add(claim.claimant_id)
+            ambiguous.add(claimant_id)
             messages.append(
-                f"Interface template {claim.template_name!r} of {module} could name any of {sorted(labels)} "
-                "since this device's virtual-chassis position changed; "
-                "skipping them all rather than renaming a guess."
+                f"Interface template {template_name!r} of {module} could name any of {sorted(labels)} "
+                f"{cause}; skipping them all rather than renaming a guess."
             )
 
-    subject = "Interface" if label_kind == "interface name" else "Family base"
+    subject = "Family base" if label_kind == "family base" else "Interface"
+    form = "raw or renamed name" if label_kind == _RAW_BASE else "drifted name"
     for label, ids in claimants.items():
         if len(ids) > 1:
             messages.append(
-                f"{subject} {label!r} on {module} could be the drifted name of any of the templates "
+                f"{subject} {label!r} on {module} could be the {form} of any of the templates "
                 f"{sorted(by_id[claimant_id][0] for claimant_id in ids)}; "
                 "skipping it rather than renaming a guess."
             )
@@ -63,3 +60,17 @@ def resolve_template_claims(claims, *, module, label_kind):
         if labels and claimant_id not in ambiguous
     )
     return accepted, tuple(messages)
+
+
+def _index_claims(claims):
+    """Return each claimant's template name and distinct labels, and the claimants of each label."""
+    by_id = {}
+    claimants = defaultdict(list)
+    for claim in claims:
+        if claim.claimant_id in by_id:
+            raise ValueError(f"Duplicate claimant_id: {claim.claimant_id}")
+        labels = tuple(dict.fromkeys(claim.labels))
+        by_id[claim.claimant_id] = (claim.template_name, labels)
+        for label in labels:
+            claimants[label].append(claim.claimant_id)
+    return by_id, claimants

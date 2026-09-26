@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## Unreleased
+
+### Features
+
+- Test and preview device-level rules in the Build Rule tester. Derive the port from
+  the interface name, accept a virtual-chassis position, and retain the rule kind
+  and interface-name filter when opening the add form. Module-rule previews now
+  accept a `{vc_position}` value, and the module variable table lists it.
+
+### Bug Fixes
+
+- The REST API now clears the rule-mode fields the same way the web form does. A
+  device-level rule sent with `module_type_is_regex: true` no longer fails with a
+  server error; it saves with regex mode off. A module-type rule sent with a
+  `module_type_pattern` saves with the pattern cleared, instead of a 400 response.
+- A rule save with `update_fields` now validates the row it stores. Fields outside
+  `update_fields` come from the database, not from unsaved values on the instance.
+  A flat rule can no longer store a `{channel}` template, and an unsaved invalid
+  mode no longer blocks a valid template save.
+- A name template variable that starts with a non-ASCII letter, such as `{é}`, is now
+  read as a variable. Before, a group like `{é é}` passed the rule check and failed
+  only when the rule renamed an interface, and `{é!r}` got the generic unsafe
+  expression error instead of the format-field error.
+- A device-interface rule can no longer store a Parent Module Type. Migration
+  `0018` clears the field on every existing device-interface rule and logs each
+  rule ID and cleared module type. The engine never matched a device rule on
+  this field, so only the rule ranking changes. A rollback does not restore the
+  cleared values. Record them before the upgrade if you need them.
+- A save now refuses a brace group that can never evaluate, such as `{slot_num // 2}`,
+  `{ channel }`, `{bay_position.x}`, or `{bay_position!r}`. Before, the rule saved and
+  failed on every rename. The error quotes the group and shows the variable-token form,
+  `{{slot_num} // 2}`. The name-template audit migration reports these groups too.
+
 ## v1.5.3 (2026-09-21)
 
 ### Bug Fixes

@@ -31,6 +31,7 @@ from netbox_interface_name_rules.family import (
     describe_template_interfaces,
     execute_installed_plan_set,
     execute_structural_family,
+    module_raw_bases,
     plan_installed_families,
     plan_prospective_families,
     resolved_template_names,
@@ -68,6 +69,17 @@ def _installed_projection(plan):
         plan.precondition_status,
         plan.precondition_reason,
     )
+
+
+class _NamesAreRaw:
+    """Bases for described template names, which are raw by construction."""
+
+    @staticmethod
+    def base_for(name):
+        return name
+
+
+_NAMES_ARE_RAW = _NamesAreRaw()
 
 
 class ProspectivePlanSetLookupTest(SimpleTestCase):
@@ -123,6 +135,7 @@ class ProspectivePlanTestCase(ChannelizationTestCase):
             rule,
             build_variables(bay, device=self.device),
             describe_template_interfaces(templates, names),
+            _NAMES_ARE_RAW,
         )
 
 
@@ -165,6 +178,7 @@ class ProspectiveFlatPlanTest(ProspectivePlanTestCase):
             self.rule,
             build_variables(bay, device=self.device),
             interfaces,
+            _NAMES_ARE_RAW,
         )
 
         self.assertEqual(
@@ -426,7 +440,13 @@ class ProspectiveMatchesInstalledPlanningTest(ProspectivePlanTestCase):
         variables = build_variables(bay, device=self.device)
         installed = plan_installed_families(module, rule, variables)
         interfaces = list(Interface.objects.filter(module=module).order_by("pk"))
-        prospective = plan_prospective_families(module, rule, variables, describe_interfaces(interfaces))
+        prospective = plan_prospective_families(
+            module,
+            rule,
+            variables,
+            describe_interfaces(interfaces),
+            module_raw_bases(module, rule, variables, interfaces),
+        )
         return installed, prospective
 
     def test_a_channelized_family_plans_the_same_names_either_way(self):
@@ -505,6 +525,7 @@ class ProspectivePlanningIsReadOnlyTest(ChannelizationTestCase):
             self.rule,
             build_variables(bay, device=self.device),
             describe_template_interfaces(resolved_template_names(module), ["3"]),
+            _NAMES_ARE_RAW,
         )
 
         self.assertEqual(list(Interface.objects.filter(module=module).values_list("pk", "name")), before)
@@ -534,6 +555,7 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
             self.rule,
             build_variables(bay, device=self.device),
             describe_interfaces(interfaces),
+            module_raw_bases(module, self.rule, build_variables(bay, device=self.device), interfaces),
         ).plans[0]
 
         preview, checked = find_interfaces_for_rule(self.rule)

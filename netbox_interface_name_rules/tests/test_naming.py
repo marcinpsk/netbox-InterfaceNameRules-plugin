@@ -3,10 +3,12 @@
 """Integration tests for the lower-level naming seam."""
 
 from unittest import skipUnless
+from unittest.mock import patch
 
 from dcim.models import (
     Device,
     DeviceType,
+    Interface,
     Manufacturer,
     Module,
     ModuleBay,
@@ -17,7 +19,20 @@ from dcim.models import (
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.naming import build_variables, evaluate_name_template, numeric_suffix
+from netbox_interface_name_rules.name_template import (
+    TEMPLATE_VARIABLES,
+    NamingContext,
+    TemplateVariableCondition,
+    TemplateVariableSource,
+    evaluate_name_template,
+    variables_for_context,
+)
+from netbox_interface_name_rules.naming import (
+    build_bay_chain_variables,
+    build_device_interface_variables,
+    build_variables,
+    numeric_suffix,
+)
 from netbox_interface_name_rules.tests.helpers import make_placement
 
 
@@ -34,6 +49,70 @@ def _supports_module_placeholder():
 
 
 REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
+
+
+class TemplateVariableCatalogueTest(TestCase):
+    """The catalogue records each template variable and its naming contexts once."""
+
+    def test_catalogue_records_context_source_and_condition(self):
+        """Pin the language inputs without making validation enforce them yet."""
+        member = NamingContext.MODULE_MEMBER
+        parent = NamingContext.MODULE_PARENT
+        device = NamingContext.DEVICE_INTERFACE
+        built = TemplateVariableSource.MODULE_BAY_CHAIN
+        caller = TemplateVariableSource.RENAME_CALLER
+        vc_member = TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
+        channels = TemplateVariableCondition.RULE_DECLARES_CHANNELS
+        expected = {
+            "slot": ({(member, built), (parent, built)}, None),
+            "slot_num": ({(member, built), (parent, built)}, None),
+            "bay_position": ({(member, built), (parent, built)}, None),
+            "bay_position_num": ({(member, built), (parent, built)}, None),
+            "parent_bay_position": ({(member, built), (parent, built)}, None),
+            "parent_bay_position_num": ({(member, built), (parent, built)}, None),
+            "sfp_slot": ({(member, built), (parent, built)}, None),
+            "base": ({(member, caller), (parent, caller), (device, caller)}, None),
+            "vc_position": ({(member, built), (parent, built), (device, caller)}, vc_member),
+            "channel": ({(member, caller)}, channels),
+            "port": ({(device, caller)}, None),
+        }
+
+        actual = {variable.name: (set(variable.providers), variable.condition) for variable in TEMPLATE_VARIABLES}
+
+        self.assertEqual(actual, expected)
+
+    def test_each_context_has_exactly_its_documented_variables(self):
+        expected = {
+            NamingContext.MODULE_MEMBER: {
+                "slot",
+                "slot_num",
+                "bay_position",
+                "bay_position_num",
+                "parent_bay_position",
+                "parent_bay_position_num",
+                "sfp_slot",
+                "base",
+                "vc_position",
+                "channel",
+            },
+            NamingContext.MODULE_PARENT: {
+                "slot",
+                "slot_num",
+                "bay_position",
+                "bay_position_num",
+                "parent_bay_position",
+                "parent_bay_position_num",
+                "sfp_slot",
+                "base",
+                "vc_position",
+            },
+            NamingContext.DEVICE_INTERFACE: {"vc_position", "base", "port"},
+        }
+
+        self.assertEqual(
+            {context: {variable.name for variable in variables_for_context(context)} for context in NamingContext},
+            expected,
+        )
 
 
 class NumericSuffixTest(TestCase):
@@ -92,6 +171,23 @@ class NamingTest(TestCase):
             name_template="xe-{vc_position}/{slot}/{bay_position_num}",
         )
 
+    def test_preview_builders_cover_each_naming_context(self):
+        interface = Interface.objects.create(device=self.device, name="Ethernet1/5", type="1000base-t")
+        device_variables = build_device_interface_variables(interface.name, self.device.vc_position)
+        module_variables = {
+            **build_variables(self.bay, self.device),
+            "base": interface.name,
+            "channel": "0",
+        }
+        for context, variables in (
+            (NamingContext.DEVICE_INTERFACE, device_variables),
+            (NamingContext.MODULE_MEMBER, module_variables),
+        ):
+            with self.subTest(context=context):
+                self.assertEqual(set(variables), {v.name for v in variables_for_context(context)})
+        self.assertEqual(device_variables, {"base": "Ethernet1/5", "port": "5", "vc_position": "3"})
+        self.assertEqual(build_device_interface_variables(interface.name, None), {"base": "Ethernet1/5", "port": "5"})
+
     def test_real_module_context_builds_and_evaluates_the_rule_name(self):
         variables = build_variables(self.module.module_bay, device=self.module.device)
 
@@ -111,6 +207,82 @@ class NamingTest(TestCase):
             },
         )
         self.assertEqual(name, "xe-3/7/7")
+
+    def test_build_variables_produces_exactly_the_catalogued_bay_chain_entries(self):
+        variables = build_variables(self.module.module_bay, device=self.module.device)
+        for context in (NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT):
+            with self.subTest(context=context):
+                catalogued = {
+                    variable.name
+                    for variable in variables_for_context(
+                        context,
+                        source=TemplateVariableSource.MODULE_BAY_CHAIN,
+                    )
+                }
+                self.assertEqual(set(variables), catalogued)
+
+    def test_build_variables_omits_only_the_conditional_vc_entry_for_a_standalone_device(self):
+        variables = build_variables(self.module.module_bay)
+        catalogued = {
+            variable.name
+            for variable in variables_for_context(
+                NamingContext.MODULE_MEMBER,
+                source=TemplateVariableSource.MODULE_BAY_CHAIN,
+            )
+            if variable.condition is None
+        }
+
+        self.assertEqual(set(variables), catalogued)
+
+    def test_preview_derivation_uses_the_same_bay_chain_rules(self):
+        variables = build_bay_chain_variables("03", "bay/02", "parent/07")
+
+        self.assertEqual(
+            variables,
+            {
+                "slot": "03",
+                "slot_num": "3",
+                "bay_position": "bay/02",
+                "bay_position_num": "2",
+                "parent_bay_position": "parent/07",
+                "parent_bay_position_num": "7",
+                "sfp_slot": "2",
+            },
+        )
+
+    def test_bay_chain_values_do_not_depend_on_catalogue_order(self):
+        with patch(
+            "netbox_interface_name_rules.name_template.TEMPLATE_VARIABLES",
+            tuple(reversed(TEMPLATE_VARIABLES)),
+        ):
+            variables = build_bay_chain_variables("03", "bay/02", "parent/07", vc_position=4)
+
+        self.assertEqual(
+            variables,
+            {
+                "slot": "03",
+                "slot_num": "3",
+                "bay_position": "bay/02",
+                "bay_position_num": "2",
+                "parent_bay_position": "parent/07",
+                "parent_bay_position_num": "7",
+                "sfp_slot": "2",
+                "vc_position": "4",
+            },
+        )
+
+    def test_a_bay_owned_by_an_installed_module_uses_the_installation_slot(self):
+        owned_bay = ModuleBay(
+            device=self.device,
+            module=self.module,
+            name="Owned Bay",
+            position="9",
+        )
+
+        variables = build_variables(owned_bay)
+
+        self.assertEqual(variables["slot"], "7")
+        self.assertEqual(variables["slot_num"], "7")
 
 
 @skipUnless(_supports_module_placeholder(), REQUIRES_MODULE_PLACEHOLDER)

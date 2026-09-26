@@ -13,7 +13,8 @@ This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/ne
 - **`models.py`**: Defines `InterfaceNameRule`. A rule can select an exact module type or a regex pattern, add parent, device, and platform scopes, and describe flat or channelized breakout output.
 - **`signals.py`**: Handles `pre_save` and `post_save` for `dcim.Module` and `dcim.Device`. It records prior state, schedules work with `transaction.on_commit()`, and catches failures at the deferred callback boundary. It intentionally does not connect to `dcim.Interface` because NetBox creates module interfaces with `bulk_create()`. It also connects the optional LibreNMS prediction signal when that plugin is installed.
 - **`rule_selection.py`**: Loads and fingerprints enabled rules, separates exact and regex candidates, applies scope priority, and pins one cached snapshot across batch work.
-- **`naming.py`**: Builds variables from the module-bay hierarchy and evaluates templates. It replaces known variables, parses the remaining integer arithmetic, and evaluates only supported AST nodes.
+- **`name_template.py`**: Owns the name-template language, its template-variable catalogue, and evaluation.
+- **`naming.py`**: Builds template-variable values from the module-bay hierarchy.
 - **`family/`**: Owns the interface-family domain model, discovery, planning, execution, structural creation, conversion, name collision checks, and NetBox capability detection.
 - **`engine.py`**: Orchestrates rule application, prediction, virtual-chassis reapply, preview, and batch operations. It keeps stable entry points while delegating rule selection, naming, and family behavior to their owning modules.
 - **`api/` and `graphql/`**: Expose NetBox REST and GraphQL integrations.
@@ -62,16 +63,21 @@ Key Ruff settings: line-length 120, ignores E501/F403/F405 globally, ignores F40
 
 ## Testing
 
+The suite runs under pytest only. `conftest.py` fixtures, such as the preview-key guard, do not load under
+`manage.py test`, so do not use it for this suite.
+
 ```bash
 # Run all plugin tests (inside devcontainer)
 netbox-test
 
-# Or manually from /opt/netbox/netbox:
-python manage.py test netbox_interface_name_rules
+# Run one test by its pytest node ID (inside devcontainer)
+netbox-test netbox_interface_name_rules/tests/test_views.py::TestClassName::test_method_name
 
-# Run a single test
-python manage.py test netbox_interface_name_rules.tests.TestClassName.test_method_name
+# Or run pytest from the plugin root; TEST_DB_NAME must start with test_
+TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=redis pytest netbox_interface_name_rules
 ```
+
+`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`.
 
 ## REUSE/SPDX compliance
 
@@ -87,9 +93,55 @@ The `reuse-lint` pre-commit hook validates compliance on every commit.
 ## Key conventions
 
 - All views, forms, serializers, and tables inherit from NetBox's base classes (`NetBoxModel`, `NetBoxModelViewSet`, `NetBoxModelForm`, etc.) — always use these, not raw Django/DRF equivalents. Non-model forms are the exception: NetBox 4.x dropped `BootstrapMixin` and styles every form through its own widget templates (`FORM_RENDERER = TemplatesSetting`), so a plain form subclasses `django.forms.Form`, exactly as NetBox's own `ConfirmationForm`/`BulkRenameForm` do.
-- Template variables use braces: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{parent_bay_position}`, `{sfp_slot}`, `{base}`, `{channel}`, and `{vc_position}`. `naming.py` replaces known variables explicitly before it parses arithmetic.
-- Arithmetic inside braces is parsed with `ast.parse` and evaluated recursively for the supported integer operators. Never use `eval()` on user input.
+- Use the public surface in `name_template.py` for the name-template language. Do not restate or reimplement its parsing rules.
 - The `tags` field on `InterfaceNameRule` uses `related_name="+"` to avoid reverse accessor clashes with other plugins.
 - Rule matching uses two tiers. Exact module-type rules take priority over regex rules. Within each tier, `rule_selection.py` applies the parent, device, and platform scope score, then the documented tie breakers.
 - Add new rules to the appropriate vendor-specific file under `contrib/` (`cisco.yaml`, `juniper.yaml`, `linux.yaml`, `ufispace.yaml`, `ufispace-device-type.yaml`, `converters.yaml`) — keep them updated when adding new rule patterns.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/) format, enforced by pre-commit hook.
+
+<!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->
+### Template variables
+
+#### Module member names
+
+Module rules use these variables in the Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
+
+#### Module parent names
+
+Module rules use these variables in the Parent Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+
+#### Device interface names
+
+Device-interface rules use these variables in the Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{base}` | Current interface name before the rule applies. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
+<!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->

@@ -12,7 +12,7 @@ These YAML files can be imported directly into NetBox via **Interface Name Rules
 | `juniper-channelized.yaml` | The Juniper breakout families of `juniper.yaml` in `channelized` mode (NetBox 4.7+) — import instead of, not alongside |
 | `ufispace.yaml` | UfiSpace SONiC platforms (platform-scoped, requires "SONiC" Platform object) |
 | `ufispace-device-type.yaml` | UfiSpace SONiC platforms (device-type-scoped, no Platform required) |
-| `linux.yaml` | Linux servers — traditional eth0/eth1, systemd predictable ens{slot}f{N}, Mellanox breakout |
+| `linux.yaml` | Linux servers — traditional eth0/eth1, systemd predictable ens{slot_num}f{N}, Mellanox breakout |
 | `converters.yaml` | Media converter offset rules (CVR-X2-SFP, etc.) |
 
 ## Adding rules
@@ -67,18 +67,52 @@ See `contrib/ufispace.yaml` for a real-world example of the pattern mode and `co
 
 ## Template variables
 
-| Variable | Description |
-|----------|-------------|
-| `{bay_position}` | Raw bay position string |
-| `{bay_position_num}` | Numeric suffix of bay position |
-| `{slot}` | Top-level slot/module bay position |
-| `{slot_num}` | Number the slot ends with, for arithmetic |
-| `{parent_bay_position}` | Parent module's bay position, possibly path-shaped |
-| `{parent_bay_position_num}` | Number the parent bay position ends with, for arithmetic |
-| `{sfp_slot}` | Sub-bay index within parent module |
-| `{base}` | Base interface name from NetBox position resolution |
-| `{vc_position}` | Virtual Chassis member position (`device.vc_position`); only injected when the device is a VC member — templates using this variable will produce no rename on non-VC devices |
-| `{channel}` | Breakout channel number (requires `channel_count`; range starts at `channel_start`, default `0`) |
+<!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->
+### Module member names
+
+Module rules use these variables in the Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
+
+### Module parent names
+
+Module rules use these variables in the Parent Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
+| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
+| `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
+| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+
+### Device interface names
+
+Device-interface rules use these variables in the Name Template field.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{base}` | Current interface name before the rule applies. | `et-0/0/1` |
+| `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
+| `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
+<!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
+
+### Breakout channels
 
 `channel_count` is a rule configuration field (not a template variable) that enables breakout mode.
 Set it to the number of sub-interfaces to create per module, e.g.:
@@ -93,6 +127,8 @@ Set it to the number of sub-interfaces to create per module, e.g.:
 
 With `channel_count: 4` and `{base}` resolving to `et-0/0/1`, this creates
 `et-0/0/1:0`, `et-0/0/1:1`, `et-0/0/1:2`, and `et-0/0/1:3`.
+
+### Arithmetic expressions
 
 Arithmetic expressions are supported inside `name_template`.
 Variables like `{parent_bay_position_num}` and `{sfp_slot}` are substituted first,

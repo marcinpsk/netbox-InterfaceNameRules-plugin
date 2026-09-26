@@ -34,7 +34,6 @@ from .domain import (
     MemberOutcome,
 )
 from .installed import (
-    TemplateNames,
     family_names_for,
     flat_family_bases,
     interfaces_by_module,
@@ -42,7 +41,7 @@ from .installed import (
 )
 from .names import COLLISION_REASON, is_name_collision, name_is_taken
 from .targets import builds_channelized_family, channelized_family_names
-from .template_names import pinned_template_cache
+from .template_names import TemplateNames, pinned_template_cache
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +135,7 @@ def plan_module_conversions(
             continue
         claimed.add(rows[0].pk)
         try:
-            parent_name, _channels = channelized_family_names(rule, base_name, variables)
+            parent_name, _channels = channelized_family_names(rule, base_name, base_name, variables)
         except (TypeError, ValueError) as exc:
             # One family that cannot resolve must not lose the outcome the batch already accumulated.
             plan = _conversion_plan(module, "", channel_names, rows, channelization_supported)
