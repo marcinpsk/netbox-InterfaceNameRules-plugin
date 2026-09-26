@@ -14,8 +14,9 @@ from pathlib import Path
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, migrations, transaction
+from django.db import DatabaseError, IntegrityError, connection, migrations, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -173,6 +174,71 @@ class RuleValidationAgreementTest(TestCase):
         rule.refresh_from_db()
         self.assertTrue(rule.applies_to_device_interfaces)
         self.assertEqual(rule.module_type_pattern, "xe.*")
+
+    def test_a_targeted_save_validates_the_stored_mode_not_an_unsaved_one(self):
+        """A flat stored rule must not take a {channel} template from an unsaved channelized mode."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 4
+        rule.name_template = "xe-{bay_position}:{channel}"
+
+        with self.assertRaises(ValidationError):
+            rule.save(update_fields=["name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+        self.assertEqual(rule.name_template, "xe-{bay_position}")
+
+    def test_a_targeted_save_ignores_an_invalid_unsaved_mode(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 0
+        rule.name_template = "ge-{bay_position}"
+
+        rule.save(update_fields=["name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+        self.assertEqual(rule.name_template, "ge-{bay_position}")
+
+    def test_a_targeted_save_of_the_mode_fields_validates_their_new_values(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.breakout_mode = BreakoutModeChoices.CHANNELIZED
+        rule.channel_count = 0
+        rule.name_template = "xe-{bay_position}:{channel}"
+
+        with self.assertRaises(ValidationError):
+            rule.save(update_fields=["breakout_mode", "channel_count", "name_template"])
+
+        rule.channel_count = 4
+        rule.save(update_fields=["breakout_mode", "channel_count", "name_template"])
+
+        rule.refresh_from_db()
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.CHANNELIZED)
+        self.assertEqual(rule.name_template, "xe-{bay_position}:{channel}")
+
+    def test_a_targeted_save_of_a_missing_row_keeps_the_django_error(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        InterfaceNameRule.objects.filter(pk=rule.pk).delete()
+
+        with self.assertRaisesMessage(DatabaseError, "did not affect any rows"):
+            rule.save(update_fields=["name_template"])
+
+    def test_a_targeted_save_of_an_unsaved_rule_keeps_the_django_error(self):
+        rule = InterfaceNameRule(module_type=self.module_type, name_template="xe-{bay_position}")
+
+        with self.assertRaisesMessage(ValueError, "no primary key"):
+            rule.save(update_fields=["name_template"])
+
+    def test_a_targeted_save_of_an_unrelated_field_does_not_query_the_rule(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with CaptureQueriesContext(connection) as queries:
+            rule.save(update_fields=["description"])
+
+        rule_reads = f'SELECT "{InterfaceNameRule._meta.db_table}".'
+        self.assertFalse([query["sql"] for query in queries if query["sql"].startswith(rule_reads)])
 
     def test_save_refuses_positional_arguments(self):
         """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""

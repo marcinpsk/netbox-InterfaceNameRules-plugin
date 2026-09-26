@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+import inspect
+
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -22,9 +24,7 @@ def csv_export_entry(headers, values):
 
 
 DEVICE_RULE_PARENT_MODULE_TYPE_ERROR = "Parent module type must be empty for device-level interface rules."
-_RULE_VALIDATION_FIELDS = frozenset(
-    {"applies_to_device_interfaces", "breakout_mode", "channel_count", "name_template", "parent_name_template"}
-)
+_RULE_VALIDATION_FIELDS = frozenset(inspect.signature(validate_rule).parameters)
 
 
 class InterfaceNameRule(NetBoxModel):
@@ -185,7 +185,7 @@ class InterfaceNameRule(NetBoxModel):
             compile_module_type_pattern(self.module_type_pattern)
         elif not self.module_type:
             raise ValidationError({"module_type": "Module type is required when regex mode is disabled."})
-        self._validate_rule()
+        validate_rule(**self._rule_values())
 
     def _normalise_mode(self):
         """Clear the mode fields that the rule's mode gives no meaning."""
@@ -194,15 +194,15 @@ class InterfaceNameRule(NetBoxModel):
         elif not self.module_type_is_regex:
             self.module_type_pattern = ""
 
-    def _validate_rule(self):
-        """Check the topology and both templates against the rule's naming context."""
-        validate_rule(
-            breakout_mode=self.breakout_mode,
-            channel_count=self.channel_count,
-            name_template=self.name_template,
-            parent_name_template=self.parent_name_template,
-            applies_to_device_interfaces=self.applies_to_device_interfaces,
-        )
+    def _rule_values(self):
+        """Return the in-memory values that validate_rule() checks."""
+        return {
+            "breakout_mode": self.breakout_mode,
+            "channel_count": self.channel_count,
+            "name_template": self.name_template,
+            "parent_name_template": self.parent_name_template,
+            "applies_to_device_interfaces": self.applies_to_device_interfaces,
+        }
 
     def get_absolute_url(self):
         """Return the detail URL for this rule."""
@@ -353,8 +353,16 @@ class InterfaceNameRule(NetBoxModel):
         else:
             # The API saves its validated attrs, not the instance clean() normalised.
             self._normalise_mode()
-        if update_fields is None or _RULE_VALIDATION_FIELDS.intersection(update_fields):
-            self._validate_rule()
+        if update_fields is None:
+            validate_rule(**self._rule_values())
+        elif written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
+            # Validate the row as stored: fields outside update_fields come from the database.
+            stored = self.__class__._base_manager.using(kwargs.get("using") or self._state.db).filter(pk=self.pk)
+            row = stored.values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()
+            # A missing row is left to Django, which refuses the update itself.
+            if row is not None:
+                del row["pk"]
+                validate_rule(**(self._rule_values() | row))
         return super().save(**kwargs)
 
     def __str__(self):
