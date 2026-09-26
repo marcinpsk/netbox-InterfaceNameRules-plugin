@@ -7,6 +7,7 @@ clean(), so each one must also be unable to reach the table.
 """
 
 import ast
+import inspect
 from importlib import import_module
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.apps import apps as global_apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, migrations, transaction
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -265,6 +266,33 @@ class RuleValidationAgreementTest(TestCase):
             name_template="Gi{vc_position}/{port}",
         )
         self.assertEqual(InterfaceNameRule.objects.count(), 3)
+
+
+class ModeNormalisationSeamTest(SimpleTestCase):
+    """Only _normalise_mode() may change a field, so the API and the web form store the same rule."""
+
+    def test_only_normalise_mode_writes_a_model_field(self):
+        fields = {name for field in InterfaceNameRule._meta.concrete_fields for name in (field.name, field.attname)}
+        source, first_line = inspect.getsourcelines(InterfaceNameRule)
+        (rule_class,) = ast.increment_lineno(ast.parse("".join(source)), first_line - 1).body
+        methods = [node for node in rule_class.body if isinstance(node, ast.FunctionDef)]
+        self.assertIn("_normalise_mode", [method.name for method in methods])
+        for method in methods:
+            if method.name == "_normalise_mode":
+                continue
+            attribute_owners = {id(node.value) for node in ast.walk(method) if isinstance(node, ast.Attribute)}
+            for node in ast.walk(method):
+                if isinstance(node, ast.Name) and node.id == "self":
+                    # A bare self (setattr, an alias, a helper argument) could change a field unseen.
+                    self.assertTrue(
+                        id(node) in attribute_owners,
+                        f"models.py:{node.lineno} {method.name}() uses self, not self.<attr>",
+                    )
+                elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+                    self.assertFalse(
+                        isinstance(node.ctx, (ast.Store, ast.Del)) and node.attr in fields,
+                        f"{method.name}() writes self.{node.attr}; change a field only in _normalise_mode()",
+                    )
 
 
 class RefuseImplicitMigrationDatabase:
