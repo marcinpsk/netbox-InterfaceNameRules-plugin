@@ -289,6 +289,50 @@ def _evaluate_arithmetic(node):
     raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
 
 
+class _FormatFieldError(ValueError):
+    """Report a brace group written as a str.format conversion or format specification."""
+
+
+_FORMAT_FIELD_MESSAGE = (
+    "Name templates take a variable or an arithmetic expression, not str.format "
+    "conversions and format specifications: {group}"
+)
+
+
+def _substitute_tokens(template, replacements):
+    """Replace each exact token in *replacements* and return the text and the spans of the inserted values."""
+    literal_spans = []
+    if not replacements:
+        return template, literal_spans
+    offset = 0
+
+    def substitute(match):
+        nonlocal offset
+        value = replacements[match.group()]
+        start = match.start() + offset
+        literal_spans.append((start, start + len(value)))
+        offset += len(value) - len(match.group())
+        return value
+
+    pattern = "|".join(re.escape(token) for token in sorted(replacements, key=lambda token: (-len(token), token)))
+    return re.sub(pattern, substitute, template), literal_spans
+
+
+def _evaluate_group(expression):
+    """Evaluate one brace group after substitution, or raise ValueError."""
+    expr = expression.strip()
+    format_field = _FORMAT_FIELD_RE.fullmatch(expr)
+    if format_field and format_field[1].isidentifier():
+        raise _FormatFieldError(_FORMAT_FIELD_MESSAGE.format(group=f"{{{expr}}}"))
+    if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
+        raise ValueError(f"Unsafe expression in name template: {expr}")
+    try:
+        node = _parse_expression(expr)
+        return str(int(_evaluate_arithmetic(node)))
+    except (SyntaxError, TypeError, ZeroDivisionError) as exc:
+        raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
+
+
 def variable_token(name):
     """Return the exact text a name template substitutes for the variable *name*."""
     return f"{{{name}}}"
@@ -353,7 +397,7 @@ _REFUSALS = {
 
 
 def _template_errors(template, context, channel_count):
-    """Return brace and context errors for one template."""
+    """Return brace, context, and group-shape errors for one template."""
     if not _parse_brace_groups(template).balanced:
         return ["Unbalanced braces — every '{' in the template needs a '}'."]
     available = {
@@ -367,7 +411,29 @@ def _template_errors(template, context, channel_count):
         or f"{variable_token(name)} is not available in a {_CONTEXT_LABELS[context]}. Available: {available_text}."
         for name in referenced_variables(template)
         if name not in available
-    ]
+    ] + _group_errors(template)
+
+
+def _group_errors(template):
+    """Return one error for each distinct brace group that no variable values can evaluate."""
+    tokens = (variable_token(name) for name in referenced_variables(template) if name.isidentifier())
+    # Same-length placeholders keep each evaluated group at its offset in the operator's template.
+    text, literal_spans = _substitute_tokens(template, {token: "1" * len(token) for token in tokens})
+    errors = {}
+    for field in _parse_brace_groups(text, literal_spans).evaluated_fields:
+        group = template[field.start : field.end]
+        try:
+            _evaluate_group(field.expression)
+        except _FormatFieldError:
+            errors.setdefault(_FORMAT_FIELD_MESSAGE.format(group=group))
+        except ValueError as exc:
+            if not isinstance(exc.__cause__, ZeroDivisionError):
+                errors.setdefault(
+                    f"{group} is neither a variable token nor integer arithmetic over variable tokens. "
+                    "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
+                    "as in {{slot_num} // 2}."
+                )
+    return list(errors)
 
 
 def validate_rule(*, breakout_mode, channel_count, name_template, parent_name_template, applies_to_device_interfaces):
@@ -402,43 +468,12 @@ def evaluate_name_template(template: str, variables: dict) -> str:
     evaluating the arithmetic expression.
     """
     replacements = {variable_token(key): str(value) for key, value in variables.items()}
-    literal_spans = []
-    offset = 0
-
-    def substitute(match):
-        nonlocal offset
-        value = replacements[match.group()]
-        start = match.start() + offset
-        literal_spans.append((start, start + len(value)))
-        offset += len(value) - len(match.group())
-        return value
-
-    result = template
-    if replacements:
-        pattern = "|".join(re.escape(token) for token in sorted(replacements, key=lambda token: (-len(token), token)))
-        result = re.sub(pattern, substitute, template)
-
-    def evaluate_expression(field):
-        expr = field.expression.strip()
-        format_field = _FORMAT_FIELD_RE.fullmatch(expr)
-        if format_field and format_field[1].isidentifier():
-            raise ValueError(
-                f"Name templates take a variable or an arithmetic expression, not str.format "
-                f"conversions and format specifications: {{{expr}}}"
-            )
-        if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
-            raise ValueError(f"Unsafe expression in name template: {expr}")
-        try:
-            node = _parse_expression(expr)
-            return str(int(_evaluate_arithmetic(node)))
-        except (SyntaxError, TypeError, ZeroDivisionError) as exc:
-            raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
-
+    result, literal_spans = _substitute_tokens(template, replacements)
     parsed = _parse_brace_groups(result, literal_spans)
     parts = []
     end = 0
     for field in parsed.evaluated_fields:
-        parts.extend((result[end : field.start], evaluate_expression(field)))
+        parts.extend((result[end : field.start], _evaluate_group(field.expression)))
         end = field.end
     parts.append(result[end:])
     return "".join(parts)

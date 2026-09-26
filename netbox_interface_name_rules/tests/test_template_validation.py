@@ -86,6 +86,65 @@ class ReferencedVariablesTest(SimpleTestCase):
         self.assertIn("parent_name_template", caught.exception.message_dict)
 
 
+class BraceGroupShapeTest(SimpleTestCase):
+    """A save refuses a brace group that no variable values can evaluate."""
+
+    SUFFIX = (
+        " is neither a variable token nor integer arithmetic over variable tokens. "
+        "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
+        "as in {{slot_num} // 2}."
+    )
+
+    def _errors(self, template, channel_count=0):
+        try:
+            name_template.validate_rule(
+                breakout_mode="flat",
+                channel_count=channel_count,
+                name_template=template,
+                parent_name_template="",
+                applies_to_device_interfaces=False,
+            )
+        except ValidationError as exc:
+            return exc.message_dict["name_template"]
+        return []
+
+    def test_the_refusal_quotes_the_operators_group(self):
+        for template, group in (
+            ("eth{slot_num // 2}", "{slot_num // 2}"),
+            ("{slot_num + {sfp_slot}}", "{slot_num + {sfp_slot}}"),
+            ("xe-{{slot_num} / 2}", "{{slot_num} / 2}"),
+            ("{ channel }", "{ channel }"),
+            ("{bay_position[0]}", "{bay_position[0]}"),
+        ):
+            with self.subTest(template=template):
+                self.assertEqual(self._errors(template, channel_count=4), [group + self.SUFFIX])
+
+    def test_a_format_field_keeps_the_format_field_message(self):
+        self.assertEqual(
+            self._errors("xe-{ bay_position :>2}"),
+            [
+                (
+                    "Name templates take a variable or an arithmetic expression, not str.format "
+                    "conversions and format specifications: { bay_position :>2}"
+                )
+            ],
+        )
+
+    def test_each_distinct_group_is_reported_once_after_the_context_errors(self):
+        self.assertEqual(
+            self._errors("{port}-{slot_num // 2}/{slot_num // 2}/{sfp_slot.x}")[1:],
+            ["{slot_num // 2}" + self.SUFFIX, "{sfp_slot.x}" + self.SUFFIX],
+        )
+
+    def test_an_unavailable_variable_token_gets_only_the_context_error(self):
+        errors = self._errors("{{unknown} // 2}")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("{unknown} is not available"))
+
+    def test_a_zero_divisor_is_not_a_shape_refusal(self):
+        self.assertEqual(self._errors("port{8 // ({slot_num} - {sfp_slot})}"), [])
+
+
 class TemplateBulkEditTest(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -166,6 +225,7 @@ class TemplateAuditMigrationTest(TransactionTestCase):
                 ),
                 Rule(module_type_is_regex=True, module_type_pattern="audit-channel", name_template="{channel}"),
                 Rule(module_type_is_regex=True, module_type_pattern="audit-valid", name_template="{vc_position}"),
+                Rule(module_type_is_regex=True, module_type_pattern="audit-shape", name_template="eth{slot_num // 2}"),
             )
         )
         Rule.objects.bulk_create(rows)
@@ -180,13 +240,14 @@ class TemplateAuditMigrationTest(TransactionTestCase):
                 (rows[3], "name_template", "{port}"),
                 (rows[3], "parent_name_template", "{unknown}"),
                 (rows[4], "name_template", "{channel}"),
+                (rows[6], "name_template", "{slot_num // 2} is neither"),
             ):
                 self.assertTrue(
                     any(f"ID {row.pk}" in line and field in line and reason in line for line in logs.output)
                 )
             self.assertEqual(list(Rule.objects.order_by("pk").values()), before)
             self.assertIn(target, MigrationExecutor(connection).loader.applied_migrations)
-            self.assertEqual(len(logs.output), 6)
+            self.assertEqual(len(logs.output), 7)
         finally:
             Rule.objects.filter(pk__in=[row.pk for row in rows]).delete()
             MigrationExecutor(connection).migrate(latest)

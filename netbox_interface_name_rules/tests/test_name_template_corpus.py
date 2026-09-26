@@ -43,6 +43,11 @@ class TemplateCase:
 
 ACCEPTED = AdapterVerdicts(True, True, True, True, True)
 REFUSED = AdapterVerdicts(False, False, False, False, False)
+SHAPE_REFUSAL = (
+    " is neither a variable token nor integer arithmetic over variable tokens. "
+    "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
+    "as in {{slot_num} // 2}."
+)
 
 NAME_TEMPLATE_CORPUS = (
     TemplateCase("module names port", "{port}", REFUSED),
@@ -94,7 +99,42 @@ NAME_TEMPLATE_CORPUS = (
         "Available: {base}, {bay_position}, {bay_position_num}, {parent_bay_position}, "
         "{parent_bay_position_num}, {sfp_slot}, {slot}, {slot_num}, {vc_position}.",
     ),
-    TemplateCase("format conversion", "xe-{bay_position!r}", ACCEPTED),
+    TemplateCase(
+        "format conversion",
+        "xe-{bay_position!r}",
+        REFUSED,
+        error_message="Name templates take a variable or an arithmetic expression, not str.format "
+        "conversions and format specifications: {bay_position!r}",
+    ),
+    TemplateCase(
+        "bare variable name in arithmetic",
+        "eth{slot_num // 2}",
+        REFUSED,
+        error_message="{slot_num // 2}" + SHAPE_REFUSAL,
+    ),
+    TemplateCase(
+        "bare variable name beside a nested token",
+        "{slot_num + {sfp_slot}}",
+        REFUSED,
+        error_message="{slot_num + {sfp_slot}}" + SHAPE_REFUSAL,
+    ),
+    TemplateCase("spaces around a variable", "{ channel }", REFUSED, channel_count=4),
+    TemplateCase("attribute access", "{bay_position.x}", REFUSED),
+    TemplateCase("index access", "{bay_position[0]}", REFUSED),
+    TemplateCase("true division", "{{slot_num} / 2}", REFUSED),
+    TemplateCase(
+        "parent template bare variable name in arithmetic",
+        "{base}:{channel}",
+        REFUSED,
+        parent_name_template="p{slot_num // 2}",
+        error_field="parent_name_template",
+        error_message="{slot_num // 2}" + SHAPE_REFUSAL,
+        breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        channel_count=4,
+    ),
+    TemplateCase("variable token in arithmetic", "eth{{slot_num} // 2}", ACCEPTED),
+    TemplateCase("converter offset arithmetic", "swp{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}", ACCEPTED),
+    TemplateCase("value-dependent zero divisor", "{{slot_num} // {sfp_slot}}", ACCEPTED),
     TemplateCase("channel without declared channels", "xe-{channel}", REFUSED),
     TemplateCase(
         "module parent names channel",

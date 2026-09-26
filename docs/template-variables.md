@@ -4,6 +4,8 @@ A save refuses a template variable that the rule's naming context does not provi
 The error names the variable and lists the available variables. Module rules can use
 `{channel}` only when they declare channels. Device rules cannot use module variables,
 and module rules cannot use `{port}`. Braces must balance in both template fields.
+A save also refuses a brace group that is neither a variable token nor integer arithmetic
+over variable tokens, such as `{slot_num // 2}` or `{bay_position!r}`.
 These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
 The rule tester applies the same checks for the selected rule kind.
 

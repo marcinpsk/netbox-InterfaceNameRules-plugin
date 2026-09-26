@@ -48,8 +48,9 @@ python manage.py migrate
 ```
 
 The name-template audit migration reports stored rules whose templates use variables
-outside their naming context or have unbalanced braces. Each warning names the rule
-ID, field, and reason. The migration leaves all values unchanged and completes even
+outside their naming context, have unbalanced braces, or have a brace group that cannot
+evaluate. Each warning names the rule ID, field, and reason. The migration leaves all
+values unchanged and completes even
 when it reports a refused rule. Correct the reported templates before saving those
 rules again. See [Template Variables](template-variables.md) for each context's variables.
 

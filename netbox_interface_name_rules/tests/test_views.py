@@ -1112,15 +1112,16 @@ class RuleTestViewTest(ViewTestBase):
         self.assertIsNotNone(response.context["db_preview"])
 
     def test_check_invalid_template_sets_error(self):
-        """POST with a malformed template expression sets error context."""
+        """POST with a template the entered values cannot evaluate sets error context."""
         data = {
-            "name_template": "{1 + }",
+            "name_template": "{1 + {bay_position}}",
             "channel_count": "0",
             "channel_start": "0",
+            "var_bay_position": "swp1",
         }
         response = self.client.post(self._url(), data)
         self.assertEqual(response.status_code, 200)
-        self.assertIsNotNone(response.context["error"])
+        self.assertEqual(response.context["error"], "ValueError")
 
     def test_save_rule_existing_redirects_to_edit(self):
         """POST save_rule with matching module_type redirects to rule edit page."""

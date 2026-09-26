@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule ID and cleared module type. The engine never matched a device rule on
   this field, so only the rule ranking changes. A rollback does not restore the
   cleared values. Record them before the upgrade if you need them.
+- A save now refuses a brace group that can never evaluate, such as `{slot_num // 2}`,
+  `{ channel }`, `{bay_position.x}`, or `{bay_position!r}`. Before, the rule saved and
+  failed on every rename. The error quotes the group and shows the variable-token form,
+  `{{slot_num} // 2}`. The name-template audit migration reports these groups too.
 
 ## v1.5.3 (2026-09-21)
 

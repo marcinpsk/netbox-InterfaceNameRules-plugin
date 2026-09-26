@@ -962,7 +962,7 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
         # Create a device-interface rule with an unsafe template that triggers ValueError
         rule = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True,
-            name_template="{1/0}",  # division not allowed — ValueError from evaluate_name_template
+            name_template="{1 + {base}}",  # {base} is Gi0/1 here, so evaluate_name_template raises ValueError
         )
         Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
         apply_device_interface_rules(self.device)

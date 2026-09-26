@@ -158,6 +158,10 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._braces_balanced".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._evaluated_brace_fields".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._evaluate_arithmetic".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._evaluate_group".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._substitute_tokens".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._FormatFieldError".msg = "Use name_template.evaluate_name_template."
+"netbox_interface_name_rules.name_template._FORMAT_FIELD_MESSAGE".msg = "Use name_template.evaluate_name_template."
 "netbox_interface_name_rules.name_template._parse_brace_groups".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._parse_expression".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._reference_brace_fields".msg = "Use the name_template public interface."
@@ -166,6 +170,7 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._identifiers".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._validate_breakout_topology".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._template_errors".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._group_errors".msg = "Use name_template.validate_rule."
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
