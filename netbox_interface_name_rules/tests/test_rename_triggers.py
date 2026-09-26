@@ -29,6 +29,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_bay_templates,
     make_module_type,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -318,6 +319,96 @@ class PreviousStateReadFailureTest(RenameTriggerTestCase):
         self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 1)
 
 
+class CoalescedTriggerTest(RenameTriggerTestCase):
+    """Several triggers for one module or device in one transaction cause one reapply."""
+
+    def test_two_module_type_changes_reapply_once_with_the_final_rule(self):
+        module = self._install()
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._change_type(module, self.type_b)
+            self._change_type(module, self.type_c)
+
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["ge-1/0/0"])
+
+    def test_an_install_and_a_type_change_reapply_once_with_force(self):
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=self.type_a)
+            self._change_type(module, self.type_b)
+
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["xe-1/0/0"])
+
+    def test_a_module_type_changed_and_changed_back_is_compared_with_the_earliest_state(self):
+        module = self._install()
+        rename_out_of_band(Interface.objects.get(module=module), "operator-name")
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._change_type(module, self.type_b)
+            self._change_type(module, self.type_a)
+
+        self.assertEqual(reapplies.call_count, 0)
+        self.assertEqual(self._names(module), ["operator-name"])
+
+    def test_an_install_under_a_reused_key_is_not_absorbed_by_a_pending_type_change(self):
+        module = self._install()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._change_type(module, self.type_b)
+            pk = module.pk
+            module.delete()
+            module = Module.objects.create(pk=pk, device=self.device, module_bay=self._bay(), module_type=self.type_a)
+
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_two_position_changes_reapply_once_with_the_final_position(self):
+        module = self._install()
+
+        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._move_to_position(2)
+            self._move_to_position(3)
+
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["et-3/0/0"])
+
+    def test_a_position_changed_and_changed_back_is_compared_with_the_earliest_state(self):
+        module = self._install()
+        rename_out_of_band(Interface.objects.get(module=module), "operator-name")
+
+        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._move_to_position(2)
+            self._move_to_position(1)
+
+        self.assertEqual(reapplies.call_count, 0)
+        self.assertEqual(self._names(module), ["operator-name"])
+
+    def test_a_trigger_in_a_rolled_back_savepoint_does_not_suppress_a_later_trigger(self):
+        module = self._install()
+
+        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self._move_to_position(2)
+                raise RuntimeError("roll back the savepoint")
+            self.device.refresh_from_db()
+            self._move_to_position(3)
+
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["et-3/0/0"])
+
+    def test_a_rolled_back_savepoint_keeps_the_earlier_reapply(self):
+        module = self._install()
+
+        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._move_to_position(2)
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self._move_to_position(1)
+                raise RuntimeError("roll back the savepoint")
+
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["et-2/0/0"])
+
+
 def _reject_interface_updates(execute, sql, params, many, context):
     if sql.lstrip().startswith('UPDATE "dcim_interface"'):
         raise IntegrityError("injected reapply failure")
@@ -424,3 +515,16 @@ class CommittedRenameTriggerTest(_RenameTriggerFixture, TransactionTestCase):
         self.module.save(update_fields=["module_type"])
 
         self.assertEqual(self._names(self.module), ["xe-1/0/0"])
+
+    def test_a_rolled_back_transaction_does_not_suppress_the_next_trigger(self):
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            self.device.vc_position = 2
+            self.device.save()
+            raise RuntimeError("roll back the transaction")
+        self.device.refresh_from_db()
+
+        with transaction.atomic():
+            self.device.vc_position = 3
+            self.device.save()
+
+        self.assertEqual(self._names(self.module), ["et-3/0/0"])

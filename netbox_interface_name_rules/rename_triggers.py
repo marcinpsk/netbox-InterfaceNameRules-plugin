@@ -3,8 +3,9 @@
 """Rename triggers: read the previous state, decide, and reapply the rules after commit.
 
 The receivers in ``signals.py`` pass every module and device save here. ``before_save`` reads the
-previous state; ``after_save`` compares it with the saved values and schedules a reapply after
-commit. The reapply compares the previous state with the committed row.
+previous state; ``after_save`` compares it with the saved values and schedules one reapply per
+module or device per transaction. The reapply compares the earliest previous state of the
+transaction with the committed row, so it acts on the net change.
 """
 
 import dataclasses
@@ -40,13 +41,14 @@ def _state_of(state_class, instance):
 class ModuleReapply:
     """Reapply the rules to one module after commit.
 
-    ``baseline`` is the previous state, or the state the module was installed with when
-    ``installed`` is set.
+    ``baseline`` is the earliest previous state of the transaction, or the state the module was
+    installed with when ``installed`` is set.
     """
 
     pk: int
     baseline: ModuleState
     installed: bool
+    started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
     @classmethod
     def after_install(cls, module):
@@ -58,8 +60,14 @@ class ModuleReapply:
         changed = current != self.baseline
         return changed if self.installed or changed else None
 
+    def covers(self, pending):
+        """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
+        # An install is never covered: a pending reapply compares with the row this install replaced.
+        return isinstance(pending, ModuleReapply) and pending.pk == self.pk and not (pending.started or self.installed)
+
     def __call__(self):
         """Reapply the module's rule against the committed row."""
+        self.started = True
         from dcim.models import Module, ModuleBay
 
         try:
@@ -85,18 +93,24 @@ class ModuleReapply:
 class DeviceReapply:
     """Reapply the module and device-interface rules of one device after commit.
 
-    ``baseline`` is the previous state.
+    ``baseline`` is the earliest previous state of the transaction.
     """
 
     pk: int
     baseline: DeviceState
+    started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
     def is_due(self, current):
         """Return whether *current* differs from the baseline while the device is in a virtual chassis."""
         return current != self.baseline and current.virtual_chassis_id is not None
 
+    def covers(self, pending):
+        """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
+        return isinstance(pending, DeviceReapply) and pending.pk == self.pk and not pending.started
+
     def __call__(self):
         """Reapply the device's rules against the committed row."""
+        self.started = True
         from dcim.models import Device
 
         try:
@@ -187,5 +201,10 @@ def after_save(sender, instance, created):
     # No entry: NetBox sent this post_save by hand, without a model save.
     _, previous = _previous_states.pop(id(instance), (None, None))
     reapply = trigger(instance, created, previous)
-    if reapply is not None:
-        transaction.on_commit(reapply)
+    if reapply is None:
+        return
+    connection = transaction.get_connection()
+    # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
+    if connection.in_atomic_block and any(reapply.covers(pending) for _, pending, _ in connection.run_on_commit):
+        return
+    transaction.on_commit(reapply)
