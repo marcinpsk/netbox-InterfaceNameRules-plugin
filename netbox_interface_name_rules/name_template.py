@@ -203,9 +203,14 @@ _FORMAT_FIELD_RE = re.compile(r"(.*?)\s*(?:![rsa]|:[^{}]*)")
 
 
 def _identifiers(text):
-    """Return each whole identifier in *text*; only str.isidentifier() knows every Unicode one."""
-    runs = ("".join(chars) for part, chars in itertools.groupby(text, lambda char: f"_{char}".isidentifier()) if part)
-    return [run for run in runs if run.isidentifier()]
+    """Return each identifier-character run in *text* from its first identifier start, so none is lost."""
+    names = []
+    for part, chars in itertools.groupby(text, lambda char: f"_{char}".isidentifier()):
+        run = "".join(chars)
+        start = next((index for index, char in enumerate(run) if char.isidentifier()), None)
+        if part and start is not None:
+            names.append(run[start:])
+    return names
 
 
 def _reference_brace_fields(template):
