@@ -93,24 +93,24 @@ Community-contributed rules for various vendors are in the [`contrib/`](contrib/
 Inside the devcontainer:
 
 ```bash
-netbox-test                 # run this plugin's tests (shared test_netbox DB)
-netbox-test-isolated <app> [flags]   # run on a per-session ISOLATED test DB
+netbox-test                          # run this plugin's suite with pytest
+netbox-test <pytest args>            # e.g. one file, or -k 'a test name'
 ```
 
-`netbox-test-isolated` is concurrency-safe: Django otherwise names the test
-database `test_<DB_NAME>` (`test_netbox`), so two `manage.py test` runs in the
-same devcontainer collide on one DB and corrupt each other's migrations (a
-crashed run can even leave an `idle in transaction` connection holding locks that
-wedges every later run). The helper points the test DB at a unique name —
-derived from the first app argument, or `TEST_DB_NAME=...` — via the
-[`isolated_test_settings`](.devcontainer/config/isolated_test_settings.py) shim
-(`--settings=isolated_test_settings` with `.devcontainer/config` on `PYTHONPATH`).
-Plain `netbox-test` keeps using the shared default (`test_netbox`);
-`netbox-test-isolated` instead derives a per-app DB name by default — `test_<app>`
-from the first app argument (this plugin when none is given) — unless you set
-`TEST_DB_NAME` explicitly. Example — test a sibling plugin without disturbing a
-parallel run:
+`netbox-test` runs pytest, the runner CI uses, so the fixtures and guards in
+`conftest.py` apply. It uses the `test_netbox_interface_name_rules` database and
+gives each xdist worker its own copy. Concurrent `netbox-test` calls wait for each
+other. Set `TEST_DB_NAME=...` or `TEST_REDIS_HOST=...` to use other targets.
+
+`netbox-test-isolated <app> [flags]` runs the Django test runner
+(`manage.py test`) on an isolated database. Do not use it for this plugin's
+suite: it skips `conftest.py`. It exists for the performance runner and for other
+apps. Django otherwise names the test database `test_<DB_NAME>` (`test_netbox`),
+so two concurrent runs share one database and corrupt each other's migrations.
+The helper sets the database name to `test_<app>` from the first app argument,
+or to `TEST_DB_NAME=...`, through the
+[`isolated_test_settings`](.devcontainer/config/isolated_test_settings.py) shim:
 
 ```bash
-netbox-test-isolated netbox_nso_plugin --keepdb
+netbox-test-isolated <other_app> --keepdb
 ```
