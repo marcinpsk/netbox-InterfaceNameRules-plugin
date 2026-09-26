@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Validate templates at the language, bulk-edit, and upgrade boundaries."""
 
+import string
+
 from dcim.models import Manufacturer, ModuleType
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -157,9 +159,19 @@ class BraceGroupShapeTest(SimpleTestCase):
                 self.assertEqual(self._errors(template), [])
                 self.assertEqual(name_template.evaluate_name_template(template, {"slot_num": slot_num}), name)
 
-    def test_two_glued_literals_that_need_different_digits_are_refused(self):
+    def test_each_variable_takes_its_own_leading_digit(self):
         template = "{0{slot_num} + {sfp_slot}5}"
-        self.assertEqual(self._errors(template), [template + self.SUFFIX])
+        self.assertEqual(self._errors(template), [])
+        self.assertEqual(name_template.evaluate_name_template(template, {"slot_num": "0", "sfp_slot": "1"}), "15")
+
+    def test_one_variable_that_needs_two_leading_digits_is_refused(self):
+        self.assertEqual(self._errors("xe-{0{slot_num} + {slot_num}5}"), ["{0{slot_num} + {slot_num}5}" + self.SUFFIX])
+
+    def test_unknown_variable_tokens_share_one_digit(self):
+        group = "{" + "".join(f"{{{name}}}" for name in string.ascii_letters) + " ** 2}"
+        errors = self._errors(group)
+        self.assertEqual(len(errors), len(string.ascii_letters) + 1, "one context error per name, then the group")
+        self.assertEqual(errors[-1], group + self.SUFFIX)
 
 
 class TemplateBulkEditTest(TestCase):

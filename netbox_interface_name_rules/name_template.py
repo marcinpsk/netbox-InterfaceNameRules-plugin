@@ -419,6 +419,7 @@ def _validate_breakout_topology(breakout_mode, channel_count, parent_name_templa
         raise ValidationError({"channel_count": "A channelized rule must define at least one channel."})
 
 
+_VARIABLE_NAMES = frozenset(variable.name for variable in TEMPLATE_VARIABLES)
 _CONTEXT_LABELS = {
     NamingContext.DEVICE_INTERFACE: "device-level rule's name template",
     NamingContext.MODULE_MEMBER: "module rule's name template",
@@ -451,22 +452,46 @@ def _group_errors(template):
     """Return one error for each distinct brace group that no variable values can evaluate."""
     tokens = tuple(variable_token(name) for name in referenced_variables(template) if name.isidentifier())
     # Same-length placeholders keep each evaluated group at its offset in the operator's template.
-    texts = [_substitute_tokens(template, {token: digit * len(token) for token in tokens}) for digit in "10"]
+    text, literal_spans = _substitute_tokens(template, {token: "1" * len(token) for token in tokens})
+    spans = iter(literal_spans)
+    span = next(spans, None)
     errors = {}
-    for field in _parse_brace_groups(*texts[0]).evaluated_fields:
+    for field in _parse_brace_groups(text, literal_spans).evaluated_fields:
+        group_spans = []
+        while span is not None and span[0] < field.end:
+            if span[0] > field.start:
+                group_spans.append(span)
+            span = next(spans, None)
+        failure = _group_shape_refusal(template, text, field, group_spans)
         group = template[field.start : field.end]
-        failures = [_group_shape_error(text[field.start + 1 : field.end - 1]) for text, _spans in texts]
-        if not all(failures):
-            continue
-        if isinstance(failures[0], _FormatFieldError):
+        if isinstance(failure, _FormatFieldError):
             errors.setdefault(_FORMAT_FIELD_MESSAGE.format(group=group))
-        else:
+        elif failure:
             errors.setdefault(
                 f"{group} is neither a variable token nor integer arithmetic over variable tokens. "
                 "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
                 "as in {{slot_num} // 2}."
             )
     return list(errors)
+
+
+def _group_shape_refusal(template, text, field, spans):
+    """Return the all-ones shape error of one group when no 0 or 1 digit per variable passes, or None."""
+    # Unknown names share one digit: the context check refuses them, and each would double the work.
+    names = {span: template[span[0] + 1 : span[1] - 1] for span in spans}
+    choices = {span: name if name in _VARIABLE_NAMES else None for span, name in names.items()}
+    variables = tuple(dict.fromkeys(choices.values()))
+    first_error = None
+    for digits in itertools.product("10", repeat=len(variables)):
+        digit_of = dict(zip(variables, digits, strict=True))
+        chars = list(text[field.start + 1 : field.end - 1])
+        for (start, end), variable in choices.items():
+            chars[start - field.start - 1 : end - field.start - 1] = digit_of[variable] * (end - start)
+        error = _group_shape_error("".join(chars))
+        if error is None:
+            return None
+        first_error = first_error or error
+    return first_error
 
 
 def validate_rule(*, breakout_mode, channel_count, name_template, parent_name_template, applies_to_device_interfaces):

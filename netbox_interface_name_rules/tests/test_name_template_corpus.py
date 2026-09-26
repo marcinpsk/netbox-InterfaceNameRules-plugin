@@ -145,6 +145,13 @@ NAME_TEMPLATE_CORPUS = (
     TemplateCase("constant zero divisor is well-shaped", "{8 // 0}", ACCEPTED),
     TemplateCase("literal zero before a variable token", "{0{slot_num}}", ACCEPTED),
     TemplateCase("literal digit after a variable token", "{{slot_num}5}", ACCEPTED),
+    TemplateCase("two variable tokens with different leading digits", "{0{slot_num} + {sfp_slot}5}", ACCEPTED),
+    TemplateCase(
+        "one variable token that needs two leading digits",
+        "xe-{0{slot_num} + {slot_num}5}",
+        REFUSED,
+        error_message="{0{slot_num} + {slot_num}5}" + SHAPE_REFUSAL,
+    ),
     TemplateCase("channel without declared channels", "xe-{channel}", REFUSED),
     TemplateCase(
         "module parent names channel",
