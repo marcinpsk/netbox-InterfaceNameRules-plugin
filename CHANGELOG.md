@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device-level rule sent with `module_type_is_regex: true` no longer fails with a
   server error; it saves with regex mode off. A module-type rule sent with a
   `module_type_pattern` saves with the pattern cleared, instead of a 400 response.
+- A name template variable that starts with a non-ASCII letter, such as `{é}`, is now
+  read as a variable. Before, a group like `{é é}` passed the rule check and failed
+  only when the rule renamed an interface, and `{é!r}` got the generic unsafe
+  expression error instead of the format-field error.
 
 ## v1.5.3 (2026-09-21)
 

@@ -198,9 +198,11 @@ _UNARY_OPERATORS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
-_FORMAT_FIELD_RE = re.compile(r"[A-Za-z_]\w*\s*(?:![rsa]|:[^{}]*)$")
-_NAMED_HEAD_RE = re.compile(r"([A-Za-z_]\w*)(?=$|\.|\[)")
-_IDENTIFIER_RE = re.compile(r"(?<!\w)[A-Za-z_]\w*")
+# A Python identifier starts with a letter or underscore in any script, never a digit.
+_IDENTIFIER = r"[^\W\d]\w*"
+_FORMAT_FIELD_RE = re.compile(rf"{_IDENTIFIER}\s*(?:![rsa]|:[^{{}}]*)$")
+_NAMED_HEAD_RE = re.compile(rf"({_IDENTIFIER})(?=$|\.|\[)")
+_IDENTIFIER_RE = re.compile(rf"(?<!\w){_IDENTIFIER}")
 
 
 def _reference_brace_fields(template):

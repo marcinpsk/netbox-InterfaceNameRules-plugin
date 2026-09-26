@@ -32,12 +32,14 @@ class ReferencedVariablesTest(SimpleTestCase):
             ("xe-{port)}", ("port",)),
             ("{slot foo}", ("slot", "foo")),
             ("{8 + port-}", ("port",)),
+            ("{é é}", ("é",)),
+            ("{é.1 + port}", ("é", "port")),
         ):
             with self.subTest(template=template):
                 self.assertEqual(name_template.referenced_variables(template), expected)
 
     def test_a_group_that_does_not_parse_still_names_its_variables(self):
-        for template in ("xe-{port +}", "xe-{port)}", "{slot foo}"):
+        for template in ("xe-{port +}", "xe-{port)}", "{slot foo}", "{é é}"):
             with self.subTest(template=template), self.assertRaises(ValidationError):
                 name_template.validate_rule(
                     breakout_mode="flat",

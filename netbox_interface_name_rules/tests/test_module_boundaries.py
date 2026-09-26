@@ -139,6 +139,18 @@ def _ast_imports(path: pathlib.Path) -> list[int]:
     ]
 
 
+def _ascii_identifier_classes(path: pathlib.Path) -> list[int]:
+    """Return lines of string constants that restrict an identifier's first character to ASCII."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and any(shape in node.value for shape in ("[A-Za-z_]", "[a-zA-Z_]", "[_A-Za-z]", "[_a-zA-Z]"))
+    ]
+
+
 def _test_modules() -> list[pathlib.Path]:
     """Return the test modules of this package."""
     return sorted(path for path in (PACKAGE / "tests").glob("*.py") if path.stem != "__init__")
@@ -592,6 +604,23 @@ class PluginModuleBoundaryTest(SimpleTestCase):
             path.write_text("import ast as syntax_tree\n", encoding="utf-8")
 
             self.assertEqual(_ast_imports(path), [1])
+
+    def test_production_patterns_accept_a_non_ascii_identifier(self):
+        """Template variables are Python identifiers, so a pattern that reads one must accept `é` first."""
+        violations = {
+            (str(path.relative_to(PACKAGE)), line)
+            for path in _production_modules()
+            for line in _ascii_identifier_classes(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_ascii_identifier_detector_catches_a_constructed_violation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("import re\nNAME = re.compile(r'[A-Za-z_]\\w*')\n", encoding="utf-8")
+
+            self.assertEqual(_ascii_identifier_classes(path), [2])
 
 
 class UnisolatedReverseTest(SimpleTestCase):
