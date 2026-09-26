@@ -272,20 +272,27 @@ def _parse_expression(expression):
     return ast.parse(expression, mode="eval")
 
 
-def _evaluate_arithmetic(node):
-    """Evaluate one validated integer arithmetic syntax tree without executing code."""
+def _arithmetic_operands(node):
+    """Return the operand nodes of an integer arithmetic node, or raise ValueError for any other node."""
     if isinstance(node, ast.Expression):
-        return _evaluate_arithmetic(node.body)
+        return (node.body,)
     if isinstance(node, ast.Constant) and type(node.value) is int:
-        return node.value
+        return ()
     if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
-        return _BINARY_OPERATORS[type(node.op)](
-            _evaluate_arithmetic(node.left),
-            _evaluate_arithmetic(node.right),
-        )
+        return (node.left, node.right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
-        return _UNARY_OPERATORS[type(node.op)](_evaluate_arithmetic(node.operand))
+        return (node.operand,)
     raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
+
+
+def _evaluate_arithmetic(node):
+    """Evaluate one integer arithmetic syntax tree without executing code."""
+    values = [_evaluate_arithmetic(operand) for operand in _arithmetic_operands(node)]
+    if isinstance(node, ast.BinOp):
+        return _BINARY_OPERATORS[type(node.op)](*values)
+    if isinstance(node, ast.UnaryOp):
+        return _UNARY_OPERATORS[type(node.op)](*values)
+    return node.value if isinstance(node, ast.Constant) else values[0]
 
 
 class _FormatFieldError(ValueError):
@@ -326,18 +333,37 @@ def _substitute_tokens(template, replacements):
     return re.sub(pattern, substitute, template), literal_spans
 
 
-def _evaluate_group(expression):
-    """Evaluate one brace group after substitution, or raise ValueError."""
-    expr = expression.strip()
+def _group_tree(expr):
+    """Return the syntax tree of one stripped brace group that passes the text checks, or raise ValueError."""
     if _is_format_field(expr):
         raise _FormatFieldError(_FORMAT_FIELD_MESSAGE.format(group=f"{{{expr}}}"))
     if not re.match(r"^(?!.*(?<!/)/(?!/))[\d\s\+\-\*\(\/\)]+$", expr):
         raise ValueError(f"Unsafe expression in name template: {expr}")
     try:
-        node = _parse_expression(expr)
-        return str(int(_evaluate_arithmetic(node)))
-    except (SyntaxError, TypeError, ZeroDivisionError) as exc:
+        return _parse_expression(expr)
+    except SyntaxError as exc:
         raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
+
+
+def _evaluate_group(expression):
+    """Evaluate one brace group after substitution, or raise ValueError."""
+    expr = expression.strip()
+    node = _group_tree(expr)
+    try:
+        return str(int(_evaluate_arithmetic(node)))
+    except (TypeError, ZeroDivisionError) as exc:
+        raise ValueError(f"Invalid arithmetic expression '{expr}': {exc}") from exc
+
+
+def _group_shape_error(expression):
+    """Return the ValueError the evaluator raises for one brace group before it computes, or None."""
+    try:
+        pending = [_group_tree(expression.strip())]
+        while pending:
+            pending.extend(_arithmetic_operands(pending.pop()))
+    except ValueError as exc:
+        return exc
+    return None
 
 
 def variable_token(name):
@@ -423,23 +449,23 @@ def _template_errors(template, context, channel_count):
 
 def _group_errors(template):
     """Return one error for each distinct brace group that no variable values can evaluate."""
-    tokens = (variable_token(name) for name in referenced_variables(template) if name.isidentifier())
+    tokens = tuple(variable_token(name) for name in referenced_variables(template) if name.isidentifier())
     # Same-length placeholders keep each evaluated group at its offset in the operator's template.
-    text, literal_spans = _substitute_tokens(template, {token: "1" * len(token) for token in tokens})
+    texts = [_substitute_tokens(template, {token: digit * len(token) for token in tokens}) for digit in "10"]
     errors = {}
-    for field in _parse_brace_groups(text, literal_spans).evaluated_fields:
+    for field in _parse_brace_groups(*texts[0]).evaluated_fields:
         group = template[field.start : field.end]
-        try:
-            _evaluate_group(field.expression)
-        except _FormatFieldError:
+        failures = [_group_shape_error(text[field.start + 1 : field.end - 1]) for text, _spans in texts]
+        if not all(failures):
+            continue
+        if isinstance(failures[0], _FormatFieldError):
             errors.setdefault(_FORMAT_FIELD_MESSAGE.format(group=group))
-        except ValueError as exc:
-            if not isinstance(exc.__cause__, ZeroDivisionError):
-                errors.setdefault(
-                    f"{group} is neither a variable token nor integer arithmetic over variable tokens. "
-                    "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
-                    "as in {{slot_num} // 2}."
-                )
+        else:
+            errors.setdefault(
+                f"{group} is neither a variable token nor integer arithmetic over variable tokens. "
+                "Write each variable as its own {name} token, and use only +, -, *, // and parentheses, "
+                "as in {{slot_num} // 2}."
+            )
     return list(errors)
 
 

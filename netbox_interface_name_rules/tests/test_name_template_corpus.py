@@ -135,6 +135,16 @@ NAME_TEMPLATE_CORPUS = (
     TemplateCase("variable token in arithmetic", "eth{{slot_num} // 2}", ACCEPTED),
     TemplateCase("converter offset arithmetic", "swp{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}", ACCEPTED),
     TemplateCase("value-dependent zero divisor", "{{slot_num} // {sfp_slot}}", ACCEPTED),
+    TemplateCase(
+        "power after a placeholder zero divisor",
+        "{1 // ({slot_num} - {sfp_slot}) + 2 ** 3}",
+        REFUSED,
+        error_message="{1 // ({slot_num} - {sfp_slot}) + 2 ** 3}" + SHAPE_REFUSAL,
+    ),
+    TemplateCase("power of a variable token", "{{slot_num} ** 2}", REFUSED),
+    TemplateCase("constant zero divisor is well-shaped", "{8 // 0}", ACCEPTED),
+    TemplateCase("literal zero before a variable token", "{0{slot_num}}", ACCEPTED),
+    TemplateCase("literal digit after a variable token", "{{slot_num}5}", ACCEPTED),
     TemplateCase("channel without declared channels", "xe-{channel}", REFUSED),
     TemplateCase(
         "module parent names channel",

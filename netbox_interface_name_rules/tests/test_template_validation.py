@@ -141,8 +141,25 @@ class BraceGroupShapeTest(SimpleTestCase):
         self.assertEqual(len(errors), 1)
         self.assertTrue(errors[0].startswith("{unknown} is not available"))
 
-    def test_a_zero_divisor_is_not_a_shape_refusal(self):
-        self.assertEqual(self._errors("port{8 // ({slot_num} - {sfp_slot})}"), [])
+    def test_a_forbidden_operator_is_refused_before_any_division(self):
+        for template in ("{1 // ({slot_num} - {sfp_slot}) + 2 ** 3}", "{{slot_num} ** 2}"):
+            with self.subTest(template=template):
+                self.assertEqual(self._errors(template), [template + self.SUFFIX])
+
+    def test_a_well_shaped_group_saves_even_when_it_divides_by_zero(self):
+        for template in ("port{8 // ({slot_num} - {sfp_slot})}", "{8 // 0}"):
+            with self.subTest(template=template):
+                self.assertEqual(self._errors(template), [], "the group is well-shaped, so its values decide")
+
+    def test_a_token_beside_a_literal_digit_saves_when_some_values_evaluate(self):
+        for template, slot_num, name in (("{0{slot_num}}", "0", "0"), ("{{slot_num}5}", "1", "15")):
+            with self.subTest(template=template):
+                self.assertEqual(self._errors(template), [])
+                self.assertEqual(name_template.evaluate_name_template(template, {"slot_num": slot_num}), name)
+
+    def test_two_glued_literals_that_need_different_digits_are_refused(self):
+        template = "{0{slot_num} + {sfp_slot}5}"
+        self.assertEqual(self._errors(template), [template + self.SUFFIX])
 
 
 class TemplateBulkEditTest(TestCase):
