@@ -1819,18 +1819,8 @@ class NameCollisionTest(EngineAdvancedFixtures):
         self.assertEqual(Interface.objects.filter(module=module).count(), 4)
 
 
-# ---------------------------------------------------------------------------
-# Module deletion cascades to interfaces (documents CASCADE behavior)
-# ---------------------------------------------------------------------------
-
-
 class ModuleDeletionCascadeTest(TestCase):
-    """Verify that deleting a module also deletes its interfaces (CASCADE on_delete).
-
-    Interface.module uses on_delete=CASCADE, so when a module is removed from a bay
-    all its renamed interfaces are deleted rather than orphaned.  This test documents
-    the expected behavior so that any inadvertent change in cascade policy is caught.
-    """
+    """Deleting a module deletes its renamed interfaces (Interface.module is on_delete=CASCADE)."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1844,7 +1834,7 @@ class ModuleDeletionCascadeTest(TestCase):
         cls.bay = ModuleBay.objects.get(device=cls.device, name="DCBay 0")
 
     def test_interfaces_deleted_when_module_removed(self):
-        """Deleting a module cascades to its interfaces — renamed interfaces are removed."""
+        """Deleting a module removes the interfaces the rule renamed."""
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="et-0/0/{bay_position}",

@@ -4,9 +4,11 @@ status: accepted
 
 # Reapply from a rename trigger with its previous state
 
-A rename trigger compares the previous state with the saved row, and reapplies the rules after commit. Three decisions shape it.
+A rename trigger compares the previous state with the saved row, and reapplies the rules after commit. Four decisions shape it.
 
 A save fails when its previous state cannot be read. The receivers used to catch the error and store no previous state, and the module path then read that as "no change" and dropped the reapply; the device path read it as a change. NetBox runs every edit view, bulk view and REST write inside a transaction, and PostgreSQL refuses every later statement in a transaction once one fails, so the save failed anyway and the catch only hid the cause. Reading an unknown state as "changed" was rejected because it still hides the error and does work nobody asked for.
+
+Several rename triggers for one module or device in one transaction cause one reapply. It compares the earliest previous state of the transaction with the committed row, so a change that the same transaction undoes reapplies nothing. The names still match the committed row, because nothing renamed them in between. Reapplying once per trigger was rejected because each reapply after the first repeats the work against the same committed rows.
 
 A reapply recognises the interfaces the plugin renamed earlier by rebuilding their earlier names from the previous state: the old module bay, the old device and the old virtual-chassis position. NetBox 4.7 renames a moved module's interfaces only while they carry their raw template name, so after a move or a bay-position edit an interface the plugin renamed carries a name built from a position that no longer exists. Matching any bay position, as the `{vc_position}` claim does, was rejected because a wider match makes more rows ambiguous, and an ambiguous row is left alone. Not recognising them was rejected because nothing else can: Apply Rules has no previous state, so a missed move leaves the name wrong until an operator fixes it by hand. Names left wrong by moves made before this change stay wrong for the same reason, and the documentation says so.
 
