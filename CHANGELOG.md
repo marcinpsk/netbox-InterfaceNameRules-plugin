@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- Several rename triggers for one module or device in one transaction now reapply the
+  rules once, when the transaction commits. The reapply compares the values from before
+  the first trigger with the committed row, so a change that is undone in the same
+  transaction renames nothing.
 - Test and preview device-level rules in the Build Rule tester. Derive the port from
   the interface name, accept a virtual-chassis position, and retain the rule kind
   and interface-name filter when opening the add form. Module-rule previews now
@@ -17,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- A module or device save now fails with the real database error when the plugin cannot
+  read the values it compares. Before, a module save took the failure as "no change" and
+  skipped the rename, a device save took it as a change, and both logged a warning.
 - The REST API now clears the rule-mode fields the same way the web form does. A
   device-level rule sent with `module_type_is_regex: true` no longer fails with a
   server error; it saves with regex mode off. A module-type rule sent with a
