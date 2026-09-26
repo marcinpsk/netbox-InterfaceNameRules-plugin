@@ -53,7 +53,7 @@ from netbox_interface_name_rules import __version__ as plugin_version
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.signals import _apply_rules_deferred, _apply_rules_for_device_deferred
+from netbox_interface_name_rules.rename_triggers import DeviceReapply, DeviceState, ModuleReapply
 from performance.artifact import SCHEMA_VERSION, validate_artifact
 
 _OUTPUT_VARIABLE = "INTERFACE_FAMILY_PERFORMANCE_OUTPUT"
@@ -758,7 +758,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
             holder["module"] = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
 
             def operation():
-                _apply_rules_deferred(holder["module"].pk, bay.pk)
+                ModuleReapply.after_install(holder["module"])()
 
         else:
 
@@ -861,7 +861,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
             Device.objects.filter(pk=device.pk).update(vc_position=2)
 
             def operation():
-                _apply_rules_for_device_deferred(device.pk)
+                DeviceReapply(device.pk, DeviceState(virtual_chassis.pk, 1))()
 
         else:
 

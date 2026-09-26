@@ -57,7 +57,7 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.family import plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
-from netbox_interface_name_rules.signals import _apply_rules_deferred
+from netbox_interface_name_rules.rename_triggers import ModuleReapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
     CHANNEL_TYPE,
@@ -176,11 +176,11 @@ class VcPositionJoinDriftTest(VcDriftTestCase):
         joined the VC while no rule existed, and the rule that arrives afterwards must still see the
         interface as unrenamed.
         """
-        module, bay = self._install_on(self.device, self.module_type, "4")
+        module, _ = self._install_on(self.device, self.module_type, "4")
         self._join(VirtualChassis.objects.create(name="vcjoin-vc2"), 2)
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 
-        _apply_rules_deferred(module.pk, bay.pk)
+        ModuleReapply.after_install(module)()
 
         self.assertEqual(self._names(module), ["et-0/0/4"])
 

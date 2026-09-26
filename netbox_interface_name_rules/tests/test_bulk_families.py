@@ -50,7 +50,7 @@ from netbox_interface_name_rules.family import (
     template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+from netbox_interface_name_rules.rename_triggers import DeviceReapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
 
@@ -495,11 +495,13 @@ class VirtualChassisReapplyCostTest(VirtualChassisReapplyTestCase):
 
     def _reapply_queries(self, position):
         """Return the queries the deferred reapplication runs for one position change."""
-        self.device.virtual_chassis = self.virtual_chassis
-        self.device.vc_position = position
-        self.device.save()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self.device.virtual_chassis = self.virtual_chassis
+            self.device.vc_position = position
+            self.device.save()
+        [reapply] = [callback for callback in callbacks if isinstance(callback, DeviceReapply)]
         with CaptureQueriesContext(connection) as captured:
-            _apply_rules_for_device_deferred(self.device.pk)
+            reapply()
         return captured.captured_queries
 
     def test_the_reapply_reads_the_interface_templates_once_for_the_module_type(self):

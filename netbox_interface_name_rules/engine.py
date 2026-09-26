@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Core renaming engine — rule lookup and interface rename logic.
 
-This module is imported lazily by signals.py so that model imports happen
+This module is imported lazily by rename_triggers.py so that model imports happen
 after Django is fully initialised.
 """
 
