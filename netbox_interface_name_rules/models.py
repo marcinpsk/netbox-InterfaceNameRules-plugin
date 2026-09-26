@@ -4,7 +4,7 @@ import inspect
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
@@ -356,13 +356,17 @@ class InterfaceNameRule(NetBoxModel):
         if update_fields is None:
             validate_rule(**self._rule_values())
         elif written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
-            # Validate the row as stored: fields outside update_fields come from the database.
-            stored = self.__class__._base_manager.using(kwargs.get("using") or self._state.db).filter(pk=self.pk)
-            row = stored.values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()
-            # A missing row is left to Django, which refuses the update itself.
-            if row is not None:
-                del row["pk"]
-                validate_rule(**(self._rule_values() | row))
+            # Validate the stored row, locked so a concurrent targeted save cannot change it before this write.
+            using = kwargs.get("using") or self._state.db
+            with transaction.atomic(using=using):
+                stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
+                # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.
+                row = stored.order_by().values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()
+                # A missing row is left to Django, which refuses the update itself.
+                if row is not None:
+                    del row["pk"]
+                    validate_rule(**(self._rule_values() | row))
+                return super().save(**kwargs)
         return super().save(**kwargs)
 
     def __str__(self):

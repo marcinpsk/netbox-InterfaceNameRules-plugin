@@ -240,6 +240,19 @@ class RuleValidationAgreementTest(TestCase):
         rule_reads = f'SELECT "{InterfaceNameRule._meta.db_table}".'
         self.assertFalse([query["sql"] for query in queries if query["sql"].startswith(rule_reads)])
 
+    def test_a_targeted_save_locks_the_row_it_validates_against(self):
+        """A concurrent targeted save must not change the stored fields between this read and this write."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with CaptureQueriesContext(connection) as queries:
+            rule.save(update_fields=["name_template"])
+
+        rule_reads = f'SELECT "{InterfaceNameRule._meta.db_table}".'
+        locked = [query["sql"] for query in queries if query["sql"].startswith(rule_reads)]
+        self.assertTrue(locked)
+        self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in locked), locked)
+
     def test_save_refuses_positional_arguments(self):
         """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
