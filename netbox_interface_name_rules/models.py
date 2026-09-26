@@ -4,7 +4,7 @@ import inspect
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
@@ -356,8 +356,8 @@ class InterfaceNameRule(NetBoxModel):
         if update_fields is None:
             validate_rule(**self._rule_values())
         elif written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
-            # Validate the stored row, locked so a concurrent targeted save cannot change it before this write.
-            using = kwargs.get("using") or self._state.db
+            # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
+            using = kwargs["using"] = kwargs.get("using") or router.db_for_write(self.__class__, instance=self)
             with transaction.atomic(using=using):
                 stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
                 # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.

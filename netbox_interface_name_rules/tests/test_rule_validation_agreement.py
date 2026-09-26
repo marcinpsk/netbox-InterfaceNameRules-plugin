@@ -253,6 +253,17 @@ class RuleValidationAgreementTest(TestCase):
         self.assertTrue(locked)
         self.assertTrue(all(sql.endswith(" FOR UPDATE") for sql in locked), locked)
 
+    def test_a_targeted_save_validates_on_the_database_the_router_writes_to(self):
+        """The validation read must use the alias Django writes to, not the one the rule was loaded from."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule._state.db = "unrouted"
+        rule.name_template = "xe-0/{bay_position}"
+
+        with override_settings(DATABASE_ROUTERS=[WriteToDefaultDatabase()]):
+            rule.save(update_fields=["name_template"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-0/{bay_position}")
+
     def test_save_refuses_positional_arguments(self):
         """Positional update_fields would skip both save() guards; Django 6.0 removes them anyway."""
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="p{bay_position}")
@@ -347,6 +358,10 @@ class RuleValidationAgreementTest(TestCase):
         self.assertEqual(InterfaceNameRule.objects.count(), 3)
 
 
+# Calls that read the instance and change no field: Django's router resolves save()'s write alias.
+SELF_ARGUMENT_PERMITS = frozenset({("save", "router.db_for_write")})
+
+
 class ModeNormalisationSeamTest(SimpleTestCase):
     """Only _normalise_mode() may change a field, so the API and the web form store the same rule."""
 
@@ -360,11 +375,17 @@ class ModeNormalisationSeamTest(SimpleTestCase):
             if method.name == "_normalise_mode":
                 continue
             attribute_owners = {id(node.value) for node in ast.walk(method) if isinstance(node, ast.Attribute)}
+            permitted = {
+                id(argument)
+                for node in ast.walk(method)
+                if isinstance(node, ast.Call) and (method.name, ast.unparse(node.func)) in SELF_ARGUMENT_PERMITS
+                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]
+            }
             for node in ast.walk(method):
                 if isinstance(node, ast.Name) and node.id == "self":
                     # A bare self (setattr, an alias, a helper argument) could change a field unseen.
                     self.assertTrue(
-                        id(node) in attribute_owners,
+                        id(node) in attribute_owners | permitted,
                         f"models.py:{node.lineno} {method.name}() uses self, not self.<attr>",
                     )
                 elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
@@ -372,6 +393,13 @@ class ModeNormalisationSeamTest(SimpleTestCase):
                         isinstance(node.ctx, (ast.Store, ast.Del)) and node.attr in fields,
                         f"{method.name}() writes self.{node.attr}; change a field only in _normalise_mode()",
                     )
+
+
+class WriteToDefaultDatabase:
+    """Send every write to the default database, whatever database the instance came from."""
+
+    def db_for_write(self, model, **hints):
+        return "default"
 
 
 class RefuseImplicitMigrationDatabase:
