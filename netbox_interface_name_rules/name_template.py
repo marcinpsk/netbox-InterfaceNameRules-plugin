@@ -275,13 +275,13 @@ def _parse_expression(expression):
 def _arithmetic_operands(node):
     """Return the operand nodes of an integer arithmetic node, or raise ValueError for any other node."""
     if isinstance(node, ast.Expression):
-        return (node.body,)
+        return [node.body]
     if isinstance(node, ast.Constant) and type(node.value) is int:
-        return ()
+        return []
     if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
-        return (node.left, node.right)
+        return [node.left, node.right]
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
-        return (node.operand,)
+        return [node.operand]
     raise ValueError(f"Unsafe AST node in expression: {type(node).__name__}")
 
 
