@@ -137,7 +137,7 @@ class EvaluateNameTemplateTest(TestCase):
         self.assertEqual(str(raised.exception), message)
 
     def test_a_format_spec_field_on_a_non_ascii_name_names_the_unsupported_construct(self):
-        for field in ("naïve!r", "é!r"):
+        for field in ("naïve!r", "é!r", "℘!r", "a·b:>3"):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(
                     ValueError, rf"not str\.format conversions and format specifications: \{{{field}\}}"

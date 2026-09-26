@@ -149,7 +149,6 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._CALLER".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._DEVICE".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._FORMAT_FIELD_RE".msg = "Use the name_template public interface."
-"netbox_interface_name_rules.name_template._IDENTIFIER".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._MEMBER".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._PARENT".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._UNARY_OPERATORS".msg = "Use the name_template public interface."
@@ -164,8 +163,7 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._reference_brace_fields".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._CONTEXT_LABELS".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._REFUSALS".msg = "Use name_template.validate_rule."
-"netbox_interface_name_rules.name_template._NAMED_HEAD_RE".msg = "Use name_template.validate_rule."
-"netbox_interface_name_rules.name_template._IDENTIFIER_RE".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._identifiers".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._validate_breakout_topology".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._template_errors".msg = "Use name_template.validate_rule."
 

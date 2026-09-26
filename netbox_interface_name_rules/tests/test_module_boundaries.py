@@ -139,15 +139,18 @@ def _ast_imports(path: pathlib.Path) -> list[int]:
     ]
 
 
-def _ascii_identifier_classes(path: pathlib.Path) -> list[int]:
-    """Return lines of string constants that restrict an identifier's first character to ASCII."""
+_IDENTIFIER_APPROXIMATIONS = ("[A-Za-z_]", "[a-zA-Z_]", "[_A-Za-z]", "[_a-zA-Z]", r"[^\W\d]")
+
+
+def _identifier_approximations(path: pathlib.Path) -> list[int]:
+    """Return lines of string constants that approximate a Python identifier with a character class."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     return [
         node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and any(shape in node.value for shape in ("[A-Za-z_]", "[a-zA-Z_]", "[_A-Za-z]", "[_a-zA-Z]"))
+        and any(shape in node.value for shape in _IDENTIFIER_APPROXIMATIONS)
     ]
 
 
@@ -605,22 +608,22 @@ class PluginModuleBoundaryTest(SimpleTestCase):
 
             self.assertEqual(_ast_imports(path), [1])
 
-    def test_production_patterns_accept_a_non_ascii_identifier(self):
-        """Template variables are Python identifiers, so a pattern that reads one must accept `é` first."""
+    def test_production_code_does_not_approximate_an_identifier(self):
+        """Template variables are Python identifiers; only str.isidentifier() knows every one, such as `℘`."""
         violations = {
             (str(path.relative_to(PACKAGE)), line)
             for path in _production_modules()
-            for line in _ascii_identifier_classes(path)
+            for line in _identifier_approximations(path)
         }
 
         self.assertEqual(violations, set())
 
-    def test_ascii_identifier_detector_catches_a_constructed_violation(self):
+    def test_identifier_approximation_detector_catches_a_constructed_violation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "sample.py"
             path.write_text("import re\nNAME = re.compile(r'[A-Za-z_]\\w*')\n", encoding="utf-8")
 
-            self.assertEqual(_ascii_identifier_classes(path), [2])
+            self.assertEqual(_identifier_approximations(path), [2])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

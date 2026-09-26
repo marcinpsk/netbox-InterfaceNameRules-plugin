@@ -3,6 +3,7 @@
 """Define and evaluate the name-template language."""
 
 import ast
+import itertools
 import operator
 import re
 from dataclasses import dataclass
@@ -198,11 +199,13 @@ _UNARY_OPERATORS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
-# A Python identifier starts with a letter or underscore in any script, never a digit.
-_IDENTIFIER = r"[^\W\d]\w*"
-_FORMAT_FIELD_RE = re.compile(rf"{_IDENTIFIER}\s*(?:![rsa]|:[^{{}}]*)$")
-_NAMED_HEAD_RE = re.compile(rf"({_IDENTIFIER})(?=$|\.|\[)")
-_IDENTIFIER_RE = re.compile(rf"(?<!\w){_IDENTIFIER}")
+_FORMAT_FIELD_RE = re.compile(r"(.*?)\s*(?:![rsa]|:[^{}]*)")
+
+
+def _identifiers(text):
+    """Return each whole identifier in *text*; only str.isidentifier() knows every Unicode one."""
+    runs = ("".join(chars) for part, chars in itertools.groupby(text, lambda char: f"_{char}".isidentifier()) if part)
+    return [run for run in runs if run.isidentifier()]
 
 
 def _reference_brace_fields(template):
@@ -296,9 +299,9 @@ def referenced_variables(template):
     names = {}
     for field in _parse_brace_groups(template).reference_fields:
         head = field.split("!", 1)[0].split(":", 1)[0].strip()
-        match = _NAMED_HEAD_RE.match(head)
-        if match:
-            names.setdefault(match[1], None)
+        named_head = re.split(r"[.\[]", head, maxsplit=1)[0]
+        if named_head.isidentifier():
+            names.setdefault(named_head, None)
         for source in (field.strip(), head):
             try:
                 tree = _parse_expression(source)
@@ -313,7 +316,7 @@ def referenced_variables(template):
             break
         else:
             # A group that does not parse names every identifier in it, so the check fails closed.
-            for name in _IDENTIFIER_RE.findall(head):
+            for name in _identifiers(head):
                 names.setdefault(name, None)
     return tuple(names)
 
@@ -412,7 +415,8 @@ def evaluate_name_template(template: str, variables: dict) -> str:
 
     def evaluate_expression(field):
         expr = field.expression.strip()
-        if _FORMAT_FIELD_RE.fullmatch(expr):
+        format_field = _FORMAT_FIELD_RE.fullmatch(expr)
+        if format_field and format_field[1].isidentifier():
             raise ValueError(
                 f"Name templates take a variable or an arithmetic expression, not str.format "
                 f"conversions and format specifications: {{{expr}}}"
