@@ -701,6 +701,34 @@ Unicode letters, and <code>{0,3}</code> for a repeat with an omitted Python lowe
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>/opt/netbox/netbox
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>python<span class="w"> </span>manage.py<span class="w"> </span>migrate
 </code></pre></div>
+<p>The name-template audit migration reports stored rules whose templates use variables
+outside their naming context, have unbalanced braces, or have a brace group that cannot
+evaluate. Each warning names the rule ID, field, and reason. The migration leaves all
+values unchanged and completes even
+when it reports a refused rule. Correct the reported templates before saving those
+rules again. See <a href="../template-variables/">Template Variables</a> for each context's variables.</p>
+<p>Three migrations change stored rules to the shape that rule validation accepts.
+A rollback of these migrations does not restore the old values. If you need
+them, record them before the upgrade.</p>
+<ul>
+<li>Migration <code>0015</code> turns off regex mode and sets the breakout mode to flat on
+  every device-interface rule. It also sets a channelized rule with a channel
+  count of 0 to flat, and clears the <strong>Parent Name Template</strong> of every rule that
+  is not channelized. A device-interface rule never matched on regex mode, but
+  the priority score of a device-interface rule reads its regex mode, so the
+  migration can change the rank of a device-interface rule. When two
+  device-interface rules match the same interface, a different rule can rename
+  it, and the interface can get a different name. The breakout mode and
+  <strong>Parent Name Template</strong> changes do not change the rank or the name of any
+  interface. The migration does not log the rules it changes.</li>
+<li>Migration <code>0016</code> sets every breakout mode other than flat or channelized to
+  flat. It does not log the rules it changes.</li>
+<li>Migration <code>0018</code> clears the <strong>Parent Module Type</strong> of every device-interface
+  rule. A device-interface rule never matched on that field, so only the rule
+  ranking changes. For each cleared rule, the migration logs the rule ID and the
+  cleared module type. A rollback of migration <code>0018</code> does not restore the
+  cleared values.</li>
+</ul>
 <h2 id="restart-netbox">Restart NetBox</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>systemctl<span class="w"> </span>restart<span class="w"> </span>netbox<span class="w"> </span>netbox-rq
 </code></pre></div>

@@ -1141,12 +1141,6 @@ the <code>FPC/PIC/port</code> convention — for pizza-box ACX devices this simp
 </thead>
 <tbody>
 <tr>
-<td><code>QSFP-DD-400G-.*</code></td>
-<td><code>et-0/0/{bay_position}</code></td>
-<td>—</td>
-<td><code>et-0/0/4</code></td>
-</tr>
-<tr>
 <td><code>QSFP-100G-.*</code></td>
 <td><code>et-0/0/{bay_position}</code></td>
 <td>—</td>
@@ -1433,12 +1427,12 @@ determined by the host's naming scheme, not the transceiver type.</p>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"eth{bay_position_num}"</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">"Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">traditional</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(eth0,</span><span class="nv"> </span><span class="s">eth1,</span><span class="nv"> </span><span class="s">...)"</span>
 <a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># systemd predictable: ens{slot}f{port}  (bare-metal with udev slot names)</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># {slot} = top-level module bay position (NIC card slot number)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># systemd predictable: ens{slot_num}f{port}  (bare-metal with udev slot names)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># {slot_num} = numeric suffix of the top-level module bay position (NIC card slot number)</span>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># {bay_position_num} = port index within the NIC</span>
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"SFP28-25G-.*"</span>
 <a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"ens{slot}f{bay_position_num}"</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"ens{slot_num}f{bay_position_num}"</span>
 <a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">"Linux</span><span class="nv"> </span><span class="s">server</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">SFP28</span><span class="nv"> </span><span class="s">25G</span><span class="nv"> </span><span class="s">systemd</span><span class="nv"> </span><span class="s">predictable</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(ens1f0,</span><span class="nv"> </span><span class="s">ens1f1,</span><span class="nv"> </span><span class="s">...)"</span>
 <a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
 <a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="c1"># Mellanox QSFP28 hardware breakout → 4×25G sub-ports (eth0d1 .. eth0d4)</span>

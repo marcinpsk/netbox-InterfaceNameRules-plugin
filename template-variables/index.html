@@ -411,10 +411,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#module-interface-rules" class="md-nav__link">
+  <a href="#module-member-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Module Interface Rules
+        Module member names
       
     </span>
   </a>
@@ -422,10 +422,43 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#device-interface-rules" class="md-nav__link">
+  <a href="#module-parent-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Device Interface Rules
+        Module parent names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-interface-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device interface names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-interface-rule-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device interface rule filter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-base-starts-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What {base} starts from
       
     </span>
   </a>
@@ -726,10 +759,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#module-interface-rules" class="md-nav__link">
+  <a href="#module-member-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Module Interface Rules
+        Module member names
       
     </span>
   </a>
@@ -737,10 +770,43 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#device-interface-rules" class="md-nav__link">
+  <a href="#module-parent-names" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Device Interface Rules
+        Module parent names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-interface-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device interface names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-interface-rule-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device interface rule filter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-base-starts-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What {base} starts from
       
     </span>
   </a>
@@ -934,9 +1000,30 @@
 
 
 <h1 id="template-variables">Template Variables</h1>
+<p>A save refuses a template variable that the rule's naming context does not provide.
+The error names the variable and lists the available variables. Module rules can use
+<code>{channel}</code> only when they declare channels. Device rules cannot use module variables,
+and module rules cannot use <code>{port}</code>. Braces must balance in both template fields.
+A save also refuses a brace group that is neither a variable token nor integer arithmetic
+over variable tokens, such as <code>{slot_num // 2}</code> or <code>{bay_position!r}</code>.
+These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
+The rule tester applies the same checks for the selected rule kind.</p>
+<p>For a device rule, select <strong>Device-level interfaces</strong>, enter the current interface
+name in <code>{base}</code>, and supply <code>{vc_position}</code>. The tester derives <code>{port}</code> from the
+interface name and shows it beside the result. For example, <code>Ethernet1/5</code> at position
+<code>2</code> produces <code>eth2-5</code> with the name template <code>eth{vc_position}-{port}</code>.
+The optional interface-name filter uses RE2. The database preview covers module rules only.</p>
+<p>For a module rule, a blank <code>{vc_position}</code> simulates a device outside a virtual chassis.
+A template that uses that variable then shows an evaluation error. A device-rule preview
+requires a position because device rules rename only virtual-chassis members with a position.</p>
+<p><code>{vc_position}</code> is accepted at save in every context that lists it. If the device does
+not provide a position at rename time, that rename is skipped and logged.</p>
+<p>An upgrade reports stored rules that these checks refuse and changes none of them.
+See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <h2 id="available-variables">Available Variables</h2>
-<h3 id="module-interface-rules">Module Interface Rules</h3>
-<p>These variables are available in rules that rename <strong>module-installed interfaces</strong> (triggered by <code>post_save</code> on <code>dcim.Module</code>):</p>
+<!-- BEGIN GENERATED TEMPLATE VARIABLE REFERENCE -->
+<h3 id="module-member-names">Module member names</h3>
+<p>Module rules use these variables in the Name Template field.</p>
 <table>
 <thead>
 <tr>
@@ -947,59 +1034,59 @@
 </thead>
 <tbody>
 <tr>
-<td><code>{bay_position}</code></td>
-<td>Raw bay position string</td>
-<td><code>0</code>, <code>swp1</code>, <code>TenGigabitEthernet3/2/1</code></td>
-</tr>
-<tr>
-<td><code>{bay_position_num}</code></td>
-<td>Numeric suffix of bay position</td>
-<td><code>0</code>, <code>1</code></td>
-</tr>
-<tr>
 <td><code>{slot}</code></td>
-<td>Top-level slot/module bay position</td>
-<td><code>3</code></td>
+<td>Top-level module bay position.</td>
+<td><code>Slot 3</code></td>
 </tr>
 <tr>
 <td><code>{slot_num}</code></td>
-<td>Numeric suffix of slot</td>
+<td>Numeric suffix of the top-level module bay position.</td>
 <td><code>3</code></td>
 </tr>
 <tr>
+<td><code>{bay_position}</code></td>
+<td>Position of the bay that holds the module.</td>
+<td><code>swp1</code></td>
+</tr>
+<tr>
+<td><code>{bay_position_num}</code></td>
+<td>Numeric suffix of the module bay position.</td>
+<td><code>1</code></td>
+</tr>
+<tr>
 <td><code>{parent_bay_position}</code></td>
-<td>Parent module's bay position</td>
-<td><code>2</code>, <code>TenGigabitEthernet3/2</code></td>
+<td>Position of the parent module's bay.</td>
+<td><code>TenGigabitEthernet3/2</code></td>
 </tr>
 <tr>
 <td><code>{parent_bay_position_num}</code></td>
-<td>Numeric suffix of parent bay position</td>
+<td>Numeric suffix of the parent module's bay position.</td>
 <td><code>2</code></td>
 </tr>
 <tr>
 <td><code>{sfp_slot}</code></td>
-<td>Sub-bay index within parent module</td>
-<td><code>1</code></td>
+<td>Numeric sub-bay index within the parent module.</td>
+<td><code>0</code></td>
 </tr>
 <tr>
 <td><code>{base}</code></td>
-<td>Original interface name from NetBox template</td>
-<td><code>Interface 0</code></td>
-</tr>
-<tr>
-<td><code>{channel}</code></td>
-<td>Breakout channel number (requires <code>channel_count</code>)</td>
-<td><code>0</code>, <code>1</code>, <code>2</code></td>
+<td>The raw template name of the interface the rule renames.</td>
+<td><code>et-0/0/1</code></td>
 </tr>
 <tr>
 <td><code>{vc_position}</code></td>
-<td>Virtual Chassis member position (<code>device.vc_position</code>)</td>
-<td><code>1</code>, <code>2</code></td>
+<td>Virtual Chassis member position. Available only on a member device.</td>
+<td><code>2</code></td>
+</tr>
+<tr>
+<td><code>{channel}</code></td>
+<td>Breakout channel number. Available when the rule declares channels.</td>
+<td><code>0</code></td>
 </tr>
 </tbody>
 </table>
-<h3 id="device-interface-rules">Device Interface Rules</h3>
-<p>These variables are available in rules with <strong>Applies to Device Interfaces</strong> enabled (triggered by <code>post_save</code> on <code>dcim.Device</code> — VC position change):</p>
+<h3 id="module-parent-names">Module parent names</h3>
+<p>Module rules use these variables in the Parent Name Template field.</p>
 <table>
 <thead>
 <tr>
@@ -1010,23 +1097,100 @@
 </thead>
 <tbody>
 <tr>
-<td><code>{vc_position}</code></td>
-<td>Virtual Chassis member position (<code>device.vc_position</code>)</td>
-<td><code>1</code>, <code>2</code></td>
+<td><code>{slot}</code></td>
+<td>Top-level module bay position.</td>
+<td><code>Slot 3</code></td>
+</tr>
+<tr>
+<td><code>{slot_num}</code></td>
+<td>Numeric suffix of the top-level module bay position.</td>
+<td><code>3</code></td>
+</tr>
+<tr>
+<td><code>{bay_position}</code></td>
+<td>Position of the bay that holds the module.</td>
+<td><code>swp1</code></td>
+</tr>
+<tr>
+<td><code>{bay_position_num}</code></td>
+<td>Numeric suffix of the module bay position.</td>
+<td><code>1</code></td>
+</tr>
+<tr>
+<td><code>{parent_bay_position}</code></td>
+<td>Position of the parent module's bay.</td>
+<td><code>TenGigabitEthernet3/2</code></td>
+</tr>
+<tr>
+<td><code>{parent_bay_position_num}</code></td>
+<td>Numeric suffix of the parent module's bay position.</td>
+<td><code>2</code></td>
+</tr>
+<tr>
+<td><code>{sfp_slot}</code></td>
+<td>Numeric sub-bay index within the parent module.</td>
+<td><code>0</code></td>
 </tr>
 <tr>
 <td><code>{base}</code></td>
-<td>Current full interface name (before renaming)</td>
-<td><code>Gi0/1</code>, <code>ge-0/0/3</code></td>
+<td>The raw template name of the interface the rule renames.</td>
+<td><code>et-0/0/1</code></td>
 </tr>
 <tr>
-<td><code>{port}</code></td>
-<td>Segment after the last <code>/</code> in the interface name; full name if no <code>/</code></td>
-<td><code>1</code> (from <code>Gi0/1</code>), <code>3</code> (from <code>ge-0/0/3</code>)</td>
+<td><code>{vc_position}</code></td>
+<td>Virtual Chassis member position. Available only on a member device.</td>
+<td><code>2</code></td>
 </tr>
 </tbody>
 </table>
+<h3 id="device-interface-names">Device interface names</h3>
+<p>Device-interface rules use these variables in the Name Template field.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{base}</code></td>
+<td>Current interface name before the rule applies.</td>
+<td><code>et-0/0/1</code></td>
+</tr>
+<tr>
+<td><code>{vc_position}</code></td>
+<td>Virtual Chassis member position. Available only on a member device.</td>
+<td><code>2</code></td>
+</tr>
+<tr>
+<td><code>{port}</code></td>
+<td>Segment after the last slash in the current interface name. Uses the full name when no slash is present.</td>
+<td><code>1</code></td>
+</tr>
+</tbody>
+</table>
+<!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
+
+<h3 id="device-interface-rule-filter">Device interface rule filter</h3>
 <p>The <strong>Module Type Pattern</strong> field in device interface rules acts as a <strong>regex filter on interface names</strong> (not a module type selector). Only interfaces whose current name matches the pattern are renamed.</p>
+<h3 id="what-base-starts-from">What <code>{base}</code> starts from</h3>
+<p>In a module rule, <code>{base}</code> is the raw template name of the interface the rule renames: the name
+the module type's interface template resolves to now. The base value does not change when the rule
+runs again. The resulting name can still change when another variable changes: <code>Gi{vc_position}/{base}</code>
+gives a new name after a virtual-chassis position change. A flat breakout family, an installed
+channelized family and a plain interface rename all read it this way.
+The parent and every channel of a channelized family receive the parent's base value.</p>
+<p>NetBox does not record which template created an interface. For a rule that uses <code>{base}</code>, the
+plugin finds the template by the interface's name: the raw name itself, a name NetBox gave the
+interface at an earlier virtual-chassis position, or the name the rule gives the raw name at any
+virtual-chassis position. A <code>{vc_position}</code> inside an arithmetic expression matches only the current
+position, and so does a <code>{base}</code> inside one when its template name uses the <code>{vc_position}</code> token. An interface that no template claims, or that more than one template claims, keeps its name. The plugin logs the reason. A raw name wins over another template's earlier
+virtual-chassis form, but not over the name the rule gives another template, so a module type
+whose templates overlap under the rule keeps every overlapping name, on install too. A module type without interface templates has
+no raw names, so there <code>{base}</code> is the interface's current name.</p>
+<p>In a device interface rule, <code>{base}</code> is the interface's current name.</p>
 <h2 id="arithmetic-expressions">Arithmetic Expressions</h2>
 <p>Any brace-enclosed expression containing arithmetic operators is evaluated safely:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}
@@ -1161,8 +1325,7 @@ into a parent with <code>channels</code> set and creates one channel subinterfac
 minus <code>{channel}</code> — the parent is the one interface in the family without a channel number, and a
 <code>{channel}</code> in it is rejected in every spelling, including inside an expression (<code>{channel + 1}</code>).
 Braces must balance, so a stray <code>{</code> is refused on save instead of ending up in an interface name.
-Blank leaves the parent the name NetBox gave it. <code>{base}</code> is the base interface's current name, for
-the parent and for every channel alike.</p>
+Blank leaves the parent the name NetBox gave it.</p>
 <p>The complete family is checked before anything is written: one occupied name — the parent's or any
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
 (4.6 and older) a <code>channelized</code> rule is skipped and logged; it is never applied as a flat breakout

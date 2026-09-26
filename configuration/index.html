@@ -798,7 +798,7 @@
 <tr>
 <td>Applies to Device Interfaces</td>
 <td>No</td>
-<td>Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type must be empty; Module Type Pattern can filter interface names</td>
+<td>Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names</td>
 </tr>
 <tr>
 <td>Module Type Pattern</td>
@@ -813,7 +813,7 @@
 <tr>
 <td>Parent Module Type</td>
 <td>No</td>
-<td>Restrict to modules inside this parent (e.g., converter)</td>
+<td>Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule</td>
 </tr>
 <tr>
 <td>Device Type</td>
