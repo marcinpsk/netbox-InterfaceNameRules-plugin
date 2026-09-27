@@ -122,7 +122,7 @@ def _creation_plans(module, rule, variables, plain, bases):
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces, admit_leftover=None) -> ModuleFamilyPlans:
+def plan_module_families(module, rule, variables, interfaces, admit_leftover=None, previous=None) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
@@ -131,8 +131,11 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
     *admit_leftover* filters the interfaces no installed family claimed.  It runs before two of
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
+
+    *previous* holds the names the module's templates had before a move, so the plans also find the
+    interfaces and flat families that the previous state named.
     """
-    bases = module_raw_bases(module, rule, variables, interfaces)
+    bases = module_raw_bases(module, rule, variables, interfaces, previous)
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]

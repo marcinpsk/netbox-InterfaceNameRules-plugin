@@ -8,6 +8,10 @@ module or device per transaction. The reapply compares the earliest previous sta
 transaction with the committed row, so it acts on the net change. A reapply that leaves an
 interface unrenamed, or fails, writes one journal entry on the module or device. A reapply that
 cannot read the committed row is logged only.
+
+A save that moves a module also reads, before the save, what named the interfaces of the module and
+of every module nested in it. The reapply renames that subtree and recognises the earlier names
+from it, because NetBox can change the nested bays in the same save.
 """
 
 import dataclasses
@@ -24,9 +28,20 @@ logger = logging.getLogger("netbox_interface_name_rules")
 
 @dataclasses.dataclass(frozen=True)
 class ModuleState:
-    """The module values a rename trigger compares."""
+    """The module values a rename trigger compares.
+
+    *naming* is not compared. Only a save that moves the module reads it: the ``PreviousNaming`` of
+    the module and of every module nested in it, the moved module first.
+    """
 
     module_type_id: int
+    module_bay_id: int
+    device_id: int
+    naming: tuple = dataclasses.field(default=(), compare=False, repr=False)
+
+    def placement(self):
+        """Return the bay and the device that hold the module."""
+        return self.module_bay_id, self.device_id
 
 
 @dataclasses.dataclass(frozen=True)
@@ -37,9 +52,14 @@ class DeviceState:
     vc_position: int | None
 
 
+def _compared_fields(state_class):
+    """Return the names of the fields a rename trigger compares."""
+    return [field.name for field in dataclasses.fields(state_class) if field.compare]
+
+
 def _state_of(state_class, instance):
     """Return the *state_class* values that *instance* holds."""
-    return state_class(**{field.name: getattr(instance, field.name) for field in dataclasses.fields(state_class)})
+    return state_class(**{name: getattr(instance, name) for name in _compared_fields(state_class)})
 
 
 @dataclasses.dataclass(eq=False)
@@ -47,7 +67,7 @@ class ModuleReapply:
     """Reapply the rules to one module after commit.
 
     ``baseline`` is the earliest previous state of the transaction, or the state the module was
-    installed with when ``installed`` is set.
+    installed with when ``installed`` is set. After a move it holds the naming of the moved subtree.
     """
 
     pk: int
@@ -61,15 +81,29 @@ class ModuleReapply:
         """Return the reapply for a module installed by this save."""
         return cls(module.pk, _state_of(ModuleState, module), installed=True)
 
-    def force_reapply(self, current):
-        """Return the ``force_reapply`` flag for *current*, or None when no reapply is due."""
-        changed = current != self.baseline
-        return changed if self.installed or changed else None
-
     def covers(self, pending):
         """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
         # An install is never covered: a pending reapply compares with the row this install replaced.
         return isinstance(pending, ModuleReapply) and pending.pk == self.pk and not (pending.started or self.installed)
+
+    def absorb(self, later):
+        """Keep the earliest previous state, and take the naming of a *later* move when no earlier save read one."""
+        if later.baseline.naming and not self.baseline.naming:
+            self.baseline = dataclasses.replace(self.baseline, naming=later.baseline.naming)
+
+    def _outcomes(self, module, current):
+        """Yield the outcome facts of the reapply that the change from the baseline to *current* asks for."""
+        from .engine import module_rule_outcomes, moved_module_rule_outcomes
+
+        naming = self.baseline.naming
+        if not naming or current.placement() == self.baseline.placement():
+            yield from module_rule_outcomes(module, module.module_bay, force_reapply=current != self.baseline)
+            return
+        if current.module_type_id != self.baseline.module_type_id:
+            # The module's earlier names came from another module type, so only its nested modules use them.
+            yield from module_rule_outcomes(module, module.module_bay, force_reapply=True)
+            naming = naming[1:]
+        yield from moved_module_rule_outcomes(naming)
 
     def __call__(self):
         """Reapply the module's rule against the committed row."""
@@ -85,15 +119,13 @@ class ModuleReapply:
             logger.exception("Failed to read module %s for its rename trigger reapply", self.pk)
             return
         module_bay = module.module_bay
-        force_reapply = self.force_reapply(_state_of(ModuleState, module))
-        if force_reapply is None:
+        current = _state_of(ModuleState, module)
+        if current == self.baseline and not self.installed:
             return
         outcomes = []
         try:
-            from .engine import module_rule_outcomes
-
             # extend() keeps the facts the generator yielded before a later family raised.
-            outcomes.extend(module_rule_outcomes(module, module_bay, force_reapply=force_reapply))
+            outcomes.extend(self._outcomes(module, current))
         except Exception as error:
             logger.exception("Failed to apply interface name rules for %s in %s", module.module_type, module_bay.name)
             outcomes.append(_failure(error))
@@ -122,6 +154,9 @@ class DeviceReapply:
     def covers(self, pending):
         """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
         return isinstance(pending, DeviceReapply) and pending.pk == self.pk and not pending.started
+
+    def absorb(self, later):
+        """Keep the earliest previous state: a later device trigger adds nothing to it."""
 
     def __call__(self):
         """Reapply the device's rules against the committed row."""
@@ -215,17 +250,11 @@ def _module_reapply(module, created, previous):
         return ModuleReapply.after_install(module)
     if previous is None:
         return None
-    reapply = ModuleReapply(module.pk, previous, installed=False)
     current = _state_of(ModuleState, module)
-    if reapply.force_reapply(current) is None:
+    if current == previous:
         return None
-    logger.debug(
-        "Module %s type changed from %s to %s; scheduling a reapply",
-        module.pk,
-        previous.module_type_id,
-        current.module_type_id,
-    )
-    return reapply
+    logger.debug("Module %s changed from %s to %s; scheduling a reapply", module.pk, previous, current)
+    return ModuleReapply(module.pk, previous, installed=False)
 
 
 def _device_reapply(device, created, previous):
@@ -237,9 +266,23 @@ def _device_reapply(device, created, previous):
     return DeviceReapply(device.pk, previous)
 
 
+def _with_move_naming(module, previous):
+    """Return *previous*, with the naming of the module's subtree when the save moves the module."""
+    if _state_of(ModuleState, module).placement() == previous.placement():
+        return previous
+    from .engine import read_previous_naming
+
+    return dataclasses.replace(previous, naming=read_previous_naming(module.pk))
+
+
+def _as_read(_instance, previous):
+    """Return *previous* unchanged: the compared values are the whole previous state."""
+    return previous
+
+
 _TRIGGERS = {
-    "dcim.Module": (ModuleState, _module_reapply),
-    "dcim.Device": (DeviceState, _device_reapply),
+    "dcim.Module": (ModuleState, _with_move_naming, _module_reapply),
+    "dcim.Device": (DeviceState, _as_read, _device_reapply),
 }
 
 # Keyed by id(): model equality follows the primary key, so two instances of one row would collide.
@@ -248,12 +291,11 @@ _previous_states = {}
 
 def before_save(sender, instance):
     """Read the previous state of *instance* and hold it for its post_save. A read error propagates."""
-    state_class, _ = _TRIGGERS[sender._meta.label]
+    state_class, complete, _ = _TRIGGERS[sender._meta.label]
     previous = None
     if instance.pk is not None:
-        names = [field.name for field in dataclasses.fields(state_class)]
-        row = sender.objects.filter(pk=instance.pk).values(*names).first()
-        previous = None if row is None else state_class(**row)
+        row = sender.objects.filter(pk=instance.pk).values(*_compared_fields(state_class)).first()
+        previous = None if row is None else complete(instance, state_class(**row))
     key = id(instance)
 
     def forget(reference):
@@ -266,15 +308,19 @@ def before_save(sender, instance):
 
 def after_save(sender, instance, created):
     """Schedule a reapply after commit when the save of *instance* is a rename trigger."""
-    _, trigger = _TRIGGERS[sender._meta.label]
+    *_, trigger = _TRIGGERS[sender._meta.label]
     # No entry: NetBox sent this post_save by hand, without a model save.
     _, previous = _previous_states.pop(id(instance), (None, None))
     reapply = trigger(instance, created, previous)
     if reapply is None:
         return
     connection = transaction.get_connection()
-    # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
-    if connection.in_atomic_block and any(reapply.covers(pending) for _, pending, _ in connection.run_on_commit):
+    pending = None
+    if connection.in_atomic_block:
+        # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
+        pending = next((pending for _, pending, _ in connection.run_on_commit if reapply.covers(pending)), None)
+    if pending is not None:
+        pending.absorb(reapply)
         return
     reapply.author = _request_user()
     transaction.on_commit(reapply)

@@ -54,6 +54,7 @@ from .installed import (
     plan_installed_flat_families,
     plan_interface_rename,
 )
+from .previous import PreviousNames, previous_rule_names
 from .prospective import (
     ProspectiveInterface,
     describe_interfaces,
@@ -98,6 +99,7 @@ __all__ = (
     "PlannedChannel",
     "PlannedMember",
     "PlannedName",
+    "PreviousNames",
     "ProspectiveFamilyPlan",
     "ProspectiveFamilyPlanSet",
     "ProspectiveInterface",
@@ -137,6 +139,7 @@ __all__ = (
     "plan_prospective_families",
     "plan_structural_family",
     "preview_rule_conversions",
+    "previous_rule_names",
     "resolve_template_claims",
     "resolved_template_names",
     "supports_channelization",

@@ -44,7 +44,11 @@ from netbox_interface_name_rules.tests.test_channelization import (
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
-MODULE_STATE_READ = re.compile(r'SELECT "dcim_module"\."module_type_id"(?: AS "module_type_id")? FROM "dcim_module"')
+MODULE_STATE_READ = re.compile(
+    r'SELECT "dcim_module"\."module_type_id"(?: AS "module_type_id")?, '
+    r'"dcim_module"\."module_bay_id"(?: AS "module_bay_id")?, '
+    r'"dcim_module"\."device_id"(?: AS "device_id")? FROM "dcim_module"'
+)
 DEVICE_STATE_READ = re.compile(
     r'SELECT "dcim_device"\."virtual_chassis_id"(?: AS "virtual_chassis_id")?, '
     r'"dcim_device"\."vc_position"(?: AS "vc_position")? FROM "dcim_device"'
