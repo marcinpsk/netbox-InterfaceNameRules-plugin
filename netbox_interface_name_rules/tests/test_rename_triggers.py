@@ -75,6 +75,16 @@ def _journal(instance):
     )
 
 
+def _give_the_next_module_id(pk):
+    """Make the database assign *pk* to the next module that NetBox creates."""
+    # NetBox before 4.7 creates no components for a module saved with an explicit pk.
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT setval(pg_get_serial_sequence(%s, %s), %s, false)",
+            [Module._meta.db_table, Module._meta.pk.column, pk],
+        )
+
+
 class _RenameTriggerFixture:
     """One device at virtual-chassis position 1 and three module types, each with its own rule.
 
@@ -375,8 +385,10 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
             self._change_type(module, self.type_b)
             pk = module.pk
             module.delete()
-            module = Module.objects.create(pk=pk, device=self.device, module_bay=self._bay(), module_type=self.type_a)
+            _give_the_next_module_id(pk)
+            module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=self.type_a)
 
+        self.assertEqual(module.pk, pk)
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
     def test_two_position_changes_reapply_once_with_the_final_position(self):
