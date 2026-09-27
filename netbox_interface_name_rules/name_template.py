@@ -71,14 +71,18 @@ _PARENT = NamingContext.MODULE_PARENT
 _DEVICE = NamingContext.DEVICE_INTERFACE
 _BUILT = TemplateVariableSource.MODULE_BAY_CHAIN
 _CALLER = TemplateVariableSource.RENAME_CALLER
+_SLOT_DESCRIPTION = "Top-level module bay position. A bay on the device gives only the trailing digits of its position."
 _VC_POSITION_DESCRIPTION = "Virtual Chassis member position. Available only on a member device."
 
 TEMPLATE_VARIABLES = (
     TemplateVariable(
         "slot",
         ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
-        ((_MEMBER, "Top-level module bay position."), (_PARENT, "Top-level module bay position.")),
-        "Slot 3",
+        (
+            (_MEMBER, _SLOT_DESCRIPTION),
+            (_PARENT, _SLOT_DESCRIPTION),
+        ),
+        "3",
     ),
     TemplateVariable(
         "slot_num",
