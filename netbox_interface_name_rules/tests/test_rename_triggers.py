@@ -24,6 +24,7 @@ from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules import engine, rename_triggers
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -699,6 +700,24 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`et-1/0/0`", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
         self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
+
+    def test_leaving_the_virtual_chassis_reports_every_member_of_a_flat_family(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Flat",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        module = self._install(flat_type)
+        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`et-1/0:0`", entry.comments)
+        self.assertIn("`et-1/0:1`", entry.comments)
+        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
 
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()

@@ -98,6 +98,13 @@ def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - req
     return [by_name[label] for label in claimed]
 
 
+def _family_base(interface):
+    """Return the base name of the flat or channelized family *interface* belongs to."""
+    # A channelized parent is its own base: its channels are separate rows, so the name needs no
+    # ":"-splitting to find them.
+    return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
+
+
 def _forced_channel_bases(interfaces, raw_names, matchers, module):
     """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
 
@@ -110,9 +117,7 @@ def _forced_channel_bases(interfaces, raw_names, matchers, module):
     seen_bases: dict = {}
     forms_by_base: dict = {}
     for i in interfaces:
-        # A channelized parent is its own base: its channels are separate rows, so the name needs no
-        # ":"-splitting to find them.
-        base = i.name if family_ops.is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        base = _family_base(i)
         forms = (base, base.rsplit("/", 1)[-1])
         if not any(form in raw_names for form in forms) and not any(
             matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
@@ -265,6 +270,19 @@ def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
     )
 
 
+def _acted_on_names(plans, interfaces):
+    """Return the name of every interface the admitted *plans* act on, in plan order."""
+    names = []
+    for plan in plans:
+        if isinstance(plan, family_ops.InstalledFamilyPlan):
+            names.extend(member.snapshot.name for member in plan.members)
+            continue
+        # A creation plan stands for its base's whole flat family; the guard kept one row of it.
+        base = _family_base(plan.base)
+        names.extend(i.name for i in interfaces if getattr(i, "channel_id", None) is None and _family_base(i) == base)
+    return tuple(dict.fromkeys(names))
+
+
 def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False):
     """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
@@ -290,7 +308,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     plans = [*installed, *leftover]
 
     if missing:
-        return _unresolved_outcomes(missing, (member.snapshot.name for plan in plans for member in plan.live_members))
+        return _unresolved_outcomes(missing, _acted_on_names(plans, interfaces))
 
     outcomes = _rename_outcomes(family_ops.execute_module_families(plans))
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
