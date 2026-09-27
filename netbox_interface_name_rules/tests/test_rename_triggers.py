@@ -13,10 +13,13 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
-from django.db import DataError, IntegrityError, connection, transaction
+from django.contrib.contenttypes.models import ContentType
+from django.db import DatabaseError, DataError, IntegrityError, connection, transaction
 from django.db.models.signals import post_save
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
+from extras.choices import JournalEntryKindChoices
+from extras.models import JournalEntry
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -53,6 +56,15 @@ def _module_reapplies():
 
 def _device_reapplies():
     return _counting("device_module_rule_outcomes")
+
+
+def _journal(instance):
+    """Return the journal entries on *instance*, oldest first."""
+    return list(
+        JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(instance), assigned_object_id=instance.pk
+        ).order_by("pk")
+    )
 
 
 class _RenameTriggerFixture:
@@ -274,6 +286,14 @@ class RenameTriggerAPITest(_RenameTriggerFixture, APITestCase):
         self._patch(self.device, {"vc_position": 2})
 
         self.assertEqual(self._names(self.module), ["et-2/0/0"])
+
+    def test_the_journal_entry_names_the_request_user_as_its_author(self):
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+
+        self._patch(self.module, {"module_type": self.type_b.pk})
+
+        (entry,) = _journal(self.module)
+        self.assertEqual(entry.created_by, self.user)
 
 
 @contextmanager
@@ -505,6 +525,162 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         self.assertIn("Failed to re-apply module rules", output)
         self.assertIn("Failed to re-apply device interface rules", output)
         self.assertEqual(self._names(module), ["et-1/0/0"])
+
+
+def _reject_journal_writes(execute, sql, params, many, context):
+    if sql.lstrip().startswith('INSERT INTO "extras_journalentry"'):
+        raise DatabaseError("injected journal write failure")
+    return execute(sql, params, many, context)
+
+
+class RenameJournalTest(RenameTriggerTestCase):
+    """A reapply that leaves an interface unrenamed or fails writes one journal entry."""
+
+    def _module_type_with_rule(self, model, templates, name_template):
+        module_type = make_module_type(self.type_a.manufacturer, model, model=model)
+        for template in templates:
+            InterfaceTemplate.objects.create(module_type=module_type, name=template, type=PLAIN_TYPE)
+        return module_type, InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template)
+
+    def _standalone_device(self):
+        return make_device(f"{self.prefix} Solo", self.device.device_type)
+
+    def test_a_name_collision_writes_one_warning_entry_on_the_module(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._change_type(module, self.type_b)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0` to `xe-1/0/0`", entry.comments)
+        self.assertIn("already in use", entry.comments)
+        self.assertIsNone(entry.created_by)
+        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_the_entry_names_only_the_interfaces_left_unrenamed(self):
+        module_type, _ = self._module_type_with_rule("RenTrig Pair", ("a{module}", "b{module}"), "{base}.{vc_position}")
+        Interface.objects.create(device=self.device, name="b0.1", type=PLAIN_TYPE)
+
+        module = self._install(module_type)
+
+        self.assertEqual(self._names(module), ["a0.1", "b0"])
+        (entry,) = _journal(module)
+        self.assertIn("`b0` to `b0.1`", entry.comments)
+        self.assertNotIn("a0", entry.comments)
+
+    def test_an_interface_no_template_claims_is_reported(self):
+        module = self._install()
+        claiming_type, _ = self._module_type_with_rule("RenTrig Base", ("port{module}",), "xe-{base}")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._change_type(module, claiming_type)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertIn("no single interface template claims", entry.comments)
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_a_template_variable_the_device_lacks_is_reported(self):
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=self.type_a,
+            )
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`0`", entry.comments)
+        self.assertIn("{vc_position} is not available", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+
+    def test_a_template_variable_the_device_lacks_does_not_flag_the_rule_as_potentially_deprecated(self):
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=self.type_a,
+            )
+
+        rule = InterfaceNameRule.objects.get(module_type=self.type_a)
+        self.assertFalse(rule.tags.filter(slug="potentially-deprecated").exists())
+
+    def test_a_rule_that_cannot_be_evaluated_writes_a_danger_entry(self):
+        module_type, rule = self._module_type_with_rule("RenTrig Divide", ("{module}",), "et-{1 // {bay_position_num}}")
+
+        module = self._install(module_type)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`0`", entry.comments)
+        self.assertIn("Invalid arithmetic expression", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+        self.assertFalse(rule.tags.filter(slug="potentially-deprecated").exists())
+
+    def test_a_failed_module_reapply_writes_a_danger_entry(self):
+        module = self._install()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("injected reapply failure", entry.comments)
+
+    def test_a_failed_device_reapply_writes_one_danger_entry_on_the_device(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertEqual(entry.comments.count("injected reapply failure"), 2)
+        self.assertEqual(_journal(module), [])
+
+    def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
+        renamed = self._install()
+        fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")
+        with self.captureOnCommitCallbacks(execute=True):
+            kept = Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=fixed_type)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertEqual((self._names(renamed), self._names(kept)), (["et-2/0/0"], ["ge-1"]))
+        self.assertFalse(JournalEntry.objects.exists())
+
+    def test_a_failed_journal_write_is_logged_and_does_not_raise(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        with connection.execute_wrapper(_reject_journal_writes), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
+            for callback in callbacks:
+                callback()
+
+        self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected journal write failure"])
+        self.assertEqual(_journal(module), [])
+        self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
 
 
 class CommittedRenameTriggerTest(_RenameTriggerFixture, TransactionTestCase):

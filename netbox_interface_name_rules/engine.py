@@ -211,6 +211,12 @@ def _rename_outcomes(family_outcomes) -> tuple[RenameOutcome, ...]:
     )
 
 
+def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
+    """Return one unresolved-variable fact per interface that keeps its name for lack of *missing*."""
+    reason = f"{', '.join(name_template.variable_token(name) for name in missing)} is not available on this device"
+    return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -264,25 +270,23 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     )
     installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
     leftover = planned.leftover
+    plans = [*installed, *leftover]
 
-    family_outcomes = family_ops.execute_module_families([*installed, *leftover])
-    outcomes = _rename_outcomes(family_outcomes)
-    renamed = renamed_count(outcomes)
-    blocked = [
-        member
-        for outcome in family_outcomes
-        for member in outcome.members
-        if member.status == family_ops.FamilyStatus.BLOCKED
-    ]
+    missing = tuple(
+        dict.fromkeys(
+            name
+            for template in (rule.name_template, rule.parent_name_template)
+            for name in naming.unavailable_variables(template, variables)
+        )
+    )
+    if missing:
+        return _unresolved_outcomes(missing, (member.snapshot.name for plan in plans for member in plan.live_members))
+
+    outcomes = _rename_outcomes(family_ops.execute_module_families(plans))
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if not force_reapply and leftover and renamed == 0 and not blocked and not families_seen:
-        # All interfaces already have the names the rule would produce — flag as
-        # potentially obsolete (e.g., newer NetBox generates correct names natively).
-        # Skipped when the 0-count was caused by name collisions (a different reason
-        # than a no-op rule), so a collision never mislabels the rule as deprecated.
-        # Skipped for families too: a structural skip, or a family whose parent deliberately
-        # keeps its raw name, says nothing about the rule being obsolete.
+    if not force_reapply and leftover and not outcomes and not families_seen:
+        # Nothing renamed, skipped or built as a family: NetBox may already give these names.
         _flag_rule_potentially_deprecated(rule)
 
     return outcomes

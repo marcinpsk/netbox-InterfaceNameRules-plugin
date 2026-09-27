@@ -5,10 +5,6 @@
       1
     ],
     [
-      "# All interfaces already have the names the rule would produce — flag as\n# potentially obsolete (e.g., newer NetBox generates correct names natively).\n# Skipped when the 0-count was caused by name collisions (a different reason\n# than a no-op rule), so a collision never mislabels the rule as deprecated.\n# Skipped for families too: a structural skip, or a family whose parent deliberately\n# keeps its raw name, says nothing about the rule being obsolete.",
-      1
-    ],
-    [
       "# An earlier flat apply leaves N sibling interfaces where NetBox 4.7+ models a channelized parent\n# with N channel subinterfaces.  Converting one rewrites rows an operator owns — cables, addresses,\n# tags — so it is never a side effect of applying a rule: the operator confirms it per family.",
       1
     ],
