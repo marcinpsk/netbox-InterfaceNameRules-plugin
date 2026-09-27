@@ -6,6 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.4 (2026-09-26)
+
+### Bug Fixes
+
+- Add name-template language and device-interface rule support
+  ([#114](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/114),
+  [`eb2dda3`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/eb2dda313ace1c2080a4ee40adb4cfeaa0fc3fa9))
+
+### Chores
+
+- Fix import order ([#95](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/95),
+  [`d6dde5a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d6dde5ac295bbad1813a2a13e1d72697c48dcbaf))
+
+- **deps**: Bump codecov/codecov-action from 7.0.0 to 7.1.1 in the github-actions group
+  ([#110](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/110),
+  [`4a7b2fb`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4a7b2fb9eef959db521eca7d8f6378d4ace2f40c))
+
+- **deps**: Bump the uv group across 1 directory with 10 updates
+  ([#94](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/94),
+  [`2743e33`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2743e33510189ad060c378bc13400671a1930720))
+
+- **deps-dev**: Bump django from 6.0.7 to 6.1.1
+  ([#105](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/105),
+  [`b67445f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b67445f1bbfd572b52fe5272ce6748ca1cfece80))
+
+- **deps-dev**: Bump pre-commit from 4.5.1 to 4.6.2
+  ([#106](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/106),
+  [`9cd75d8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9cd75d8e8f017441ebde0f465f308c4053d66032))
+
+- **deps-dev**: Bump pytest from 9.0.3 to 9.1.1
+  ([#107](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/107),
+  [`b829039`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b8290393b63f1236e199f67f2c95862843978aed))
+
+- **deps-dev**: Bump pytest-cov from 7.0.0 to 7.1.0
+  ([#108](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/108),
+  [`bf3fae8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/bf3fae88ec65640208b36bad0cc78773d797aef0))
+
+- **deps-dev**: Bump pytest-django from 4.12.0 to 4.14.0
+  ([#109](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/109),
+  [`39f9ec9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/39f9ec99abce2d2ef4593a524237aa3696cd2459))
+
+
 ## Unreleased
 
 ### Features
