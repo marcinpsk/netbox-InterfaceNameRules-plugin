@@ -50,10 +50,15 @@ from netbox.constants import RQ_QUEUE_DEFAULT
 from utilities.rqworker import any_workers_for_queue
 
 from netbox_interface_name_rules import __version__ as plugin_version
+from netbox_interface_name_rules import rename_triggers
 from netbox_interface_name_rules.choices import BreakoutModeChoices
-from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
+from netbox_interface_name_rules.engine import (
+    read_previous_naming,
+    supports_channelization,
+    supports_vc_position_token,
+)
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import DeviceReapply, DeviceState, ModuleReapply
+from netbox_interface_name_rules.rename_triggers import DeviceReapply, DeviceState, ModuleReapply, ModuleState
 from performance.artifact import SCHEMA_VERSION, validate_artifact
 
 _OUTPUT_VARIABLE = "INTERFACE_FAMILY_PERFORMANCE_OUTPUT"
@@ -885,6 +890,74 @@ class SignalPathPerformanceTest(TransactionTestCase):
             work_units=module_count,
         )
 
+    def _prepare_move(self, prefix: str, kind: str, direct: bool) -> _PreparedScenario:
+        """Build a module-move scenario: one module moved from bay 3 to bay 4 of its device.
+
+        ``nested_4`` moves a card that holds four modules. The direct layer reads the previous
+        naming and saves the real move with the lifecycle receivers patched out, then measures the
+        committed callback alone.
+        """
+        manufacturer, device = self._build_device(prefix, ("3", "4"))
+        nested = []
+        if kind == "nested_4":
+            module_type = ModuleType.objects.create(
+                manufacturer=manufacturer, model=f"{prefix}-Card", part_number=f"{prefix}-Card"
+            )
+            for position in range(1, 5):
+                ModuleBayTemplate.objects.create(
+                    module_type=module_type, name=f"Port {position}", position=str(position)
+                )
+            optic_type = self._plain_module_type(manufacturer, f"{prefix}-Optic")
+            InterfaceNameRule.objects.create(module_type=optic_type, name_template="et-0/{slot}/{bay_position}")
+            expected = [f"et-0/4/{position}" for position in range(1, 5)]
+        else:
+            module_type = self._plain_module_type(manufacturer, f"{prefix}-Module")
+            if kind == "no_matching_rule":
+                other_type = ModuleType.objects.create(
+                    manufacturer=manufacturer, model=f"{prefix}-Other", part_number=f"{prefix}-Other"
+                )
+                InterfaceNameRule.objects.create(module_type=other_type, name_template="unused-{bay_position}")
+                expected = ["4"]
+            elif kind == "plain_rename":
+                InterfaceNameRule.objects.create(module_type=module_type, name_template="et-0/0/{bay_position}")
+                expected = ["et-0/0/4"]
+            else:
+                raise AssertionError(f"Unknown move scenario {kind!r}.")
+        source = ModuleBay.objects.get(device=device, position="3")
+        target = ModuleBay.objects.get(device=device, position="4")
+        with transaction.atomic():
+            module = Module.objects.create(device=device, module_bay=source, module_type=module_type)
+        for bay in ModuleBay.objects.filter(module=module).order_by("position"):
+            with transaction.atomic():
+                nested.append(Module.objects.create(device=device, module_bay=bay, module_type=optic_type))
+
+        def move():
+            module.module_bay = target
+            with transaction.atomic():
+                module.save()
+
+        operation = move
+        if direct:
+            baseline = ModuleState(module.module_type_id, source.pk, device.pk, naming=read_previous_naming(module.pk))
+            with patch.object(rename_triggers, "before_save"), patch.object(rename_triggers, "after_save"):
+                move()
+
+            def operation():
+                ModuleReapply(module.pk, baseline, installed=False)()
+
+        def verify():
+            names = sorted(Interface.objects.filter(device=device).values_list("name", flat=True))
+            self.assertEqual(names, expected)
+            return {"interface_names": names, "interfaces_after": len(names)}
+
+        return _PreparedScenario(
+            operation=operation,
+            verify=verify,
+            cleanup=lambda: self._cleanup_fixture(prefix),
+            fixture=self._fixture(module_type, device),
+            work_units=1 + len(nested),
+        )
+
     def _scenarios(self) -> list[_Scenario]:
         """Return the stable scenario matrix in report order."""
         scenarios = []
@@ -922,6 +995,26 @@ class SignalPathPerformanceTest(TransactionTestCase):
                         layer=layer,
                         prepare=lambda prefix=prefix, module_count=module_count, direct=direct: self._prepare_vc(
                             prefix, module_count, direct
+                        ),
+                    )
+                )
+        move_kinds = (
+            ("no_matching_rule", "Module move with no matching rule"),
+            ("plain_rename", "Module move with a plain interface rename"),
+            ("nested_4", "Card move with four nested modules renamed"),
+        )
+        for kind, description in move_kinds:
+            for direct in (False, True):
+                layer = "direct_callback" if direct else "complete_model_save"
+                name = f"move.{layer}.{kind}"
+                prefix = "Perf" + _fingerprint(name)[:8]
+                scenarios.append(
+                    _Scenario(
+                        name=name,
+                        description=description,
+                        layer=layer,
+                        prepare=lambda prefix=prefix, kind=kind, direct=direct: self._prepare_move(
+                            prefix, kind, direct
                         ),
                     )
                 )
