@@ -60,8 +60,27 @@ TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=localhost pytest n
 We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 - `feat:` — new feature (triggers minor version bump)
-- `fix:` — bug fix (triggers patch version bump)
-- `docs:`, `ci:`, `chore:`, `refactor:`, `test:` — no version bump
+- `fix:`, `perf:`, `refactor:` — bug fix, performance or refactoring change (triggers patch version bump)
+- `docs:`, `ci:`, `chore:`, `test:`, `build:`, `style:`, `revert:` — no version bump
+
+The repository merges every PR with a merge commit; squash and rebase merges are off. The release tool
+ignores merge commits and writes one changelog line for each commit on the branch. Write each commit
+subject as the changelog line you want users to read.
+
+## Releases
+
+A push to `main` runs python-semantic-release. It reads the Conventional Commit subjects since the last
+tag, selects the version bump, and writes the release section of `CHANGELOG.md`.
+
+- Do not edit `CHANGELOG.md` by hand, and do not add an `## Unreleased` section. The release tool
+  inserts each new version above the older ones, so a hand-written section stays behind and keeps
+  describing changes that already shipped. A documentation test refuses any section that is not a
+  release section.
+- The release PR from `develop` to `main` also uses a merge commit. A squash gives the release tool one
+  commit, and the release then depends on the squash message. `parse_squash_commits = true` in
+  `pyproject.toml` makes the tool parse each Conventional Commit it finds in that message. The v1.5.4
+  squash message held only the PR title, so v1.5.4 got one `fix` line and a patch bump for changes
+  that included features.
 
 ## License
 

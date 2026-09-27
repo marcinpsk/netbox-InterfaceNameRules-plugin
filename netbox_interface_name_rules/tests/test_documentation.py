@@ -7,6 +7,7 @@ import importlib
 import json
 import re
 import tempfile
+import tomllib
 import unittest
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -608,6 +609,27 @@ class SuiteRunnerDocumentationTest(unittest.TestCase):
                 "netbox_interface_name_rules.tests.test_views.ViewTest",
             ],
         )
+
+
+class ChangelogDocumentationTest(unittest.TestCase):
+    """semantic-release writes every CHANGELOG section; a hand-written section stays behind at release."""
+
+    def test_every_section_is_a_release_section(self):
+        text = (_PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        headings = re.findall(r"^## .*$", text, re.MULTILINE)
+
+        self.assertTrue(headings)
+        self.assertEqual(
+            [heading for heading in headings if not re.fullmatch(r"## v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading)],
+            [],
+        )
+
+    def test_the_release_guide_states_the_squash_parser_setting(self):
+        pyproject = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        setting = pyproject["tool"]["semantic_release"]["commit_parser_options"]["parse_squash_commits"]
+        guide = (_PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+        self.assertIn(f"`parse_squash_commits = {str(setting).lower()}`", guide)
 
 
 _PATTERN_KEY = re.compile(r"^[^\S\r\n]*-?[^\S\r\n]*module_type_pattern:[^\S\r\n]*(.+)$", re.MULTILINE)
