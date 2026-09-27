@@ -76,9 +76,11 @@ tag, selects the version bump, and writes the release section of `CHANGELOG.md`.
   inserts each new version above the older ones, so a hand-written section stays behind and keeps
   describing changes that already shipped. A documentation test refuses any section that is not a
   release section.
-- The release PR from `develop` to `main` also uses a merge commit. A squash would give the release
-  tool one commit, so the changelog would get one line and a `feat:` on `develop` could ship as a patch
-  release.
+- The release PR from `develop` to `main` also uses a merge commit. A squash gives the release tool one
+  commit, and the release then depends on the squash message. `parse_squash_commits = true` in
+  `pyproject.toml` makes the tool parse each Conventional Commit it finds in that message. The v1.5.4
+  squash message held only the PR title, so v1.5.4 got one `fix` line and a patch bump for changes
+  that included features.
 
 ## License
 
