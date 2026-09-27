@@ -742,6 +742,22 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`xe-1/0/0:1`", entry.comments)
         self.assertNotIn("`0`", entry.comments)
 
+    def test_an_interface_a_lower_priority_rule_renames_is_not_reported(self):
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="mgmt-2", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        InterfaceNameRule.objects.create(
+            name_template="oob-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt."
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
+        self.assertEqual(_journal(self.device), [])
+
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()
         fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")

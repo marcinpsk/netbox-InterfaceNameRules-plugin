@@ -433,16 +433,19 @@ def _matches_device_interface(rule, interface):
     return compiled.fullmatch(interface.name) is not None
 
 
-def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only):
-    """Apply one rule to each eligible device-interface family and return the outcome facts."""
-    outcomes = []
+def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family):
+    """Apply one rule to each eligible device-interface family and record its outcome facts in *by_family*.
+
+    A rule that renames a family, or finds it correct, replaces the skips earlier rules left on it.
+    """
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
         missing = naming.unavailable_variables(rule.name_template, variables)
         if missing:
-            outcomes.extend(_unresolved_outcomes(missing, (interface.name, *(child.name for child in children))))
+            names = (interface.name, *(child.name for child in children))
+            by_family.setdefault(interface.pk, []).extend(_unresolved_outcomes(missing, names))
             claimed_pks.update((interface.pk, *(child.pk for child in children)))
             continue
         if report_only:
@@ -450,10 +453,11 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
             continue
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         outcome = family_ops.execute_installed_plan(plan)
-        outcomes.extend(_rename_outcomes((outcome,)))
         if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
             claimed_pks.update(plan.member_pks)
-    return outcomes
+            by_family[interface.pk] = list(_rename_outcomes((outcome,)))
+        else:
+            by_family.setdefault(interface.pk, []).extend(_rename_outcomes((outcome,)))
 
 
 def apply_device_interface_rules(device):
@@ -500,11 +504,10 @@ def device_interface_rule_outcomes(device, report_only=False) -> tuple[RenameOut
 
     families = family_ops.device_interface_families(interfaces)
     claimed_pks: set[int] = set()
-    return tuple(
-        outcome
-        for rule in rules
-        for outcome in _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only)
-    )
+    by_family: dict[int, list] = {}
+    for rule in rules:
+        _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family)
+    return tuple(outcome for outcomes in by_family.values() for outcome in outcomes)
 
 
 def _raw_name_matchers(module):
