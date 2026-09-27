@@ -15,7 +15,7 @@ automatically apply renaming rules based on configurable templates.
 
 ## Features
 
-- **Signal-driven** — rules fire automatically on module install
+- **Signal-driven** — rules fire automatically on module install and after a module moves
 - **Template variables** — `{slot}`, `{bay_position}`, `{bay_position_num}`, `{channel}`, etc.
 - **Arithmetic expressions** — `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
 - **Breakout support** — create multiple channel interfaces from a single port

@@ -85,20 +85,66 @@ This means:
 
 The tag is informational only — the rule remains active.
 
+### Moving a module
+
+NetBox 4.7 can move an installed module to another module bay or to another
+device. After the move, the plugin renames the interfaces of the moved module
+and of every module nested in it. The new names come from the rule that matches
+each module at its new position. That rule can be a different rule, because the
+device type, the platform and the parent module type select the rule.
+
+NetBox renames a moved module's interfaces only while they carry their raw
+template name. To find the interfaces that the plugin renamed earlier, the plugin
+rebuilds their earlier names from the state before the move: the old module bay,
+the old device and its virtual-chassis position, and the rule that matched there.
+It reads that state before the save, because in the same save NetBox can change
+the position and the name of the module bays that the moved module holds.
+
+The plugin renames an interface only when exactly one interface template claims
+it. A template claims an interface through its raw template name before or after
+the move, or through the name that the old rule or the new rule gives it. When one
+template claims two interfaces, or two templates claim one interface, the plugin
+renames none of them. These interfaces, and each interface that no template
+claims, keep their names, and the journal entry lists them.
+
+When no rule matches the module at its new position, the interfaces keep their
+names. The journal entry lists each interface that the old rule named. When no
+rule matched the module at its old position, the plugin renames the raw template
+names as an install does.
+
+Limits:
+
+- The plugin does not repair names that module moves left wrong before this
+  version. Apply Rules cannot repair them either, because it has no state from
+  before the move. Rename these interfaces by hand.
+- When one transaction first changes a device's virtual-chassis position or edits
+  an occupied module bay, and then moves a module out of that device or bay, the
+  move reads the values after the first change. The plugin cannot rebuild the
+  earlier names from those values, so these interfaces keep their names and the
+  journal entry lists them. A web UI or REST API request changes objects of one
+  model only, so only scripts and shell sessions do this.
+- NetBox before 4.7 saves a move as a change of the module row only. The
+  plugin renames the moved module's interfaces, and recognises the raw template
+  names from the old bay. The modules nested in the moved module keep their
+  names, because their module bays keep the old parent bay.
+
 ### Journal entries after an automatic rename
 
 The plugin renames interfaces again after a save that can make a name wrong: a
-module install, a module type change, and a device that joins or changes position
-in a virtual chassis. When that rename leaves an interface unrenamed although a
-rule matched it, or fails, the plugin writes one journal entry. The entry goes on
-the module, or on the device for a virtual-chassis change. It lists each
-interface and the reason:
+module install, a module type change, a module move to another bay or device,
+and a device that joins or changes position in a virtual chassis. When that
+rename leaves an interface unrenamed although a rule matched it, or fails, the
+plugin writes one journal entry. The entry goes on the module, or on the device
+for a virtual-chassis change. The entry for a move goes on the moved module and
+also lists the interfaces of the modules nested in it. It lists each interface
+and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
   outside a virtual chassis,
-- no interface template claims the interface, so the rule cannot find its
-  `{base}`,
+- no single interface template claims the interface, so the rule cannot find its
+  `{base}`, or, after a move, the plugin cannot tell which name the interface had,
+- no rule matches a moved module at its new position,
 - the rule failed, for example on a division by zero in its template.
 
 When an error stops the rename, the entry also has one line for that error,

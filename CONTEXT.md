@@ -94,7 +94,7 @@ The complete path from a NetBox model save, through the committed callback, to t
 _Avoid_: Signal handler performance
 
 **Rename trigger**:
-A saved change in NetBox after which the names a rule gives may be wrong, so the plugin must reapply its rules. The triggers are: a module is installed, a module's type changes, and a device's virtual chassis or virtual-chassis position changes (the device joins a virtual chassis, leaves it, or gets a different position). Two more triggers are planned but not implemented yet: a module moves to another bay or device (#119), and an occupied module bay's position or name changes (#120).
+A saved change in NetBox after which the names a rule gives may be wrong, so the plugin must reapply its rules. The triggers are: a module is installed, a module's type changes, a module moves to another bay or device, and a device's virtual chassis or virtual-chassis position changes (the device joins a virtual chassis, leaves it, or gets a different position). One more trigger is planned but not implemented yet: an occupied module bay's position or name changes (#120).
 _Avoid_: Signal, event
 
 **Reapply**:
@@ -102,11 +102,11 @@ Running the rules again on interfaces that already exist. An operator reapplies 
 _Avoid_: Re-run, refresh
 
 **Previous state**:
-The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change".
+The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change". The previous state of a move also holds what named the interfaces of the moved module and of each module nested in it: the template variables, the raw template names, and the device type, platform and parent module type that selected the rule. A reapply recognises the names the plugin gave earlier by rebuilding them from it.
 _Avoid_: Old values, snapshot (NetBox's change-log snapshot is a different thing)
 
 **Rename outcome**:
-A fact that a reapply reports. Most outcomes are interface outcomes: what a reapply did to one interface that a matching rule acted on, which is renamed, blocked with a reason, unresolved variable, unclaimed (no single interface template claims its name), or failed. An interface that already has its correct name, or that the rule does not match, has no outcome. One outcome names no interface: a failure that stopped the whole reapply. The interface outcomes found before that failure stay. A rename trigger reports every outcome except "renamed" in one journal entry on the module or device.
+A fact that a reapply reports. Most outcomes are interface outcomes: what a reapply did to one interface that a matching rule acted on, which is renamed, blocked with a reason, unresolved variable, unclaimed (no single interface template claims its name), or failed. An interface that already has its correct name, or that the rule does not match, has no outcome. After a move, an interface that the rule of the previous state named is blocked when no rule matches the module at its new position. One outcome names no interface: a failure that stopped the whole reapply. The interface outcomes found before that failure stay. A rename trigger reports every outcome except "renamed" in one journal entry on the module or device.
 _Avoid_: Result, family status (a family status describes one family operation, not what the operator is told)
 
 **Signal-path performance baseline**:
