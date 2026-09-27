@@ -40,7 +40,7 @@ from .installed import (
     is_plain_interface,
 )
 from .names import COLLISION_REASON, is_name_collision, name_is_taken
-from .targets import builds_channelized_family, channelized_family_names
+from .targets import channelized_family_names, used_parent_template
 from .template_names import TemplateNames, pinned_template_cache
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def conversion_offered(rule) -> bool:
     family has no parent row (its ch-0 interface *is* the base), so without a parent name there is
     nowhere for that base to go and the conversion is not offered at all.
     """
-    return rule.enabled and builds_channelized_family(rule) and bool(rule.parent_name_template)
+    return rule.enabled and bool(used_parent_template(rule))
 
 
 # ---------------------------------------------------------------------------

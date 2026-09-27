@@ -66,6 +66,11 @@ def builds_channelized_family(rule) -> bool:
     return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
 
 
+def used_parent_template(rule) -> str:
+    """Return the parent name template that *rule* applies, or an empty string when it applies none."""
+    return rule.parent_name_template if builds_channelized_family(rule) else ""
+
+
 def one_family_per_name_set(candidates):
     """Return the index of one candidate base per family, in candidate order.
 

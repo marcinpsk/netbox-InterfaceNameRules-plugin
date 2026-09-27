@@ -10,10 +10,9 @@ renames to it. A name that no single template claims has no base, and nothing re
 import logging
 import re
 
-from ..choices import BreakoutModeChoices
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
-from .targets import builds_channelized_family
+from .targets import used_parent_template
 from .template_names import VC_POSITION_DIGITS
 
 logger = logging.getLogger(__name__)
@@ -25,25 +24,20 @@ _MARKERS = {"base": BASE_MARKER, "vc_position": "\x00vc_position\x00"}
 
 def rule_reads_base(rule) -> bool:
     """Return whether any of *rule*'s name templates substitutes ``{base}``."""
-    return any(references_variable(template, "base") for template in (rule.name_template, rule.parent_name_template))
+    return any(references_variable(template, "base") for template in (rule.name_template, used_parent_template(rule)))
 
 
 def _renaming_template(rule):
     """Return the template that gives a family's base interface its name under *rule*, or None."""
     if rule.channel_count <= 0:
         return rule.name_template
-    if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
-        return rule.parent_name_template
-    return None
+    return used_parent_template(rule) or None
 
 
 def _parent_name_needs_channels(rule):
     """Return whether *rule* gives every parent one name, so only the family's channels carry its base."""
-    return (
-        builds_channelized_family(rule)
-        and bool(rule.parent_name_template)
-        and not references_variable(rule.parent_name_template, "base")
-    )
+    parent_template = used_parent_template(rule)
+    return bool(parent_template) and not references_variable(parent_template, "base")
 
 
 def _marked_evaluation(template, variables, raw):
