@@ -523,6 +523,49 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         self.assertIn("Failed to re-apply device interface rules", output)
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
+    def test_a_failed_module_reload_is_logged(self):
+        module = self._install()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
+        with (
+            connection.execute_wrapper(_reject_reads_of("dcim_module")),
+            self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
+        ):
+            reapply()
+
+        self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_module read failure"])
+        self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_a_failed_device_reload_is_logged(self):
+        module = self._install()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.DeviceReapply)]
+        with (
+            connection.execute_wrapper(_reject_reads_of("dcim_device")),
+            self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
+        ):
+            reapply()
+
+        self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_device read failure"])
+        self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 2)
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+
+def _reject_reads_of(table):
+    """Return an execute wrapper that fails every read of *table*."""
+
+    def reject(execute, sql, params, many, context):
+        if sql.lstrip().startswith("SELECT") and f'FROM "{table}"' in sql:
+            raise DatabaseError(f"injected {table} read failure")
+        return execute(sql, params, many, context)
+
+    return reject
+
 
 def _reject_journal_writes(execute, sql, params, many, context):
     if sql.lstrip().startswith('INSERT INTO "extras_journalentry"'):

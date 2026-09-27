@@ -6,7 +6,8 @@ The receivers in ``signals.py`` pass every module and device save here. ``before
 previous state; ``after_save`` compares it with the saved values and schedules one reapply per
 module or device per transaction. The reapply compares the earliest previous state of the
 transaction with the committed row, so it acts on the net change. A reapply that leaves an
-interface unrenamed, or fails, writes one journal entry on the module or device.
+interface unrenamed, or fails, writes one journal entry on the module or device. A reapply that
+cannot read the committed row is logged only.
 """
 
 import dataclasses
@@ -73,13 +74,17 @@ class ModuleReapply:
     def __call__(self):
         """Reapply the module's rule against the committed row."""
         self.started = True
-        from dcim.models import Module, ModuleBay
+        from dcim.models import Module
 
         try:
-            module = Module.objects.get(pk=self.pk)
-            module_bay = ModuleBay.objects.get(pk=module.module_bay_id)
-        except (Module.DoesNotExist, ModuleBay.DoesNotExist):
+            module = Module.objects.select_related("module_bay").get(pk=self.pk)
+        except Module.DoesNotExist:
             return
+        except Exception:
+            # No committed row was read, so no object can carry a journal entry.
+            logger.exception("Failed to read module %s for its rename trigger reapply", self.pk)
+            return
+        module_bay = module.module_bay
         force_reapply = self.force_reapply(_state_of(ModuleState, module))
         if force_reapply is None:
             return
@@ -124,6 +129,10 @@ class DeviceReapply:
         try:
             device = Device.objects.select_related("virtual_chassis").get(pk=self.pk)
         except Device.DoesNotExist:
+            return
+        except Exception:
+            # No committed row was read, so no object can carry a journal entry.
+            logger.exception("Failed to read device %s for its rename trigger reapply", self.pk)
             return
         current = _state_of(DeviceState, device)
         if not self.is_due(current):
