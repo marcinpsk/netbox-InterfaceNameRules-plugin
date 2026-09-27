@@ -50,7 +50,7 @@ from netbox_interface_name_rules.family import (
     template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.signals import _apply_rules_for_device_deferred
+from netbox_interface_name_rules.rename_triggers import DeviceReapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
 
@@ -456,19 +456,20 @@ class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
 
     def test_one_failing_module_stops_at_the_deferred_operation_boundary(self):
         modules = self._install_and_name(("1", "2"))
-        real_apply = engine_module.apply_interface_name_rules
+        real_apply = engine_module.module_rule_outcomes
 
-        def fail_on_the_first_module(module, module_bay, force_reapply=False):
+        def fail_on_the_first_module(module, *args, **kwargs):
             if module.pk == modules[0].pk:
                 raise RuntimeError("module boom")
-            return real_apply(module, module_bay, force_reapply=force_reapply)
+            return real_apply(module, *args, **kwargs)
 
         with (
-            patch.object(engine_module, "apply_interface_name_rules", side_effect=fail_on_the_first_module),
-            self.assertLogs("netbox_interface_name_rules", level="ERROR"),
+            patch.object(engine_module, "module_rule_outcomes", side_effect=fail_on_the_first_module),
+            self.assertLogs("netbox_interface_name_rules", level="ERROR") as logs,
         ):
             self._join(4)
 
+        self.assertIn("module boom", "\n".join(logs.output))
         self.assertEqual(self._names(modules[0]), ["1"])
         self.assertEqual(self._names(modules[1]), ["2"])
 
@@ -495,11 +496,13 @@ class VirtualChassisReapplyCostTest(VirtualChassisReapplyTestCase):
 
     def _reapply_queries(self, position):
         """Return the queries the deferred reapplication runs for one position change."""
-        self.device.virtual_chassis = self.virtual_chassis
-        self.device.vc_position = position
-        self.device.save()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self.device.virtual_chassis = self.virtual_chassis
+            self.device.vc_position = position
+            self.device.save()
+        [reapply] = [callback for callback in callbacks if isinstance(callback, DeviceReapply)]
         with CaptureQueriesContext(connection) as captured:
-            _apply_rules_for_device_deferred(self.device.pk)
+            reapply()
         return captured.captured_queries
 
     def test_the_reapply_reads_the_interface_templates_once_for_the_module_type(self):

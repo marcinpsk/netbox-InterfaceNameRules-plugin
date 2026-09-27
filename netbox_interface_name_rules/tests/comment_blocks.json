@@ -5,10 +5,6 @@
       1
     ],
     [
-      "# All interfaces already have the names the rule would produce — flag as\n# potentially obsolete (e.g., newer NetBox generates correct names natively).\n# Skipped when the 0-count was caused by name collisions (a different reason\n# than a no-op rule), so a collision never mislabels the rule as deprecated.\n# Skipped for families too: a structural skip, or a family whose parent deliberately\n# keeps its raw name, says nothing about the rule being obsolete.",
-      1
-    ],
-    [
       "# An earlier flat apply leaves N sibling interfaces where NetBox 4.7+ models a channelized parent\n# with N channel subinterfaces.  Converting one rewrites rows an operator owns — cables, addresses,\n# tags — so it is never a side effect of applying a rule: the operator confirms it per family.",
       1
     ],
@@ -92,22 +88,6 @@
     ]
   ],
   "signals.py": [
-    [
-      "#   Module.save()\n#     → bulk_create() all interfaces (pre_save never fires)\n#     → NetBox fires post_save(Module)\n#     → on_module_saved → transaction.on_commit\n#     → _apply_rules_deferred → apply_interface_name_rules()",
-      1
-    ],
-    [
-      "# Adding a pre_save on Interface would be a no-op for the normal install\n# path and would create a false sense of security.",
-      1
-    ],
-    [
-      "# NetBox's Module.save() creates interfaces via bulk_create() which bypasses\n# pre_save signals entirely.  NetBox then manually dispatches post_save for\n# the Module object.  The actual renaming path is therefore:",
-      1
-    ],
-    [
-      "# When a Device's vc_position or virtual_chassis changes, any module-attached\n# interfaces with rules using {vc_position} need to be renamed.  We capture\n# the old values in pre_save (stored on the instance) and compare in post_save.",
-      1
-    ],
     [
       "# When netbox-librenms-plugin is installed it exposes a Signal that asks\n# subscribers to rewrite the list of interface names it predicts a module's\n# templates will produce. Without this rewrite, its module-adoption lookup\n# would only see NetBox's raw template output and miss interfaces we renamed\n# after install. The import is guarded so INR works fine when librenms-plugin\n# is absent.",
       1

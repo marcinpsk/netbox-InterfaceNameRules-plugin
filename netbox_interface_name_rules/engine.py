@@ -2,12 +2,13 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Core renaming engine — rule lookup and interface rename logic.
 
-This module is imported lazily by signals.py so that model imports happen
+This module is imported lazily by rename_triggers.py so that model imports happen
 after Django is fully initialised.
 """
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
 
 from django.core.exceptions import ValidationError
 
@@ -15,6 +16,7 @@ from . import family as family_ops
 from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
+from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,13 @@ def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - req
     return [by_name[label] for label in claimed]
 
 
+def _family_base(interface):
+    """Return the base name of the flat or channelized family *interface* belongs to."""
+    # A channelized parent is its own base: its channels are separate rows, so the name needs no
+    # ":"-splitting to find them.
+    return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
+
+
 def _forced_channel_bases(interfaces, raw_names, matchers, module):
     """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
 
@@ -109,9 +118,7 @@ def _forced_channel_bases(interfaces, raw_names, matchers, module):
     seen_bases: dict = {}
     forms_by_base: dict = {}
     for i in interfaces:
-        # A channelized parent is its own base: its channels are separate rows, so the name needs no
-        # ":"-splitting to find them.
-        base = i.name if family_ops.is_channelized_parent(i) else i.name.rsplit(":", 1)[0]
+        base = _family_base(i)
         forms = (base, base.rsplit("/", 1)[-1])
         if not any(form in raw_names for form in forms) and not any(
             matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
@@ -183,6 +190,39 @@ def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module)
     ]
 
 
+_MEMBER_OUTCOME_KINDS = {
+    family_ops.FamilyStatus.CHANGED: OutcomeKind.RENAMED,
+    family_ops.FamilyStatus.BLOCKED: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.STALE: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.UNSUPPORTED: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.FAILED: OutcomeKind.FAILED,
+}
+
+
+def _rename_outcome(member) -> RenameOutcome:
+    """Return the outcome fact of one executed family member."""
+    kind = _MEMBER_OUTCOME_KINDS[member.status]
+    if kind == OutcomeKind.BLOCKED and member.reason == family_ops.UNCLAIMED_BASE_REASON:
+        kind = OutcomeKind.UNCLAIMED
+    return RenameOutcome(kind, member.current_name, member.reason, member.target_name)
+
+
+def _rename_outcomes(family_outcomes) -> tuple[RenameOutcome, ...]:
+    """Return the outcome facts of executed families; a member that kept its correct name has none."""
+    return tuple(
+        _rename_outcome(member)
+        for family in family_outcomes
+        for member in family.members
+        if member.status != family_ops.FamilyStatus.UNCHANGED
+    )
+
+
+def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
+    """Return one unresolved-variable fact per interface that keeps its name for lack of *missing*."""
+    reason = f"{', '.join(name_template.variable_token(name) for name in missing)} is not available on this device"
+    return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -201,22 +241,64 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         Number of interfaces renamed/created, or 0 if no rule matched.
 
     """
+    return renamed_count(module_rule_outcomes(module, module_bay, force_reapply))
+
+
+def module_rule_outcomes(module, module_bay, force_reapply=False, report_only=False) -> Iterator[RenameOutcome]:
+    """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
+
+    Each family's facts are yielded before the next family runs, so a caller keeps them when a later
+    family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
+    device lacks gives facts.
+    """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
-        return 0
+        return
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        return _apply_rule_to_module(rule, module, module_bay, force_reapply)
+        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only)
 
 
-def _apply_rule_to_module(rule, module, module_bay, force_reapply):
-    """Plan and execute every family *rule* intends on *module*; see ``apply_interface_name_rules``."""
+def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
+    """Return the variables either template of the module *rule* reads that *variables* lack."""
+    return tuple(
+        dict.fromkeys(
+            name
+            for template in (rule.name_template, rule.parent_name_template)
+            for name in naming.unavailable_variables(template, variables)
+        )
+    )
+
+
+def _acted_on_names(rule, plans, interfaces):
+    """Return the name of every interface the admitted *plans* act on, in plan order."""
+    names = []
+    for plan in plans:
+        if isinstance(plan, family_ops.InstalledFamilyPlan):
+            keeps_parent = plan.parent_pk is not None and not family_ops.names_installed_parent(rule)
+            names.extend(
+                member.snapshot.name
+                for member in plan.members
+                if not (keeps_parent and member.role == family_ops.MemberRole.PARENT)
+            )
+            continue
+        # A creation plan stands for its base's whole flat family; the guard kept one row of it.
+        base = _family_base(plan.base)
+        names.extend(i.name for i in interfaces if getattr(i, "channel_id", None) is None and _family_base(i) == base)
+    return tuple(dict.fromkeys(names))
+
+
+def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False):
+    """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
+    missing = _unavailable_rule_variables(rule, variables)
+    if report_only and not missing:
+        return
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -231,24 +313,22 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     )
     installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
     leftover = planned.leftover
+    plans = [*installed, *leftover]
 
-    outcomes = family_ops.execute_module_families([*installed, *leftover])
-    renamed = sum(outcome.changed_count for outcome in outcomes)
-    blocked = [
-        member for outcome in outcomes for member in outcome.members if member.status == family_ops.FamilyStatus.BLOCKED
-    ]
+    if missing:
+        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
+        return
+
+    any_outcome = False
+    for family in family_ops.execute_module_families(plans):
+        for outcome in _rename_outcomes((family,)):
+            any_outcome = True
+            yield outcome
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if not force_reapply and leftover and renamed == 0 and not blocked and not families_seen:
-        # All interfaces already have the names the rule would produce — flag as
-        # potentially obsolete (e.g., newer NetBox generates correct names natively).
-        # Skipped when the 0-count was caused by name collisions (a different reason
-        # than a no-op rule), so a collision never mislabels the rule as deprecated.
-        # Skipped for families too: a structural skip, or a family whose parent deliberately
-        # keeps its raw name, says nothing about the rule being obsolete.
+    if not force_reapply and leftover and not any_outcome and not families_seen:
+        # Nothing renamed, skipped or built as a family: NetBox may already give these names.
         _flag_rule_potentially_deprecated(rule)
-
-    return renamed
 
 
 def predict_rule_output(module, module_bay, raw_names):
@@ -292,6 +372,15 @@ def reapply_module_rules(device):
 
     Returns the number of interfaces renamed across the device's modules.
     """
+    return renamed_count(device_module_rule_outcomes(device))
+
+
+def device_module_rule_outcomes(device, report_only=False) -> Iterator[RenameOutcome]:
+    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and yield the outcome facts.
+
+    Each module's facts are yielded before the next module runs, so a caller keeps them when a later
+    module fails. *report_only* is passed to ``module_rule_outcomes``.
+    """
     from dcim.models import Module
 
     modules = list(
@@ -302,13 +391,9 @@ def reapply_module_rules(device):
             *family_template_names.BAY_CHAIN_RELATIONS,
         )
     )
-    total = 0
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
         for module in modules:
-            if not module.module_bay:
-                continue
-            total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
-    return total
+            yield from module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
 
 
 def _device_interface_rules(device):
@@ -351,28 +436,33 @@ def _matches_device_interface(rule, interface):
     return compiled.fullmatch(interface.name) is not None
 
 
-def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
-    """Apply one rule to each eligible device-interface family."""
-    total = 0
+def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family):
+    """Apply one rule to each eligible device-interface family and record its outcome facts in *by_family*.
+
+    A rule that renames a family, or finds it correct, replaces the skips earlier rules left on it;
+    a failure stays reported.
+    """
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
-        plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
-        try:
-            outcome = family_ops.execute_installed_plan(plan)
-        except ValidationError:
-            logger.exception(
-                "Failed to apply rule %s to device interface %r on device %s; skipping.",
-                rule.pk,
-                interface.name,
-                device.pk,
-            )
+        missing = naming.unavailable_variables(rule.name_template, variables)
+        if missing:
+            names = (interface.name, *(child.name for child in children))
+            by_family.setdefault(interface.pk, []).extend(_unresolved_outcomes(missing, names))
+            claimed_pks.update((interface.pk, *(child.pk for child in children)))
             continue
-        total += outcome.changed_count
+        if report_only:
+            claimed_pks.update((interface.pk, *(child.pk for child in children)))
+            continue
+        plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
+        outcome = family_ops.execute_installed_plan(plan)
         if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
             claimed_pks.update(plan.member_pks)
-    return total
+            failures = [earlier for earlier in by_family.get(interface.pk, ()) if earlier.kind == OutcomeKind.FAILED]
+            by_family[interface.pk] = [*failures, *_rename_outcomes((outcome,))]
+        else:
+            by_family.setdefault(interface.pk, []).extend(_rename_outcomes((outcome,)))
 
 
 def apply_device_interface_rules(device):
@@ -390,30 +480,39 @@ def apply_device_interface_rules(device):
 
     Returns the number of interfaces renamed.
     """
-    from dcim.models import Interface
-
     if not getattr(device, "virtual_chassis_id", None):
         return 0  # Only rename for VC members (vc_position must be set)
 
     if device.vc_position is None:
         return 0  # vc_position unset (e.g. VC master before position assigned)
 
-    vc_position = str(device.vc_position)
+    return renamed_count(device_interface_rule_outcomes(device))
+
+
+def device_interface_rule_outcomes(device, report_only=False) -> tuple[RenameOutcome, ...]:
+    """Apply the device-interface rules and return the outcome facts.
+
+    Unlike ``apply_device_interface_rules``, this also runs for a device without a virtual-chassis
+    position: a rule that reads ``{vc_position}`` then renames nothing and reports each interface it
+    matches as unresolved. With *report_only*, no rule renames anything.
+    """
+    from dcim.models import Interface
+
+    vc_position = device.vc_position if device.virtual_chassis_id is not None else None
     rules = _device_interface_rules(device)
     if not rules:
-        return 0
+        return ()
 
     interfaces = list(Interface.objects.filter(device=device, module=None).order_by("pk"))
     if not interfaces:
-        return 0
+        return ()
 
     families = family_ops.device_interface_families(interfaces)
     claimed_pks: set[int] = set()
-    total = 0
+    by_family: dict[int, list] = {}
     for rule in rules:
-        total += _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
-
-    return total
+        _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family)
+    return tuple(outcome for outcomes in by_family.values() for outcome in outcomes)
 
 
 def _raw_name_matchers(module):

@@ -11,7 +11,8 @@ Requires NetBox ≥ 4.3.0 and Python ≥ 3.12. Licensed under Apache-2.0 (REUSE-
 This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/netbox/en/stable/plugins/development/):
 
 - **`models.py`**: Defines `InterfaceNameRule`. A rule can select an exact module type or a regex pattern, add parent, device, and platform scopes, and describe flat or channelized breakout output.
-- **`signals.py`**: Handles `pre_save` and `post_save` for `dcim.Module` and `dcim.Device`. It records prior state, schedules work with `transaction.on_commit()`, and catches failures at the deferred callback boundary. It intentionally does not connect to `dcim.Interface` because NetBox creates module interfaces with `bulk_create()`. It also connects the optional LibreNMS prediction signal when that plugin is installed.
+- **`signals.py`**: Connects `pre_save` and `post_save` for `dcim.Module` and `dcim.Device` and passes each save to `rename_triggers.py`. The receivers hold no state and make no decision. It intentionally does not connect to `dcim.Interface` because NetBox creates module interfaces with `bulk_create()`. It also connects the optional LibreNMS prediction signal when that plugin is installed.
+- **`rename_triggers.py`**: Owns the rename-trigger lifecycle. It reads the previous state before a save and lets a read error fail the save. After the save it decides whether the save is a rename trigger and schedules one reapply per module or device per transaction with `transaction.on_commit()`. The reapply compares the earliest previous state with the committed row, and it catches and logs failures at that boundary.
 - **`rule_selection.py`**: Loads and fingerprints enabled rules, separates exact and regex candidates, applies scope priority, and pins one cached snapshot across batch work.
 - **`name_template.py`**: Owns the name-template language, its template-variable catalogue, and evaluation.
 - **`naming.py`**: Builds template-variable values from the module-bay hierarchy.
@@ -20,7 +21,7 @@ This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/ne
 - **`api/` and `graphql/`**: Expose NetBox REST and GraphQL integrations.
 - **`views.py`, `urls.py`, `tables.py`, `forms.py`, `filters.py`, `navigation.py`, `jobs.py`**: Provide NetBox UI and background-job integrations.
 
-The signal handler → engine import is intentionally lazy to ensure Django models are fully loaded before use.
+The rename-trigger → engine import is intentionally lazy to ensure Django models are fully loaded before use.
 
 ## Development environment
 

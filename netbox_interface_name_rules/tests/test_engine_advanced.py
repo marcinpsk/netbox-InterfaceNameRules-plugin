@@ -36,6 +36,7 @@ from netbox_interface_name_rules.family import FamilyStatus
 from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import _extract_trailing_digits
+from netbox_interface_name_rules.tests.helpers import make_device
 
 
 class EngineAdvancedFixtures(TestCase):
@@ -1816,3 +1817,39 @@ class NameCollisionTest(EngineAdvancedFixtures):
         self.assertEqual(second.changed_count, 0)
         self.assertEqual(second.skipped_members, ())  # its own existing channels are NOT conflicts
         self.assertEqual(Interface.objects.filter(module=module).count(), 4)
+
+
+class ModuleDeletionCascadeTest(TestCase):
+    """Deleting a module deletes its renamed interfaces (Interface.module is on_delete=CASCADE)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer = Manufacturer.objects.create(name="DelCasMfg", slug="delcasmfg")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="DelCas-Dev", slug="delcas-dev")
+        ModuleBayTemplate.objects.create(device_type=device_type, name="DCBay 0", position="0")
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="DelCas-SFP", part_number="DelCas-SFP"
+        )
+        cls.device = make_device("DelCas", device_type, name="delcas-sw1")
+        cls.bay = ModuleBay.objects.get(device=cls.device, name="DCBay 0")
+
+    def test_interfaces_deleted_when_module_removed(self):
+        """Deleting a module removes the interfaces the rule renamed."""
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+        )
+        module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
+        iface = Interface.objects.create(device=self.device, module=module, name="0", type="10gbase-x-sfpp")
+
+        # Rename the interface
+        renamed = apply_interface_name_rules(module, self.bay)
+        self.assertEqual(renamed, 1)
+        iface.refresh_from_db()
+        self.assertEqual(iface.name, "et-0/0/0")
+
+        iface_pk = iface.pk
+        module.delete()
+
+        # Interface was cascade-deleted with the module
+        self.assertFalse(Interface.objects.filter(pk=iface_pk).exists())
