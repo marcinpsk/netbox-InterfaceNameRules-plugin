@@ -111,9 +111,10 @@ renames nothing. Its journal entry lists the interfaces whose rules use
 `{vc_position}`, so you can decide what to call them.
 
 The kind is **Danger** when the rule failed and **Warning** otherwise. The author
-is the user who saved the change. An interface that already has its correct name,
-or that the rule does not match, is not listed. The server log records the same
-events.
+is the user of the request that saved the change. A save outside a request, for
+example from a script or the shell, writes an entry with no author. An interface
+that already has its correct name, or that the rule does not match, is not listed.
+The server log records the same events.
 
 ### Apply Rules and the Applicable Column
 

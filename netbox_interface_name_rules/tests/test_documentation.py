@@ -409,6 +409,15 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
                     priority,
                 )
 
+    def test_configuration_states_that_a_save_outside_a_request_has_no_journal_author(self):
+        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+
+        self.assertIn(
+            "The author is the user of the request that saved the change. "
+            "A save outside a request, for example from a script or the shell, writes an entry with no author.",
+            guide,
+        )
+
     def test_transaction_adr_states_unrelated_failure_behavior(self):
         adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text(
             encoding="utf-8"
