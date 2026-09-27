@@ -89,6 +89,9 @@ The tag is informational only — the rule remains active.
 
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed
 after a matching rule is active are renamed automatically at install time.
+The web UI, the REST API and bulk import install modules inside a transaction.
+A script or shell that creates a module outside a transaction gets no rename:
+run Apply Rules after it, or wrap the install in `transaction.atomic()`.
 
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where
