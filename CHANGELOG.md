@@ -17,10 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   available, no template claims the interface, or the rule failed. The kind is
   Danger for a failure and Warning otherwise, and the author is the user who saved
   the change. Before, these went only to the server log, and some were not logged.
-- A device that leaves its virtual chassis now reapplies its rules. A rule that uses
-  `{vc_position}` cannot give a name there, so its interfaces keep their names and
-  the device's journal entry lists them. A rule that does not use `{vc_position}`
-  renames as it does after a position change.
+- A device that leaves its virtual chassis, or stays in one without a position, now
+  gets a report-only check. Nothing is renamed. The device's journal entry lists the
+  interfaces whose rules use `{vc_position}`, because those rules cannot give a name
+  there.
 - Several rename triggers for one module or device in one transaction now reapply the
   rules once, when the transaction commits. The reapply compares the values from before
   the first trigger with the committed row, so a change that is undone in the same

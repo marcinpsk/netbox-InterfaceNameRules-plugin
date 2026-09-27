@@ -9,7 +9,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off and Applies to Device Interfaces is disabled) |
-| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins, leaves or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names |
+| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names |
 | Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name, or a device interface's current name when Applies to Device Interfaces is enabled |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
@@ -88,11 +88,11 @@ The tag is informational only — the rule remains active.
 ### Journal entries after an automatic rename
 
 The plugin renames interfaces again after a save that can make a name wrong: a
-module install, a module type change, and a device that joins, leaves or changes
-position in a virtual chassis. When that rename leaves an interface unrenamed
-although a rule matched it, or fails, the plugin writes one journal entry. The
-entry goes on the module, or on the device for a virtual-chassis change. It lists
-each interface and the reason:
+module install, a module type change, and a device that joins or changes position
+in a virtual chassis. When that rename leaves an interface unrenamed although a
+rule matched it, or fails, the plugin writes one journal entry. The entry goes on
+the module, or on the device for a virtual-chassis change. It lists each
+interface and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
@@ -100,6 +100,10 @@ each interface and the reason:
 - no interface template claims the interface, so the rule cannot find its
   `{base}`,
 - the rule failed, for example on a division by zero in its template.
+
+A device that leaves its virtual chassis, or stays in one without a position,
+renames nothing. Its journal entry lists the interfaces whose rules use
+`{vc_position}`, so you can decide what to call them.
 
 The kind is **Danger** when the rule failed and **Warning** otherwise. The author
 is the user who saved the change. An interface that already has its correct name,

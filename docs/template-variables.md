@@ -135,7 +135,7 @@ name_template: "Gi{vc_position}/{bay_position_num}"
 
 ### Device Interface Rules (VC port renaming)
 
-When a device **joins** a Virtual Chassis, **leaves** it or **changes position**, the plugin reapplies the device-interface rules for that device. This renames native device-type interfaces (those not created by a module, i.e. `module=None`) using the `{vc_position}`, `{base}`, and `{port}` variables.
+When a device **joins** a Virtual Chassis or **changes position**, the plugin reapplies the device-interface rules for that device. This renames native device-type interfaces (those not created by a module, i.e. `module=None`) using the `{vc_position}`, `{base}`, and `{port}` variables.
 
 Enable **Applies to Device Interfaces** on the rule and set the **Module Type Pattern** as an interface-name filter (regex).
 
@@ -193,12 +193,12 @@ always had, and so does every release older than NetBox 4.6.
 Note that the drift is only reachable on a **re-apply**: at install time the interfaces are named
 and the rule is applied in the same instant, so the two always agree.
 
-**Leaving a virtual chassis does not reset names.** A device that leaves its VC reapplies its
-rules, but a rule using `{vc_position}` cannot give a name off a chassis. Its interfaces keep their
-names, and a journal entry on the device lists them. What they should be called instead is an
-operator decision: change the rule, then re-apply it from **Apply Rules → Preview & Apply**. The
-matching above finds the interfaces whether they were named at a position or at the fallback. A rule
-that does not use `{vc_position}` renames on leave as it does after a position change.
+**Leaving a virtual chassis does not rename anything.** A device that leaves its VC, or stays in
+one without a position, keeps every interface name, whatever its rules use. A rule using
+`{vc_position}` cannot give a name off a chassis, so a journal entry on the device lists its
+interfaces. What they should be called instead is an operator decision: change the rule, then
+re-apply it from **Apply Rules → Preview & Apply**. The matching above finds the interfaces whether
+they were named at a position or at the fallback.
 
 ## Examples
 
