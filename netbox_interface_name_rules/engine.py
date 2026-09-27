@@ -276,8 +276,7 @@ def _acted_on_names(rule, plans, interfaces):
     names = []
     for plan in plans:
         if isinstance(plan, family_ops.InstalledFamilyPlan):
-            # A blank parent template leaves an installed parent its name, so the rule does not act on it.
-            keeps_parent = plan.parent_pk is not None and not rule.parent_name_template
+            keeps_parent = plan.parent_pk is not None and not family_ops.names_installed_parent(rule)
             names.extend(
                 member.snapshot.name
                 for member in plan.members

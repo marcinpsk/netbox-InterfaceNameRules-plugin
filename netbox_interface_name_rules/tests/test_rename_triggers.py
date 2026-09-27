@@ -36,7 +36,11 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_type,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import PARENT_TYPE, REQUIRES_CHANNELIZATION
+from netbox_interface_name_rules.tests.test_channelization import (
+    PARENT_TYPE,
+    REQUIRES_CHANNELIZATION,
+    _channelized_module_type,
+)
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -740,6 +744,39 @@ class RenameJournalTest(RenameTriggerTestCase):
         (entry,) = _journal(self.device)
         self.assertIn("`xe-1/0/0:0`", entry.comments)
         self.assertIn("`xe-1/0/0:1`", entry.comments)
+        self.assertNotIn("`0`", entry.comments)
+
+    def _install_channelized_family(self, model, **rule_fields):
+        """Install a module whose templates form a two-channel family, under a rule with *rule_fields*."""
+        module_type = _channelized_module_type(self.type_a.manufacturer, model, channels=2, child_channel_ids=(1, 2))
+        InterfaceNameRule.objects.create(module_type=module_type, **rule_fields)
+        return self._install(module_type)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_reports_a_parent_a_simple_rule_renames(self):
+        module = self._install_channelized_family("RenTrig Lockstep", name_template="et-{vc_position}/{bay_position}")
+        self.assertEqual(self._names(module), ["et-1/0", "et-1/0:1", "et-1/0:2"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        for name in ("et-1/0", "et-1/0:1", "et-1/0:2"):
+            self.assertIn(f"`{name}`", entry.comments)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_does_not_report_a_parent_a_flat_breakout_rule_keeps(self):
+        module = self._install_channelized_family(
+            "RenTrig Flat Breakout",
+            name_template="xe-{vc_position}/0/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        self.assertEqual(self._names(module), ["0", "xe-1/0/0:0", "xe-1/0/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`xe-1/0/0:0`", entry.comments)
         self.assertNotIn("`0`", entry.comments)
 
     def test_an_interface_a_lower_priority_rule_renames_is_not_reported(self):

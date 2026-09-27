@@ -71,6 +71,7 @@ from .structural import (
 from .targets import (
     UNCLAIMED_BASE_REASON,
     channelized_family_names,
+    names_installed_parent,
     one_family_per_name_set,
     template_channel_suffixes,
 )
@@ -123,6 +124,7 @@ __all__ = (
     "interfaces_by_module",
     "is_channelized_parent",
     "module_raw_bases",
+    "names_installed_parent",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_device_interface_rename",
