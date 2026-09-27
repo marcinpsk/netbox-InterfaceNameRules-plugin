@@ -101,6 +101,11 @@ interface and the reason:
   `{base}`,
 - the rule failed, for example on a division by zero in its template.
 
+When an error stops the rename, the entry also has one line for that error,
+which names no interface. The interfaces listed before the error stay in the
+entry. When the plugin cannot read the saved module or device, it writes no
+entry and only the server log records the error.
+
 A device that leaves its virtual chassis, or stays in one without a position,
 renames nothing. Its journal entry lists the interfaces whose rules use
 `{vc_position}`, so you can decide what to call them.
