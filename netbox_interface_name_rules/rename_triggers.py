@@ -77,7 +77,7 @@ class ModuleReapply:
         from dcim.models import Module
 
         try:
-            module = Module.objects.select_related("module_bay").get(pk=self.pk)
+            module = Module.objects.select_related("module_bay", "module_type").get(pk=self.pk)
         except Module.DoesNotExist:
             return
         except Exception:

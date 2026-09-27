@@ -551,6 +551,15 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
+    def test_a_module_type_read_failure_does_not_escape_the_reapply(self):
+        module = self._install()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
+        with connection.execute_wrapper(_reject_reads_of("dcim_moduletype")):
+            reapply()
+
     def test_a_failed_device_reload_is_logged(self):
         module = self._install()
         with self.captureOnCommitCallbacks() as callbacks:
