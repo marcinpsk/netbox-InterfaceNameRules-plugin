@@ -85,6 +85,31 @@ This means:
 
 The tag is informational only — the rule remains active.
 
+### Journal entries after an automatic rename
+
+The plugin renames interfaces again after a save that can make a name wrong: a
+module install, a module type change, and a device that joins or changes position
+in a virtual chassis. When that rename leaves an interface unrenamed although a
+rule matched it, or fails, the plugin writes one journal entry. The entry goes on
+the module, or on the device for a virtual-chassis change. It lists each
+interface and the reason:
+
+- the name the rule gives is already in use on the device,
+- a template variable is not available, such as `{vc_position}` on a device
+  outside a virtual chassis,
+- no interface template claims the interface, so the rule cannot find its
+  `{base}`,
+- the rule failed, for example on a division by zero in its template.
+
+A device that leaves its virtual chassis, or stays in one without a position,
+renames nothing. Its journal entry lists the interfaces whose rules use
+`{vc_position}`, so you can decide what to call them.
+
+The kind is **Danger** when the rule failed and **Warning** otherwise. The author
+is the user who saved the change. An interface that already has its correct name,
+or that the rule does not match, is not listed. The server log records the same
+events.
+
 ### Apply Rules and the Applicable Column
 
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed

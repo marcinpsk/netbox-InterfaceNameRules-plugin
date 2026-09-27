@@ -277,7 +277,7 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
 
 @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionLeaveDriftTest(VcDriftTestCase):
-    """Leaving a VC is an operator decision — nothing is scheduled, but a re-apply must still match."""
+    """Leaving a VC renames nothing, and a later re-apply must still match the drifted name."""
 
     @classmethod
     def setUpTestData(cls):
@@ -286,8 +286,9 @@ class VcPositionLeaveDriftTest(VcDriftTestCase):
         )
         cls.module_type = _token_module_type(manufacturer, "VcLeave-SFP", "xe-{vc_position:0}/0/{module}")
 
-    def test_leaving_a_vc_schedules_no_rename(self):
-        """Deliberate: a rule's ``{vc_position}`` cannot even evaluate off a VC, so un-renaming is manual."""
+    def test_leaving_a_vc_renames_nothing(self):
+        """Deliberate: what the interfaces are called off a VC is an operator decision, even for a rule
+        that needs no ``{vc_position}``."""
         module, _ = self._install_on(self.device, self.module_type, "3")
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 

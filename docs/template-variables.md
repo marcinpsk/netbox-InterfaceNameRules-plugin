@@ -125,7 +125,7 @@ the raw variable still gives the position as it is stored.
 
 ### Module Interface Rules (linecard/SFP)
 
-When a module is installed on a device that belongs to a Virtual Chassis, the `{vc_position}` variable is injected automatically and reflects the device's chassis position (`device.vc_position`). Templates that use `{vc_position}` on non-VC devices will fail gracefully (the rename is skipped).
+When a module is installed on a device that belongs to a Virtual Chassis, the `{vc_position}` variable is injected automatically and reflects the device's chassis position (`device.vc_position`). Templates that use `{vc_position}` on non-VC devices rename nothing: the interfaces keep their names, and a journal entry on the module lists them.
 
 ```yaml
 name_template: "Gi{vc_position}/{bay_position_num}"
@@ -135,7 +135,7 @@ name_template: "Gi{vc_position}/{bay_position_num}"
 
 ### Device Interface Rules (VC port renaming)
 
-When a device **joins** a Virtual Chassis or **changes position**, the plugin fires `apply_device_interface_rules()` for that device. This renames native device-type interfaces (those not created by a module, i.e. `module=None`) using the `{vc_position}`, `{base}`, and `{port}` variables.
+When a device **joins** a Virtual Chassis or **changes position**, the plugin reapplies the device-interface rules for that device. This renames native device-type interfaces (those not created by a module, i.e. `module=None`) using the `{vc_position}`, `{base}`, and `{port}` variables.
 
 Enable **Applies to Device Interfaces** on the rule and set the **Module Type Pattern** as an interface-name filter (regex).
 
@@ -193,11 +193,12 @@ always had, and so does every release older than NetBox 4.6.
 Note that the drift is only reachable on a **re-apply**: at install time the interfaces are named
 and the rule is applied in the same instant, so the two always agree.
 
-**Leaving a virtual chassis does not rename anything.** The plugin deliberately schedules no
-re-apply when a device is removed from a VC — a rule using `{vc_position}` cannot even be evaluated
-off a chassis, so what the interfaces should be called instead is an operator decision. Re-apply the
-rule manually from **Apply Rules → Preview & Apply** when you want it; the matching above finds the
-interfaces whether they were named at a position or at the fallback.
+**Leaving a virtual chassis does not rename anything.** A device that leaves its VC, or stays in
+one without a position, keeps every interface name, whatever its rules use. A rule using
+`{vc_position}` cannot give a name off a chassis, so a journal entry on the device lists its
+interfaces. What they should be called instead is an operator decision: change the rule, then
+re-apply it from **Apply Rules → Preview & Apply**. The matching above finds the interfaces whether
+they were named at a position or at the fallback.
 
 ## Examples
 

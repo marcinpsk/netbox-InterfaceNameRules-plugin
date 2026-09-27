@@ -456,7 +456,7 @@ class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
 
     def test_one_failing_module_stops_at_the_deferred_operation_boundary(self):
         modules = self._install_and_name(("1", "2"))
-        real_apply = engine_module.apply_interface_name_rules
+        real_apply = engine_module.module_rule_outcomes
 
         def fail_on_the_first_module(module, module_bay, force_reapply=False):
             if module.pk == modules[0].pk:
@@ -464,7 +464,7 @@ class VirtualChassisReapplyTest(VirtualChassisReapplyTestCase):
             return real_apply(module, module_bay, force_reapply=force_reapply)
 
         with (
-            patch.object(engine_module, "apply_interface_name_rules", side_effect=fail_on_the_first_module),
+            patch.object(engine_module, "module_rule_outcomes", side_effect=fail_on_the_first_module),
             self.assertLogs("netbox_interface_name_rules", level="ERROR"),
         ):
             self._join(4)

@@ -5,7 +5,8 @@
 The receivers in ``signals.py`` pass every module and device save here. ``before_save`` reads the
 previous state; ``after_save`` compares it with the saved values and schedules one reapply per
 module or device per transaction. The reapply compares the earliest previous state of the
-transaction with the committed row, so it acts on the net change.
+transaction with the committed row, so it acts on the net change. A reapply that leaves an
+interface unrenamed, or fails, writes one journal entry on the module or device.
 """
 
 import dataclasses
@@ -13,6 +14,9 @@ import logging
 import weakref
 
 from django.db import transaction
+from netbox.context import current_request
+
+from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 
 logger = logging.getLogger("netbox_interface_name_rules")
 
@@ -48,6 +52,7 @@ class ModuleReapply:
     pk: int
     baseline: ModuleState
     installed: bool
+    author: object = dataclasses.field(default=None, init=False)
     started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
     @classmethod
@@ -79,14 +84,16 @@ class ModuleReapply:
         if force_reapply is None:
             return
         try:
-            from .engine import apply_interface_name_rules
+            from .engine import module_rule_outcomes
 
-            renamed = apply_interface_name_rules(module, module_bay, force_reapply=force_reapply)
-        except Exception:
+            outcomes = module_rule_outcomes(module, module_bay, force_reapply=force_reapply)
+        except Exception as error:
             logger.exception("Failed to apply interface name rules for %s in %s", module.module_type, module_bay.name)
-            return
+            outcomes = (_failure(error),)
+        renamed = renamed_count(outcomes)
         if renamed:
             logger.info("Renamed %d interface(s) for %s in %s", renamed, module.module_type, module_bay.name)
+        _report(module, outcomes, self.author)
 
 
 @dataclasses.dataclass(eq=False)
@@ -98,11 +105,12 @@ class DeviceReapply:
 
     pk: int
     baseline: DeviceState
+    author: object = dataclasses.field(default=None, init=False)
     started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
     def is_due(self, current):
-        """Return whether *current* differs from the baseline while the device is in a virtual chassis."""
-        return current != self.baseline and current.virtual_chassis_id is not None
+        """Return whether *current* differs from the baseline."""
+        return current != self.baseline
 
     def covers(self, pending):
         """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
@@ -117,23 +125,77 @@ class DeviceReapply:
             device = Device.objects.select_related("virtual_chassis").get(pk=self.pk)
         except Device.DoesNotExist:
             return
-        if not self.is_due(_state_of(DeviceState, device)):
+        current = _state_of(DeviceState, device)
+        if not self.is_due(current):
             return
-        total = 0
+        # Off a chassis or without a position, what the interfaces are called is the operator's decision.
+        report_only = current.virtual_chassis_id is None or current.vc_position is None
+        outcomes = []
         try:
-            from .engine import reapply_module_rules
+            from .engine import device_module_rule_outcomes
 
-            total += reapply_module_rules(device)
-        except Exception:
+            # extend() keeps the facts the generator yielded before a later module raised.
+            outcomes.extend(device_module_rule_outcomes(device, report_only=report_only))
+        except Exception as error:
             logger.exception("Failed to re-apply module rules for device %s after VC change", self.pk)
+            outcomes.append(_failure(error))
         try:
-            from .engine import apply_device_interface_rules
+            from .engine import device_interface_rule_outcomes
 
-            total += apply_device_interface_rules(device) or 0
-        except Exception:
+            outcomes.extend(device_interface_rule_outcomes(device, report_only=report_only))
+        except Exception as error:
             logger.exception("Failed to re-apply device interface rules for device %s after VC change", self.pk)
+            outcomes.append(_failure(error))
+        total = renamed_count(outcomes)
         if total:
             logger.info("Re-renamed %d interface(s) for device %s after VC change", total, device)
+        _report(device, outcomes, self.author)
+
+
+def _failure(error):
+    """Return the outcome fact of a reapply that *error* stopped."""
+    return RenameOutcome(OutcomeKind.FAILED, None, f"the reapply stopped with {type(error).__name__}: {error}")
+
+
+def _journal_line(outcome):
+    """Return the Markdown list item that names one outcome's interface and reason."""
+    if outcome.interface_name is None:
+        return f"- {outcome.reason} ({outcome.kind})"
+    subject = f"`{outcome.interface_name}`"
+    if outcome.target_name not in (None, outcome.interface_name):
+        subject += f" to `{outcome.target_name}`"
+    return f"- {subject}: {outcome.reason} ({outcome.kind})"
+
+
+def _report(target, outcomes, author):
+    """Write one journal entry on *target* when an outcome is a skip or a failure. A failed write is logged."""
+    reported = [outcome for outcome in outcomes if outcome.kind != OutcomeKind.RENAMED]
+    if not reported:
+        return
+    from extras.choices import JournalEntryKindChoices
+    from extras.models import JournalEntry
+
+    failed = any(outcome.kind == OutcomeKind.FAILED for outcome in reported)
+    kind = JournalEntryKindChoices.KIND_DANGER if failed else JournalEntryKindChoices.KIND_WARNING
+    comments = "\n".join(
+        (
+            "Interface Name Rules reapplied its rules after this change, with these results:",
+            "",
+            *(_journal_line(outcome) for outcome in reported),
+        )
+    )
+    logger.warning("Rename trigger on %s: %d interface(s) skipped or failed; see its journal", target, len(reported))
+    try:
+        with transaction.atomic():
+            JournalEntry.objects.create(assigned_object=target, created_by=author, kind=kind, comments=comments)
+    except Exception:
+        logger.exception("Failed to write the rename journal entry for %s", target)
+
+
+def _request_user():
+    """Return the authenticated user of the current request, or None outside a request."""
+    user = getattr(current_request.get(), "user", None)
+    return user if user is not None and user.is_authenticated else None
 
 
 def _module_reapply(module, created, previous):
@@ -159,12 +221,8 @@ def _device_reapply(device, created, previous):
     """Return the reapply a device save asks for, or None when the save is not a rename trigger."""
     if created or previous is None:
         return None
-    current = _state_of(DeviceState, device)
-    if current == previous:
+    if _state_of(DeviceState, device) == previous:
         return None
-    if current.virtual_chassis_id is None:
-        # Still scheduled: it holds the earliest state if the device rejoins in this transaction.
-        logger.debug("Device %s left its virtual chassis; no reapply without a vc_position", device.pk)
     return DeviceReapply(device.pk, previous)
 
 
@@ -207,4 +265,5 @@ def after_save(sender, instance, created):
     # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
     if connection.in_atomic_block and any(reapply.covers(pending) for _, pending, _ in connection.run_on_commit):
         return
+    reapply.author = _request_user()
     transaction.on_commit(reapply)

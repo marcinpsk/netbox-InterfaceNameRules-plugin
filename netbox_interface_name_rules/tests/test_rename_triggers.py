@@ -10,17 +10,23 @@ committed callbacks, and reads the interface names back.
 import gc
 import re
 from contextlib import contextmanager
+from unittest import skipUnless
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
-from django.db import DataError, IntegrityError, connection, transaction
+from django.contrib.contenttypes.models import ContentType
+from django.db import DatabaseError, DataError, IntegrityError, connection, transaction
 from django.db.models.signals import post_save
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
+from extras.choices import JournalEntryKindChoices
+from extras.models import JournalEntry
 from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules import engine, rename_triggers
+from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.engine import supports_channelization
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -30,6 +36,11 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_type,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
+from netbox_interface_name_rules.tests.test_channelization import (
+    PARENT_TYPE,
+    REQUIRES_CHANNELIZATION,
+    _channelized_module_type,
+)
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -48,11 +59,20 @@ def _counting(entry_point):
 
 
 def _module_reapplies():
-    return _counting("apply_interface_name_rules")
+    return _counting("module_rule_outcomes")
 
 
 def _device_reapplies():
-    return _counting("reapply_module_rules")
+    return _counting("device_module_rule_outcomes")
+
+
+def _journal(instance):
+    """Return the journal entries on *instance*, oldest first."""
+    return list(
+        JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(instance), assigned_object_id=instance.pk
+        ).order_by("pk")
+    )
 
 
 class _RenameTriggerFixture:
@@ -164,17 +184,6 @@ class RenameTriggerTest(RenameTriggerTestCase):
 
         self.assertEqual(self._names(module), ["0"])
 
-    def test_leaving_the_virtual_chassis_causes_no_reapply(self):
-        module = self._install()
-
-        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
-            self.device.virtual_chassis = None
-            self.device.vc_position = None
-            self.device.save()
-
-        self.assertEqual(reapplies.call_count, 0)
-        self.assertEqual(self._names(module), ["et-1/0/0"])
-
     def test_a_save_that_changes_no_compared_value_causes_no_reapply(self):
         module = self._install()
 
@@ -274,6 +283,14 @@ class RenameTriggerAPITest(_RenameTriggerFixture, APITestCase):
         self._patch(self.device, {"vc_position": 2})
 
         self.assertEqual(self._names(self.module), ["et-2/0/0"])
+
+    def test_the_journal_entry_names_the_request_user_as_its_author(self):
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+
+        self._patch(self.module, {"module_type": self.type_b.pk})
+
+        (entry,) = _journal(self.module)
+        self.assertEqual(entry.created_by, self.user)
 
 
 @contextmanager
@@ -505,6 +522,341 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         self.assertIn("Failed to re-apply module rules", output)
         self.assertIn("Failed to re-apply device interface rules", output)
         self.assertEqual(self._names(module), ["et-1/0/0"])
+
+
+def _reject_journal_writes(execute, sql, params, many, context):
+    if sql.lstrip().startswith('INSERT INTO "extras_journalentry"'):
+        raise DatabaseError("injected journal write failure")
+    return execute(sql, params, many, context)
+
+
+class RenameJournalTest(RenameTriggerTestCase):
+    """A reapply that leaves an interface unrenamed or fails writes one journal entry."""
+
+    def _module_type_with_rule(self, model, templates, name_template, interface_type=PLAIN_TYPE, **rule_fields):
+        module_type = make_module_type(self.type_a.manufacturer, model, model=model)
+        for template in templates:
+            InterfaceTemplate.objects.create(module_type=module_type, name=template, type=interface_type)
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template, **rule_fields)
+        return module_type, rule
+
+    def _standalone_device(self):
+        return make_device(f"{self.prefix} Solo", self.device.device_type)
+
+    def _leave(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self.device.virtual_chassis = None
+            self.device.vc_position = None
+            self.device.save()
+
+    def _install_renamed_by_the_operator(self):
+        """Install a module whose rule needs no {vc_position}, then rename its interface by hand."""
+        fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=fixed_type)
+        rename_out_of_band(Interface.objects.get(module=module), "operator-name")
+        return module
+
+    def test_a_name_collision_writes_one_warning_entry_on_the_module(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._change_type(module, self.type_b)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0` to `xe-1/0/0`", entry.comments)
+        self.assertIn("already in use", entry.comments)
+        self.assertIsNone(entry.created_by)
+        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_the_entry_names_only_the_interfaces_left_unrenamed(self):
+        module_type, _ = self._module_type_with_rule("RenTrig Pair", ("a{module}", "b{module}"), "{base}.{vc_position}")
+        Interface.objects.create(device=self.device, name="b0.1", type=PLAIN_TYPE)
+
+        module = self._install(module_type)
+
+        self.assertEqual(self._names(module), ["a0.1", "b0"])
+        (entry,) = _journal(module)
+        self.assertIn("`b0` to `b0.1`", entry.comments)
+        self.assertNotIn("a0", entry.comments)
+
+    def test_an_interface_no_template_claims_is_reported(self):
+        module = self._install()
+        claiming_type, _ = self._module_type_with_rule("RenTrig Base", ("port{module}",), "xe-{base}")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._change_type(module, claiming_type)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertIn("no single interface template claims", entry.comments)
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+    def test_a_template_variable_the_device_lacks_is_reported(self):
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=self.type_a,
+            )
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`0`", entry.comments)
+        self.assertIn("{vc_position} is not available", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+
+    def test_a_template_variable_the_device_lacks_does_not_flag_the_rule_as_potentially_deprecated(self):
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=self.type_a,
+            )
+
+        rule = InterfaceNameRule.objects.get(module_type=self.type_a)
+        self.assertFalse(rule.tags.filter(slug="potentially-deprecated").exists())
+
+    def test_a_rule_that_cannot_be_evaluated_writes_a_danger_entry(self):
+        module_type, rule = self._module_type_with_rule("RenTrig Divide", ("{module}",), "et-{1 // {bay_position_num}}")
+
+        module = self._install(module_type)
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`0`", entry.comments)
+        self.assertIn("Invalid arithmetic expression", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+        self.assertFalse(rule.tags.filter(slug="potentially-deprecated").exists())
+
+    def test_a_failed_module_reapply_writes_a_danger_entry(self):
+        module = self._install()
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("injected reapply failure", entry.comments)
+
+    def test_a_failed_device_reapply_writes_one_danger_entry_on_the_device(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertEqual(entry.comments.count("injected reapply failure"), 2)
+        self.assertEqual(_journal(module), [])
+
+    def test_leaving_the_virtual_chassis_renames_nothing_and_reports_the_skip(self):
+        module = self._install()
+        by_hand = self._install_renamed_by_the_operator()
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="eth0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        InterfaceNameRule.objects.create(
+            name_template="lan-{port}", applies_to_device_interfaces=True, module_type_pattern="eth0"
+        )
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertIn("`mgmt0`", entry.comments)
+        self.assertIn("{vc_position} is not available", entry.comments)
+        self.assertNotIn("eth0", entry.comments)
+        self.assertNotIn("operator-name", entry.comments)
+        self.assertEqual(_journal(module), [])
+        self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
+        self.assertEqual(
+            sorted(Interface.objects.filter(device=self.device, module=None).values_list("name", flat=True)),
+            ["eth0", "mgmt0"],
+        )
+
+    def test_a_virtual_chassis_member_without_a_position_renames_nothing_and_reports_the_skip(self):
+        module = self._install()
+        by_hand = self._install_renamed_by_the_operator()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(None)
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertNotIn("operator-name", entry.comments)
+        self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
+
+    def test_leaving_the_virtual_chassis_reports_every_member_of_a_flat_family(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Flat",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        module = self._install(flat_type)
+        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`et-1/0:0`", entry.comments)
+        self.assertIn("`et-1/0:1`", entry.comments)
+        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_does_not_report_a_parent_that_keeps_its_name(self):
+        channelized_type, _ = self._module_type_with_rule(
+            "RenTrig Channelized",
+            ("{module}",),
+            "xe-{vc_position}/0/{bay_position}:{channel}",
+            interface_type=PARENT_TYPE,
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        )
+        module = self._install(channelized_type)
+        self.assertEqual(self._names(module), ["0", "xe-1/0/0:0", "xe-1/0/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`xe-1/0/0:0`", entry.comments)
+        self.assertIn("`xe-1/0/0:1`", entry.comments)
+        self.assertNotIn("`0`", entry.comments)
+
+    def _install_channelized_family(self, model, **rule_fields):
+        """Install a module whose templates form a two-channel family, under a rule with *rule_fields*."""
+        module_type = _channelized_module_type(self.type_a.manufacturer, model, channels=2, child_channel_ids=(1, 2))
+        InterfaceNameRule.objects.create(module_type=module_type, **rule_fields)
+        return self._install(module_type)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_reports_a_parent_a_simple_rule_renames(self):
+        module = self._install_channelized_family("RenTrig Lockstep", name_template="et-{vc_position}/{bay_position}")
+        self.assertEqual(self._names(module), ["et-1/0", "et-1/0:1", "et-1/0:2"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        for name in ("et-1/0", "et-1/0:1", "et-1/0:2"):
+            self.assertIn(f"`{name}`", entry.comments)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_does_not_report_a_parent_a_flat_breakout_rule_keeps(self):
+        module = self._install_channelized_family(
+            "RenTrig Flat Breakout",
+            name_template="xe-{vc_position}/0/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        self.assertEqual(self._names(module), ["0", "xe-1/0/0:0", "xe-1/0/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`xe-1/0/0:0`", entry.comments)
+        self.assertNotIn("`0`", entry.comments)
+
+    def test_a_failure_stays_reported_when_a_lower_priority_rule_renames_the_interface(self):
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{8 // ({vc_position} - 2)}",
+            applies_to_device_interfaces=True,
+            module_type_pattern="mgmt0",
+        )
+        InterfaceNameRule.objects.create(
+            name_template="oob-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt."
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`mgmt0`", entry.comments)
+
+    def test_an_interface_a_lower_priority_rule_renames_is_not_reported(self):
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="mgmt-2", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        InterfaceNameRule.objects.create(
+            name_template="oob-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt."
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
+        self.assertEqual(_journal(self.device), [])
+
+    def test_a_device_reapply_that_fails_on_one_module_keeps_the_earlier_outcomes(self):
+        blocked = self._install()
+        with self.captureOnCommitCallbacks(execute=True):
+            Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=self.type_a)
+        Interface.objects.create(device=self.device, name="et-2/0/0", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`et-1/0/0` to `et-2/0/0`", entry.comments)
+        self.assertIn("injected reapply failure", entry.comments)
+        self.assertEqual(self._names(blocked), ["et-1/0/0"])
+
+    def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
+        renamed = self._install()
+        fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")
+        with self.captureOnCommitCallbacks(execute=True):
+            kept = Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=fixed_type)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertEqual((self._names(renamed), self._names(kept)), (["et-2/0/0"], ["ge-1"]))
+        self.assertFalse(JournalEntry.objects.exists())
+
+    def test_a_failed_journal_write_is_logged_and_does_not_raise(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="xe-1/0/0", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._change_type(module, self.type_b)
+
+        with connection.execute_wrapper(_reject_journal_writes), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
+            for callback in callbacks:
+                callback()
+
+        self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected journal write failure"])
+        self.assertEqual(_journal(module), [])
+        self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
 
 
 class CommittedRenameTriggerTest(_RenameTriggerFixture, TransactionTestCase):

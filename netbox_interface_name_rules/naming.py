@@ -2,7 +2,20 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Build name-template variables from NetBox rows."""
 
-from .name_template import NamingContext, TemplateVariableCondition, TemplateVariableSource, variables_for_context
+from .name_template import (
+    TEMPLATE_VARIABLES,
+    NamingContext,
+    TemplateVariableCondition,
+    TemplateVariableSource,
+    referenced_variables,
+    variables_for_context,
+)
+
+_DEVICE_CONDITIONAL_VARIABLES = frozenset(
+    variable.name
+    for variable in TEMPLATE_VARIABLES
+    if variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
+)
 
 
 def _extract_trailing_digits(value: str) -> str:
@@ -138,3 +151,12 @@ def build_device_interface_variables(interface_name, vc_position):
     """Build device-interface variables from the current name and VC position."""
     values = {"base": interface_name, "port": interface_name.rsplit("/", 1)[-1], "vc_position": str(vc_position)}
     return _filter_variables(NamingContext.DEVICE_INTERFACE, None, values, vc_position)
+
+
+def unavailable_variables(template, variables) -> tuple[str, ...]:
+    """Return the variables *template* reads that this device does not provide in *variables*."""
+    return tuple(
+        name
+        for name in referenced_variables(template)
+        if name in _DEVICE_CONDITIONAL_VARIABLES and name not in variables
+    )
