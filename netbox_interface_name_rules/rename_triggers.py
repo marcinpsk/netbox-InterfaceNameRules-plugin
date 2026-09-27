@@ -14,6 +14,8 @@ import weakref
 
 from django.db import transaction
 
+from .rename_outcomes import renamed_count
+
 logger = logging.getLogger("netbox_interface_name_rules")
 
 
@@ -79,9 +81,9 @@ class ModuleReapply:
         if force_reapply is None:
             return
         try:
-            from .engine import apply_interface_name_rules
+            from .engine import module_rule_outcomes
 
-            renamed = apply_interface_name_rules(module, module_bay, force_reapply=force_reapply)
+            renamed = renamed_count(module_rule_outcomes(module, module_bay, force_reapply=force_reapply))
         except Exception:
             logger.exception("Failed to apply interface name rules for %s in %s", module.module_type, module_bay.name)
             return
@@ -121,15 +123,15 @@ class DeviceReapply:
             return
         total = 0
         try:
-            from .engine import reapply_module_rules
+            from .engine import device_module_rule_outcomes
 
-            total += reapply_module_rules(device)
+            total += renamed_count(device_module_rule_outcomes(device))
         except Exception:
             logger.exception("Failed to re-apply module rules for device %s after VC change", self.pk)
         try:
-            from .engine import apply_device_interface_rules
+            from .engine import device_interface_rule_outcomes
 
-            total += apply_device_interface_rules(device) or 0
+            total += renamed_count(device_interface_rule_outcomes(device))
         except Exception:
             logger.exception("Failed to re-apply device interface rules for device %s after VC change", self.pk)
         if total:

@@ -48,11 +48,11 @@ def _counting(entry_point):
 
 
 def _module_reapplies():
-    return _counting("apply_interface_name_rules")
+    return _counting("module_rule_outcomes")
 
 
 def _device_reapplies():
-    return _counting("reapply_module_rules")
+    return _counting("device_module_rule_outcomes")
 
 
 class _RenameTriggerFixture:

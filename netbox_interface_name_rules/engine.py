@@ -15,6 +15,7 @@ from . import family as family_ops
 from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
+from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,33 @@ def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module)
     ]
 
 
+_MEMBER_OUTCOME_KINDS = {
+    family_ops.FamilyStatus.CHANGED: OutcomeKind.RENAMED,
+    family_ops.FamilyStatus.BLOCKED: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.STALE: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.UNSUPPORTED: OutcomeKind.BLOCKED,
+    family_ops.FamilyStatus.FAILED: OutcomeKind.FAILED,
+}
+
+
+def _rename_outcome(member) -> RenameOutcome:
+    """Return the outcome fact of one executed family member."""
+    kind = _MEMBER_OUTCOME_KINDS[member.status]
+    if kind == OutcomeKind.BLOCKED and member.reason == family_ops.UNCLAIMED_BASE_REASON:
+        kind = OutcomeKind.UNCLAIMED
+    return RenameOutcome(kind, member.current_name, member.reason, member.target_name)
+
+
+def _rename_outcomes(family_outcomes) -> tuple[RenameOutcome, ...]:
+    """Return the outcome facts of executed families; a member that kept its correct name has none."""
+    return tuple(
+        _rename_outcome(member)
+        for family in family_outcomes
+        for member in family.members
+        if member.status != family_ops.FamilyStatus.UNCHANGED
+    )
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -201,12 +229,17 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
         Number of interfaces renamed/created, or 0 if no rule matched.
 
     """
+    return renamed_count(module_rule_outcomes(module, module_bay, force_reapply))
+
+
+def module_rule_outcomes(module, module_bay, force_reapply=False) -> tuple[RenameOutcome, ...]:
+    """Apply the module's rule as ``apply_interface_name_rules`` does, and return its outcome facts."""
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
-        return 0
+        return ()
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
         return _apply_rule_to_module(rule, module, module_bay, force_reapply)
@@ -232,10 +265,14 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
     leftover = planned.leftover
 
-    outcomes = family_ops.execute_module_families([*installed, *leftover])
-    renamed = sum(outcome.changed_count for outcome in outcomes)
+    family_outcomes = family_ops.execute_module_families([*installed, *leftover])
+    outcomes = _rename_outcomes(family_outcomes)
+    renamed = renamed_count(outcomes)
     blocked = [
-        member for outcome in outcomes for member in outcome.members if member.status == family_ops.FamilyStatus.BLOCKED
+        member
+        for outcome in family_outcomes
+        for member in outcome.members
+        if member.status == family_ops.FamilyStatus.BLOCKED
     ]
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
@@ -248,7 +285,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
         # keeps its raw name, says nothing about the rule being obsolete.
         _flag_rule_potentially_deprecated(rule)
 
-    return renamed
+    return outcomes
 
 
 def predict_rule_output(module, module_bay, raw_names):
@@ -292,6 +329,11 @@ def reapply_module_rules(device):
 
     Returns the number of interfaces renamed across the device's modules.
     """
+    return renamed_count(device_module_rule_outcomes(device))
+
+
+def device_module_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
+    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and return the outcome facts."""
     from dcim.models import Module
 
     modules = list(
@@ -302,11 +344,12 @@ def reapply_module_rules(device):
             *family_template_names.BAY_CHAIN_RELATIONS,
         )
     )
-    total = 0
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
-        for module in modules:
-            total += apply_interface_name_rules(module, module.module_bay, force_reapply=True) or 0
-    return total
+        return tuple(
+            outcome
+            for module in modules
+            for outcome in module_rule_outcomes(module, module.module_bay, force_reapply=True)
+        )
 
 
 def _device_interface_rules(device):
@@ -350,8 +393,8 @@ def _matches_device_interface(rule, interface):
 
 
 def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
-    """Apply one rule to each eligible device-interface family."""
-    total = 0
+    """Apply one rule to each eligible device-interface family and return the outcome facts."""
+    outcomes = []
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
@@ -359,18 +402,19 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         try:
             outcome = family_ops.execute_installed_plan(plan)
-        except ValidationError:
+        except ValidationError as error:
             logger.exception(
                 "Failed to apply rule %s to device interface %r on device %s; skipping.",
                 rule.pk,
                 interface.name,
                 device.pk,
             )
+            outcomes.append(RenameOutcome(OutcomeKind.FAILED, interface.name, " ".join(error.messages)))
             continue
-        total += outcome.changed_count
+        outcomes.extend(_rename_outcomes((outcome,)))
         if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
             claimed_pks.update(plan.member_pks)
-    return total
+    return outcomes
 
 
 def apply_device_interface_rules(device):
@@ -388,30 +432,35 @@ def apply_device_interface_rules(device):
 
     Returns the number of interfaces renamed.
     """
+    return renamed_count(device_interface_rule_outcomes(device))
+
+
+def device_interface_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
+    """Apply the device-interface rules as ``apply_device_interface_rules`` does, and return the outcome facts."""
     from dcim.models import Interface
 
     if not getattr(device, "virtual_chassis_id", None):
-        return 0  # Only rename for VC members (vc_position must be set)
+        return ()  # Only rename for VC members (vc_position must be set)
 
     if device.vc_position is None:
-        return 0  # vc_position unset (e.g. VC master before position assigned)
+        return ()  # vc_position unset (e.g. VC master before position assigned)
 
     vc_position = str(device.vc_position)
     rules = _device_interface_rules(device)
     if not rules:
-        return 0
+        return ()
 
     interfaces = list(Interface.objects.filter(device=device, module=None).order_by("pk"))
     if not interfaces:
-        return 0
+        return ()
 
     families = family_ops.device_interface_families(interfaces)
     claimed_pks: set[int] = set()
-    total = 0
-    for rule in rules:
-        total += _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
-
-    return total
+    return tuple(
+        outcome
+        for rule in rules
+        for outcome in _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
+    )
 
 
 def _raw_name_matchers(module):
