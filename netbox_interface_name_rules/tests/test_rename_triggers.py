@@ -383,6 +383,20 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
         self.assertEqual(reapplies.call_count, 0)
         self.assertEqual(self._names(module), ["operator-name"])
 
+    def test_leaving_and_rejoining_the_virtual_chassis_is_compared_with_the_earliest_state(self):
+        module = self._install()
+        rename_out_of_band(Interface.objects.get(module=module), "operator-name")
+
+        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self.device.virtual_chassis = None
+            self.device.vc_position = None
+            self.device.save()
+            self.device.virtual_chassis = self.virtual_chassis
+            self._move_to_position(1)
+
+        self.assertEqual(reapplies.call_count, 0)
+        self.assertEqual(self._names(module), ["operator-name"])
+
     def test_a_trigger_in_a_rolled_back_savepoint_does_not_suppress_a_later_trigger(self):
         module = self._install()
 

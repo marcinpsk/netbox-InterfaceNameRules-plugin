@@ -159,13 +159,13 @@ def _device_reapply(device, created, previous):
     """Return the reapply a device save asks for, or None when the save is not a rename trigger."""
     if created or previous is None:
         return None
-    reapply = DeviceReapply(device.pk, previous)
     current = _state_of(DeviceState, device)
-    if reapply.is_due(current):
-        return reapply
-    if current != previous:
+    if current == previous:
+        return None
+    if current.virtual_chassis_id is None:
+        # Still scheduled: it holds the earliest state if the device rejoins in this transaction.
         logger.debug("Device %s left its virtual chassis; no reapply without a vc_position", device.pk)
-    return None
+    return DeviceReapply(device.pk, previous)
 
 
 _TRIGGERS = {
