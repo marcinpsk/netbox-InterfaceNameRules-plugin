@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.5.5 (2026-09-27)
+
+### Bug Fixes
+
+- **name-template**: Show the digits {slot} gives for a bay on the device
+  ([`8ec4158`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8ec4158fd16227213e66dc9084a872d157e0959c))
+
+### Chores
+
+- **ruff**: Ban imports of the private slot description
+  ([`02f92ff`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/02f92ff8416bd1c3ec7e5509492880d9db8f3d8e))
+
+### Documentation
+
+- **changelog**: File the 1.5.4 notes under their release and document the release flow
+  ([`ea49dcb`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ea49dcb8826870449b57b32f9ba2d815fa94b08d))
+
+- **contributing**: State that every PR merges with a merge commit
+  ([`ba03c87`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ba03c872c2d98adf7832c959f238b6267c633edf))
+
+- **contributing**: State what parse_squash_commits does for a squash release
+  ([`df6f253`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/df6f253bd83b8351e870c94eea982170dfc6535a))
+
+### Refactoring
+
+- **raw-bases**: Read the parent template only when the rule applies it
+  ([`284c120`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/284c1208624c3ba0bb4214f066e385e4b881e051))
+
+
 ## v1.5.4 (2026-09-26)
 
 ### Features
