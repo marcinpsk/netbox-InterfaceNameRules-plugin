@@ -94,7 +94,7 @@ The complete path from a NetBox model save, through the committed callback, to t
 _Avoid_: Signal handler performance
 
 **Rename trigger**:
-A saved change in NetBox after which the names a rule gives may be wrong, so the plugin must reapply its rules. The triggers are: a module is installed, a module's type changes, and a device's virtual chassis or virtual-chassis position changes (the device joins a virtual chassis, leaves it, or gets a different position). Two more triggers are planned but not implemented yet (issues #119 and #120): a module moves to another bay or device, and an occupied module bay's position or name changes.
+A saved change in NetBox after which the names a rule gives may be wrong, so the plugin must reapply its rules. The triggers are: a module is installed, a module's type changes, and a device's virtual chassis or virtual-chassis position changes (the device joins a virtual chassis, leaves it, or gets a different position). Two more triggers are planned but not implemented yet: a module moves to another bay or device (#119), and an occupied module bay's position or name changes (#120).
 _Avoid_: Signal, event
 
 **Reapply**:
