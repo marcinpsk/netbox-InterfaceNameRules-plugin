@@ -176,17 +176,6 @@ class RenameTriggerTest(RenameTriggerTestCase):
 
         self.assertEqual(self._names(module), ["0"])
 
-    def test_leaving_the_virtual_chassis_causes_no_reapply(self):
-        module = self._install()
-
-        with _device_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
-            self.device.virtual_chassis = None
-            self.device.vc_position = None
-            self.device.save()
-
-        self.assertEqual(reapplies.call_count, 0)
-        self.assertEqual(self._names(module), ["et-1/0/0"])
-
     def test_a_save_that_changes_no_compared_value_causes_no_reapply(self):
         module = self._install()
 
@@ -655,6 +644,32 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertEqual(entry.comments.count("injected reapply failure"), 2)
         self.assertEqual(_journal(module), [])
+
+    def test_leaving_the_virtual_chassis_keeps_the_names_and_reports_the_skip(self):
+        module = self._install()
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="eth0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.device.virtual_chassis = None
+            self.device.vc_position = None
+            self.device.save()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertIn("`mgmt0`", entry.comments)
+        self.assertIn("{vc_position} is not available", entry.comments)
+        self.assertNotIn("eth0", entry.comments)
+        self.assertEqual(_journal(module), [])
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+        self.assertEqual(
+            sorted(Interface.objects.filter(device=self.device, module=None).values_list("name", flat=True)),
+            ["eth0", "mgmt0"],
+        )
 
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()

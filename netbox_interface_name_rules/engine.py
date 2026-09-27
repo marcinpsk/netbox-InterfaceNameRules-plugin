@@ -403,6 +403,11 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
+        missing = naming.unavailable_variables(rule.name_template, variables)
+        if missing:
+            outcomes.extend(_unresolved_outcomes(missing, (interface.name, *(child.name for child in children))))
+            claimed_pks.update((interface.pk, *(child.pk for child in children)))
+            continue
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
         outcome = family_ops.execute_installed_plan(plan)
         outcomes.extend(_rename_outcomes((outcome,)))
@@ -426,20 +431,25 @@ def apply_device_interface_rules(device):
 
     Returns the number of interfaces renamed.
     """
+    if not getattr(device, "virtual_chassis_id", None):
+        return 0  # Only rename for VC members (vc_position must be set)
+
+    if device.vc_position is None:
+        return 0  # vc_position unset (e.g. VC master before position assigned)
+
     return renamed_count(device_interface_rule_outcomes(device))
 
 
 def device_interface_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
-    """Apply the device-interface rules as ``apply_device_interface_rules`` does, and return the outcome facts."""
+    """Apply the device-interface rules and return the outcome facts.
+
+    Unlike ``apply_device_interface_rules``, this also runs for a device without a virtual-chassis
+    position: a rule that reads ``{vc_position}`` then renames nothing and reports each interface it
+    matches as unresolved.
+    """
     from dcim.models import Interface
 
-    if not getattr(device, "virtual_chassis_id", None):
-        return ()  # Only rename for VC members (vc_position must be set)
-
-    if device.vc_position is None:
-        return ()  # vc_position unset (e.g. VC master before position assigned)
-
-    vc_position = str(device.vc_position)
+    vc_position = device.vc_position if device.virtual_chassis_id is not None else None
     rules = _device_interface_rules(device)
     if not rules:
         return ()

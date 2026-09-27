@@ -109,8 +109,8 @@ class DeviceReapply:
     started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
     def is_due(self, current):
-        """Return whether *current* differs from the baseline while the device is in a virtual chassis."""
-        return current != self.baseline and current.virtual_chassis_id is not None
+        """Return whether *current* differs from the baseline."""
+        return current != self.baseline
 
     def covers(self, pending):
         """Return whether *pending*, not yet run, already reapplies what this trigger asks for."""
@@ -217,12 +217,8 @@ def _device_reapply(device, created, previous):
     """Return the reapply a device save asks for, or None when the save is not a rename trigger."""
     if created or previous is None:
         return None
-    current = _state_of(DeviceState, device)
-    if current == previous:
+    if _state_of(DeviceState, device) == previous:
         return None
-    if current.virtual_chassis_id is None:
-        # Still scheduled: it holds the earliest state if the device rejoins in this transaction.
-        logger.debug("Device %s left its virtual chassis; no reapply without a vc_position", device.pk)
     return DeviceReapply(device.pk, previous)
 
 
