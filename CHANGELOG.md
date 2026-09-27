@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
+- A rename that runs automatically after a save now writes a journal entry when it
+  leaves an interface unrenamed although a rule matched it, or when it fails. The
+  entry goes on the module, or on the device for a virtual-chassis change. It names
+  each interface and the reason: the name is taken, a template variable is not
+  available, no template claims the interface, or the rule failed. The kind is
+  Danger for a failure and Warning otherwise, and the author is the user who saved
+  the change. Before, these went only to the server log, and some were not logged.
+- A device that leaves its virtual chassis now reapplies its rules. A rule that uses
+  `{vc_position}` cannot give a name there, so its interfaces keep their names and
+  the device's journal entry lists them. A rule that does not use `{vc_position}`
+  renames as it does after a position change.
 - Several rename triggers for one module or device in one transaction now reapply the
   rules once, when the transaction commits. The reapply compares the values from before
   the first trigger with the committed row, so a change that is undone in the same
@@ -21,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- Installing a module on a device outside a virtual chassis no longer tags a rule
+  that uses `{vc_position}` as `potentially-deprecated`. A rule that fails on an
+  interface no longer gets the tag either.
 - A module or device save now fails with the real database error when the plugin cannot
   read the values it compares. Before, a module save took the failure as "no change" and
   skipped the rename, a device save took it as a change, and both logged a warning.

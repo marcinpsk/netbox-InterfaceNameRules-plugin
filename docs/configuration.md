@@ -9,7 +9,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Field | Required | Description |
 |-------|----------|-------------|
 | Module Type | Conditional | The module type that triggers this rule (required when Regex Mode is off and Applies to Device Interfaces is disabled) |
-| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names |
+| Applies to Device Interfaces | No | Rename device-level interfaces when the device joins, leaves or changes position in a Virtual Chassis. Module Type and Parent Module Type must be empty; Module Type Pattern can filter interface names |
 | Module Type Pattern | Conditional | RE2 pattern matched against the complete module type model name, or a device interface's current name when Applies to Device Interfaces is enabled |
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
@@ -84,6 +84,27 @@ This means:
 - For **retroactive applies**: the rule is still useful for modules installed before the rule existed
 
 The tag is informational only — the rule remains active.
+
+### Journal entries after an automatic rename
+
+The plugin renames interfaces again after a save that can make a name wrong: a
+module install, a module type change, and a device that joins, leaves or changes
+position in a virtual chassis. When that rename leaves an interface unrenamed
+although a rule matched it, or fails, the plugin writes one journal entry. The
+entry goes on the module, or on the device for a virtual-chassis change. It lists
+each interface and the reason:
+
+- the name the rule gives is already in use on the device,
+- a template variable is not available, such as `{vc_position}` on a device
+  outside a virtual chassis,
+- no interface template claims the interface, so the rule cannot find its
+  `{base}`,
+- the rule failed, for example on a division by zero in its template.
+
+The kind is **Danger** when the rule failed and **Warning** otherwise. The author
+is the user who saved the change. An interface that already has its correct name,
+or that the rule does not match, is not listed. The server log records the same
+events.
 
 ### Apply Rules and the Applicable Column
 

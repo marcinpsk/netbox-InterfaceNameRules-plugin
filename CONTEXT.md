@@ -105,6 +105,10 @@ _Avoid_: Re-run, refresh
 The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change".
 _Avoid_: Old values, snapshot (NetBox's change-log snapshot is a different thing)
 
+**Rename outcome**:
+What a reapply did to one interface that a matching rule acted on: renamed, blocked with a reason, unresolved variable, unclaimed, or failed. An interface that already has its correct name, or that the rule does not claim, has no outcome. A rename trigger reports every outcome except "renamed" in one journal entry on the module or device.
+_Avoid_: Result, family status (a family status describes one family operation, not what the operator is told)
+
 **Signal-path performance baseline**:
 Test-suite measurements of the automatic naming signal path before an implementation change. The baseline includes query counts, PostgreSQL work profiles, scaling behavior, and repeated machine-time samples collected on the hardware used for the after measurement. Shared-runner elapsed time is not a recurring CI metric.
 _Avoid_: Runtime limit, CI speed
