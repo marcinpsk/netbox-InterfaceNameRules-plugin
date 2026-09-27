@@ -557,8 +557,16 @@ class ReapplyFailureTest(RenameTriggerTestCase):
             self._change_type(module, self.type_b)
 
         (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
-        with connection.execute_wrapper(_reject_reads_of("dcim_moduletype")):
+        with (
+            connection.execute_wrapper(_reject_reads_of("dcim_moduletype")),
+            self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
+        ):
             reapply()
+
+        self.assertEqual(
+            [str(record.exc_info[1]) for record in logs.records], ["injected dcim_moduletype read failure"]
+        )
+        self.assertEqual(self._names(module), ["et-1/0/0"])
 
     def test_a_failed_device_reload_is_logged(self):
         module = self._install()
@@ -581,7 +589,7 @@ def _reject_reads_of(table):
     """Return an execute wrapper that fails every read of *table*."""
 
     def reject(execute, sql, params, many, context):
-        if sql.lstrip().startswith("SELECT") and f'FROM "{table}"' in sql:
+        if sql.lstrip().startswith("SELECT") and (f'FROM "{table}"' in sql or f'JOIN "{table}"' in sql):
             raise DatabaseError(f"injected {table} read failure")
         return execute(sql, params, many, context)
 
