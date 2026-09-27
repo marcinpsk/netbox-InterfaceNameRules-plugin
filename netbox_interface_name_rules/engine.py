@@ -270,12 +270,18 @@ def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
     )
 
 
-def _acted_on_names(plans, interfaces):
+def _acted_on_names(rule, plans, interfaces):
     """Return the name of every interface the admitted *plans* act on, in plan order."""
     names = []
     for plan in plans:
         if isinstance(plan, family_ops.InstalledFamilyPlan):
-            names.extend(member.snapshot.name for member in plan.members)
+            # A blank parent template leaves an installed parent its name, so the rule does not act on it.
+            keeps_parent = plan.parent_pk is not None and not rule.parent_name_template
+            names.extend(
+                member.snapshot.name
+                for member in plan.members
+                if not (keeps_parent and member.role == family_ops.MemberRole.PARENT)
+            )
             continue
         # A creation plan stands for its base's whole flat family; the guard kept one row of it.
         base = _family_base(plan.base)
@@ -308,7 +314,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     plans = [*installed, *leftover]
 
     if missing:
-        return _unresolved_outcomes(missing, _acted_on_names(plans, interfaces))
+        return _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
 
     outcomes = _rename_outcomes(family_ops.execute_module_families(plans))
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)

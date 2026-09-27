@@ -10,6 +10,7 @@ committed callbacks, and reads the interface names back.
 import gc
 import re
 from contextlib import contextmanager
+from unittest import skipUnless
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
@@ -25,6 +26,7 @@ from utilities.testing import APITestCase
 
 from netbox_interface_name_rules import engine, rename_triggers
 from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.engine import supports_channelization
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -34,6 +36,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_type,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
+from netbox_interface_name_rules.tests.test_channelization import PARENT_TYPE, REQUIRES_CHANNELIZATION
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -718,6 +721,26 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`et-1/0:0`", entry.comments)
         self.assertIn("`et-1/0:1`", entry.comments)
         self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_leaving_the_virtual_chassis_does_not_report_a_parent_that_keeps_its_name(self):
+        channelized_type, _ = self._module_type_with_rule(
+            "RenTrig Channelized",
+            ("{module}",),
+            "xe-{vc_position}/0/{bay_position}:{channel}",
+            interface_type=PARENT_TYPE,
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        )
+        module = self._install(channelized_type)
+        self.assertEqual(self._names(module), ["0", "xe-1/0/0:0", "xe-1/0/0:1"])
+
+        self._leave()
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`xe-1/0/0:0`", entry.comments)
+        self.assertIn("`xe-1/0/0:1`", entry.comments)
+        self.assertNotIn("`0`", entry.comments)
 
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()
