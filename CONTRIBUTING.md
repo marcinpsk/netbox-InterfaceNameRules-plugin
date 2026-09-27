@@ -63,6 +63,22 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 - `fix:` — bug fix (triggers patch version bump)
 - `docs:`, `ci:`, `chore:`, `refactor:`, `test:` — no version bump
 
+A PR to `develop` is squash-merged, so its title becomes the commit subject. Write the title as the
+changelog line you want users to read.
+
+## Releases
+
+A push to `main` runs python-semantic-release. It reads the Conventional Commit subjects since the last
+tag, selects the version bump, and writes the release section of `CHANGELOG.md`.
+
+- Do not edit `CHANGELOG.md` by hand, and do not add an `## Unreleased` section. The release tool
+  inserts each new version above the older ones, so a hand-written section stays behind and keeps
+  describing changes that already shipped. A documentation test refuses any section that is not a
+  release section.
+- Merge the release PR from `develop` to `main` with a merge commit, not a squash. A squash gives the
+  release tool one commit, so the changelog gets one line and a `feat:` on `develop` can ship as a patch
+  release.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under Apache-2.0.
