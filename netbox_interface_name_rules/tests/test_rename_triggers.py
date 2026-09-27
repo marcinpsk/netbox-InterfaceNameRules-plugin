@@ -525,14 +525,29 @@ def _reject_journal_writes(execute, sql, params, many, context):
 class RenameJournalTest(RenameTriggerTestCase):
     """A reapply that leaves an interface unrenamed or fails writes one journal entry."""
 
-    def _module_type_with_rule(self, model, templates, name_template):
+    def _module_type_with_rule(self, model, templates, name_template, interface_type=PLAIN_TYPE, **rule_fields):
         module_type = make_module_type(self.type_a.manufacturer, model, model=model)
         for template in templates:
-            InterfaceTemplate.objects.create(module_type=module_type, name=template, type=PLAIN_TYPE)
-        return module_type, InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template)
+            InterfaceTemplate.objects.create(module_type=module_type, name=template, type=interface_type)
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template, **rule_fields)
+        return module_type, rule
 
     def _standalone_device(self):
         return make_device(f"{self.prefix} Solo", self.device.device_type)
+
+    def _leave(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self.device.virtual_chassis = None
+            self.device.vc_position = None
+            self.device.save()
+
+    def _install_renamed_by_the_operator(self):
+        """Install a module whose rule needs no {vc_position}, then rename its interface by hand."""
+        fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=fixed_type)
+        rename_out_of_band(Interface.objects.get(module=module), "operator-name")
+        return module
 
     def test_a_name_collision_writes_one_warning_entry_on_the_module(self):
         module = self._install()
@@ -645,18 +660,19 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertEqual(entry.comments.count("injected reapply failure"), 2)
         self.assertEqual(_journal(module), [])
 
-    def test_leaving_the_virtual_chassis_keeps_the_names_and_reports_the_skip(self):
+    def test_leaving_the_virtual_chassis_renames_nothing_and_reports_the_skip(self):
         module = self._install()
+        by_hand = self._install_renamed_by_the_operator()
         Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="eth0", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
         )
+        InterfaceNameRule.objects.create(
+            name_template="lan-{port}", applies_to_device_interfaces=True, module_type_pattern="eth0"
+        )
 
-        with self.captureOnCommitCallbacks(execute=True):
-            self.device.virtual_chassis = None
-            self.device.vc_position = None
-            self.device.save()
+        self._leave()
 
         (entry,) = _journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
@@ -664,12 +680,25 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`mgmt0`", entry.comments)
         self.assertIn("{vc_position} is not available", entry.comments)
         self.assertNotIn("eth0", entry.comments)
+        self.assertNotIn("operator-name", entry.comments)
         self.assertEqual(_journal(module), [])
-        self.assertEqual(self._names(module), ["et-1/0/0"])
+        self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
         self.assertEqual(
             sorted(Interface.objects.filter(device=self.device, module=None).values_list("name", flat=True)),
             ["eth0", "mgmt0"],
         )
+
+    def test_a_virtual_chassis_member_without_a_position_renames_nothing_and_reports_the_skip(self):
+        module = self._install()
+        by_hand = self._install_renamed_by_the_operator()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(None)
+
+        (entry,) = _journal(self.device)
+        self.assertIn("`et-1/0/0`", entry.comments)
+        self.assertNotIn("operator-name", entry.comments)
+        self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
 
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()

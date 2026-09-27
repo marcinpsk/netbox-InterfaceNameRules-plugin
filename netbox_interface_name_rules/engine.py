@@ -238,8 +238,11 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed_count(module_rule_outcomes(module, module_bay, force_reapply))
 
 
-def module_rule_outcomes(module, module_bay, force_reapply=False) -> tuple[RenameOutcome, ...]:
-    """Apply the module's rule as ``apply_interface_name_rules`` does, and return its outcome facts."""
+def module_rule_outcomes(module, module_bay, force_reapply=False, report_only=False) -> tuple[RenameOutcome, ...]:
+    """Apply the module's rule as ``apply_interface_name_rules`` does, and return its outcome facts.
+
+    With *report_only*, nothing is renamed: only a rule that needs a variable the device lacks gives facts.
+    """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
@@ -248,14 +251,28 @@ def module_rule_outcomes(module, module_bay, force_reapply=False) -> tuple[Renam
         return ()
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        return _apply_rule_to_module(rule, module, module_bay, force_reapply)
+        return _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only)
 
 
-def _apply_rule_to_module(rule, module, module_bay, force_reapply):
-    """Plan and execute every family *rule* intends on *module*; see ``apply_interface_name_rules``."""
+def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
+    """Return the variables either template of the module *rule* reads that *variables* lack."""
+    return tuple(
+        dict.fromkeys(
+            name
+            for template in (rule.name_template, rule.parent_name_template)
+            for name in naming.unavailable_variables(template, variables)
+        )
+    )
+
+
+def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False):
+    """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
+    missing = _unavailable_rule_variables(rule, variables)
+    if report_only and not missing:
+        return ()
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -272,13 +289,6 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply):
     leftover = planned.leftover
     plans = [*installed, *leftover]
 
-    missing = tuple(
-        dict.fromkeys(
-            name
-            for template in (rule.name_template, rule.parent_name_template)
-            for name in naming.unavailable_variables(template, variables)
-        )
-    )
     if missing:
         return _unresolved_outcomes(missing, (member.snapshot.name for plan in plans for member in plan.live_members))
 
@@ -336,8 +346,11 @@ def reapply_module_rules(device):
     return renamed_count(device_module_rule_outcomes(device))
 
 
-def device_module_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
-    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and return the outcome facts."""
+def device_module_rule_outcomes(device, report_only=False) -> tuple[RenameOutcome, ...]:
+    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and return the outcome facts.
+
+    *report_only* is passed to ``module_rule_outcomes``.
+    """
     from dcim.models import Module
 
     modules = list(
@@ -352,7 +365,7 @@ def device_module_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
         return tuple(
             outcome
             for module in modules
-            for outcome in module_rule_outcomes(module, module.module_bay, force_reapply=True)
+            for outcome in module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
         )
 
 
@@ -396,7 +409,7 @@ def _matches_device_interface(rule, interface):
     return compiled.fullmatch(interface.name) is not None
 
 
-def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks):
+def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only):
     """Apply one rule to each eligible device-interface family and return the outcome facts."""
     outcomes = []
     for interface, children in families:
@@ -406,6 +419,9 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         missing = naming.unavailable_variables(rule.name_template, variables)
         if missing:
             outcomes.extend(_unresolved_outcomes(missing, (interface.name, *(child.name for child in children))))
+            claimed_pks.update((interface.pk, *(child.pk for child in children)))
+            continue
+        if report_only:
             claimed_pks.update((interface.pk, *(child.pk for child in children)))
             continue
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
@@ -440,12 +456,12 @@ def apply_device_interface_rules(device):
     return renamed_count(device_interface_rule_outcomes(device))
 
 
-def device_interface_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
+def device_interface_rule_outcomes(device, report_only=False) -> tuple[RenameOutcome, ...]:
     """Apply the device-interface rules and return the outcome facts.
 
     Unlike ``apply_device_interface_rules``, this also runs for a device without a virtual-chassis
     position: a rule that reads ``{vc_position}`` then renames nothing and reports each interface it
-    matches as unresolved.
+    matches as unresolved. With *report_only*, no rule renames anything.
     """
     from dcim.models import Interface
 
@@ -463,7 +479,7 @@ def device_interface_rule_outcomes(device) -> tuple[RenameOutcome, ...]:
     return tuple(
         outcome
         for rule in rules
-        for outcome in _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks)
+        for outcome in _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only)
     )
 
 

@@ -125,20 +125,23 @@ class DeviceReapply:
             device = Device.objects.select_related("virtual_chassis").get(pk=self.pk)
         except Device.DoesNotExist:
             return
-        if not self.is_due(_state_of(DeviceState, device)):
+        current = _state_of(DeviceState, device)
+        if not self.is_due(current):
             return
+        # Off a chassis or without a position, what the interfaces are called is the operator's decision.
+        report_only = current.virtual_chassis_id is None or current.vc_position is None
         outcomes = []
         try:
             from .engine import device_module_rule_outcomes
 
-            outcomes.extend(device_module_rule_outcomes(device))
+            outcomes.extend(device_module_rule_outcomes(device, report_only=report_only))
         except Exception as error:
             logger.exception("Failed to re-apply module rules for device %s after VC change", self.pk)
             outcomes.append(_failure(error))
         try:
             from .engine import device_interface_rule_outcomes
 
-            outcomes.extend(device_interface_rule_outcomes(device))
+            outcomes.extend(device_interface_rule_outcomes(device, report_only=report_only))
         except Exception as error:
             logger.exception("Failed to re-apply device interface rules for device %s after VC change", self.pk)
             outcomes.append(_failure(error))
