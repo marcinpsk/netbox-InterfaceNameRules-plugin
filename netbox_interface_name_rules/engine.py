@@ -400,17 +400,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
         plan = family_ops.plan_device_interface_rename(device, rule, variables, interface, children)
-        try:
-            outcome = family_ops.execute_installed_plan(plan)
-        except ValidationError as error:
-            logger.exception(
-                "Failed to apply rule %s to device interface %r on device %s; skipping.",
-                rule.pk,
-                interface.name,
-                device.pk,
-            )
-            outcomes.append(RenameOutcome(OutcomeKind.FAILED, interface.name, " ".join(error.messages)))
-            continue
+        outcome = family_ops.execute_installed_plan(plan)
         outcomes.extend(_rename_outcomes((outcome,)))
         if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
             claimed_pks.update(plan.member_pks)
