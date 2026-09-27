@@ -434,7 +434,8 @@ def _matches_device_interface(rule, interface):
 def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family):
     """Apply one rule to each eligible device-interface family and record its outcome facts in *by_family*.
 
-    A rule that renames a family, or finds it correct, replaces the skips earlier rules left on it.
+    A rule that renames a family, or finds it correct, replaces the skips earlier rules left on it;
+    a failure stays reported.
     """
     for interface, children in families:
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
@@ -453,7 +454,8 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         outcome = family_ops.execute_installed_plan(plan)
         if outcome.status in {family_ops.FamilyStatus.CHANGED, family_ops.FamilyStatus.UNCHANGED}:
             claimed_pks.update(plan.member_pks)
-            by_family[interface.pk] = list(_rename_outcomes((outcome,)))
+            failures = [earlier for earlier in by_family.get(interface.pk, ()) if earlier.kind == OutcomeKind.FAILED]
+            by_family[interface.pk] = [*failures, *_rename_outcomes((outcome,))]
         else:
             by_family.setdefault(interface.pk, []).extend(_rename_outcomes((outcome,)))
 

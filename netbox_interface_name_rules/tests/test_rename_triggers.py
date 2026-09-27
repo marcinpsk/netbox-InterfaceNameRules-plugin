@@ -779,6 +779,25 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`xe-1/0/0:0`", entry.comments)
         self.assertNotIn("`0`", entry.comments)
 
+    def test_a_failure_stays_reported_when_a_lower_priority_rule_renames_the_interface(self):
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{8 // ({vc_position} - 2)}",
+            applies_to_device_interfaces=True,
+            module_type_pattern="mgmt0",
+        )
+        InterfaceNameRule.objects.create(
+            name_template="oob-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt."
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(2)
+
+        self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`mgmt0`", entry.comments)
+
     def test_an_interface_a_lower_priority_rule_renames_is_not_reported(self):
         Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="mgmt-2", type=PLAIN_TYPE)
