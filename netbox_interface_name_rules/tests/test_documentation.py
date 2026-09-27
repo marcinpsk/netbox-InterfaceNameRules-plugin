@@ -418,6 +418,13 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             adr,
         )
 
+    def test_glossary_separates_an_unclaimed_outcome_from_a_rule_that_does_not_match(self):
+        glossary = (_PROJECT_ROOT / "CONTEXT.md").read_text(encoding="utf-8")
+        entry = glossary.split("**Rename outcome**:", 1)[1].split("\n**", 1)[0]
+
+        self.assertIn("unclaimed (no single interface template claims its name)", entry)
+        self.assertIn("or that the rule does not match, has no outcome", entry)
+
     def test_re2_upgrade_guide_separates_errors_from_warnings(self):
         guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
         section = guide.split("## Run Database Migrations", 1)[1].split("## Restart NetBox", 1)[0]

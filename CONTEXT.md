@@ -106,7 +106,7 @@ The values a rename trigger compares against: what the database held just before
 _Avoid_: Old values, snapshot (NetBox's change-log snapshot is a different thing)
 
 **Rename outcome**:
-What a reapply did to one interface that a matching rule acted on: renamed, blocked with a reason, unresolved variable, unclaimed, or failed. An interface that already has its correct name, or that the rule does not claim, has no outcome. A rename trigger reports every outcome except "renamed" in one journal entry on the module or device.
+What a reapply did to one interface that a matching rule acted on: renamed, blocked with a reason, unresolved variable, unclaimed (no single interface template claims its name), or failed. An interface that already has its correct name, or that the rule does not match, has no outcome. A rename trigger reports every outcome except "renamed" in one journal entry on the module or device.
 _Avoid_: Result, family status (a family status describes one family operation, not what the operator is told)
 
 **Signal-path performance baseline**:
