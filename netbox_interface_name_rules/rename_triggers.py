@@ -88,13 +88,15 @@ class ModuleReapply:
         force_reapply = self.force_reapply(_state_of(ModuleState, module))
         if force_reapply is None:
             return
+        outcomes = []
         try:
             from .engine import module_rule_outcomes
 
-            outcomes = module_rule_outcomes(module, module_bay, force_reapply=force_reapply)
+            # extend() keeps the facts the generator yielded before a later family raised.
+            outcomes.extend(module_rule_outcomes(module, module_bay, force_reapply=force_reapply))
         except Exception as error:
             logger.exception("Failed to apply interface name rules for %s in %s", module.module_type, module_bay.name)
-            outcomes = (_failure(error),)
+            outcomes.append(_failure(error))
         renamed = renamed_count(outcomes)
         if renamed:
             logger.info("Renamed %d interface(s) for %s in %s", renamed, module.module_type, module_bay.name)

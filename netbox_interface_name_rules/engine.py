@@ -244,20 +244,22 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed_count(module_rule_outcomes(module, module_bay, force_reapply))
 
 
-def module_rule_outcomes(module, module_bay, force_reapply=False, report_only=False) -> tuple[RenameOutcome, ...]:
-    """Apply the module's rule as ``apply_interface_name_rules`` does, and return its outcome facts.
+def module_rule_outcomes(module, module_bay, force_reapply=False, report_only=False) -> Iterator[RenameOutcome]:
+    """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
 
-    With *report_only*, nothing is renamed: only a rule that needs a variable the device lacks gives facts.
+    Each family's facts are yielded before the next family runs, so a caller keeps them when a later
+    family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
+    device lacks gives facts.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
     if not rule:
-        return ()
+        return
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        return _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only)
+        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only)
 
 
 def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
@@ -296,7 +298,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     variables = build_variables(module_bay, device=module.device)
     missing = _unavailable_rule_variables(rule, variables)
     if report_only and not missing:
-        return ()
+        return
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -314,16 +316,19 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     plans = [*installed, *leftover]
 
     if missing:
-        return _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
+        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
+        return
 
-    outcomes = _rename_outcomes(family_ops.execute_module_families(plans))
+    any_outcome = False
+    for family in family_ops.execute_module_families(plans):
+        for outcome in _rename_outcomes((family,)):
+            any_outcome = True
+            yield outcome
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if not force_reapply and leftover and not outcomes and not families_seen:
+    if not force_reapply and leftover and not any_outcome and not families_seen:
         # Nothing renamed, skipped or built as a family: NetBox may already give these names.
         _flag_rule_potentially_deprecated(rule)
-
-    return outcomes
 
 
 def predict_rule_output(module, module_bay, raw_names):

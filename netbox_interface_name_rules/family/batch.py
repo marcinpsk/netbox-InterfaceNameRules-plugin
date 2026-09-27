@@ -175,15 +175,16 @@ def _selected(plans, selected_pks):
 
 
 def execute_module_families(plans):
-    """Execute each planned family in order."""
-    return [execute_family_plan(plan) for plan in plans]
+    """Execute each planned family in order, and yield its outcome before the next family runs."""
+    for plan in plans:
+        yield execute_family_plan(plan)
 
 
 def _apply_module(rule, module, interfaces, selected_pks):
     """Plan and execute every selected family on one module."""
     variables = build_variables(module.module_bay, device=module.device)
     plans = _selected(plan_module_families(module, rule, variables, interfaces).plans, selected_pks)
-    return execute_module_families(plans)
+    return list(execute_module_families(plans))
 
 
 def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> BatchOutcome:
