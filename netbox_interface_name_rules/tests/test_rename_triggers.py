@@ -758,6 +758,24 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
         self.assertEqual(_journal(self.device), [])
 
+    def test_a_device_reapply_that_fails_on_one_module_keeps_the_earlier_outcomes(self):
+        blocked = self._install()
+        with self.captureOnCommitCallbacks(execute=True):
+            Module.objects.create(device=self.device, module_bay=self._bay("Bay 1"), module_type=self.type_a)
+        Interface.objects.create(device=self.device, name="et-2/0/0", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`et-1/0/0` to `et-2/0/0`", entry.comments)
+        self.assertIn("injected reapply failure", entry.comments)
+        self.assertEqual(self._names(blocked), ["et-1/0/0"])
+
     def test_a_trigger_that_renames_or_keeps_every_name_writes_no_entry(self):
         renamed = self._install()
         fixed_type, _ = self._module_type_with_rule("RenTrig Fixed", ("{module}",), "ge-{bay_position}")

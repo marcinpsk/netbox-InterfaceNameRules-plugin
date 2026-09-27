@@ -134,6 +134,7 @@ class DeviceReapply:
         try:
             from .engine import device_module_rule_outcomes
 
+            # extend() keeps the facts the generator yielded before a later module raised.
             outcomes.extend(device_module_rule_outcomes(device, report_only=report_only))
         except Exception as error:
             logger.exception("Failed to re-apply module rules for device %s after VC change", self.pk)

@@ -8,6 +8,7 @@ after Django is fully initialised.
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
 
 from django.core.exceptions import ValidationError
 
@@ -370,10 +371,11 @@ def reapply_module_rules(device):
     return renamed_count(device_module_rule_outcomes(device))
 
 
-def device_module_rule_outcomes(device, report_only=False) -> tuple[RenameOutcome, ...]:
-    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and return the outcome facts.
+def device_module_rule_outcomes(device, report_only=False) -> Iterator[RenameOutcome]:
+    """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and yield the outcome facts.
 
-    *report_only* is passed to ``module_rule_outcomes``.
+    Each module's facts are yielded before the next module runs, so a caller keeps them when a later
+    module fails. *report_only* is passed to ``module_rule_outcomes``.
     """
     from dcim.models import Module
 
@@ -386,11 +388,8 @@ def device_module_rule_outcomes(device, report_only=False) -> tuple[RenameOutcom
         )
     )
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
-        return tuple(
-            outcome
-            for module in modules
-            for outcome in module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
-        )
+        for module in modules:
+            yield from module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
 
 
 def _device_interface_rules(device):
