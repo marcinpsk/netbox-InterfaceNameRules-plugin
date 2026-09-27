@@ -617,6 +617,20 @@ class SuiteRunnerDocumentationTest(unittest.TestCase):
         )
 
 
+class ChangelogDocumentationTest(unittest.TestCase):
+    """semantic-release writes every CHANGELOG section; a hand-written section stays behind at release."""
+
+    def test_every_section_is_a_release_section(self):
+        text = (_PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        headings = re.findall(r"^## .*$", text, re.MULTILINE)
+
+        self.assertTrue(headings)
+        self.assertEqual(
+            [heading for heading in headings if not re.fullmatch(r"## v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading)],
+            [],
+        )
+
+
 _PATTERN_KEY = re.compile(r"^[^\S\r\n]*-?[^\S\r\n]*module_type_pattern:[^\S\r\n]*(.+)$", re.MULTILINE)
 
 

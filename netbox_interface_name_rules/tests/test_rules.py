@@ -25,6 +25,7 @@ from netbox_interface_name_rules.engine import (
     find_matching_rule,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES
 from netbox_interface_name_rules.tests.helpers import make_device
 
 
@@ -175,6 +176,16 @@ class BuildVariablesTest(TestCase):
         variables = build_variables(bay)
         self.assertEqual(variables["bay_position"], "swp3")
         self.assertEqual(variables["bay_position_num"], "3")
+
+    def test_a_top_level_bay_gives_the_documented_slot_example(self):
+        """A bay on the device resolves {slot} to its trailing digits, as the catalogue example shows."""
+        manufacturer = Manufacturer.objects.create(name="SlotMfg", slug="slotmfg")
+        dt = DeviceType.objects.create(manufacturer=manufacturer, model="SLOT-DEV", slug="slot-dev")
+        ModuleBayTemplate.objects.create(device_type=dt, name="Slot 3", position="Slot 3")
+        device = make_device("Slot", dt, name="slot-test-01")
+        bay = ModuleBay.objects.get(device=device, name="Slot 3")
+        example = next(variable.example for variable in TEMPLATE_VARIABLES if variable.name == "slot")
+        self.assertEqual(build_variables(bay)["slot"], example)
 
 
 class ApplyInterfaceNameRulesTest(TestCase):

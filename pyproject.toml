@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-interface-name-rules"
-version = "1.5.3"
+version = "1.5.4"
 description = "NetBox plugin for automatic interface renaming when modules are installed"
 readme = "README.md"
 requires-python = ">=3.12.0"
@@ -150,6 +150,7 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._DEVICE".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._MEMBER".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._PARENT".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._SLOT_DESCRIPTION".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._UNARY_OPERATORS".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._VC_POSITION_DESCRIPTION".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._EvaluatedField".msg = "Use the name_template public interface."

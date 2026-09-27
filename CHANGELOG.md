@@ -6,25 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
-## Unreleased
+## v1.5.4 (2026-09-26)
 
 ### Features
 
-- A rename that runs automatically after a save now writes a journal entry when it
-  leaves an interface unrenamed although a rule matched it, or when it fails. The
-  entry goes on the module, or on the device for a virtual-chassis change. It names
-  each interface and the reason: the name is taken, a template variable is not
-  available, no template claims the interface, or the rule failed. The kind is
-  Danger for a failure and Warning otherwise, and the author is the user who saved
-  the change. Before, these went only to the server log, and some were not logged.
-- A device that leaves its virtual chassis, or stays in one without a position, now
-  gets a report-only check. Nothing is renamed. The device's journal entry lists the
-  interfaces whose rules use `{vc_position}`, because those rules cannot give a name
-  there.
-- Several rename triggers for one module or device in one transaction now reapply the
-  rules once, when the transaction commits. The reapply compares the values from before
-  the first trigger with the committed row, so a change that is undone in the same
-  transaction renames nothing.
 - Test and preview device-level rules in the Build Rule tester. Derive the port from
   the interface name, accept a virtual-chassis position, and retain the rule kind
   and interface-name filter when opening the add form. Module-rule previews now
@@ -32,33 +17,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
-- Installing a module on a device outside a virtual chassis no longer tags a rule
-  that uses `{vc_position}` as `potentially-deprecated`. A rule that fails on an
-  interface no longer gets the tag either.
-- A module or device save now fails with the real database error when the plugin cannot
-  read the values it compares. Before, a module save took the failure as "no change" and
-  skipped the rename, a device save took it as a change, and both logged a warning.
+- Add name-template language and device-interface rule support
+  ([#114](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/114),
+  [`eb2dda3`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/eb2dda313ace1c2080a4ee40adb4cfeaa0fc3fa9))
+
 - The REST API now clears the rule-mode fields the same way the web form does. A
   device-level rule sent with `module_type_is_regex: true` no longer fails with a
   server error; it saves with regex mode off. A module-type rule sent with a
   `module_type_pattern` saves with the pattern cleared, instead of a 400 response.
+
 - A rule save with `update_fields` now validates the row it stores. Fields outside
   `update_fields` come from the database, not from unsaved values on the instance.
   A flat rule can no longer store a `{channel}` template, and an unsaved invalid
   mode no longer blocks a valid template save.
+
 - A name template variable that starts with a non-ASCII letter, such as `{é}`, is now
   read as a variable. Before, a group like `{é é}` passed the rule check and failed
   only when the rule renamed an interface, and `{é!r}` got the generic unsafe
   expression error instead of the format-field error.
+
 - A device-interface rule can no longer store a Parent Module Type. Migration
   `0018` clears the field on every existing device-interface rule and logs each
   rule ID and cleared module type. The engine never matched a device rule on
   this field, so only the rule ranking changes. A rollback does not restore the
   cleared values. Record them before the upgrade if you need them.
+
 - A save now refuses a brace group that can never evaluate, such as `{slot_num // 2}`,
   `{ channel }`, `{bay_position.x}`, or `{bay_position!r}`. Before, the rule saved and
   failed on every rename. The error quotes the group and shows the variable-token form,
   `{{slot_num} // 2}`. The name-template audit migration reports these groups too.
+
+### Chores
+
+- Fix import order ([#95](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/95),
+  [`d6dde5a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d6dde5ac295bbad1813a2a13e1d72697c48dcbaf))
+
+- **deps**: Bump codecov/codecov-action from 7.0.0 to 7.1.1 in the github-actions group
+  ([#110](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/110),
+  [`4a7b2fb`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4a7b2fb9eef959db521eca7d8f6378d4ace2f40c))
+
+- **deps**: Bump the uv group across 1 directory with 10 updates
+  ([#94](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/94),
+  [`2743e33`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2743e33510189ad060c378bc13400671a1930720))
+
+- **deps-dev**: Bump django from 6.0.7 to 6.1.1
+  ([#105](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/105),
+  [`b67445f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b67445f1bbfd572b52fe5272ce6748ca1cfece80))
+
+- **deps-dev**: Bump pre-commit from 4.5.1 to 4.6.2
+  ([#106](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/106),
+  [`9cd75d8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9cd75d8e8f017441ebde0f465f308c4053d66032))
+
+- **deps-dev**: Bump pytest from 9.0.3 to 9.1.1
+  ([#107](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/107),
+  [`b829039`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b8290393b63f1236e199f67f2c95862843978aed))
+
+- **deps-dev**: Bump pytest-cov from 7.0.0 to 7.1.0
+  ([#108](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/108),
+  [`bf3fae8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/bf3fae88ec65640208b36bad0cc78773d797aef0))
+
+- **deps-dev**: Bump pytest-django from 4.12.0 to 4.14.0
+  ([#109](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/pull/109),
+  [`39f9ec9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/39f9ec99abce2d2ef4593a524237aa3696cd2459))
+
 
 ## v1.5.3 (2026-09-21)
 

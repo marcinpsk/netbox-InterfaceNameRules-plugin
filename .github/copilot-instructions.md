@@ -109,7 +109,7 @@ Module rules use these variables in the Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. | `3` |
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
@@ -126,7 +126,7 @@ Module rules use these variables in the Parent Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{slot}` | Top-level module bay position. | `Slot 3` |
+| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. | `3` |
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |

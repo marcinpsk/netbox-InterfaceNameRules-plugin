@@ -510,3 +510,34 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
             list(candidates[0].current_names), [f"brk-xe-1/0/3-InrBaseSentinelEnd:{channel}" for channel in range(2)]
         )
         self.assertEqual(self._names(module), [f"brk-xe-1/0/3-InrBaseSentinelEnd:{channel}" for channel in range(2)])
+
+
+class RawBaseUnusedParentTemplateTest(VcDriftTestCase):
+    """A parent template that the breakout mode ignores does not make a rule read ``{base}``."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("RawBaseUnused", ["3"])
+        cls.module_type = _plain_module_type(manufacturer, "RawBaseUnused-SFP", PLAIN_TYPE)
+
+    def _rule(self, parent_name_template):
+        """Return an unsaved flat rule, as the Build Rule tester previews one."""
+        return InterfaceNameRule(
+            module_type=self.module_type,
+            name_template="et-0/0/{bay_position}",
+            parent_name_template=parent_name_template,
+            breakout_mode=FLAT,
+        )
+
+    def test_an_ignored_parent_template_previews_what_no_parent_template_previews(self):
+        module, _ = self._install_on(self.device, self.module_type, "3")
+        rename_out_of_band(Interface.objects.get(module=module), "renamed")
+        expected = [("renamed", ["et-0/0/3"])]
+        self.assertEqual(
+            [(entry["current_name"], entry["new_names"]) for entry in find_interfaces_for_rule(self._rule(""))[0]],
+            expected,
+        )
+
+        results, _total = find_interfaces_for_rule(self._rule("{base}-p"))
+
+        self.assertEqual([(entry["current_name"], entry["new_names"]) for entry in results], expected)
