@@ -9,8 +9,8 @@ callback, which runs only when its savepoint commits. Each trigger also appends 
 that no savepoint rollback drops, and only the newest runner runs the plan, after every trigger. So
 the plan acts on the triggers that committed, and it moves no committed callback. The plan reapplies
 each module and each device at most once, from the earliest previous state of the transaction, so
-it acts on the net change. A reapply that leaves an interface unrenamed, or fails, writes one journal entry. A
-reapply that cannot read the committed rows is logged only.
+it acts on the net change. A reapply that leaves an interface unrenamed, or fails, writes one journal
+entry. A reapply that cannot read the committed rows is logged only.
 
 A save that moves a module, or that changes what the names in an occupied bay are built from, also
 reads before the save what named the interfaces of that module and of every module nested in it.
@@ -209,12 +209,56 @@ def _moved_or_bay_changed(root, entry, module):
     return moved or _bay_values(module.module_bay) != entry.bay_values
 
 
-def _outermost(pks, roots):
-    """Return the first of *pks* whose naming no other of *pks* read."""
+def _journal_owner(pk, covering, roots):
+    """Return the module whose journal entry reports module *pk*.
+
+    That is the first of *covering*, the changed modules whose naming read *pk*, that no other of them
+    read, or *pk* itself when *covering* is empty.
+    """
     return next(
-        (pk for pk in pks if not any(other != pk and pk in roots[other].members for other in pks)),
-        pks[0],
+        (
+            owner
+            for owner in covering
+            if not any(other != owner and owner in roots[other].members for other in covering)
+        ),
+        covering[0] if covering else pk,
     )
+
+
+def _reapply_options(module, root, entry, naming_changed):
+    """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
+
+    *naming_changed* is whether the module, or a module whose naming read it, moved or had its bay
+    values changed.
+    """
+    current = _state_of(ModuleState, module)
+    if root is not None and current.module_type_id != root.baseline.module_type_id:
+        # The module's earlier names came from another module type, so it reapplies as a type change.
+        return {"force_reapply": True}
+    if entry is not None and (naming_changed or entry.raw_only):
+        # An installed module's raw names were resolved when it was installed, so its naming recognises them.
+        return {"naming": entry}
+    if root is not None and (root.installed or current != root.baseline):
+        return {"force_reapply": current != root.baseline}
+    return None
+
+
+def _reapply_module(module, options, outcomes):
+    """Reapply *module* with *options*, and add its outcome facts to *outcomes*. A failure is one more fact."""
+    from .engine import module_rule_outcomes
+
+    renamed_before = renamed_count(outcomes)
+    try:
+        # extend() keeps the facts the generator yielded before a later family raised.
+        outcomes.extend(module_rule_outcomes(module, module.module_bay, **options))
+    except Exception as error:
+        logger.exception(
+            "Failed to apply interface name rules for %s in %s", module.module_type, module.module_bay.name
+        )
+        outcomes.append(_failure(error))
+    renamed = renamed_count(outcomes) - renamed_before
+    if renamed:
+        logger.info("Renamed %d interface(s) for %s in %s", renamed, module.module_type, module.module_bay.name)
 
 
 def _reapply_modules(triggers):
@@ -225,7 +269,7 @@ def _reapply_modules(triggers):
     installed in the transaction and a naming was read for it. It reapplies as an install otherwise.
     Its outcomes go to the outermost of those modules that read its naming, or to the module itself.
     """
-    from .engine import committed_modules, module_rule_outcomes, pinned_reapply
+    from .engine import committed_modules, pinned_reapply
 
     roots = _module_roots(triggers)
     entries = _earliest_naming(triggers, roots)
@@ -242,34 +286,14 @@ def _reapply_modules(triggers):
     outcomes_by_owner = {}
     with pinned_reapply(modules.values()):
         for pk in walked:
-            module, root, entry = modules.get(pk), roots.get(pk), entries.get(pk)
+            module = modules.get(pk)
             if module is None:
                 continue
             covering = [other for other in changed if other != pk and pk in roots[other].members]
-            current = _state_of(ModuleState, module)
-            if root is not None and current.module_type_id != root.baseline.module_type_id:
-                # The module's earlier names came from another module type, so it reapplies as a type change.
-                options = {"force_reapply": True}
-            elif entry is not None and (pk in changed or covering or entry.raw_only):
-                # An installed module's raw names were resolved when it was installed, so its naming recognises them.
-                options = {"naming": entry}
-            elif root is not None and (root.installed or current != root.baseline):
-                options = {"force_reapply": current != root.baseline}
-            else:
-                continue
-            outcomes = outcomes_by_owner.setdefault(_outermost(covering, roots) if covering else pk, [])
-            renamed_before = renamed_count(outcomes)
-            try:
-                # extend() keeps the facts the generator yielded before a later family raised.
-                outcomes.extend(module_rule_outcomes(module, module.module_bay, **options))
-            except Exception as error:
-                logger.exception(
-                    "Failed to apply interface name rules for %s in %s", module.module_type, module.module_bay.name
-                )
-                outcomes.append(_failure(error))
-            renamed = renamed_count(outcomes) - renamed_before
-            if renamed:
-                logger.info("Renamed %d interface(s) for %s in %s", renamed, module.module_type, module.module_bay.name)
+            options = _reapply_options(module, roots.get(pk), entries.get(pk), pk in changed or bool(covering))
+            if options is not None:
+                owner = _journal_owner(pk, covering, roots)
+                _reapply_module(module, options, outcomes_by_owner.setdefault(owner, []))
     for owner, outcomes in outcomes_by_owner.items():
         _report(modules[owner], outcomes, roots[owner].author)
 
