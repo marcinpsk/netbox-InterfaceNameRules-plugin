@@ -88,8 +88,10 @@ The parent and every channel of a channelized family receive the parent's base v
 NetBox does not record which template created an interface. For a rule that uses `{base}`, the
 plugin finds the template by the interface's name: the raw name itself, a name NetBox gave the
 interface at an earlier virtual-chassis position, or the name the rule gives the raw name at any
-virtual-chassis position. A `{vc_position}` inside an arithmetic expression matches only the current
-position, and so does a `{base}` inside one when its template name uses the `{vc_position}` token. An interface that no template claims, or that more than one template claims, keeps its name. The plugin logs the reason. A raw name wins over another template's earlier
+virtual-chassis position. For a flat breakout rule, the name the rule gives is the whole flat
+family. The plugin checks all these names in one claim, and an install, a virtual-chassis change,
+Apply Rules and a move all use the same claim. A `{vc_position}` inside an arithmetic expression matches only the current
+position, and so does a `{base}` inside one when its template name uses the `{vc_position}` token. An interface that no template claims, or that more than one template claims, keeps its name. So does an interface whose template also claims another interface or flat family. The plugin logs the reason. A raw name wins over another template's earlier
 virtual-chassis form, but not over the name the rule gives another template, so a module type
 whose templates overlap under the rule keeps every overlapping name, on install too. A module type without interface templates has
 no raw names, so there `{base}` is the interface's current name.
@@ -187,7 +189,10 @@ contributes a matcher covering every value the token can take (any member positi
 and the explicit `X` of a `{vc_position:X}`), so one matcher recognises the name whatever position
 the interface was named at. Matching stays conservative — if a matcher could claim two interfaces,
 or two templates could claim one interface, nothing is renamed and a warning names the module, the
-templates and the candidates. Module types that do not use the token keep the exact matching they
+templates and the candidates. The matchers are part of the one claim that the `{base}` section
+describes. For example, a template `{vc_position}/{module}` whose flat family `1/0:0`, `1/0:1` was
+named at position 1 claims that family and also an interface `3/0` at position 3, so the plugin
+renames neither and reports both. Module types that do not use the token keep the exact matching they
 always had, and so does every release older than NetBox 4.6.
 
 Note that the drift is only reachable on a **re-apply**: at install time the interfaces are named

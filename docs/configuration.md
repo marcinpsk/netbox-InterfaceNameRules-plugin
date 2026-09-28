@@ -196,9 +196,12 @@ and the reason:
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
   outside a virtual chassis,
-- no single interface template claims the interface, so the rule cannot find its
-  `{base}`, or, after a move or a bay edit, the plugin cannot tell which name the
-  interface had,
+- no single interface template claims the interface: two templates claim it,
+  its template also claims another interface or flat family, or no template
+  claims it and the rule uses `{base}` or the module moved or its bay changed,
+- a flat breakout family that the rule named at another virtual-chassis
+  position lost one of its interfaces, so the plugin keeps the names of the
+  rest,
 - no rule matches a moved module, or the module in an edited bay, at its new
   position,
 - the interface is not on the device of its module, which NetBox before 4.7
