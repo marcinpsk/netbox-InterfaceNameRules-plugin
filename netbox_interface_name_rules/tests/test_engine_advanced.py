@@ -32,7 +32,7 @@ from netbox_interface_name_rules.engine import (
     find_interfaces_for_rule,
     has_applicable_interfaces,
 )
-from netbox_interface_name_rules.family import FamilyStatus
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, FamilyStatus
 from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import _extract_trailing_digits
@@ -427,8 +427,8 @@ class ChannelFamilyBaseTest(EngineAdvancedFixtures):
             channel_start=0,
         )
 
-    def test_a_half_built_family_is_completed_through_its_own_first_member(self):
-        """The interface already named channel 0 owns the family; the raw port is left where it is."""
+    def test_a_half_built_family_beside_its_raw_port_is_refused(self):
+        """The module type claims the raw port and the family's first member: two candidates, so neither builds."""
         rule = self._breakout_rule()
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
@@ -436,10 +436,13 @@ class ChannelFamilyBaseTest(EngineAdvancedFixtures):
 
         outcome = apply_rule_to_existing(rule)
 
-        self.assertEqual(outcome.changed_count, 3)
+        self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(
-            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["0", "xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"],
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0", "xe-0/0/0:0"]
+        )
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [("0", UNCLAIMED_BASE_REASON), ("xe-0/0/0:0", UNCLAIMED_BASE_REASON)],
         )
 
     def test_with_no_member_named_yet_the_first_port_builds_the_family(self):
@@ -812,8 +815,8 @@ class BreakoutTemplateValueErrorTest(TestCase):
         )
         InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
-        Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
+        # Without templates, the module type claims the interface named as its bay position.
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         outcome = apply_rule_to_existing(rule)
 
@@ -822,10 +825,7 @@ class BreakoutTemplateValueErrorTest(TestCase):
             {member.status for member in outcome.skipped_members},
             {FamilyStatus.FAILED},
         )
-        self.assertEqual(
-            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["Eth0", "Eth1"],
-        )
+        self.assertEqual(sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0"])
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +1028,8 @@ class PreviewTemplateErrorTest(TestCase):
         )
         InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        # Without templates, the module type claims the interface named as its bay position.
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         results, total = find_interfaces_for_rule(rule)
 
@@ -1100,7 +1101,8 @@ class PreviewLimitTest(TestCase):
         for position in ("0", "1"):
             bay = ModuleBay.objects.get(device=self.device, name=f"CLBay {position}")
             module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
-            Interface.objects.create(device=self.device, module=module, name=f"Eth{position}", type="100gbase-x-qsfp28")
+            # Without templates, the module type claims the interface named as its bay position.
+            Interface.objects.create(device=self.device, module=module, name=position, type="100gbase-x-qsfp28")
 
         results, total = find_interfaces_for_rule(rule, limit=1)
 

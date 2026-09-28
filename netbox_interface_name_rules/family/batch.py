@@ -133,28 +133,27 @@ def _creation_plans(module, rule, variables, plain, bases):
     """Return one creation plan per family, so two bases of one family never build it twice."""
     candidates = []
     for base in plain:
-        base_name = bases.base_for(base.name)
+        base_name = bases.builds_on(base.name)
         target_names = (
             (base.name,) if base_name is None else intended_family_names(rule, variables, base.name, base_name)
         )
         candidates.append((base, base_name, target_names))
     kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
-    return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
+    # A name that a planned family takes belongs to that family, so it is not reported on its own.
+    taken = {name for index in kept if candidates[index][1] is not None for name in candidates[index][2]}
+    return [
+        _creation_plan(module, rule, variables, *candidates[index][:2])
+        for index in kept
+        if candidates[index][1] is not None or candidates[index][0].name not in taken
+    ]
 
 
-def _scoped(interfaces, rule, bases, scope):
-    """Return ``(admitted, kept)``: the leftover *interfaces* in *scope* this run plans, and those it reports."""
-    admitted, kept = [], []
-    for interface in interfaces:
-        claim = bases.claim(interface.name)
-        if scope == RunScope.INSTALL and not claim.raw:
-            continue
-        # A breakout rule builds only on a name one template alone claims; ``base_for`` gates a {base} rule.
-        if claim.accepted or not breaks_out(rule):
-            admitted.append(interface)
-        elif claim.claimed or _is_top_level(interface):
-            kept.append(interface)
-    return admitted, kept
+def _is_candidate(interface, rule, bases, previous_forms):
+    """Return whether a leftover *interface* is a candidate of its own; a subinterface is not always one."""
+    if _is_top_level(interface):
+        return True
+    # After a move, or under a breakout rule unless a template claims it, a subinterface belongs to its parent.
+    return previous_forms is None and not (breaks_out(rule) and not bases.claim(interface.name).claimed)
 
 
 def _in_scope_installed(plans, bases, scope):
@@ -195,16 +194,18 @@ def plan_module_families(module, rule, variables, interfaces, bases, scope=None)
         for interface in interfaces
         if interface.pk not in claimed
         and not _is_channel(interface)
-        and (previous_forms is None or _is_top_level(interface))
+        and _is_candidate(interface, rule, bases, previous_forms)
+        and (scope != RunScope.INSTALL or bases.claim(interface.name).raw)
     ]
-    kept = ()
-    if scope is not None:
-        plain, kept = _scoped(plain, rule, bases, scope)
     if not breaks_out(rule):
         leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
-        leftover = ()  # pragma: no cover - requires channelization support
+        leftover = tuple(  # pragma: no cover - requires channelization support
+            plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON)
+            for interface in plain
+            if bases.builds_on(interface.name) is None
+        )
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
                 "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
@@ -213,9 +214,8 @@ def plan_module_families(module, rule, variables, interfaces, bases, scope=None)
             )
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
-    unclaimed = tuple(plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON) for interface in kept)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
-    return ModuleFamilyPlans(installed=installed_plans, leftover=(*leftover, *unclaimed))
+    return ModuleFamilyPlans(installed=installed_plans, leftover=leftover)
 
 
 def _selection_pks(plan):

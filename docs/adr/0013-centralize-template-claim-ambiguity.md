@@ -45,11 +45,15 @@ The paths read the result as follows:
   claim. An install touches an interface that a template claims as its raw name, now or at an
   earlier position. A forced reapply and Apply Rules touch every interface. In scope, a rule without
   channels that does not read `{base}` needs no template, so it renames every interface. A rule that
-  reads `{base}` keeps an interface that no single template claims and reports it as unclaimed. A
-  breakout rule builds a family only on an interface that one template alone claims. On an automatic
-  run it keeps every other interface and reports it as unclaimed. A subinterface that no template
-  claims is no candidate of its own, so a breakout rule neither touches nor reports it. The scope
-  applies before two interfaces that intend one family collapse into one (ADR 0011).
+  reads `{base}` keeps an interface that no single template claims and reports it as unclaimed. The
+  scope applies before two interfaces that intend one family collapse into one (ADR 0011).
+- A breakout rule builds a family only on an interface that one template alone claims. This holds on
+  every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
+  does not read `{base}`, and on a module type without templates, where only the interface named as
+  the bay position qualifies. Every other interface keeps its name and is reported as unclaimed,
+  unless a family that the rule builds takes that name. A subinterface that no template claims is no
+  candidate of its own, so a breakout rule neither touches nor reports it. Prediction refuses a given
+  name that the claim finds ambiguous, and predicts every other given name from itself.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
   reports a family that lost a member, unless the rule gives the family those names already: the
   family's first interface then builds it again. A channelized rule renames no flat family, and

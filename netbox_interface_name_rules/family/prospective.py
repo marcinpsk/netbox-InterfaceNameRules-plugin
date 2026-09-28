@@ -25,6 +25,7 @@ from .names import COLLISION_REASON
 from .structural import UNSUPPORTED_REASON, has_flat_expansion
 from .targets import (
     UNCLAIMED_BASE_REASON,
+    breaks_out,
     channelized_family_names,
     channelized_family_targets,
     flat_family_names,
@@ -314,6 +315,11 @@ class _TemplateSuffixes:
         return self._suffixes.get(channel_id, default)
 
 
+def _plain_base(rule, bases, name):
+    """Return ``{base}`` for *name*; a breakout rule builds only on a name that one template alone claims."""
+    return bases.builds_on(name) if breaks_out(rule) else bases.base_for(name)
+
+
 def plan_prospective_families(module, rule, variables, interfaces, bases) -> ProspectiveFamilyPlanSet:
     """Return one plan for each family *rule* intends on the described *interfaces*.
 
@@ -332,7 +338,7 @@ def plan_prospective_families(module, rule, variables, interfaces, bases) -> Pro
     plans = tuple(
         _rename_plan(rule, variables, root, family, suffixes, bases)
         if _is_family_root(rule, root, family)
-        else _plain_plan(rule, variables, root.name, bases.base_for(root.name), context)
+        else _plain_plan(rule, variables, root.name, _plain_base(rule, bases, root.name), context)
         for root, family in families
     )
     return ProspectiveFamilyPlanSet(module_id=module.pk, plans=plans)

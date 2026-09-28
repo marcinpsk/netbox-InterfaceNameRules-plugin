@@ -19,8 +19,9 @@ its base is that template's raw name now.
 The same claim decides every path. After a move it decides alone. Without a move, the plans of an
 install, of a forced reapply and of Apply Rules read it: an install touches a name that still carries a
 raw name, and a forced reapply and Apply Rules touch every name. A rule that reads ``{base}`` keeps a
-name that no single template claims. A rule without channels that does not read ``{base}`` needs no
-template, so it renames every name it touches (ADR 0013).
+name that no single template claims, and a breakout rule builds only on a name that one template alone
+claims. A rule without channels that does not read ``{base}`` needs no template, so it renames every
+name it touches (ADR 0013).
 """
 
 import itertools
@@ -312,11 +313,10 @@ def _expected_flat_paths(layout):
     """Return the plan view each path gives a flat layout under the rule stated in the module docstring.
 
     A complete family takes its names now. A family that lost a member keeps its names, unless the rule
-    gives it those names now: its interfaces then build it again, once. On an automatic run a breakout
-    rule builds only on a name one template alone claims; an install touches only raw names.
+    gives it those names now: its interfaces then build it again, once. On every path a breakout rule
+    builds only on a name one template alone claims; an install touches only raw names.
     """
     verdict = _expected(layout, moved=False)
-    reads_base = layout.rule_key == "flat"
     installed = {}
     for unit in verdict.families:
         base, targets = FLAT_NAME.fullmatch(unit[0])["base"], _flat_targets(layout.rule_key, verdict.bases[unit[0]])
@@ -327,27 +327,19 @@ def _expected_flat_paths(layout):
     leftover = [name for name in layout.present if name not in installed]
 
     def built(names):
-        view, kept = {}, {}
+        names, kept = list(names), {}
         for name in names:
-            base = verdict.bases.get(name) if reads_base else name
-            if base is None:
-                view[name] = UNCLAIMED
-                continue
-            targets = _flat_targets(layout.rule_key, base)
-            if targets not in kept or (name == targets[0] and kept[targets] != targets[0]):
-                kept[targets] = name
-        return {**view, **{name: targets for targets, name in kept.items()}}
-
-    def automatic(names):
-        names = list(names)
-        return {
-            **built(name for name in names if name in verdict.bases),
-            **dict.fromkeys((name for name in names if name not in verdict.bases), UNCLAIMED),
-        }
+            if name in verdict.bases:
+                targets = _flat_targets(layout.rule_key, verdict.bases[name])
+                if targets not in kept or (name == targets[0] and kept[targets] != targets[0]):
+                    kept[targets] = name
+        taken = {member for targets in kept for member in targets}
+        refused = {name: UNCLAIMED for name in names if name not in verdict.bases and name not in taken}
+        return {**refused, **{name: targets for targets, name in kept.items()}}
 
     return {
-        "install": automatic(name for name in leftover if name in verdict.raw),
-        "forced reapply": {**installed, **automatic(leftover)},
+        "install": built(name for name in leftover if name in verdict.raw),
+        "forced reapply": {**installed, **built(leftover)},
         "Apply Rules": {**installed, **built(leftover)},
     }
 

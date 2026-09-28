@@ -20,7 +20,7 @@ import re
 from unittest import skipIf
 
 import yaml
-from dcim.models import Interface, InterfaceTemplate, ModuleType
+from dcim.models import Interface, InterfaceTemplate, ModuleType, VirtualChassis
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -1083,6 +1083,56 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
         self.assertEqual(self._names(module), family)
         self.assertEqual(apply_rule_to_existing(self.first_channel_rule).changed_count, 0)
         self.assertEqual(self._names(module), family)
+
+
+class FlatBreakoutClaimGateTest(ChannelizationTestCase):
+    """A breakout rule builds a family only on a name that one template alone claims, in Apply Rules too."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "BrkGate", ["5"], virtual_chassis=VirtualChassis.objects.create(name="brkgate-vc"), vc_position=2
+        )
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkGate-QSFP", part_number="BrkGate-QSFP"
+        )
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="z", type=PARENT_TYPE)
+
+    def test_apply_rules_builds_no_family_on_names_the_claim_refuses(self):
+        """``z`` is the raw name and ``x-1:0``, ``x-1:1`` the family the rule gave at position 1: one template claims both."""
+        module, _ = self._install(self.module_type, "5")
+        for name in ("x-1:0", "x-1:1"):
+            Interface.objects.create(device=self.device, module=module, name=name, type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="x-{vc_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        self.assertEqual(find_interfaces_for_rule(rule), ([], 3))
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["x-1:0", "x-1:1", "z"])
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [(name, UNCLAIMED_BASE_REASON) for name in ("x-1:0", "x-1:1", "z")],
+        )
+
+    def test_prediction_keeps_the_names_the_claim_refuses(self):
+        module, bay = self._install(self.module_type, "5")
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="x-{vc_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        self.assertEqual(predict_rule_output(module, bay, ["z"]), ["x-2:0", "x-2:1"])
+        self.assertEqual(predict_rule_output(module, bay, ["z", "x-1:0"]), ["z", "x-1:0"])
 
 
 @skipIf(supports_channelization(), "requires a NetBox that cannot model channelized interfaces (4.6 and older)")
