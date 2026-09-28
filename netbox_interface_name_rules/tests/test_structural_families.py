@@ -24,6 +24,7 @@ from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
     execute_structural_family,
+    has_flat_expansion,
     plan_structural_family,
     structural,
 )
@@ -66,7 +67,8 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
+        variables = build_variables(bay, device=self.device)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, has_flat_expansion(module))
         return module, bay, plan
 
 
