@@ -43,15 +43,9 @@ def resolve_template_claims(claims, *, module, label_kind):
                 f"{cause}; skipping them all rather than renaming a guess."
             )
 
-    subject = "Family base" if label_kind == "family base" else "Interface"
-    form = "raw or renamed name" if label_kind == _RAW_BASE else "drifted name"
     for label, ids in claimants.items():
         if len(ids) > 1:
-            messages.append(
-                f"{subject} {label!r} on {module} could be the {form} of any of the templates "
-                f"{sorted(by_id[claimant_id][0] for claimant_id in ids)}; "
-                "skipping it rather than renaming a guess."
-            )
+            messages.append(_shared_label_message(label, ids, by_id, module, label_kind))
             ambiguous.update(ids)
 
     accepted = tuple(
@@ -60,6 +54,41 @@ def resolve_template_claims(claims, *, module, label_kind):
         if labels and claimant_id not in ambiguous
     )
     return accepted, tuple(messages)
+
+
+def _shared_label_message(label, ids, by_id, module, label_kind):
+    """Return the message for a label that the templates *ids* all claim."""
+    subject = "Family base" if label_kind == "family base" else "Interface"
+    form = "raw or renamed name" if label_kind == _RAW_BASE else "drifted name"
+    return (
+        f"{subject} {label!r} on {module} could be the {form} of any of the templates "
+        f"{sorted(by_id[claimant_id][0] for claimant_id in ids)}; "
+        "skipping it rather than renaming a guess."
+    )
+
+
+def resolve_group_claims(claims, *, module):
+    """Return accepted pairs and messages for claims whose labels are groups of interface names.
+
+    A group is one interface, or every member of one interface family. A template's group is
+    accepted only when the template claims no other group and no other template claims any name
+    in it, in any group: groups that share a name are one ambiguity, as equal labels are.
+    """
+    accepted, messages = resolve_template_claims(claims, module=module, label_kind=_RAW_BASE)
+    by_id, claimants_by_group = _index_claims(claims)
+    claimants_by_name = defaultdict(set)
+    for group, ids in claimants_by_group.items():
+        for name in group:
+            claimants_by_name[name].update(ids)
+    shared = {name: ids for name, ids in claimants_by_name.items() if len(ids) > 1}
+    # A group that several templates claim whole was reported above; a name shared across groups was not.
+    reported = {name for group, ids in claimants_by_group.items() if len(ids) > 1 for name in group}
+    messages += tuple(
+        _shared_label_message(name, ids, by_id, module, _RAW_BASE)
+        for name, ids in shared.items()
+        if name not in reported
+    )
+    return tuple((claimant_id, group) for claimant_id, group in accepted if shared.keys().isdisjoint(group)), messages
 
 
 def _index_claims(claims):

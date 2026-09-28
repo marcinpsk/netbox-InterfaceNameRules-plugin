@@ -661,6 +661,29 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         for name in names:
             self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
 
+    def test_a_family_member_another_template_claims_refuses_the_whole_family(self):
+        module_type = self._module_type("Member Flat", "{module}", "0:1")
+        module = self._install(module_type, self._bay(self.device))
+        rename_out_of_band(Interface.objects.get(module=module, name="0"), "0:0")
+        rename_out_of_band(Interface.objects.get(module=module, name="0:1"), "0:1:0")
+        for name in ("0:1", "0:1:1"):
+            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="{base}:{channel}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        self._move(module, self._bay(self.device, "Bay 1"))
+
+        names = ["0:0", "0:1", "0:1:0", "0:1:1"]
+        self.assertEqual(self._names(module), names)
+        (entry,) = _journal(module)
+        for name in names:
+            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
+
     def test_an_interface_no_template_matches_keeps_its_name_and_is_reported(self):
         module = self._install(self.plain_type, self._bay(self.device))
         rename_out_of_band(Interface.objects.get(module=module), "operator-name")
