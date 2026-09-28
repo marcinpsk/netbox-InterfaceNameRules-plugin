@@ -248,7 +248,7 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
 
 def module_rule_outcomes(
-    module, module_bay, force_reapply=False, report_only=False, previous=None
+    module, module_bay, force_reapply=False, report_only=False, naming=None
 ) -> Iterator[RenameOutcome]:
     """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
 
@@ -256,36 +256,31 @@ def module_rule_outcomes(
     family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
     device lacks gives facts.
 
-    *previous* is the module's ``PreviousNaming`` before a move. The rule then renames every name
+    *naming* is the module's ``ModuleNaming`` read before a move. The rule then renames every name
     one template claims through its current or previous forms, and reports every other interface.
     Without a rule now, each interface the previous rule named keeps its name and is reported.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
-    earlier = None if previous is None else previous.names()
+    previous_forms = None if naming is None else naming.previous_forms()
 
     if not rule:
-        if earlier is not None and earlier.rule is not None:
-            yield from _left_without_a_rule(module, earlier)
+        if previous_forms is not None and previous_forms.rule is not None:
+            yield from _left_without_a_rule(module, previous_forms)
         return
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, earlier)
+        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, previous_forms)
 
 
-def _left_without_a_rule(module, previous) -> Iterator[RenameOutcome]:
+def _left_without_a_rule(module, previous_forms) -> Iterator[RenameOutcome]:
     """Yield a blocked fact for each interface the previous rule named, now that no rule matches the module."""
     from dcim.models import Interface
 
-    given = family_ops.previous_rule_names(previous)
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
-    for interface, channels in family_ops.device_interface_families(interfaces):
-        # A simple rule renamed the channels in lockstep with their parent, so they follow it.
-        parent_named = interface.name in given
-        for row in (interface, *channels):
-            if parent_named or row.name in given:
-                yield RenameOutcome(OutcomeKind.BLOCKED, row.name, NO_RULE_REASON)
+    for name in family_ops.names_the_previous_rule_gave(previous_forms, interfaces):
+        yield RenameOutcome(OutcomeKind.BLOCKED, name, NO_RULE_REASON)
 
 
 def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
@@ -317,10 +312,10 @@ def _acted_on_names(rule, plans, interfaces):
     return tuple(dict.fromkeys(names))
 
 
-def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False, previous=None):
+def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False, previous_forms=None):
     """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``.
 
-    With *previous*, the claim over every form decides what is renamed, so no guard filters the plans.
+    With *previous_forms*, the claim over every form decides what is renamed, so no guard filters the plans.
     """
     from dcim.models import Interface
 
@@ -339,13 +334,13 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
         # The guard runs while it can still see every claimed row, before two of them that intend
         # one family are collapsed into it.
         admit_leftover=None
-        if previous is not None
+        if previous_forms is not None
         else lambda plain: _collect_unrenamed(plain, rule, raw_names, force_reapply, raw.matchers, module),
-        previous=previous,
+        previous_forms=previous_forms,
     )
     installed = (
         list(planned.installed)
-        if previous is not None
+        if previous_forms is not None
         else _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
     )
     leftover = planned.leftover
@@ -362,7 +357,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
             yield outcome
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if not force_reapply and previous is None and leftover and not any_outcome and not families_seen:
+    if not force_reapply and previous_forms is None and leftover and not any_outcome and not families_seen:
         # Nothing renamed, skipped or built as a family: NetBox may already give these names.
         _flag_rule_potentially_deprecated(rule)
 
@@ -442,11 +437,11 @@ _NAMING_RELATIONS = (
 
 
 @dataclass(frozen=True, eq=False)
-class PreviousNaming:
-    """What named one module's interfaces before a move, read before the save.
+class ModuleNaming:
+    """What named one module's interfaces at the time it was read: a move reads it before the save.
 
-    The module type and the scope select the rule the previous state gave the module. The template
-    variables and the templates as they resolved then rebuild the names that rule gave.
+    The module type and the scope select the rule that state gave the module. The template variables
+    and the templates as they resolved then rebuild the names that rule gave.
     """
 
     module_pk: int
@@ -471,13 +466,13 @@ class PreviousNaming:
             templates=family_ops.resolved_template_names(module),
         )
 
-    def names(self) -> family_ops.PreviousNames:
-        """Return the names to recognise, under the rule this naming selects."""
+    def previous_forms(self) -> family_ops.PreviousForms:
+        """Return what rebuilds the names this naming gave, under the rule it selects now."""
         rule = find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
-        return family_ops.PreviousNames(rule, self.variables, {template.pk: template for template in self.templates})
+        return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
 
 
-def read_previous_naming(module_pk) -> tuple[PreviousNaming, ...]:
+def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
     """Return the naming of the module and of every module nested in it, the moved module first.
 
     A move reads this before its save: in the same save NetBox can re-resolve the position and name
@@ -496,13 +491,13 @@ def read_previous_naming(module_pk) -> tuple[PreviousNaming, ...]:
             .order_by("pk")
         )
     with family_ops.pinned_template_cache(modules):
-        return tuple(PreviousNaming.of(module) for module in modules)
+        return tuple(ModuleNaming.of(module) for module in modules)
 
 
-def moved_module_rule_outcomes(namings) -> Iterator[RenameOutcome]:
+def subtree_rule_outcomes(namings) -> Iterator[RenameOutcome]:
     """Reapply the rules to each module *namings* describes, and yield the outcome facts.
 
-    *namings* comes from ``read_previous_naming``. Each module is read as committed, and its earlier
+    *namings* comes from ``read_subtree_naming``. Each module is read as committed, and its earlier
     names are recognised from its naming; a module deleted since is skipped.
     """
     from dcim.models import Module
@@ -511,7 +506,7 @@ def moved_module_rule_outcomes(namings) -> Iterator[RenameOutcome]:
     pairs = [(committed[naming.module_pk], naming) for naming in namings if naming.module_pk in committed]
     with pinned_rule_cache(), family_ops.pinned_template_cache(committed.values()):
         for module, naming in pairs:
-            yield from module_rule_outcomes(module, module.module_bay, previous=naming)
+            yield from module_rule_outcomes(module, module.module_bay, naming=naming)
 
 
 def _device_interface_rules(device):

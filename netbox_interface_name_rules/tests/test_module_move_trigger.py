@@ -12,13 +12,14 @@ alone: the interfaces keep their raw names, and nested bays keep their parent, p
 """
 
 import importlib.util
+import re
 from contextlib import contextmanager
-from unittest import skipUnless
+from unittest import skipIf, skipUnless
 from unittest.mock import patch
 
 from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay, ModuleBayTemplate, Platform, VirtualChassis
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, transaction
+from django.db import DataError, IntegrityError, connection, transaction
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -29,7 +30,7 @@ from utilities.testing import APITestCase
 
 from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
-from netbox_interface_name_rules.engine import supports_channelization
+from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleReapply
 from netbox_interface_name_rules.tests.helpers import (
@@ -42,6 +43,7 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import REQUIRES_CHANNELIZATION, _channelized_module_type
+from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 PLAIN_TYPE = "10gbase-x-sfpp"
 BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
@@ -49,7 +51,25 @@ NETBOX_MOVES_SUBTREES = importlib.util.find_spec("dcim.models.module_moves") is 
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 UNCLAIMED = "no single interface template claims"
 NO_RULE = "no rule matches the module at its new position"
-PLACEMENT_TABLES = ('"dcim_module"', '"dcim_modulebay"', '"dcim_device"', '"dcim_virtualchassis"')
+WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
+NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
+
+
+def _writes(queries):
+    """Return ``(statement, table)`` for each write among *queries*."""
+    return [match.groups() for query in queries if (match := WRITE.match(query["sql"]))]
+
+
+def _reject_interface_updates(execute, sql, params, many, context):
+    if sql.lstrip().startswith('UPDATE "dcim_interface"'):
+        raise IntegrityError("injected reapply failure")
+    return execute(sql, params, many, context)
+
+
+def _fail_the_naming_read(execute, sql, params, many, context):
+    if NAMING_READ.match(sql):
+        return execute("SELECT 1/0", None, many, context)
+    return execute(sql, params, many, context)
 
 
 def _journal(instance):
@@ -66,6 +86,22 @@ def _module_reapplies():
     """Count the module reapplies; each call still runs the real function."""
     with patch.object(engine, "module_rule_outcomes", wraps=engine.module_rule_outcomes) as spy:
         yield spy
+
+
+@contextmanager
+def _naming_reads():
+    """Record the queries of each subtree naming read; each call still runs the real function."""
+    reads = []
+    real = engine.read_subtree_naming
+
+    def read(module_pk):
+        with CaptureQueriesContext(connection) as queries:
+            naming = real(module_pk)
+        reads.append(queries.captured_queries)
+        return naming
+
+    with patch.object(engine, "read_subtree_naming", read):
+        yield reads
 
 
 class _MoveFixture:
@@ -253,6 +289,27 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["1", "xe-1/0/1:0", "xe-1/0/1:1"])
 
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_an_interface_beside_a_channelized_family_that_no_template_claims_is_reported(self):
+        module_type = _channelized_module_type(
+            self.manufacturer, f"{self.prefix} Beside", channels=2, child_channel_ids=(1, 2)
+        )
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="xe-{vc_position}/0/{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+        module = self._install(module_type, self._bay(self.device))
+        Interface.objects.create(device=self.device, module=module, name="operator-name", type=PLAIN_TYPE)
+
+        self._move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["1", "operator-name", "xe-1/0/1:0", "xe-1/0/1:1"])
+        (entry,) = _journal(module)
+        self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
+
     def test_a_flat_family_the_move_does_not_rename_keeps_its_names_unreported(self):
         module_type = self._module_type("Flat Pair", "{module}", "mgmt")
         InterfaceNameRule.objects.create(
@@ -306,17 +363,73 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(port.position, "2")
         self.assertEqual(self._names(optic), ["et-1/2/2"])
 
-    def test_a_type_change_before_a_move_in_one_transaction_still_renames_the_nested_modules(self):
-        card, port = self._install_card(self.card_type, self._bay(self.device))
+    def _base_card(self, model):
+        """Return a card type with one `{base}` interface of its own and one nested bay."""
+        card_type = self._card_type(model, "1")
+        InterfaceTemplate.objects.create(module_type=card_type, name="{module}", type=PLAIN_TYPE)
+        InterfaceNameRule.objects.create(module_type=card_type, name_template="p{base}-{vc_position}")
+        return card_type
+
+    def test_after_a_type_change_and_a_move_the_card_is_reapplied_as_a_type_change_and_its_optic_as_moved(self):
+        card, port = self._install_card(self._base_card("First Card"), self._bay(self.device))
         optic = self._install(self.optic_type, port)
-        other_card_type = self._card_type("Other Card", "1")
+        self.assertEqual((self._names(card), self._names(optic)), (["p0-1"], ["et-1/0/1"]))
+        second_card_type = self._base_card("Second Card")
 
         with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            card.module_type = other_card_type
+            card.module_type = second_card_type
             card.save()
             self._save_move(card, self._bay(self.device, "Bay 2"))
 
-        self.assertEqual(self._names(optic), ["et-1/2/1"])
+        self.assertEqual((self._names(card), self._names(optic)), (["p0-1"], ["et-1/2/1"]))
+        (entry,) = _journal(card)
+        self.assertIn(f"`p0-1`: {UNCLAIMED}", entry.comments)
+
+    def test_a_family_whose_channel_count_changes_with_the_rule_is_blocked_and_the_subtree_still_reapplies(self):
+        card_type = self._card_type("Flat Card", "1")
+        InterfaceTemplate.objects.create(module_type=card_type, name="{module}", type=PLAIN_TYPE)
+        for device_type, template, count in ((self.device_type, "a", 2), (self.other_device_type, "b", 4)):
+            InterfaceNameRule.objects.create(
+                module_type=card_type,
+                device_type=device_type,
+                name_template=f"{template}-{{bay_position}}:{{channel}}",
+                breakout_mode=BreakoutModeChoices.FLAT,
+                channel_count=count,
+                channel_start=0,
+            )
+        card, port = self._install_card(card_type, self._bay(self.device))
+        optic = self._install(self.optic_type, port)
+        self.assertEqual(self._names(card), ["a-0:0", "a-0:1"])
+
+        self._move(card, self._bay(self.remote, "Bay 1"))
+
+        self.assertEqual((self._names(card), self._names(optic)), (["a-0:0", "a-0:1"], ["et-5/1/1"]))
+        (entry,) = _journal(card)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn("`a-0:0`: installed family has 2 channels but the rule defines 4", entry.comments)
+
+    def test_a_nested_module_whose_reapply_fails_is_reported_with_the_outcomes_before_it(self):
+        card_type = self._card_type("Two Port Card", "1")
+        ModuleBayTemplate.objects.create(module_type=card_type, name="Port 2", position="2")
+        card = self._install(card_type, self._bay(self.device))
+        blocked, failed = (
+            self._install(self.optic_type, bay) for bay in ModuleBay.objects.filter(module=card).order_by("position")
+        )
+        Interface.objects.create(device=self.remote, name="et-5/1/1", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._save_move(card, self._bay(self.remote, "Bay 1"))
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
+            for callback in callbacks:
+                if isinstance(callback, ModuleReapply):
+                    callback()
+
+        (entry,) = _journal(card)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`et-1/0/1` to `et-5/1/1`: target name is already in use", entry.comments)
+        self.assertIn("injected reapply failure", entry.comments)
+        self.assertEqual((self._names(blocked), self._names(failed)), (["et-1/0/1"], ["et-1/0/2"]))
+        self.assertEqual((_journal(blocked), _journal(failed)), ([], []))
 
     def test_the_subtree_reports_in_one_journal_entry_on_the_moved_module(self):
         card, port = self._install_card(self.card_type, self._bay(self.device))
@@ -436,6 +549,25 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`a-0:0`: {NO_RULE}", entry.comments)
         self.assertIn(f"`a-0:1`: {NO_RULE}", entry.comments)
 
+    def test_a_flat_family_whose_channel_count_changes_with_the_rule_is_blocked(self):
+        for device_type, template, count in ((self.device_type, "a", 2), (self.other_device_type, "b", 4)):
+            self._rule(
+                f"{template}-{{bay_position}}:{{channel}}",
+                device_type=device_type,
+                breakout_mode=BreakoutModeChoices.FLAT,
+                channel_count=count,
+                channel_start=0,
+            )
+        module = self._install(self.module_type, self._bay(self.device))
+
+        self._move(module, self._bay(self.remote, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["a-0:0", "a-0:1"])
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        for name in ("a-0:0", "a-0:1"):
+            self.assertIn(f"`{name}`: installed family has 2 channels but the rule defines 4", entry.comments)
+
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_without_a_rule_after_the_move_the_channels_renamed_with_their_parent_are_reported(self):
         module_type = _channelized_module_type(
@@ -489,6 +621,29 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self.assertIn(f"`x10`: {UNCLAIMED}", entry.comments)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_one_template_that_matches_two_flat_families_renames_neither(self):
+        module_type = self._module_type("Token Flat", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="{base}:{channel}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["1/0:0", "1/0:1"])
+        for name in ("3/1:0", "3/1:1"):
+            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+
+        self._move(module, self._bay(self.peer, "Bay 1"))
+
+        names = ["1/0:0", "1/0:1", "3/1:0", "3/1:1"]
+        self.assertEqual(self._names(module), names)
+        (entry,) = _journal(module)
+        for name in names:
+            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
+
     def test_an_interface_no_template_matches_keeps_its_name_and_is_reported(self):
         module = self._install(self.plain_type, self._bay(self.device))
         rename_out_of_band(Interface.objects.get(module=module), "operator-name")
@@ -500,24 +655,49 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
 
-    def test_rebuilding_the_previous_names_writes_no_module_bay_or_device(self):
+    def test_a_move_writes_only_the_module_the_rename_and_the_search_cache(self):
         module = self._install(self.plain_type, self._bay(self.device))
-        with self.captureOnCommitCallbacks() as callbacks:
-            self._save_move(module, self._bay(self.device, "Bay 1"))
 
-        with CaptureQueriesContext(connection) as queries:
-            for callback in callbacks:
-                if isinstance(callback, ModuleReapply):
-                    callback()
+        with _naming_reads() as reads, CaptureQueriesContext(connection) as queries:
+            self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-1/0/1"])
-        writes = [
-            query["sql"]
-            for query in queries.captured_queries
-            if query["sql"].lstrip().startswith(("INSERT", "UPDATE", "DELETE"))
-        ]
-        self.assertTrue(writes)
-        self.assertEqual([sql for sql in writes if any(table in sql for table in PLACEMENT_TABLES)], [])
+        (read,) = reads
+        self.assertEqual(_writes(read), [])
+        writes = _writes(queries.captured_queries)
+        self.assertEqual(
+            {table for _statement, table in writes}, {"dcim_module", "dcim_interface", "extras_cachedvalue"}
+        )
+        self.assertEqual(
+            [write for write in writes if write[1] != "extras_cachedvalue"],
+            [("UPDATE", "dcim_module"), ("UPDATE", "dcim_interface")],
+        )
+
+    def test_a_save_that_moves_nothing_reads_no_naming(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+        other_type = self._module_type("Other", "{module}")
+
+        with _naming_reads() as reads, self.captureOnCommitCallbacks(execute=True):
+            module.description = "unrelated edit"
+            module.save()
+            module.module_type = other_type
+            module.save()
+            self._save_move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(len(reads), 1)
+
+    def test_a_naming_read_that_fails_fails_the_move_with_its_error(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+
+        with (
+            connection.execute_wrapper(_fail_the_naming_read),
+            self.assertRaisesMessage(DataError, "division by zero"),
+            transaction.atomic(),
+        ):
+            self._save_move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(Module.objects.get(pk=module.pk).module_bay, self._bay(self.device))
+        self.assertEqual(self._names(module), ["et-1/0/0"])
 
 
 class MoveTransactionTest(ModuleMoveTestCase):
@@ -577,47 +757,34 @@ class MoveTransactionTest(ModuleMoveTestCase):
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual((self._names(returned), self._names(moved)), (["operator-name"], ["et-1/0/10"]))
 
-    def test_a_type_change_and_a_move_in_one_transaction_rename_with_the_new_type(self):
-        other_type = self._module_type("Other", "{module}")
-        InterfaceNameRule.objects.create(module_type=other_type, name_template="xe-{vc_position}/0/{bay_position}")
-        module = self._install(self.plain_type, self._bay(self.device))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            module.module_type = other_type
-            module.save()
-            self._save_move(module, self._bay(self.device, "Bay 1"))
+@skipIf(NETBOX_MOVES_SUBTREES, "NetBox 4.7 moves a module's components and nested bays with it")
+class ModuleRowMoveTest(ModuleMoveTestCase):
+    """Before 4.7 NetBox writes a moved module's row alone.
 
-        self.assertEqual(reapplies.call_count, 1)
-        self.assertEqual(self._names(module), ["xe-1/0/1"])
+    The interfaces keep their raw names from the old bay, and the nested bays keep their parent. The
+    reapply recognises the moved module's raw names from its previous state; the nested modules keep
+    the variables their names came from, so their names stay correct and unchanged.
+    """
 
-    def test_after_a_type_change_and_a_move_only_the_new_types_names_where_it_is_now_are_recognised(self):
-        first_type = self._module_type("First Base", "{module}")
-        second_type = self._module_type("Second Base", "{module}")
-        for module_type in (first_type, second_type):
-            InterfaceNameRule.objects.create(module_type=module_type, name_template="p{base}-{vc_position}")
-        module = self._install(first_type, self._bay(self.device))
+    def test_a_move_renames_the_moved_module_from_its_old_raw_names_and_leaves_the_nested_modules(self):
+        card_type = self._card_type("Card", "1")
+        InterfaceTemplate.objects.create(module_type=card_type, name="c{module}", type=PLAIN_TYPE)
+        optic_type = self._module_type("Optic", "{module}")
+        InterfaceNameRule.objects.create(module_type=optic_type, name_template="et-{vc_position}/{slot}/{bay_position}")
+        card, port = self._install_card(card_type, self._bay(self.device))
+        optic = self._install(optic_type, port)
+        InterfaceNameRule.objects.create(module_type=card_type, name_template="ge-{vc_position}/{bay_position}")
 
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            module.module_type = second_type
-            module.save()
-            self._save_move(module, self._bay(self.device, "Bay 1"))
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._save_move(card, self._bay(self.device, "Bay 2"))
+        port.refresh_from_db()
+        self.assertEqual((self._names(card), port.parent_id), (["c0"], self._bay(self.device).pk))
+        for callback in callbacks:
+            callback()
 
-        self.assertEqual(self._names(module), ["p0-1"])
-        (entry,) = _journal(module)
-        self.assertIn(f"`p0-1`: {UNCLAIMED}", entry.comments)
-
-    def test_a_bay_edited_before_the_move_in_one_transaction_leaves_the_name_and_reports_it(self):
-        module = self._install(self.plain_type, self._bay(self.device))
-        bay = self._bay(self.device)
-
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            bay.position = "5"
-            bay.save()
-            self._save_move(module, self._bay(self.device, "Bay 1"))
-
-        self.assertEqual(self._names(module), ["et-1/0/0"])
-        (entry,) = _journal(module)
-        self.assertIn(f"`et-1/0/0`: {UNCLAIMED}", entry.comments)
+        self.assertEqual((self._names(card), self._names(optic)), (["ge-1/2"], ["et-1/0/1"]))
+        self.assertEqual(_journal(card), [])
 
 
 class ModuleMoveAPITest(_MoveFixture, APITestCase):

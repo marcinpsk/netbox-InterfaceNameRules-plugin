@@ -30,7 +30,7 @@ logger = logging.getLogger("netbox_interface_name_rules")
 class ModuleState:
     """The module values a rename trigger compares.
 
-    *naming* is not compared. Only a save that moves the module reads it: the ``PreviousNaming`` of
+    *naming* is not compared. Only a save that moves the module reads it: the ``ModuleNaming`` of
     the module and of every module nested in it, the moved module first.
     """
 
@@ -93,7 +93,7 @@ class ModuleReapply:
 
     def _outcomes(self, module, current):
         """Yield the outcome facts of the reapply that the change from the baseline to *current* asks for."""
-        from .engine import module_rule_outcomes, moved_module_rule_outcomes
+        from .engine import module_rule_outcomes, subtree_rule_outcomes
 
         naming = self.baseline.naming
         if not naming or current.placement() == self.baseline.placement():
@@ -103,7 +103,7 @@ class ModuleReapply:
             # The module's earlier names came from another module type, so only its nested modules use them.
             yield from module_rule_outcomes(module, module.module_bay, force_reapply=True)
             naming = naming[1:]
-        yield from moved_module_rule_outcomes(naming)
+        yield from subtree_rule_outcomes(naming)
 
     def __call__(self):
         """Reapply the module's rule against the committed row."""
@@ -270,9 +270,9 @@ def _with_move_naming(module, previous):
     """Return *previous*, with the naming of the module's subtree when the save moves the module."""
     if _state_of(ModuleState, module).placement() == previous.placement():
         return previous
-    from .engine import read_previous_naming
+    from .engine import read_subtree_naming
 
-    return dataclasses.replace(previous, naming=read_previous_naming(module.pk))
+    return dataclasses.replace(previous, naming=read_subtree_naming(module.pk))
 
 
 def _as_read(_instance, previous):

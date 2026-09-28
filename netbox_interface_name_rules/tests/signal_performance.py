@@ -53,7 +53,7 @@ from netbox_interface_name_rules import __version__ as plugin_version
 from netbox_interface_name_rules import rename_triggers
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import (
-    read_previous_naming,
+    read_subtree_naming,
     supports_channelization,
     supports_vc_position_token,
 )
@@ -938,7 +938,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
 
         operation = move
         if direct:
-            baseline = ModuleState(module.module_type_id, source.pk, device.pk, naming=read_previous_naming(module.pk))
+            baseline = ModuleState(module.module_type_id, source.pk, device.pk, naming=read_subtree_naming(module.pk))
             with patch.object(rename_triggers, "before_save"), patch.object(rename_triggers, "after_save"):
                 move()
 

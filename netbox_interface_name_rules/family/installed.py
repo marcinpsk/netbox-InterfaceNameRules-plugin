@@ -137,25 +137,25 @@ def _singly_claimed(candidates):
     return [candidate for candidate in candidates if all(claims[member.pk] == 1 for member in candidate[2])]
 
 
-def _previous_family_bases(catalog, previous):
+def _previous_family_bases(catalog, previous_forms):
     """Return ``(template base, source base, source)`` for each flat family the previous rule named."""
-    rule = None if previous is None else previous.rule
+    rule = None if previous_forms is None else previous_forms.rule
     if rule is None or rule.channel_count <= 0 or rule.breakout_mode != BreakoutModeChoices.FLAT:
         return ()
     return tuple(
-        (template.resolved, previous.templates[template.pk].resolved, (rule, previous.variables))
+        (template.resolved, previous_forms.templates[template.pk].resolved, (rule, previous_forms.variables))
         for template in catalog.get()
-        if template.pk in previous.templates
+        if template.pk in previous_forms.templates
     )
 
 
-def flat_family_candidates(module, rule, variables, interfaces, catalog, previous=None):
+def flat_family_candidates(module, rule, variables, interfaces, catalog, previous_forms=None):
     """Return complete, unambiguous flat-family candidates on this module.
 
     A flat family carries the names the rule's channel range spells, and a flat rule and the
     channelized rule it later became spell those identically, so the caller decides whether the
     rule's current breakout mode makes these families its own to rename or its own to convert.
-    *previous* adds the families a flat rule named in the state before a move.
+    *previous_forms* adds the families a flat rule named in the state before a move.
     """
     by_name = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
     if not by_name:
@@ -164,7 +164,7 @@ def flat_family_candidates(module, rule, variables, interfaces, catalog, previou
         (base_name, source_base, None)
         for base_name, source_base in flat_family_bases(module, rule, variables, interfaces, catalog)
     ]
-    bases.extend(_previous_family_bases(catalog, previous))
+    bases.extend(_previous_family_bases(catalog, previous_forms))
     candidates = []
     for base_name, source_base, source in bases:
         names = family_names_for(rule, variables, base_name, source_base, source)
@@ -180,14 +180,29 @@ def flat_family_candidates(module, rule, variables, interfaces, catalog, previou
 
 
 def _flat_candidates(module, rule, variables, interfaces, bases):
-    """Return the flat families a flat-mode rule owns on this module."""
+    """Return the flat families a flat-mode rule owns on this module.
+
+    After a move, a family is kept only while the one template that claims its first channel is the
+    template it was found for, so a template with two families, or a family and an interface, claims none.
+    """
     if rule.breakout_mode != BreakoutModeChoices.FLAT:
         return []
-    return flat_family_candidates(module, rule, variables, interfaces, bases.catalog, bases.previous)
+    candidates = flat_family_candidates(module, rule, variables, interfaces, bases.catalog, bases.previous_forms)
+    if bases.previous_forms is None:
+        return candidates
+    return [candidate for candidate in candidates if bases.base_for(candidate[2][0].name) == candidate[0]]
 
 
 def _flat_plan(module, target_names, interfaces):
-    """Build one immutable plan from a complete flat-family candidate."""
+    """Build one immutable plan from a complete flat-family candidate.
+
+    A family that a move brings under a rule with another channel count keeps its names, blocked.
+    """
+    status, reason = None, ""
+    if len(target_names) != len(interfaces):
+        status = FamilyStatus.BLOCKED
+        reason = f"installed family has {len(interfaces)} channels but the rule defines {len(target_names)}"
+        target_names = tuple(interface.name for interface in interfaces)
     members = tuple(
         PlannedMember(
             snapshot=InterfaceSnapshot.from_interface(interface),
@@ -202,6 +217,8 @@ def _flat_plan(module, target_names, interfaces):
         device_id=module.device_id,
         module_id=module.pk,
         members=members,
+        precondition_status=status,
+        precondition_reason=reason,
     )
 
 
@@ -345,16 +362,16 @@ def plan_device_interface_rename(device, rule, variables, interface, children=()
     return _channelized_plan(device.pk, None, interface, children, targets)
 
 
-def module_raw_bases(module, rule, variables, interfaces, previous=None) -> RawBases:
+def module_raw_bases(module, rule, variables, interfaces, previous_forms=None) -> RawBases:
     """Return the raw template name behind each of *module*'s interfaces outside a channel.
 
-    *previous* holds the names the templates had before a move; see ``RawBases``.
+    *previous_forms* holds what named the templates before a move; see ``RawBases``.
     """
     families = {
         interface.name: tuple((child.name, child.channel_id) for child in children)
         for interface, children in device_interface_families(interfaces)
     }
-    return RawBases(module, rule, variables, families, TemplateNames(module), previous)
+    return RawBases(module, rule, variables, families, TemplateNames(module), previous_forms)
 
 
 def given_raw_names(module, rule, variables, names) -> GivenRawNames:

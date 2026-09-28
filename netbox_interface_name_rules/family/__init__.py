@@ -54,7 +54,7 @@ from .installed import (
     plan_installed_flat_families,
     plan_interface_rename,
 )
-from .previous import PreviousNames, previous_rule_names
+from .previous import PreviousForms, names_the_previous_rule_gave
 from .prospective import (
     ProspectiveInterface,
     describe_interfaces,
@@ -99,7 +99,7 @@ __all__ = (
     "PlannedChannel",
     "PlannedMember",
     "PlannedName",
-    "PreviousNames",
+    "PreviousForms",
     "ProspectiveFamilyPlan",
     "ProspectiveFamilyPlanSet",
     "ProspectiveInterface",
@@ -127,6 +127,7 @@ __all__ = (
     "is_channelized_parent",
     "module_raw_bases",
     "names_installed_parent",
+    "names_the_previous_rule_gave",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_device_interface_rename",
@@ -139,7 +140,6 @@ __all__ = (
     "plan_prospective_families",
     "plan_structural_family",
     "preview_rule_conversions",
-    "previous_rule_names",
     "resolve_template_claims",
     "resolved_template_names",
     "supports_channelization",

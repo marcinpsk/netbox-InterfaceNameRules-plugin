@@ -122,7 +122,9 @@ def _creation_plans(module, rule, variables, plain, bases):
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces, admit_leftover=None, previous=None) -> ModuleFamilyPlans:
+def plan_module_families(
+    module, rule, variables, interfaces, admit_leftover=None, previous_forms=None
+) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
@@ -132,10 +134,10 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
 
-    *previous* holds the names the module's templates had before a move, so the plans also find the
-    interfaces and flat families that the previous state named.
+    *previous_forms* holds what named the module's templates before a move, so the plans also find
+    the interfaces and flat families that the previous state named, and report the rest.
     """
-    bases = module_raw_bases(module, rule, variables, interfaces, previous)
+    bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
@@ -145,7 +147,11 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
         leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
-        leftover = ()  # pragma: no cover - requires channelization support
+        leftover = tuple(  # pragma: no cover - requires channelization support
+            plan_interface_rename(module, rule, variables, interface, bases)
+            for interface in plain
+            if previous_forms is not None and bases.base_for(interface.name) is None
+        )
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
                 "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
