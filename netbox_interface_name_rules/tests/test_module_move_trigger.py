@@ -602,6 +602,28 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         for name in ("et-0", "et-0:1", "et-0:2"):
             self.assertIn(f"`{name}`: {NO_RULE}", entry.comments)
 
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_without_a_rule_after_the_move_the_family_a_channelized_rule_built_is_reported(self):
+        module_type = self._module_type("Built", "{module}")
+        self._rule(
+            "et-{bay_position}:{channel}",
+            module_type=module_type,
+            device_type=self.device_type,
+            parent_name_template="et-{bay_position}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=2,
+            channel_start=1,
+        )
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["et-0", "et-0:1", "et-0:2"])
+
+        self._move(module, self._bay(self.remote, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["et-0", "et-0:1", "et-0:2"])
+        (entry,) = _journal(module)
+        for name in ("et-0", "et-0:1", "et-0:2"):
+            self.assertIn(f"`{name}`: {NO_RULE}", entry.comments)
+
 
 class MoveRecognitionTest(ModuleMoveTestCase):
     """Templates claim names through their current and previous forms, under the fail-closed claim rule."""
