@@ -34,7 +34,7 @@ from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
 
-NOT_BUILT_REASON = "a flat breakout family is built after a move only when every interface of the module is claimed"
+NOT_RENAMED_REASON = "the module is not renamed while one of its interfaces is unclaimed"
 
 # A member left with the name it had for a reason the operator can act on.  An unsupported topology
 # is not one of them: the release cannot hold the family, so nothing was dropped by this batch.
@@ -110,6 +110,11 @@ def _is_channel(interface) -> bool:
     return getattr(interface, "channel_id", None) is not None
 
 
+def _is_top_level(interface) -> bool:
+    """Return whether *interface* is neither a channel nor a subinterface of another interface."""
+    return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
+
+
 def _creation_plan(module, rule, variables, base, base_name):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
@@ -142,38 +147,46 @@ def plan_module_families(
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
 
-    *previous_forms* holds what named the module's templates before a move. The plans then find the
-    interfaces the previous state named and report the rest; they rename no installed flat family.
+    *previous_forms* holds what named the module's templates before a move. The plans then rename
+    only what a template claims, and no installed flat family. While any top-level interface is
+    unclaimed, they rename nothing on the module and report every interface.
     """
     bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    if previous_forms is not None and any(
+        _is_top_level(interface) and bases.base_for(interface.name) is None for interface in interfaces
+    ):
+        # An unclaimed interface may belong to a family, so its module keeps every name.
+        return ModuleFamilyPlans(
+            installed=(),
+            leftover=tuple(
+                plan_interface_rename(module, rule, variables, interface, bases)
+                if _is_top_level(interface) and bases.base_for(interface.name) is None
+                else plan_kept_interface(module, interface, NOT_RENAMED_REASON)
+                for interface in interfaces
+            ),
+        )
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
-    plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
+    plain = [
+        interface
+        for interface in interfaces
+        if interface.pk not in claimed
+        and not _is_channel(interface)
+        and (previous_forms is None or _is_top_level(interface))
+    ]
     if admit_leftover is not None:
         plain = list(admit_leftover(plain))
     if rule.channel_count <= 0:
         leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
-        leftover = tuple(  # pragma: no cover - requires channelization support
-            plan_interface_rename(module, rule, variables, interface, bases)
-            for interface in plain
-            if previous_forms is not None and bases.base_for(interface.name) is None
-        )
+        leftover = ()  # pragma: no cover - requires channelization support
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
                 "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
                 interface.name,
                 rule,
             )
-    elif previous_forms is not None and any(bases.base_for(interface.name) is None for interface in plain):
-        # An unclaimed interface may belong to a flat family, so no family is built on its module.
-        leftover = tuple(
-            plan_interface_rename(module, rule, variables, interface, bases)
-            if bases.base_for(interface.name) is None
-            else plan_kept_interface(module, interface, NOT_BUILT_REASON)
-            for interface in plain
-        )
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
     return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)

@@ -51,7 +51,7 @@ NETBOX_MOVES_SUBTREES = importlib.util.find_spec("dcim.models.module_moves") is 
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 UNCLAIMED = "no single interface template claims"
 FLAT = "a flat breakout family is not renamed after a move"
-NOT_BUILT = "a flat breakout family is built after a move only when every interface of the module is claimed"
+NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
 NO_RULE = "no rule matches the module at its new position"
 WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
 NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
@@ -276,7 +276,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["1", "xe-1/0/1:0", "xe-1/0/1:1"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
-    def test_an_interface_beside_a_channelized_family_that_no_template_claims_is_reported(self):
+    def test_an_unclaimed_interface_beside_a_channelized_family_keeps_every_name(self):
         module_type = _channelized_module_type(
             self.manufacturer, f"{self.prefix} Beside", channels=2, child_channel_ids=(1, 2)
         )
@@ -289,12 +289,34 @@ class ModuleMoveTest(ModuleMoveTestCase):
         )
         module = self._install(module_type, self._bay(self.device))
         Interface.objects.create(device=self.device, module=module, name="operator-name", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._save_move(module, self._bay(self.device, "Bay 1"))
+        saved = self._names(module)
+
+        for callback in callbacks:
+            callback()
+
+        self.assertEqual(self._names(module), saved)
+        (entry,) = _journal(module)
+        self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
+        for name in saved:
+            if name != "operator-name":
+                self.assertIn(f"`{name}`: {NOT_RENAMED}", entry.comments)
+
+    def test_a_subinterface_does_not_stop_the_rename(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+        Interface.objects.create(
+            device=self.device,
+            module=module,
+            name="et-1/0/0.100",
+            type="virtual",
+            parent=Interface.objects.get(module=module),
+        )
 
         self._move(module, self._bay(self.device, "Bay 1"))
 
-        self.assertEqual(self._names(module), ["1", "operator-name", "xe-1/0/1:0", "xe-1/0/1:1"])
-        (entry,) = _journal(module)
-        self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
+        self.assertEqual(self._names(module), ["et-1/0/0.100", "et-1/0/1"])
+        self.assertEqual(_journal(module), [])
 
 
 @skipUnless(NETBOX_MOVES_SUBTREES, REQUIRES_SUBTREE_MOVES)
@@ -550,7 +572,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["a-0", "a-0:1"])
         (entry,) = _journal(module)
-        self.assertIn(f"`a-0`: {NOT_BUILT}", entry.comments)
+        self.assertIn(f"`a-0`: {NOT_RENAMED}", entry.comments)
         self.assertIn(f"`a-0:1`: {UNCLAIMED}", entry.comments)
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -726,6 +748,23 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         saved = self._move_and_reapply(module, self._bay(self.device, "Bay 1"))
 
         self._assert_kept_and_reported(module, saved)
+
+    def test_a_second_move_under_a_simple_rule_does_not_split_the_family(self):
+        module_type = self._module_type("Port", "port")
+        self._flat_rule(module_type, "p{bay_position}:{channel}", device_type=self.device_type)
+        InterfaceNameRule.objects.create(
+            module_type=module_type, device_type=self.other_device_type, name_template="p{bay_position}:0"
+        )
+        module = self._install(module_type, self._bay(self.device, "Bay 1"))
+        self._move(module, self._bay(self.remote, "Bay 1"))
+        self.assertEqual(self._names(module), ["p1:0", "p1:1"])
+
+        self._move(module, self._bay(self.remote, "Bay 2"))
+
+        self.assertEqual(self._names(module), ["p1:0", "p1:1"])
+        entry = _journal(module)[-1]
+        self.assertIn(f"`p1:0`: {NOT_RENAMED}", entry.comments)
+        self.assertIn(f"`p1:1`: {UNCLAIMED}", entry.comments)
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):
