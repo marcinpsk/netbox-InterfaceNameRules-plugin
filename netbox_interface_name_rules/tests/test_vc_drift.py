@@ -19,12 +19,13 @@ A fixture whose interface names come out of the token needs a release that resol
 such class is gated on ``supports_vc_position_token()``; the two control classes are not, and their
 assertions are written to hold on a release that never resolves the token as well.
 
-Two engine names are pinned here as the fix's public surface:
+Two names are pinned here as the fix's public surface:
 
 * ``engine.supports_vc_position_token()`` — the feature check, probed lazily from
   ``dcim.constants.VC_POSITION_RE`` the way ``supports_channelization()`` probes the Interface model.
-* ``engine._raw_name_patterns(module)`` — the structural matchers, one per interface template whose
-  name carries the token, empty for every other template and on every release without the constant.
+* the ``historical_pattern`` of each ``family.resolved_template_names(module)`` entry — the structural
+  matchers, one per interface template whose name carries the token, None for every other template
+  and on every release without the constant.
 
 Everything else is pinned through behaviour.
 """
@@ -54,7 +55,7 @@ from netbox_interface_name_rules.engine import (
     supports_channelization,
     supports_vc_position_token,
 )
-from netbox_interface_name_rules.family import plan_installed_families
+from netbox_interface_name_rules.family import plan_installed_families, resolved_template_names
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, reapply
@@ -86,8 +87,12 @@ def _token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TY
 
 
 def _raw_name_patterns(module):
-    """Return the engine's structural raw-name matchers for *module* (see the module docstring)."""
-    return list(engine._raw_name_patterns(module))
+    """Return the structural raw-name matchers of *module*'s templates (see the module docstring)."""
+    return [
+        template.historical_pattern
+        for template in resolved_template_names(module)
+        if template.historical_pattern is not None
+    ]
 
 
 class _ConstantsWithoutVcToken(types.ModuleType):
