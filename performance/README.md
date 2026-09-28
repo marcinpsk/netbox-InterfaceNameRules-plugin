@@ -45,6 +45,7 @@ python manage.py test \
   netbox_interface_name_rules.tests.signal_performance \
   --settings=isolated_test_settings \
   --verbosity=2 \
+  --keepdb \
   --noinput
 ```
 
