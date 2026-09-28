@@ -28,7 +28,12 @@ from netbox_interface_name_rules.engine import (
     predict_rule_output,
     supports_channelization,
 )
-from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
+from netbox_interface_name_rules.family import (
+    UNCLAIMED_BASE_REASON,
+    FamilyStatus,
+    execute_installed_plan,
+    plan_installed_families,
+)
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.test_breakout_mode import (
@@ -434,13 +439,19 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
     def test_force_apply_builds_no_family_beside_the_flat_one(self):
         """A parent built on one sibling would strand the other three — the hybrid the docs rule out.
 
-        The rule's names no longer spell the flat family, so no template claims its interfaces and a
-        forced reapply leaves them alone.
+        The rule's names no longer spell the flat family, so no template claims its interfaces: each
+        keeps its name and is reported.
         """
-        changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
 
         self.assertEqual(changed, 0)
         self._assert_untouched()
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""

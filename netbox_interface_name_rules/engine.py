@@ -93,29 +93,32 @@ def _carries_a_raw_name(claim) -> bool:
     return claim is not None and claim.raw
 
 
-def _in_scope(claim, rule, force_reapply) -> bool:
-    """Return whether this run may touch an interface whose name the claim treats as *claim*.
+def _in_scope(claim, interface, rule, force_reapply) -> bool:
+    """Return whether this run may touch *interface*, whose name the claim treats as *claim*.
 
     An install touches an interface that still carries a raw name, which keeps it idempotent. A
-    forced reapply of a breakout rule touches every claimed interface, and of any other rule every
-    interface.
+    forced reapply touches every interface, except a subinterface that no template claims under a
+    breakout rule: it is no candidate of its own, and a breakout rule builds nothing on it.
     """
     if not force_reapply:
         return _carries_a_raw_name(claim)
-    return claim is not None or rule.channel_count <= 0
+    return claim is not None or rule.channel_count <= 0 or getattr(interface, "parent_id", None) is None
 
 
 def _admitted_leftover(plain, rule, bases, force_reapply):
     """Return ``(admitted, kept)``: the leftover interfaces this run renames, and those it keeps and reports.
 
     The claim over every form has already decided which template each name stands for, so this only
-    decides the scope of the run. An interface in scope that the claim refuses keeps its name.
+    decides the scope of the run. An interface in scope that the claim refuses keeps its name. So does
+    one that no template claims under a breakout rule, which builds no family on it.
     """
     admitted, kept = [], []
     for interface in plain:
         claim = bases.claim(interface.name)
-        if _in_scope(claim, rule, force_reapply):
-            (admitted if claim is None or claim.accepted else kept).append(interface)
+        if not _in_scope(claim, interface, rule, force_reapply):
+            continue
+        unclaimed_and_renamed = claim is None and rule.channel_count <= 0
+        (admitted if unclaimed_and_renamed or (claim is not None and claim.accepted) else kept).append(interface)
     return admitted, kept
 
 
