@@ -27,6 +27,7 @@ name it touches (ADR 0013).
 
 import itertools
 import re
+from collections import Counter
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -41,10 +42,11 @@ from netbox_interface_name_rules.naming import build_bay_chain_variables
 OLD_VC, OLD_BAY = 1, "0"
 NEW_VC, NEW_BAY = 2, "1"
 HISTORICAL_VCS = (3, 4)
-MODULE = SimpleNamespace(pk=1, device_id=1)
+MODULE = SimpleNamespace(pk=1, device_id=1, module_type_id=1)
 RULES = {"base": ("x", "{base}"), "bay": ("y", "{bay_position}")}
 FLAT_PREFIX = "z"
 FLAT_RULES = {"flat": "{base}", "flat without base": "{bay_position}"}
+CHANNELIZED_RULES = {"channelized": "{base}", "channelized without base": "{bay_position}"}
 FLAT_NAME = re.compile(rf"{FLAT_PREFIX}(?P<base>.+):0")
 UNCLAIMED = "kept as unclaimed"
 MISSING = ("blocked", "the flat family is missing 1 of its 2 interfaces")
@@ -149,13 +151,13 @@ def _layouts():
 
 
 def _flat_targets(rule_key, base):
-    """Return the names the flat rule *rule_key* gives the family of *base*."""
-    return _family(base if rule_key == "flat" else NEW_BAY)
+    """Return the channel names the breakout rule *rule_key* gives the family of *base*."""
+    return _family(base if rule_key in ("flat", "channelized") else NEW_BAY)
 
 
-def _flat_layouts():
-    """Yield every flat-rule layout the module docstring describes; a move recognises no flat family."""
-    for rule_key, kinds in itertools.product(FLAT_RULES, TEMPLATE_SETS):
+def _flat_layouts(rules=FLAT_RULES):
+    """Yield every breakout-rule layout the module docstring describes; a move recognises no flat family."""
+    for rule_key, kinds in itertools.product(rules, TEMPLATE_SETS):
         templates = _templates(kinds)
         pool = dict.fromkeys(
             name
@@ -248,6 +250,14 @@ def _expected(layout, moved):
 
 
 def _rule(rule_key):
+    if rule_key in CHANNELIZED_RULES:
+        return InterfaceNameRule(
+            name_template=f"{FLAT_PREFIX}{CHANNELIZED_RULES[rule_key]}:{{channel}}",
+            parent_name_template=f"p{CHANNELIZED_RULES[rule_key]}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
     if rule_key in FLAT_RULES:
         return InterfaceNameRule(
             name_template=f"{FLAT_PREFIX}{FLAT_RULES[rule_key]}:{{channel}}",
@@ -333,7 +343,9 @@ def _expected_flat_paths(layout):
 
     A complete family takes its names now. A family that lost a member keeps its names, unless the rule
     gives it those names now: its interfaces then build it again, once. On every path a breakout rule
-    builds only on a name one template alone claims; an install touches only raw names.
+    builds only on a name one template alone claims; an install touches only raw names. A family that is
+    built adopts an interface with one of its channel names; another interface that would build the same
+    family is blocked, because its names are in use.
     """
     verdict = _expected(layout, moved=False)
     installed = {}
@@ -352,9 +364,18 @@ def _expected_flat_paths(layout):
                 targets = _flat_targets(layout.rule_key, verdict.bases[name])
                 if targets not in kept or (name == targets[0] and kept[targets] != targets[0]):
                     kept[targets] = name
-        taken = {member for targets in kept for member in targets}
-        refused = {name: UNCLAIMED for name in names if name not in verdict.bases and name not in taken}
-        return {**refused, **{name: targets for targets, name in kept.items()}}
+        builders = {name: targets for targets, name in kept.items()}
+        adopted = {member for targets in kept for member in targets[1:]}
+        view = {}
+        for name in names:
+            if name in builders or name in adopted:
+                continue
+            if name not in verdict.bases:
+                view[name] = UNCLAIMED
+            else:
+                duplicate = _flat_targets(layout.rule_key, verdict.bases[name])[0]
+                view[name] = ("blocked", f"target name is already in use: {duplicate}")
+        return {**view, **builders}
 
     return {
         "install": built(name for name in leftover if name in verdict.raw),
@@ -380,6 +401,47 @@ def _expected_paths(layout):
         "forced reapply": {name: planned(name) for name in layout.present},
         "Apply Rules": {name: planned(name) for name in layout.present},
     }
+
+
+def _plan_counts(plans, present):
+    """Return how many plans each interface is in: as a member, as a base, or as a row a flat family adopts."""
+    counts = Counter()
+    for plan in plans:
+        if isinstance(plan, family.FlatCreationPlan):
+            adopted = plan.target_names[1:] if plan.precondition_status is None else ()
+            counts.update([plan.base.name, *(name for name in adopted if name in present)])
+        elif isinstance(plan, family.StructuralFamilyPlan):
+            counts[plan.base.name] += 1
+        else:
+            counts.update(member.snapshot.name for member in plan.members)
+    return counts
+
+
+def _unplanned(layout):
+    """Return, per run, each interface in scope that no plan holds, and each interface two plans hold.
+
+    The runs are an install, a forced reapply, Apply Rules on the whole module, and Apply Rules on each
+    interface alone.
+    """
+    rule = _rule(layout.rule_key)
+    variables = _variables(NEW_VC, NEW_BAY)
+    interfaces = _interfaces(layout)
+    bases = _claim(layout, rule, interfaces, moved=False)
+    present = set(layout.present)
+    runs = [
+        ("install", family.RunScope.INSTALL, None, {name for name in present if bases.claim(name).raw}),
+        ("forced reapply", family.RunScope.FORCED, None, present),
+        ("Apply Rules", None, None, present),
+        *((f"Apply Rules on {row.name}", None, frozenset({row.pk}), {row.name}) for row in interfaces),
+    ]
+    wrong = {}
+    for label, scope, selected, in_scope in runs:
+        plans = family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope, selected).plans
+        counts = _plan_counts(plans, present)
+        bad = {name: counts[name] for name in present if counts[name] > 1 or (name in in_scope and not counts[name])}
+        if bad:
+            wrong[label] = bad
+    return wrong
 
 
 def _rebuilds(layout):
@@ -451,6 +513,17 @@ class ClaimInvariantTest(SimpleTestCase):
 
         self.assertEqual(len(layouts), FLAT_LAYOUT_COUNT)
         self.assertGreater(families, 0)
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+
+    def test_every_interface_in_scope_is_in_exactly_one_plan(self):
+        """Each run plans every interface it may touch once: built, adopted by its family, or kept and reported."""
+        layouts = [
+            *(layout for layout in _layouts() if layout.previous_key == layout.rule_key),
+            *_flat_layouts(),
+            *_flat_layouts(CHANNELIZED_RULES),
+        ]
+        failures = [(layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout))]
+
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
     def test_every_path_plans_what_the_flat_claim_accepts(self):
