@@ -590,7 +590,7 @@ def _run_the_reapply(callbacks):
     """Run the rename-trigger callbacks among *callbacks*: each trigger, then the plan after them."""
     for callback in callbacks:
         if isinstance(
-            callback, (rename_triggers.ModuleTrigger, rename_triggers.DeviceTrigger, rename_triggers.ReapplyPlan)
+            callback, (rename_triggers.ModuleTrigger, rename_triggers.DeviceTrigger, rename_triggers.PlanRunner)
         ):
             callback()
 

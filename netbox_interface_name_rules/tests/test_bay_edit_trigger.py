@@ -20,7 +20,7 @@ from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import ModuleTrigger, ReapplyPlan
+from netbox_interface_name_rules.rename_triggers import ModuleTrigger, PlanRunner
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
     NETBOX_MOVES_COMPONENTS,
@@ -203,8 +203,8 @@ class NestedBayEditTest(BayEditTestCase):
         Interface.objects.create(device=self.device, name="et-1/2/1", type=PLAIN_TYPE)
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_edit(bay, position="2")
-        (plan,) = [callback for callback in callbacks if isinstance(callback, ReapplyPlan)]
-        self.assertEqual([trigger.pk for trigger in plan.triggers], [card.pk])
+        (runner,) = [callback for callback in callbacks if isinstance(callback, PlanRunner)]
+        self.assertEqual([trigger.pk for trigger in runner.plan.triggers], [card.pk])
 
         with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
             for callback in callbacks:
@@ -353,13 +353,13 @@ class NestedBayEditTest(BayEditTestCase):
 
         with _naming_reads() as reads, self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.device, "Bay 2"))
-        (plan,) = [callback for callback in callbacks if isinstance(callback, ReapplyPlan)]
+        (runner,) = [callback for callback in callbacks if isinstance(callback, PlanRunner)]
         for callback in callbacks:
             callback()
 
         port.refresh_from_db()
         self.assertEqual(port.position, "2")
-        self.assertEqual(([trigger.pk for trigger in plan.triggers], len(reads)), ([card.pk], 1))
+        self.assertEqual(([trigger.pk for trigger in runner.plan.triggers], len(reads)), ([card.pk], 1))
         self.assertEqual(self._names(optic), ["et-1/2/2"])
 
 
@@ -573,9 +573,12 @@ class BayEditTransactionTest(BayEditTestCase):
             with self.assertRaises(RuntimeError), transaction.atomic():
                 self._save_edit(bay, position="9")
                 raise RuntimeError("roll back the savepoint")
+        with _module_reapplies() as reapplies:
+            for callback in callbacks:
+                callback()
 
-        self.assertEqual([callback for callback in callbacks if isinstance(callback, (ReapplyPlan, ModuleTrigger))], [])
-        self.assertEqual(self._names(module), ["et-1/0/0"])
+        self.assertEqual([callback for callback in callbacks if isinstance(callback, ModuleTrigger)], [])
+        self.assertEqual((reapplies.call_count, self._names(module)), (0, ["et-1/0/0"]))
 
     def test_an_edit_rolled_back_after_an_earlier_edit_keeps_the_earlier_reapply(self):
         bay = self._bay(self.device)
@@ -589,6 +592,28 @@ class BayEditTransactionTest(BayEditTestCase):
 
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/5"])
+
+    def test_a_bay_edit_joins_a_plan_that_an_earlier_capture_left_pending(self):
+        self._install(self.plain_type, self._bay(self.device))
+        edited_bay = self._bay(self.device, "Bay 1")
+        edited = self._install(self.plain_type, edited_bay)
+        with self.captureOnCommitCallbacks():
+            self._save_edit(self._bay(self.device), position="5")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._save_edit(edited_bay, position="4")
+
+        self.assertEqual(self._names(edited), ["et-1/0/4"])
+
+    def test_a_bay_edit_joins_a_plan_that_a_save_outside_a_capture_left_pending(self):
+        edited_bay = self._bay(self.device, "Bay 1")
+        edited = self._install(self.plain_type, edited_bay)
+        Module.objects.create(device=self.device, module_bay=self._bay(self.device), module_type=self.plain_type)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._save_edit(edited_bay, position="4")
+
+        self.assertEqual(self._names(edited), ["et-1/0/4"])
 
     def test_an_install_and_an_edit_of_its_bay_name_the_module_for_the_edited_bay(self):
         bay = self._bay(self.device)

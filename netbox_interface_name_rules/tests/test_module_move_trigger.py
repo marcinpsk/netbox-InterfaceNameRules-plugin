@@ -32,7 +32,7 @@ from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import ReapplyPlan
+from netbox_interface_name_rules.rename_triggers import PlanRunner
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
@@ -451,7 +451,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.remote, "Bay 1"))
-        self.assertEqual(sum(isinstance(callback, ReapplyPlan) for callback in callbacks), 1)
+        self.assertEqual(sum(isinstance(callback, PlanRunner) for callback in callbacks), 1)
         for callback in callbacks:
             callback()
 

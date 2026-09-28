@@ -4,11 +4,12 @@
 
 The receivers in ``signals.py`` pass every module, module bay and device save here. ``before_save``
 reads the previous state; ``after_save`` compares it with the saved values and, when the save is a
-rename trigger, adds the trigger to the reapply plan of the transaction. The plan is one committed
-callback. Each trigger is a committed callback too, which runs before the plan only when its
-savepoint commits, so the plan acts on the triggers that committed. The plan reapplies each module
-and each device at most once, from the earliest previous state of the transaction, so it acts on the
-net change. A reapply that leaves an interface unrenamed, or fails, writes one journal entry. A
+rename trigger, adds the trigger to the reapply plan of the transaction. Each trigger is a committed
+callback, which runs only when its savepoint commits. Each trigger also appends a runner of the plan
+that no savepoint rollback drops, and only the newest runner runs the plan, after every trigger. So
+the plan acts on the triggers that committed, and it moves no committed callback. The plan reapplies
+each module and each device at most once, from the earliest previous state of the transaction, so
+it acts on the net change. A reapply that leaves an interface unrenamed, or fails, writes one journal entry. A
 reapply that cannot read the committed rows is logged only.
 
 A save that moves a module, or that changes what the names in an occupied bay are built from, also
@@ -118,15 +119,25 @@ class DeviceTrigger(_Trigger):
 
 @dataclasses.dataclass(eq=False)
 class ReapplyPlan:
-    """The committed callback that reapplies what the rename triggers of one transaction ask for."""
+    """What the rename triggers of one transaction ask for, in save order, and the newest runner."""
 
     triggers: list = dataclasses.field(default_factory=list)
+    runner: "PlanRunner | None" = None
     started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
 
+
+@dataclasses.dataclass(eq=False)
+class PlanRunner:
+    """A committed callback of a reapply plan; only the newest runner of the plan runs it."""
+
+    plan: ReapplyPlan
+
     def __call__(self):
-        """Reapply the rules for the triggers whose savepoints committed."""
-        self.started = True
-        reapply([trigger for trigger in self.triggers if trigger.kept])
+        """Reapply the rules for the triggers whose savepoints committed, when this is the newest runner."""
+        if self.plan.runner is not self or self.plan.started:
+            return
+        self.plan.started = True
+        reapply([trigger for trigger in self.plan.triggers if trigger.kept])
 
 
 def reapply(triggers):
@@ -467,20 +478,24 @@ def after_save(sender, instance, created):
         return
     trigger.author = _request_user()
     connection = transaction.get_connection()
-    # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
-    entries = connection.run_on_commit if connection.in_atomic_block else []
-    index, plan = next(
-        (
-            (index, callback)
-            for index, (_, callback, _) in enumerate(entries)
-            if isinstance(callback, ReapplyPlan) and not callback.started
-        ),
-        (None, ReapplyPlan()),
+    entries = connection.run_on_commit if connection.in_atomic_block else ()
+    plan = (
+        next(
+            (
+                callback.plan
+                for _, callback, _ in entries
+                if isinstance(callback, PlanRunner) and not callback.plan.started
+            ),
+            None,
+        )
+        or ReapplyPlan()
     )
     plan.triggers.append(trigger)
+    # Django drops the callbacks of a rolled-back savepoint from run_on_commit, so a dropped trigger is not kept.
     transaction.on_commit(trigger)
-    if index is None:
-        transaction.on_commit(plan)
+    plan.runner = PlanRunner(plan)
+    if connection.in_atomic_block:
+        # Without a savepoint tag no rollback but the transaction's drops the runner; it runs after every trigger.
+        connection.run_on_commit.append((set(), plan.runner, False))
     else:
-        # The plan keeps its savepoint tags and runs after every trigger, so it sees which committed.
-        entries.append(entries.pop(index))
+        plan.runner()
