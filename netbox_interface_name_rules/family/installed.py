@@ -280,6 +280,17 @@ def plan_installed_flat_families(module, rule, variables, interfaces, bases) -> 
     return [plan for plan in plans if plan is not None]
 
 
+def half_built_members(rule, interfaces, bases) -> dict:
+    """Return, by the name of its first row, the other rows of each half-built flat family the claim accepted."""
+    if not builds_flat_family(rule):
+        return {}
+    rows = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
+    return {
+        family.names[0]: tuple(rows[name] for name in family.names[1:] if name in rows)
+        for family in bases.flat_families()
+    }
+
+
 def plan_installed_families(module, rule, variables) -> InstalledFamilyPlanSet:
     """Return immutable plans for the installed families owned by *module*, reading its interfaces."""
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))

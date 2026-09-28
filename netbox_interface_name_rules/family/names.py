@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Shared live interface-name primitives for family execution."""
+"""Shared live interface-name primitives for family execution and its preview."""
 
 import logging
 
@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 COLLISION_REASON = "target name is already in use"
 INTERFACE_NAME_CONSTRAINT = "dcim_interface_unique_device_name"
+
+
+def name_owners(device_id, names) -> dict[str, int]:
+    """Return the primary key of the interface that owns each of *names* on the device, by name."""
+    return dict(Interface.objects.filter(device_id=device_id, name__in=names).values_list("name", "pk"))
+
+
+def first_taken_name(target_names, owners, own_pks):
+    """Return the first of *target_names* that *owners* gives to an interface outside *own_pks*, or None."""
+    return next((name for name in target_names if name in owners and owners[name] not in own_pks), None)
 
 
 def name_is_taken(device_id, target_name, exclude_pk) -> bool:

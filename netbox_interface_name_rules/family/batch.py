@@ -23,13 +23,14 @@ from .domain import (
 )
 from .execution import execute_installed_plan
 from .installed import (
+    half_built_members,
     interfaces_by_module,
-    is_plain_interface,
     module_raw_bases,
     plan_installed_families_from,
     plan_interface_rename,
     plan_kept_interface,
 )
+from .names import first_taken_name, name_owners
 from .structural import (
     carries_flat_expansion,
     execute_flat_family,
@@ -41,7 +42,6 @@ from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
     builds_channelized_family,
-    builds_flat_family,
 )
 from .template_names import pinned_template_cache
 
@@ -135,15 +135,6 @@ def _creation_plan(module, rule, variables, base, base_name, flat_expansion, mem
     return plan_flat_family(module, rule, variables, base, base_name, members)
 
 
-def _half_built_members(interfaces, bases):
-    """Return, by the name of its first row, the other rows of each half-built flat family the claim accepted."""
-    rows = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
-    return {
-        family.names[0]: tuple(rows[name] for name in family.names[1:] if name in rows)
-        for family in bases.flat_families()
-    }
-
-
 def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members):
     """Return a plan for each selected interface; a row that a half-built family keeps is in that family's plan."""
     plans = [
@@ -230,10 +221,31 @@ def plan_module_families(
             )
     else:
         flat_expansion = builds_channelized_family(rule) and carries_flat_expansion(interfaces, bases.catalog.get())
-        members = _half_built_members(interfaces, bases) if builds_flat_family(rule) else {}
+        members = half_built_members(rule, interfaces, bases)
         leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
     return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
+
+
+def creation_names_in_use(module, rule, interfaces, bases, plans) -> dict[str, str]:
+    """Return, by base name, the first name in use on the device outside the rows each creation in *plans* keeps.
+
+    *plans* are prospective plans. Each creation is checked as its executor checks it at execution,
+    so a preview offers no family that the apply refuses because one of its names is in use.
+    """
+    creations = [plan for plan in plans if plan.base_name is not None and plan.precondition_status is None]
+    if not breaks_out(rule) or not creations:
+        return {}
+    pks = {interface.name: interface.pk for interface in interfaces}
+    members = half_built_members(rule, interfaces, bases)
+    owners = name_owners(module.device_id, {name for plan in creations for name in plan.target_names})
+    in_use = {}
+    for plan in creations:
+        own_pks = {pks[plan.base_name], *(member.pk for member in members.get(plan.base_name, ()))}
+        taken = first_taken_name(plan.target_names, owners, own_pks)
+        if taken is not None:
+            in_use[plan.base_name] = taken
+    return in_use
 
 
 def _selection_pks(plan):

@@ -1154,7 +1154,8 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
         preview, _checked = find_interfaces_for_rule(rule)
         outcome = apply_rule_to_existing(rule, interface_ids=[selected.pk])
 
-        self.assertEqual([(entry["current_name"], entry["new_names"]) for entry in preview], [("0", ["x0:0", "x0:1"])])
+        # The family on 0 needs the name x0:1, which is in use, so the apply refuses it and the preview offers nothing.
+        self.assertEqual(preview, [])
         self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(
             [(member.current_name, member.reason) for member in outcome.skipped_members],
@@ -1256,16 +1257,20 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
             **fields,
         )
 
-    def _apply_to_every_interface(self, rule, module):
+    def _outcome_for_every_interface(self, rule, module):
         """Apply *rule* with every interface of *module* selected; each is in one member outcome, none in two."""
         selected = dict(Interface.objects.filter(module=module).values_list("name", "pk"))
         outcome = apply_rule_to_existing(rule, interface_ids=selected.values())
         counts = Counter(member.interface_pk for family in outcome.families for member in family.members)
         self.assertEqual({name: counts[pk] for name, pk in selected.items()}, dict.fromkeys(selected, 1))
         self.assertEqual([pk for pk, count in counts.items() if count > 1], [])
+        return outcome
+
+    def _apply_to_every_interface(self, rule, module):
+        """Return the status and reason of each member outcome, by the name the interface had."""
         return {
             member.current_name: (member.status, member.reason)
-            for family in outcome.families
+            for family in self._outcome_for_every_interface(rule, module).families
             for member in family.members
         }
 
@@ -1405,6 +1410,55 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
             [("x0:0", FamilyStatus.UNCHANGED), ("x0:1", FamilyStatus.UNCHANGED), ("x0:2", FamilyStatus.CHANGED)],
         )
         self.assertEqual(self._names(module), ["x0:0", "x0:1", "x0:2"])
+
+    def _preview_then_apply(self, rule, module):
+        """Return what the preview offers and what the apply changed, each as base name to family names.
+
+        The preview counts every interface of the module, also one whose family it does not offer.
+        """
+        preview, checked = find_interfaces_for_rule(rule)
+        self.assertEqual(checked, Interface.objects.filter(module=module).count())
+        outcome = self._outcome_for_every_interface(rule, module)
+        offered = {entry["current_name"]: entry["new_names"] for entry in preview}
+        changed = {
+            family.members[0].current_name: [member.target_name for member in family.members]
+            for family in outcome.changed_families
+        }
+        return offered, changed
+
+    def test_the_preview_offers_no_family_whose_raw_name_another_family_would_take(self):
+        module = self._module_with(module_type=self.pair_type)
+        rule = self._rule("x{base}:{channel}", module_type=self.pair_type)
+
+        offered, changed = self._preview_then_apply(rule, module)
+
+        self.assertEqual(offered, {"x0:1": ["xx0:1:0", "xx0:1:1"]})
+        self.assertEqual(changed, offered)
+
+    def test_the_preview_offers_no_family_beside_a_row_with_its_channel_name(self):
+        module = self._module_with("x0:1")
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(self._names(module), ["0", "x0:1"])
+
+    def test_the_preview_offers_no_family_whose_sibling_name_is_in_use_on_the_device(self):
+        module = self._module_with()
+        Interface.objects.create(device=self.device, name="x0:1", type=PARENT_TYPE)
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(self._names(module), ["0"])
+
+    def test_the_preview_offers_a_half_built_family_that_the_apply_completes(self):
+        module = self._half_built_family("x0:0", "x0:1")
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}", channel_count=3), module)
+
+        self.assertEqual(offered, {"x0:0": ["x0:0", "x0:1", "x0:2"]})
+        self.assertEqual(changed, offered)
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channel_name_in_use_reports_the_base(self):
