@@ -126,8 +126,8 @@ class RawBases:
     templates load once.
 
     *previous_forms* holds what named each template before a move. Its forms are claim evidence too,
-    and with it every rule computes its claims, so a name that no single template claims has no base.
-    *flat_families* are then the complete flat families
+    and with it every rule computes its claims, so a name that no single template claims has no base,
+    also on a module type without templates. *flat_families* are then the complete flat families
     found for each template, with ``template_pk`` and ``members``: a template claims a family as one
     group of names, and one claim covers families and interfaces.
     """
@@ -177,7 +177,7 @@ class RawBases:
     def _claim(self):
         """Return ``(raw name by claimed name, template by claimed name, ambiguous names)``.
 
-        Without templates the first is None, and a name is its own base.
+        Without templates the first is None, and a name is its own base, except after a move.
         A template claims its raw name, its historical raw forms and the names the rule gives it. A
         raw name beats another template's historical form, as in the drift guard, but never a
         renamed form: that overlap is ambiguous, so neither template claims the name. A parent name
@@ -190,7 +190,7 @@ class RawBases:
             if template.channel_id is None
         ]
         if not claimants:
-            return None, {}, frozenset()
+            return (None if self.previous_forms is None else {}), {}, frozenset()
         raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
         claims = []
         raw_by_claimant = {}

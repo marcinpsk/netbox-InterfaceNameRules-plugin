@@ -684,6 +684,18 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         for name in names:
             self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
 
+    def test_an_interface_of_a_module_type_without_templates_is_reported_after_a_move(self):
+        module_type = make_module_type(self.manufacturer, "Bare", model=f"{self.prefix} Bare")
+        InterfaceNameRule.objects.create(module_type=module_type, name_template="et-{bay_position}")
+        module = self._install(module_type, self._bay(self.device))
+        Interface.objects.create(device=self.device, module=module, name="operator-name", type=PLAIN_TYPE)
+
+        self._move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["operator-name"])
+        (entry,) = _journal(module)
+        self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
+
     def test_an_interface_no_template_matches_keeps_its_name_and_is_reported(self):
         module = self._install(self.plain_type, self._bay(self.device))
         rename_out_of_band(Interface.objects.get(module=module), "operator-name")
