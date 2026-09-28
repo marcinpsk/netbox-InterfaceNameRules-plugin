@@ -338,8 +338,8 @@ class BaseVariableDocumentationTest(unittest.TestCase):
                 "rule gives another template"
             ),
             (
-                "A module type without interface templates has no raw names, so there `{base}` is the "
-                "interface's current name."
+                "A module type without interface templates has no raw names, so it claims as one template "
+                "whose raw name is the bay position. There `{base}` is the bay position"
             ),
             "In a device interface rule, `{base}` is the interface's current name.",
         ):

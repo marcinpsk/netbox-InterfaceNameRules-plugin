@@ -138,9 +138,9 @@ _UNCLAIMED = NameClaim(claimed=False, accepted=False, raw=False)
 
 
 class _Resolution(NamedTuple):
-    """What one claim pass decided: raw bases by name, or None when each name is its own base."""
+    """What one claim pass decided: the raw base of each name one template alone claims, families and claims."""
 
-    bases: dict | None
+    bases: dict
     families: tuple[FlatFamily, ...]
     claims: dict
 
@@ -166,19 +166,16 @@ class RawBases:
         self._resolution = None
 
     def base_for(self, name):
-        """Return the raw template name *name* stands for, or None when no single template claims it."""
-        if not self._reads_base:
-            return name
-        bases = self._resolved().bases
-        return name if bases is None else bases.get(name)
+        """Return ``{base}`` for *name*: its own name for a rule that needs no claim, else ``builds_on``."""
+        return self.builds_on(name) if self._reads_base else name
 
     def builds_on(self, name):
-        """Return the base a breakout rule builds a family on from *name*, or None unless one template alone claims it."""
-        return self.base_for(name) if self.claim(name).accepted else None
+        """Return the raw template name *name* stands for, or None when no single template claims it."""
+        return self._resolved().bases.get(name)
 
     def is_ambiguous(self, name):
         """Return whether a rule that reads the claim finds *name* claimed, but not by one template alone."""
-        if not (self._reads_base or self._breaks_out) or self._resolved().bases is None:
+        if not (self._reads_base or self._breaks_out):
             return False
         claim = self.claim(name)
         return claim.claimed and not claim.accepted
@@ -202,8 +199,7 @@ class RawBases:
     def _claim(self):
         """Resolve every form of every template in one pass, in the order ADR 0013 lists."""
         templates = [template for template in self.catalog.get() if template.channel_id is None]
-        own_bases = not templates and self.previous_forms is None
-        if own_bases:
+        if not templates and self.previous_forms is None:
             templates = [ResolvedTemplateName(None, _STAND_IN, self._variables["bay_position"], None, None, None, None)]
         raw_names = {template.resolved for template in templates}
         raw_by_claimant = {template.pk: template.resolved for template in templates}
@@ -222,7 +218,7 @@ class RawBases:
         bases = {name: raw_by_claimant[claimant_id] for claimant_id, unit in accepted for name in unit}
         claimed = dict.fromkeys(name for claim in claims for unit in claim.units for name in unit)
         return _Resolution(
-            bases=None if own_bases else bases,
+            bases=bases,
             families=tuple(flat[pair] for pair in accepted if pair in flat),
             claims={name: NameClaim(True, name in bases, name in raw_claimed) for name in claimed},
         )

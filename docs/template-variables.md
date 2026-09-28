@@ -94,8 +94,9 @@ Apply Rules and a move all use the same claim. A `{vc_position}` inside an arith
 position, and so does a `{base}` inside one when its template name uses the `{vc_position}` token. An interface that no template claims, or that more than one template claims, keeps its name. So does an interface whose template also claims another interface or flat family. A breakout rule builds a family only on an interface that one template alone claims, also when the rule does not use `{base}`. The plugin logs the reason. A raw name wins over another template's earlier
 virtual-chassis form, but not over the name the rule gives another template, so a module type
 whose templates overlap under the rule keeps every overlapping name, on install too. A module type without interface templates has
-no raw names, so there `{base}` is the interface's current name. A breakout rule there builds a family only
-on the interface named as the bay position.
+no raw names, so it claims as one template whose raw name is the bay position. There `{base}` is the bay
+position, and a rule that uses `{base}` or a breakout rule acts only on the interface named as the bay
+position or on a name the rule gives it. Every other interface keeps its name and is reported.
 
 In a device interface rule, `{base}` is the interface's current name.
 

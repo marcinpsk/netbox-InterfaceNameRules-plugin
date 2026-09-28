@@ -25,7 +25,10 @@ The pass collects every form of every template as evidence, in this one order:
 5. after a move or a bay edit, the raw name and the names the previous rule gave, from the previous
    state. A move recognises no flat family (ADR 0015), so its pass has no flat family forms.
 
-A module type without interface templates claims as one template whose raw name is the bay position.
+A module type without interface templates claims as one template whose raw name is the bay position,
+and its claim is read like any template's. So there `{base}` is the bay position, and a rule that reads
+`{base}` or a breakout rule acts only on the interfaces this template claims. After a move it claims
+nothing (ADR 0015).
 
 The primitive takes the complete relation. A claim is a set of units: one interface name, or the
 names of one flat family. A template claims one unit when exactly one of its units holds every name
@@ -39,8 +42,7 @@ The paths read the result as follows:
 
 - A rule that reads `{base}` gets the raw name of the accepted claim. A name that no single template
   claims has no base, so the rule does not rename it. After a move every rule reads the claim this
-  way. Otherwise a rule that does not read `{base}` takes each name as its own base, and so does a
-  module type without templates.
+  way. Otherwise a rule that does not read `{base}` takes each name as its own base.
 - The engine chooses the scope of an automatic run, and the family package applies it with the
   claim. An install touches an interface that a template claims as its raw name, now or at an
   earlier position. A forced reapply and Apply Rules touch every interface. In scope, a rule without
@@ -49,11 +51,10 @@ The paths read the result as follows:
   scope applies before two interfaces that intend one family collapse into one (ADR 0011).
 - A breakout rule builds a family only on an interface that one template alone claims. This holds on
   every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
-  does not read `{base}`, and on a module type without templates, where only the interface named as
-  the bay position qualifies. Every other interface keeps its name and is reported as unclaimed,
-  unless a family that the rule builds takes that name. In Apply Rules only a family that the operator
-  selected takes a name, so a selected interface is always built or reported. A subinterface that no
-  template claims is no
+  does not read `{base}`, and on a module type without templates. Every other interface keeps its
+  name and is reported as unclaimed, unless a family that the rule builds takes that name. In Apply
+  Rules only a family that the operator selected takes a name, so a selected interface is always
+  built or reported. A subinterface that no template claims is no
   candidate of its own, so a breakout rule neither touches nor reports it. Prediction refuses a given
   name that the claim finds ambiguous, and predicts every other given name from itself.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
