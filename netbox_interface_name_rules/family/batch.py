@@ -29,7 +29,13 @@ from .installed import (
     plan_interface_rename,
     plan_kept_interface,
 )
-from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
+from .structural import (
+    carries_flat_expansion,
+    execute_flat_family,
+    execute_structural_family,
+    plan_flat_family,
+    plan_structural_family,
+)
 from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
@@ -122,14 +128,14 @@ def _is_top_level(interface) -> bool:
     return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
 
 
-def _creation_plan(module, rule, variables, base, base_name):
+def _creation_plan(module, rule, variables, base, base_name, flat_expansion):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
-        return plan_structural_family(module, rule, variables, base, base_name)
+        return plan_structural_family(module, rule, variables, base, base_name, flat_expansion)
     return plan_flat_family(module, rule, variables, base, base_name)
 
 
-def _creation_plans(module, rule, variables, plain, bases, selected_pks):
+def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion):
     """Return one creation plan per family that *selected_pks* reaches, so no family is built twice."""
     candidates = []
     for base in plain:
@@ -139,7 +145,10 @@ def _creation_plans(module, rule, variables, plain, bases, selected_pks):
         )
         candidates.append((base, base_name, target_names))
     kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
-    planned = [(_creation_plan(module, rule, variables, *candidates[index][:2]), candidates[index]) for index in kept]
+    planned = [
+        (_creation_plan(module, rule, variables, *candidates[index][:2], flat_expansion), candidates[index])
+        for index in kept
+    ]
     planned = [(plan, candidate) for plan, candidate in planned if _reaches(plan, selected_pks)]
     # A name that a selected family builds on belongs to that family, so it is not reported on its own.
     taken = {name for _plan, (_base, base_name, targets) in planned if base_name is not None for name in targets}
@@ -218,7 +227,8 @@ def plan_module_families(
                 rule,
             )
     else:
-        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks)
+        flat_expansion = builds_channelized_family(rule) and carries_flat_expansion(interfaces, bases.catalog.get())
+        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
     return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
 

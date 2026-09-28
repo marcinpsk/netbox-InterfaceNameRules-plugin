@@ -49,6 +49,11 @@ def has_flat_expansion(module) -> bool:  # pragma: no cover - requires channeliz
     return _flat_expansion(module.module_type_id, module.pk)
 
 
+def carries_flat_expansion(interfaces, templates) -> bool:
+    """Return whether *interfaces* hold more rows outside a channel than *templates* has, as ``has_flat_expansion``."""
+    return sum(1 for interface in interfaces if getattr(interface, "channel_id", None) is None) > len(templates)
+
+
 def _plan(module, base, parent_target_name, channels, status=None, reason=""):
     """Build one immutable structural plan for *base*."""
     return StructuralFamilyPlan(
@@ -65,7 +70,7 @@ def _plan(module, base, parent_target_name, channels, status=None, reason=""):
     )
 
 
-def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cover - channelization only
+def _modelled_plan(module, rule, variables, base, base_name, flat_expansion):  # pragma: no cover - channelization only
     """Return the plan for a NetBox release that can hold the family."""
     if base_name is None:
         return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
@@ -74,21 +79,22 @@ def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cove
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
-    if has_flat_expansion(module):
+    if flat_expansion:
         # Converting one sibling into a parent would strand the others beside the new family.
         reason = f"module {module} already carries a flat breakout family"
         return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, reason)
     return _plan(module, base, parent_target_name, channels)
 
 
-def plan_structural_family(module, rule, variables, base, base_name) -> StructuralFamilyPlan:
+def plan_structural_family(module, rule, variables, base, base_name, flat_expansion) -> StructuralFamilyPlan:
     """Return the plan for the channelized family *rule* builds on plain interface *base*.
 
-    *base_name* is the value of ``{base}``, or None when no template claims *base*.
+    *base_name* is the value of ``{base}``, or None when no template claims *base*. *flat_expansion* is
+    whether the module carries a flat breakout family, as ``carries_flat_expansion`` decides.
     """
     if not supports_channelization():
         return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
-    return _modelled_plan(module, rule, variables, base, base_name)  # pragma: no cover - see above
+    return _modelled_plan(module, rule, variables, base, base_name, flat_expansion)  # pragma: no cover - see above
 
 
 def _outcome(plan, status, members, reason=""):
