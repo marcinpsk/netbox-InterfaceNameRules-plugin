@@ -198,11 +198,10 @@ and the reason:
   outside a virtual chassis,
 - no single interface template claims the interface: two templates claim it,
   its template also claims another interface or flat family, or no template
-  claims it. An install reports only an interface that still carries a raw
-  name. After a type change or a virtual-chassis change, a rule without
-  channels that does not use `{base}` renames an interface that no template
-  claims, and a breakout rule does not report a subinterface that no template
-  claims,
+  claims it. This applies to a rule that uses `{base}`, to a breakout rule, and
+  after a move or a bay edit. An install reports only an interface that still
+  carries a raw name. A breakout rule does not report a subinterface that no
+  template claims,
 - a flat breakout family that the rule named at another virtual-chassis
   position lost one of its interfaces, so the plugin keeps the names of the
   rest,

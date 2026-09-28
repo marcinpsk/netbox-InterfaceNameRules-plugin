@@ -448,6 +448,35 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["xe-1/0/4", "xe-1/1/4"])
         self.assertIn("xe-1/0/4", "\n".join(logs.output))
 
+    def test_a_rule_without_base_renames_a_refused_raw_name_on_install_as_apply_rules_does(self):
+        """A rule that does not read ``{base}`` needs no template, so the claim refuses nothing it would use."""
+        modules = []
+        for position in ("3", "4"):
+            module, _ = self._install_on(self.device, self.decoy_type, position)
+            rename_out_of_band(Interface.objects.get(module=module, name=f"mgmt-{position}"), f"xe-0/0/{position}")
+            modules.append(module)
+        self._renumber(2)
+        rule = InterfaceNameRule.objects.create(module_type=self.decoy_type, name_template="et-0/0/{bay_position}")
+        installed, applied = modules
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            reapply([ModuleTrigger.after_install(installed)])
+            outcome = apply_rule_to_existing(
+                rule, interface_ids=Interface.objects.filter(module=applied).values_list("pk", flat=True)
+            )
+
+        (entry,) = JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(installed), assigned_object_id=installed.pk
+        )
+        self.assertIn("to `et-0/0/3`: target name is already in use", entry.comments)
+        self.assertEqual(outcome.changed_count, 1)
+        self.assertEqual([member.reason for member in outcome.skipped_members], ["target name is already in use"])
+        for module, position in ((installed, "3"), (applied, "4")):
+            with self.subTest(position=position):
+                names = self._names(module)
+                self.assertIn(f"et-0/0/{position}", names)
+                self.assertEqual(len(names), 2)
+
     def test_two_token_templates_that_do_not_overlap_both_rename(self):
         """The guard is scoped to real ambiguity: distinct claims still each match their own interface.
 

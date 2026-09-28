@@ -149,8 +149,8 @@ def _scoped(interfaces, rule, bases, scope):
         claim = bases.claim(interface.name)
         if scope == RunScope.INSTALL and not claim.raw:
             continue
-        # A refused name keeps its name; a breakout rule builds only on a name one template alone claims.
-        if claim.accepted or not (claim.claimed or breaks_out(rule)):
+        # A breakout rule builds only on a name one template alone claims; ``base_for`` gates a {base} rule.
+        if claim.accepted or not breaks_out(rule):
             admitted.append(interface)
         elif claim.claimed or _is_top_level(interface):
             kept.append(interface)
