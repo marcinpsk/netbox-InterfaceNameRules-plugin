@@ -15,6 +15,7 @@ from django.core.exceptions import ValidationError
 
 from . import family as family_ops
 from . import name_template, naming, rule_selection
+from .choices import BreakoutModeChoices
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
@@ -22,6 +23,7 @@ from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 logger = logging.getLogger(__name__)
 
 NO_RULE_REASON = "no rule matches the module at its new position"
+FLAT_MOVE_REASON = "a flat breakout family is not renamed after a move"
 
 
 def pinned_rule_cache():
@@ -258,13 +260,18 @@ def module_rule_outcomes(
 
     *naming* is the module's ``ModuleNaming`` read before a move. The rule then renames every name
     one template claims through its current or previous forms, and reports every other interface.
-    Without a rule now, each interface the previous rule named keeps its name and is reported.
+    Without a rule now, each interface the previous rule named keeps its name and is reported. When
+    the previous rule is a flat breakout rule, nothing on the module is renamed and every interface
+    is reported: NetBox keeps no link to a family, so it could be recognised by name only (ADR 0015).
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
     previous_forms = None if naming is None else naming.previous_forms()
 
+    if previous_forms is not None and _builds_flat_families(previous_forms.rule):
+        yield from _kept_after_move(module)
+        return
     if not rule:
         if previous_forms is not None and previous_forms.rule is not None:
             yield from _left_without_a_rule(module, previous_forms)
@@ -272,6 +279,19 @@ def module_rule_outcomes(
     # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
         yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, previous_forms)
+
+
+def _builds_flat_families(rule) -> bool:
+    """Return whether *rule* is a flat breakout rule."""
+    return rule is not None and rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
+
+
+def _kept_after_move(module) -> Iterator[RenameOutcome]:
+    """Yield a blocked fact for every interface of *module*, which a move under a flat breakout rule leaves alone."""
+    from dcim.models import Interface
+
+    for name in Interface.objects.filter(module_id=module.pk).order_by("pk").values_list("name", flat=True):
+        yield RenameOutcome(OutcomeKind.BLOCKED, name, FLAT_MOVE_REASON)
 
 
 def _left_without_a_rule(module, previous_forms) -> Iterator[RenameOutcome]:

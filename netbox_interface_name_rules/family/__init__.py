@@ -9,10 +9,9 @@ from .batch import (
     execute_family_plan,
     execute_module_families,
     plan_module_families,
-    plan_module_families_from,
 )
 from .capabilities import supports_channelization
-from .claims import TemplateClaim, resolve_group_claims, resolve_template_claims
+from .claims import TemplateClaim, resolve_template_claims
 from .conversion import (
     conversion_offered,
     convert_rule_families,
@@ -45,7 +44,6 @@ from .domain import (
 )
 from .execution import execute_installed_plan, execute_installed_plan_set
 from .installed import (
-    FlatFamily,
     device_interface_families,
     given_raw_names,
     interfaces_by_module,
@@ -92,7 +90,6 @@ __all__ = (
     "FamilyStatus",
     "FamilyTopology",
     "FlatCreationPlan",
-    "FlatFamily",
     "InstalledFamilyPlan",
     "InstalledFamilyPlanSet",
     "InstalledPlanSetOutcome",
@@ -142,11 +139,9 @@ __all__ = (
     "plan_interface_rename",
     "plan_module_conversions",
     "plan_module_families",
-    "plan_module_families_from",
     "plan_prospective_families",
     "plan_structural_family",
     "preview_rule_conversions",
-    "resolve_group_claims",
     "resolve_template_claims",
     "resolved_template_names",
     "supports_channelization",

@@ -109,39 +109,3 @@ class TemplateClaimsTest(SimpleTestCase):
             accepted, messages = family.resolve_template_claims(claims, module="module", label_kind="interface name")
         self.assertEqual(accepted, ())
         self.assertEqual(len(messages), 1)
-
-
-class GroupClaimsTest(SimpleTestCase):
-    """A group is one interface or every member of one family; a shared name refuses every group that holds it."""
-
-    def test_disjoint_groups_are_accepted_whole(self):
-        claims = (family.TemplateClaim(1, "A", (("a:0", "a:1"),)), family.TemplateClaim(2, "B", (("b",),)))
-
-        self.assertEqual(
-            family.resolve_group_claims(claims, module="module"),
-            (((1, ("a:0", "a:1")), (2, ("b",))), ()),
-        )
-
-    def test_a_name_in_two_templates_groups_refuses_both_groups(self):
-        claims = (family.TemplateClaim(1, "A", (("a:0", "a:1"),)), family.TemplateClaim(2, "B", (("a:1",),)))
-
-        self.assertEqual(
-            family.resolve_group_claims(claims, module="module"),
-            (
-                (),
-                (
-                    (
-                        "Interface 'a:1' on module could be the raw or renamed name of any of the templates "
-                        "['A', 'B']; skipping it rather than renaming a guess."
-                    ),
-                ),
-            ),
-        )
-
-    def test_a_group_two_templates_claim_whole_is_reported_once(self):
-        claims = (family.TemplateClaim(1, "A", (("x",),)), family.TemplateClaim(2, "B", (("x",),)))
-
-        accepted, messages = family.resolve_group_claims(claims, module="module")
-
-        self.assertEqual((accepted, len(messages)), ((), 1))
-        self.assertIn("('x',)", messages[0])

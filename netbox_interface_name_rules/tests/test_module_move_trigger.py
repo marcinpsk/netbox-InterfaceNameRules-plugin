@@ -50,6 +50,8 @@ BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
 NETBOX_MOVES_SUBTREES = importlib.util.find_spec("dcim.models.module_moves") is not None
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 UNCLAIMED = "no single interface template claims"
+FLAT = "a flat breakout family is not renamed after a move"
+NOT_BUILT = "a flat breakout family is built after a move only when every interface of the module is claimed"
 NO_RULE = "no rule matches the module at its new position"
 WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
 NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
@@ -202,14 +204,6 @@ class ModuleMoveTest(ModuleMoveTestCase):
         InterfaceNameRule.objects.create(module_type=cls.plain_type, name_template="et-{vc_position}/0/{bay_position}")
         cls.base_type = cls._module_type("Base", "{module}")
         InterfaceNameRule.objects.create(module_type=cls.base_type, name_template="p{base}-{vc_position}")
-        cls.flat_type = cls._module_type("Flat", "{module}")
-        InterfaceNameRule.objects.create(
-            module_type=cls.flat_type,
-            name_template="et-{vc_position}/{bay_position}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
 
     def test_a_module_moved_to_another_bay_is_renamed_for_the_new_bay(self):
         module = self._install(self.plain_type, self._bay(self.device))
@@ -241,14 +235,6 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["p1-5"])
-
-    def test_a_flat_breakout_family_is_renamed_for_the_new_bay(self):
-        module = self._install(self.flat_type, self._bay(self.device))
-        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
-
-        self._move(module, self._bay(self.device, "Bay 2"))
-
-        self.assertEqual(self._names(module), ["et-1/2:0", "et-1/2:1"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channelized_family_is_renamed_for_the_new_bay(self):
@@ -309,23 +295,6 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["1", "operator-name", "xe-1/0/1:0", "xe-1/0/1:1"])
         (entry,) = _journal(module)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
-
-    def test_a_flat_family_the_move_does_not_rename_keeps_its_names_unreported(self):
-        module_type = self._module_type("Flat Pair", "{module}", "mgmt")
-        InterfaceNameRule.objects.create(
-            module_type=module_type,
-            name_template="{base}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-        module = self._install(module_type, self._bay(self.device))
-        self.assertEqual(self._names(module), ["0:0", "0:1", "mgmt:0", "mgmt:1"])
-
-        self._move(module, self._bay(self.device, "Bay 1"))
-
-        self.assertEqual(self._names(module), ["1:0", "1:1", "mgmt:0", "mgmt:1"])
-        self.assertEqual(_journal(module), [])
 
 
 @skipUnless(NETBOX_MOVES_SUBTREES, REQUIRES_SUBTREE_MOVES)
@@ -402,18 +371,16 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(optic), ["et-1/2/1"])
 
-    def test_a_family_whose_channel_count_changes_with_the_rule_is_blocked_and_the_subtree_still_reapplies(self):
+    def test_a_card_under_a_flat_rule_keeps_its_names_and_its_nested_modules_are_renamed(self):
         card_type = self._card_type("Flat Card", "1")
         InterfaceTemplate.objects.create(module_type=card_type, name="{module}", type=PLAIN_TYPE)
-        for device_type, template, count in ((self.device_type, "a", 2), (self.other_device_type, "b", 4)):
-            InterfaceNameRule.objects.create(
-                module_type=card_type,
-                device_type=device_type,
-                name_template=f"{template}-{{bay_position}}:{{channel}}",
-                breakout_mode=BreakoutModeChoices.FLAT,
-                channel_count=count,
-                channel_start=0,
-            )
+        InterfaceNameRule.objects.create(
+            module_type=card_type,
+            name_template="a-{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
         card, port = self._install_card(card_type, self._bay(self.device))
         optic = self._install(self.optic_type, port)
         self.assertEqual(self._names(card), ["a-0:0", "a-0:1"])
@@ -423,7 +390,9 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(card), self._names(optic)), (["a-0:0", "a-0:1"], ["et-5/1/1"]))
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
-        self.assertIn("`a-0:0`: installed family has 2 channels but the rule defines 4", entry.comments)
+        for name in ("a-0:0", "a-0:1"):
+            self.assertIn(f"`{name}`: {FLAT}", entry.comments)
+        self.assertNotIn("et-", entry.comments)
 
     def test_a_nested_module_whose_reapply_fails_is_reported_with_the_outcomes_before_it(self):
         card_type = self._card_type("Two Port Card", "1")
@@ -548,24 +517,6 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`a0`: {NO_RULE}", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
 
-    def test_without_a_rule_after_the_move_a_flat_family_the_old_rule_built_is_reported(self):
-        self._rule(
-            "a-{bay_position}:{channel}",
-            device_type=self.device_type,
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-        module = self._install(self.module_type, self._bay(self.device))
-        self.assertEqual(self._names(module), ["a-0:0", "a-0:1"])
-
-        self._move(module, self._bay(self.remote, "Bay 1"))
-
-        self.assertEqual(self._names(module), ["a-0:0", "a-0:1"])
-        (entry,) = _journal(module)
-        self.assertIn(f"`a-0:0`: {NO_RULE}", entry.comments)
-        self.assertIn(f"`a-0:1`: {NO_RULE}", entry.comments)
-
     def test_a_move_from_a_plain_rule_to_a_flat_breakout_rule_builds_the_family(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule(
@@ -583,24 +534,24 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["b-1:0", "b-1:1"])
         self.assertEqual(_journal(module), [])
 
-    def test_a_flat_family_whose_channel_count_changes_with_the_rule_is_blocked(self):
-        for device_type, template, count in ((self.device_type, "a", 2), (self.other_device_type, "b", 4)):
-            self._rule(
-                f"{template}-{{bay_position}}:{{channel}}",
-                device_type=device_type,
-                breakout_mode=BreakoutModeChoices.FLAT,
-                channel_count=count,
-                channel_start=0,
-            )
+    def test_a_move_into_a_flat_rule_builds_no_family_while_an_interface_is_unclaimed(self):
+        self._rule("a-{bay_position}", device_type=self.device_type)
+        self._rule(
+            "b-{bay_position}:{channel}",
+            device_type=self.other_device_type,
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
         module = self._install(self.module_type, self._bay(self.device))
+        Interface.objects.create(device=self.device, module=module, name="a-0:1", type=PLAIN_TYPE)
 
         self._move(module, self._bay(self.remote, "Bay 1"))
 
-        self.assertEqual(self._names(module), ["a-0:0", "a-0:1"])
+        self.assertEqual(self._names(module), ["a-0", "a-0:1"])
         (entry,) = _journal(module)
-        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
-        for name in ("a-0:0", "a-0:1"):
-            self.assertIn(f"`{name}`: installed family has 2 channels but the rule defines 4", entry.comments)
+        self.assertIn(f"`a-0`: {NOT_BUILT}", entry.comments)
+        self.assertIn(f"`a-0:1`: {UNCLAIMED}", entry.comments)
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_without_a_rule_after_the_move_the_channels_renamed_with_their_parent_are_reported(self):
@@ -654,114 +605,6 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         (entry,) = _journal(module)
         self.assertIn(f"`x10`: {UNCLAIMED}", entry.comments)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
-
-    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    def test_one_template_that_matches_two_flat_families_renames_neither(self):
-        module_type = self._module_type("Token Flat", "{vc_position}/{module}")
-        InterfaceNameRule.objects.create(
-            module_type=module_type,
-            name_template="{base}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-        module = self._install(module_type, self._bay(self.device))
-        self.assertEqual(self._names(module), ["1/0:0", "1/0:1"])
-        for name in ("3/1:0", "3/1:1"):
-            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
-
-        self._move(module, self._bay(self.peer, "Bay 1"))
-
-        names = ["1/0:0", "1/0:1", "3/1:0", "3/1:1"]
-        self.assertEqual(self._names(module), names)
-        (entry,) = _journal(module)
-        for name in names:
-            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
-
-    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    def test_one_template_that_matches_three_flat_families_renames_none(self):
-        module_type = self._module_type("Three Flat", "{vc_position}/{module}")
-        InterfaceNameRule.objects.create(
-            module_type=module_type,
-            name_template="{base}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-        module = self._install(module_type, self._bay(self.device))
-        for name in ("3/1:0", "3/1:1", "4/1:0", "4/1:1"):
-            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
-
-        self._move(module, self._bay(self.peer, "Bay 1"))
-
-        names = ["1/0:0", "1/0:1", "3/1:0", "3/1:1", "4/1:0", "4/1:1"]
-        self.assertEqual(self._names(module), names)
-        (entry,) = _journal(module)
-        for name in names:
-            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
-
-    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    def test_a_family_with_more_channels_than_the_new_rule_keeps_every_name(self):
-        module_type = self._module_type("Wide Flat", "{vc_position}")
-        for platform, count in ((self.platform, 4), (self.other_platform, 2)):
-            InterfaceNameRule.objects.create(
-                module_type=module_type,
-                platform=platform,
-                name_template="{base}:{channel}",
-                breakout_mode=BreakoutModeChoices.FLAT,
-                channel_count=count,
-                channel_start=0,
-            )
-        module = self._install(module_type, self._bay(self.device))
-        names = ["1:0", "1:1", "1:2", "1:3"]
-        self.assertEqual(self._names(module), names)
-
-        self._move(module, self._bay(self.peer, "Bay 1"))
-
-        self.assertEqual(self._names(module), names)
-        (entry,) = _journal(module)
-        for name in names:
-            self.assertIn(f"`{name}`: installed family has 4 channels but the rule defines 2", entry.comments)
-
-    def test_a_raw_name_inside_its_own_templates_family_is_one_claim(self):
-        module_type = self._module_type("Fixed Flat", "0:0")
-        InterfaceNameRule.objects.create(
-            module_type=module_type,
-            name_template="{bay_position}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-        module = self._install(module_type, self._bay(self.device))
-        self.assertEqual(self._names(module), ["0:0", "0:1"])
-
-        self._move(module, self._bay(self.device, "Bay 1"))
-
-        self.assertEqual(self._names(module), ["1:0", "1:1"])
-        self.assertEqual(_journal(module), [])
-
-    def test_a_family_member_another_template_claims_refuses_the_whole_family(self):
-        module_type = self._module_type("Member Flat", "{module}", "0:1")
-        module = self._install(module_type, self._bay(self.device))
-        rename_out_of_band(Interface.objects.get(module=module, name="0"), "0:0")
-        rename_out_of_band(Interface.objects.get(module=module, name="0:1"), "0:1:0")
-        for name in ("0:1", "0:1:1"):
-            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
-        InterfaceNameRule.objects.create(
-            module_type=module_type,
-            name_template="{base}:{channel}",
-            breakout_mode=BreakoutModeChoices.FLAT,
-            channel_count=2,
-            channel_start=0,
-        )
-
-        self._move(module, self._bay(self.device, "Bay 1"))
-
-        names = ["0:0", "0:1", "0:1:0", "0:1:1"]
-        self.assertEqual(self._names(module), names)
-        (entry,) = _journal(module)
-        for name in names:
-            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
 
     def test_an_interface_of_a_module_type_without_templates_is_reported_after_a_move(self):
         module_type = make_module_type(self.manufacturer, "Bare", model=f"{self.prefix} Bare")
@@ -829,6 +672,74 @@ class MoveRecognitionTest(ModuleMoveTestCase):
 
         self.assertEqual(Module.objects.get(pk=module.pk).module_bay, self._bay(self.device))
         self.assertEqual(self._names(module), ["et-1/0/0"])
+
+
+class FlatBreakoutMoveTest(ModuleMoveTestCase):
+    """A module whose rule before the move is a flat breakout rule is not renamed, and its interfaces are reported.
+
+    NetBox keeps no link from an interface to its template or its family, so a flat family could be
+    recognised only by name, and a move keeps whatever names NetBox left.
+    """
+
+    def _flat_rule(self, module_type, name_template, **scope):
+        return InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template=name_template,
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+            **scope,
+        )
+
+    def _move_and_reapply(self, module, bay):
+        """Move *module* to *bay*, and return its names after NetBox's save, before the reapply runs."""
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._save_move(module, bay)
+        saved = self._names(module)
+        for callback in callbacks:
+            callback()
+        return saved
+
+    def _assert_kept_and_reported(self, module, names):
+        self.assertEqual(self._names(module), names)
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        for name in names:
+            self.assertIn(f"`{name}`: {FLAT}", entry.comments)
+
+    def test_a_flat_breakout_family_keeps_its_names_and_is_reported(self):
+        module_type = self._module_type("Flat", "{module}")
+        self._flat_rule(module_type, "et-{vc_position}/{bay_position}:{channel}")
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
+
+        self._move(module, self._bay(self.device, "Bay 2"))
+
+        self._assert_kept_and_reported(module, ["et-1/0:0", "et-1/0:1"])
+
+    def test_a_family_netbox_renames_in_part_gets_no_second_family(self):
+        module_type = self._module_type("Native Flat", "{module}:0")
+        self._flat_rule(module_type, "{bay_position}:{channel}")
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["0:0", "0:1"])
+
+        saved = self._move_and_reapply(module, self._bay(self.device, "Bay 1"))
+
+        self._assert_kept_and_reported(module, saved)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):
+        module_type = self._module_type("Flat To Simple", "{vc_position}")
+        self._flat_rule(module_type, "{base}:{channel}", platform=self.platform)
+        InterfaceNameRule.objects.create(
+            module_type=module_type, platform=self.other_platform, name_template="{base}:0"
+        )
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["1:0", "1:1"])
+
+        self._move(module, self._bay(self.peer, "Bay 1"))
+
+        self._assert_kept_and_reported(module, ["1:0", "1:1"])
 
 
 class MoveTransactionTest(ModuleMoveTestCase):

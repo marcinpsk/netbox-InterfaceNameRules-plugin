@@ -21,12 +21,20 @@ from .domain import (
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
-from .installed import interfaces_by_module, module_raw_bases, plan_installed_families_from, plan_interface_rename
+from .installed import (
+    interfaces_by_module,
+    module_raw_bases,
+    plan_installed_families_from,
+    plan_interface_rename,
+    plan_kept_interface,
+)
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
 from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
 from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
+
+NOT_BUILT_REASON = "a flat breakout family is built after a move only when every interface of the module is claimed"
 
 # A member left with the name it had for a reason the operator can act on.  An unsupported topology
 # is not one of them: the release cannot hold the family, so nothing was dropped by this batch.
@@ -134,18 +142,10 @@ def plan_module_families(
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
 
-    *previous_forms* holds what named the module's templates before a move, so the plans also find
-    the interfaces and flat families that the previous state named, and report the rest.
+    *previous_forms* holds what named the module's templates before a move. The plans then find the
+    interfaces the previous state named and report the rest; they rename no installed flat family.
     """
     bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
-    return plan_module_families_from(module, rule, variables, interfaces, bases, admit_leftover)
-
-
-def plan_module_families_from(module, rule, variables, interfaces, bases, admit_leftover=None) -> ModuleFamilyPlans:
-    """Return the plans ``plan_module_families`` builds, with ``{base}``, templates and claims from *bases*.
-
-    After a move, an interface in two plans is refused before any plan runs: planning raises.
-    """
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
@@ -158,7 +158,7 @@ def plan_module_families_from(module, rule, variables, interfaces, bases, admit_
         leftover = tuple(  # pragma: no cover - requires channelization support
             plan_interface_rename(module, rule, variables, interface, bases)
             for interface in plain
-            if bases.previous_forms is not None and bases.base_for(interface.name) is None
+            if previous_forms is not None and bases.base_for(interface.name) is None
         )
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
@@ -166,22 +166,17 @@ def plan_module_families_from(module, rule, variables, interfaces, bases, admit_
                 interface.name,
                 rule,
             )
+    elif previous_forms is not None and any(bases.base_for(interface.name) is None for interface in plain):
+        # An unclaimed interface may belong to a flat family, so no family is built on its module.
+        leftover = tuple(
+            plan_interface_rename(module, rule, variables, interface, bases)
+            if bases.base_for(interface.name) is None
+            else plan_kept_interface(module, interface, NOT_BUILT_REASON)
+            for interface in plain
+        )
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
-    planned = ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
-    if bases.previous_forms is not None:
-        _refuse_overlapping_plans(planned.plans)
-    return planned
-
-
-def _refuse_overlapping_plans(plans):
-    """Raise when one live interface is in two plans: running both could rename part of a family."""
-    seen = set()
-    for plan in plans:
-        for member in plan.live_members:
-            if member.snapshot.pk in seen:
-                raise ValueError(f"interface {member.snapshot.name!r} is in more than one planned family")
-            seen.add(member.snapshot.pk)
+    return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
 
 
 def _selection_pks(plan):

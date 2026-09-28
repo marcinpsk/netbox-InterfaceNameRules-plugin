@@ -12,7 +12,7 @@ import re
 from typing import NamedTuple
 
 from ..name_template import evaluate_name_template, references_variable
-from .claims import TemplateClaim, resolve_group_claims, resolve_template_claims
+from .claims import TemplateClaim, resolve_template_claims
 from .targets import used_parent_template
 from .template_names import VC_POSITION_DIGITS
 
@@ -127,12 +127,10 @@ class RawBases:
 
     *previous_forms* holds what named each template before a move. Its forms are claim evidence too,
     and with it every rule computes its claims, so a name that no single template claims has no base,
-    also on a module type without templates. *flat_families* are then the complete flat families
-    found for each template, with ``template_pk`` and ``members``: a template claims a family as one
-    group of names, and one claim covers families and interfaces.
+    also on a module type without templates.
     """
 
-    def __init__(self, module, rule, variables, families, catalog, previous_forms=None, flat_families=()):
+    def __init__(self, module, rule, variables, families, catalog, previous_forms=None):
         self._module = module
         self._rule = rule
         self._variables = variables
@@ -140,11 +138,9 @@ class RawBases:
         self._names = tuple(self._families)
         self.catalog = catalog
         self.previous_forms = previous_forms
-        self.flat_families = tuple(flat_families)
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._claimed = False
         self._by_name = None
-        self._accepted = {}
         self._ambiguous = frozenset()
 
     def base_for(self, name):
@@ -156,18 +152,6 @@ class RawBases:
             return name
         return self._by_name.get(name)
 
-    def admitted_flat_families(self):
-        """Return, after a move, each flat family that is the whole group its template's claim won.
-
-        A family that another group of its template holds was absorbed into that group, so it is no plan.
-        """
-        self._load()
-        return [
-            family
-            for family in self.flat_families
-            if self._accepted.get(family.template_pk) == tuple(member.name for member in family.members)
-        ]
-
     def is_ambiguous(self, name):
         """Return whether more than one template claims *name*, or its template claims another name too."""
         if not self._reads_base:
@@ -178,11 +162,11 @@ class RawBases:
     def _load(self):
         """Compute the claims on first use."""
         if not self._claimed:
-            self._by_name, self._accepted, self._ambiguous = self._claim()
+            self._by_name, self._ambiguous = self._claim()
             self._claimed = True
 
     def _claim(self):
-        """Return ``(raw name by claimed name, group each accepted template claims, ambiguous names)``.
+        """Return ``(raw name by claimed name, ambiguous names)``.
 
         Without templates the first is None, and a name is its own base, except after a move.
         A template claims its raw name, its historical raw forms and the names the rule gives it. A
@@ -197,7 +181,7 @@ class RawBases:
             if template.channel_id is None
         ]
         if not claimants:
-            return (None if self.previous_forms is None else {}), {}, frozenset()
+            return (None if self.previous_forms is None else {}), frozenset()
         raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
         claims = []
         raw_by_claimant = {}
@@ -213,31 +197,11 @@ class RawBases:
             )
             claims.append(TemplateClaim(claimant_id, template_name, labels))
             raw_by_claimant[claimant_id] = raw
-        accepted, messages = self._resolve(claims)
+        accepted, messages = resolve_template_claims(claims, module=self._module, label_kind="raw base")
         for message in messages:
             logger.warning("%s", message)
-        by_name = {name: raw_by_claimant[claimant_id] for claimant_id, group in accepted for name in group}
-        claimed = {name for claim in claims for group in self._groups(claim) for name in group}
-        return by_name, dict(accepted), frozenset(claimed - by_name.keys())
-
-    def _groups(self, claim):
-        """Return the groups of names *claim* holds: one per interface, and after a move one per flat family."""
-        groups = tuple((label,) for label in claim.labels)
-        if self.previous_forms is None:
-            return groups
-        return groups + tuple(
-            tuple(member.name for member in family.members)
-            for family in self.flat_families
-            if family.template_pk == claim.claimant_id
-        )
-
-    def _resolve(self, claims):
-        """Return accepted ``(template, group of names)`` pairs and the messages of the claim over *claims*."""
-        if self.previous_forms is None:
-            accepted, messages = resolve_template_claims(claims, module=self._module, label_kind="raw base")
-            return tuple((claimant_id, (label,)) for claimant_id, label in accepted), messages
-        grouped = tuple(TemplateClaim(claim.claimant_id, claim.template_name, self._groups(claim)) for claim in claims)
-        return resolve_group_claims(grouped, module=self._module)
+        by_name = {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
+        return by_name, frozenset(label for claim in claims for label in claim.labels) - by_name.keys()
 
     def _previous_template_forms(self, claimant_id):
         """Return the forms the template had in the previous state, or None without a previous state."""
