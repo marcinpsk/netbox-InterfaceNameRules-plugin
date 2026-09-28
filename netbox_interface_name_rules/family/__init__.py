@@ -68,10 +68,17 @@ from .structural import (
     plan_flat_family,
     plan_structural_family,
 )
-from .targets import channelized_family_names, one_family_per_name_set, template_channel_suffixes
+from .targets import (
+    UNCLAIMED_BASE_REASON,
+    channelized_family_names,
+    names_installed_parent,
+    one_family_per_name_set,
+    template_channel_suffixes,
+)
 from .template_names import pinned_template_cache, resolved_template_names
 
 __all__ = (
+    "UNCLAIMED_BASE_REASON",
     "BatchOutcome",
     "ConversionCandidate",
     "ConversionMember",
@@ -117,6 +124,7 @@ __all__ = (
     "interfaces_by_module",
     "is_channelized_parent",
     "module_raw_bases",
+    "names_installed_parent",
     "one_family_per_name_set",
     "pinned_template_cache",
     "plan_device_interface_rename",

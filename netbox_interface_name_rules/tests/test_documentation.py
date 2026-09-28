@@ -409,6 +409,15 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
                     priority,
                 )
 
+    def test_configuration_states_that_a_save_outside_a_request_has_no_journal_author(self):
+        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+
+        self.assertIn(
+            "The author is the user of the request that saved the change. "
+            "A save outside a request, for example from a script or the shell, writes an entry with no author.",
+            guide,
+        )
+
     def test_transaction_adr_states_unrelated_failure_behavior(self):
         adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text(
             encoding="utf-8"
@@ -418,6 +427,13 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             "An unrelated integrity or infrastructure failure rolls back its own family and propagates to the operation boundary.",
             adr,
         )
+
+    def test_glossary_separates_an_unclaimed_outcome_from_a_rule_that_does_not_match(self):
+        glossary = (_PROJECT_ROOT / "CONTEXT.md").read_text(encoding="utf-8")
+        entry = glossary.split("**Rename outcome**:", 1)[1].split("\n**", 1)[0]
+
+        self.assertIn("unclaimed (no single interface template claims its name)", entry)
+        self.assertIn("or that the rule does not match, has no outcome", entry)
 
     def test_re2_upgrade_guide_separates_errors_from_warnings(self):
         guide = (_PROJECT_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")

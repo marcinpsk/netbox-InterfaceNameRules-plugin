@@ -66,6 +66,13 @@ def builds_channelized_family(rule) -> bool:
     return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
 
 
+def names_installed_parent(rule) -> bool:
+    """Return whether *rule* gives the parent of an installed channelized family a new name."""
+    if rule.channel_count <= 0:
+        return True  # a simple rule renames the parent, and the channels follow it in lockstep
+    return bool(used_parent_template(rule))
+
+
 def used_parent_template(rule) -> str:
     """Return the parent name template that *rule* applies, or an empty string when it applies none."""
     return rule.parent_name_template if builds_channelized_family(rule) else ""
@@ -190,7 +197,7 @@ def _breakout_targets(rule, variables, parent_name, base_name, parent_channels, 
         )
     try:
         parent_target = parent_name
-        if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED and rule.parent_name_template:
+        if names_installed_parent(rule):
             parent_target = evaluate_name_template(rule.parent_name_template, {**variables, "base": base_name})
         channels = tuple(
             (

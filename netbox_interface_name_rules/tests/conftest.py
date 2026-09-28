@@ -23,6 +23,22 @@ def django_db_modify_db_settings(django_db_modify_db_settings):
     settings.DATABASES["default"]["TEST"] = test_settings
 
 
+@pytest.fixture(autouse=True)
+def _forget_flushed_object_type_ids(request):
+    """Drop the object type IDs that the flush after a TransactionTestCase makes stale."""
+    yield
+    from django.test import TestCase, TransactionTestCase
+
+    if request.cls is None or not issubclass(request.cls, TransactionTestCase) or issubclass(request.cls, TestCase):
+        return
+    from core.models import ObjectType
+    from django.contrib.contenttypes.models import ContentTypeManager
+
+    # The flush recreates content types under new IDs and clears only ContentType.objects; NetBox 4.3 caches its own.
+    if isinstance(ObjectType.objects, ContentTypeManager):
+        ObjectType.objects.clear_cache()
+
+
 @functools.lru_cache(maxsize=1)
 def _preview_key_contract():
     """Return form fields and every variable declared by a naming context."""
