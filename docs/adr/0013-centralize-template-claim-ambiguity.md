@@ -42,10 +42,12 @@ The paths read the result as follows:
   Otherwise a rule that does not read `{base}` takes each name as its own base, and so does a module
   type without templates.
 - The engine decides only the scope of an automatic run. An install touches an interface that a
-  template claims as its raw name, now or at an earlier position. A forced reapply of a breakout rule
-  touches every claimed interface, and of any other rule every interface. An interface in scope that
-  the claim refuses keeps its name and is reported as unclaimed. This scope check runs before two
-  admitted interfaces that intend one family collapse into it, as required by ADR 0011.
+  template claims as its raw name, now or at an earlier position. A forced reapply touches every
+  interface. An interface in scope that the claim refuses keeps its name and is reported as
+  unclaimed. A breakout rule builds no family on an interface that no template claims, so that
+  interface keeps its name and is reported as unclaimed too. A subinterface that no template claims
+  is no candidate of its own, so a breakout rule neither touches nor reports it. This scope check
+  runs before two admitted interfaces that intend one family collapse into it, as required by ADR 0011.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
   reports a family that lost a member, unless the rule gives the family those names already: the
   family's first interface then builds it again. A channelized rule renames no flat family, and
