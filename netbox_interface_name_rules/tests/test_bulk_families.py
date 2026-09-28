@@ -37,10 +37,6 @@ from netbox_interface_name_rules.family import (
     UNCLAIMED_BASE_REASON,
     FamilyStatus,
     FamilyTopology,
-    InstalledFamilyPlan,
-    MemberRole,
-    PlannedMember,
-    StructuralFamilyPlan,
     describe_interfaces,
     execute_family_plan,
     execute_flat_family,
@@ -762,38 +758,6 @@ class OnlyLivePlansAreExecutableTest(BulkTestCase):
             execute_flat_family(self._prospective_plan())
 
         self.assertEqual(self._names(self.module), ["1"])
-
-    def test_every_plan_kind_exposes_its_live_members_for_failure_reporting(self):
-        base = Interface.objects.get(module=self.module)
-        flat = plan_flat_family(
-            self.module,
-            self.rule,
-            build_variables(self.module.module_bay, device=self.device),
-            base,
-            base.name,
-        )
-        installed = InstalledFamilyPlan(
-            family_id=f"installed:{base.pk}",
-            topology=FamilyTopology.FLAT,
-            device_id=self.device.pk,
-            module_id=self.module.pk,
-            members=(PlannedMember(flat.base, "installed-target", MemberRole.FLAT_MEMBER),),
-        )
-        structural = StructuralFamilyPlan(
-            family_id=f"structural:{base.pk}",
-            device_id=self.device.pk,
-            module_id=self.module.pk,
-            module_type_id=self.module_type.pk,
-            base=flat.base,
-            parent_target_name="parent-target",
-            channel_count=0,
-            channels=(),
-        )
-
-        self.assertEqual(
-            [plan.live_members[0].target_name for plan in (installed, structural, flat)],
-            ["installed-target", "parent-target", "xe-0/0/1:0"],
-        )
 
 
 class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):

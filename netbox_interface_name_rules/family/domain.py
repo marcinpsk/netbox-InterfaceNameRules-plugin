@@ -93,11 +93,6 @@ class InstalledFamilyPlan:
         """Return member primary keys in plan order."""
         return tuple(member.snapshot.pk for member in self.members)
 
-    @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the planned members that already have live interface rows."""
-        return self.members
-
 
 @dataclass(frozen=True, slots=True)
 class InstalledFamilyPlanSet:
@@ -145,11 +140,6 @@ class StructuralFamilyPlan:
         """Return the parent name and every channel name in creation order."""
         return (self.parent_target_name, *(channel.name for channel in self.channels))
 
-    @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the base row this plan rewrites."""
-        return (PlannedMember(self.base, self.parent_target_name, MemberRole.PARENT),)
-
 
 @dataclass(frozen=True, slots=True)
 class FlatCreationPlan:
@@ -177,14 +167,6 @@ class FlatCreationPlan:
     def member_pks(self) -> tuple[int, ...]:
         """Return the base and every planned member, by primary key."""
         return (self.base.pk, *(member.pk for member in self.members))
-
-    @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the base row this plan rewrites and the rows it keeps."""
-        return (
-            PlannedMember(self.base, self.target_names[0], MemberRole.FLAT_MEMBER),
-            *(PlannedMember(member, member.name, MemberRole.FLAT_MEMBER) for member in self.members),
-        )
 
 
 @dataclass(frozen=True, slots=True)
