@@ -81,32 +81,6 @@ def supports_vc_position_token():
     return _vc_position_re() is not None
 
 
-def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
-    """Build drift claims and delegate admission to the family package."""
-    claims = tuple(
-        family_ops.TemplateClaim(
-            index,
-            matcher.template_name,
-            tuple(label for label, forms in candidates if any(matcher.pattern.fullmatch(form) for form in forms)),
-        )
-        for index, matcher in enumerate(matchers)
-    )
-    accepted, messages = family_ops.resolve_template_claims(claims, module=module, label_kind="interface name")
-    for message in messages:
-        logger.warning("%s", message)
-    return [label for _, label in accepted]
-
-
-def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - requires vc_position token support
-    """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
-
-    *interfaces* and *matchers* are what the exact pass left unclaimed.
-    """
-    by_name = {iface.name: iface for iface in interfaces}
-    claimed = _unambiguous_claims([(iface.name, (iface.name,)) for iface in interfaces], matchers, module)
-    return [by_name[label] for label in claimed]
-
-
 def _family_base(interface):
     """Return the base name of the flat or channelized family *interface* belongs to."""
     # A channelized parent is its own base: its channels are separate rows, so the name needs no
@@ -114,63 +88,35 @@ def _family_base(interface):
     return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
 
 
-def _forced_channel_bases(interfaces, raw_names, matchers, module):
-    """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
-
-    A base is claimed exactly when either comparison form — the full base or its last path segment,
-    the latter covering already-renamed bases — is a raw name now; otherwise a token template's
-    matcher may claim it, under the same one-to-one policy ``_drifted_candidates`` applies.  Two
-    bases with distinct rule outputs never collide downstream, so an ambiguous claim has to be
-    stopped here or it is not stopped at all.
-    """
-    seen_bases: dict = {}
-    forms_by_base: dict = {}
-    for i in interfaces:
-        base = _family_base(i)
-        forms = (base, base.rsplit("/", 1)[-1])
-        if not any(form in raw_names for form in forms) and not any(
-            matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
-        ):
-            continue
-        forms_by_base[base] = forms
-        if base not in seen_bases or i.name.endswith(":0"):
-            seen_bases[base] = i
-
-    exact_forms = {form for forms in forms_by_base.values() for form in forms if form in raw_names}
-    drifted = {base: forms for base, forms in forms_by_base.items() if not exact_forms & set(forms)}
-    if not drifted:
-        return list(seen_bases.values())
-    kept = set(  # pragma: no cover - requires vc_position token support
-        _unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module)
-    )
-    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]  # pragma: no cover - see above
+def _carries_a_raw_name(claim) -> bool:
+    """Return whether a template claims the name as its raw name, now or at an earlier virtual-chassis position."""
+    return claim is not None and claim.raw
 
 
-def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), module=None):
-    """Return the subset of *interfaces* that should be processed by the rule.
+def _in_scope(claim, rule, force_reapply) -> bool:
+    """Return whether this run may touch an interface whose name the claim treats as *claim*.
 
-    Normal (non-force) mode: only interfaces whose current name is still in the
-    raw template names (idempotency guard), plus the ones a *matchers* entry
-    claims as its own drifted name (see ``_drifted_candidates``).
-
-    force_reapply, non-channel: all interfaces (e.g. vc_position changed).
-
-    force_reapply, channel rule: one interface per base name (see
-    ``_forced_channel_bases``).
+    An install touches an interface that still carries a raw name, which keeps it idempotent. A
+    forced reapply of a breakout rule touches every claimed interface, and of any other rule every
+    interface.
     """
     if not force_reapply:
-        exact = [i for i in interfaces if i.name in raw_names]
-        if not matchers:
-            return exact
-        claimed = {i.name for i in exact}  # pragma: no cover - requires vc_position token support
-        return exact + _drifted_candidates(  # pragma: no cover - see above
-            [i for i in interfaces if i.name not in claimed],
-            [m for m in matchers if m.resolved not in claimed],
-            module,
-        )
-    if rule.channel_count == 0:
-        return interfaces
-    return _forced_channel_bases(interfaces, raw_names, matchers, module)
+        return _carries_a_raw_name(claim)
+    return claim is not None or rule.channel_count <= 0
+
+
+def _admitted_leftover(plain, rule, bases, force_reapply):
+    """Return ``(admitted, kept)``: the leftover interfaces this run renames, and those it keeps and reports.
+
+    The claim over every form has already decided which template each name stands for, so this only
+    decides the scope of the run. An interface in scope that the claim refuses keeps its name.
+    """
+    admitted, kept = [], []
+    for interface in plain:
+        claim = bases.claim(interface.name)
+        if _in_scope(claim, rule, force_reapply):
+            (admitted if claim is None or claim.accepted else kept).append(interface)
+    return admitted, kept
 
 
 def _touches_a_family(plan) -> bool:
@@ -180,22 +126,40 @@ def _touches_a_family(plan) -> bool:
     return True
 
 
-def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module):
+def _admitted_installed(plans, bases, force_reapply):
     """Return the installed families this install path should execute.
 
-    A channelized family is always executed: its parent decides the family's names, and the raw-name
-    guard describes flat rows.  A flat family is executed while the guard still claims a member of it.
+    A channelized family is always executed: its parent decides the family's names. A flat family is
+    executed on an install only while a member keeps a raw name.
     """
-    flat = [plan for plan in plans if plan.topology == family_ops.FamilyTopology.FLAT]
-    snapshots = [member.snapshot for plan in flat for member in plan.members]
-    selected = {
-        interface.pk for interface in _collect_unrenamed(snapshots, rule, raw_names, force_reapply, matchers, module)
-    }
+    if force_reapply:
+        return list(plans)
     return [
         plan
         for plan in plans
-        if plan.topology == family_ops.FamilyTopology.CHANNELIZED or selected.intersection(plan.member_pks)
+        if plan.topology == family_ops.FamilyTopology.CHANNELIZED
+        or any(_carries_a_raw_name(bases.claim(member.snapshot.name)) for member in plan.members)
     ]
+
+
+def _module_plans(module, rule, variables, interfaces, bases, force_reapply):
+    """Return ``(installed, leftover)``: the plans an automatic path executes on *module*.
+
+    With the previous state of a move in *bases*, the claim over every form decides alone what is
+    renamed, so no scope filters the plans.
+    """
+    if bases.previous_forms is not None:
+        planned = family_ops.plan_module_families(module, rule, variables, interfaces, bases)
+        return list(planned.installed), planned.leftover
+    planned = family_ops.plan_module_families(
+        module,
+        rule,
+        variables,
+        interfaces,
+        bases,
+        admit_leftover=lambda plain: _admitted_leftover(plain, rule, bases, force_reapply),
+    )
+    return _admitted_installed(planned.installed, bases, force_reapply), planned.leftover
 
 
 _MEMBER_OUTCOME_KINDS = {
@@ -282,7 +246,7 @@ def module_rule_outcomes(
         if previous_forms is not None and previous_forms.rule is not None:
             yield from _left_without_a_rule(module, previous_forms)
         return
-    # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
+    # One pin for the module: the claim and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
         yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, previous_forms)
 
@@ -343,25 +307,20 @@ def _acted_on_names(rule, plans, interfaces):
                 if not (keeps_parent and member.role == family_ops.MemberRole.PARENT)
             )
             continue
-        # A creation plan stands for its base's whole flat family; the guard kept one row of it.
+        # A creation plan stands for its base's whole flat family.
         base = _family_base(plan.base)
         names.extend(i.name for i in interfaces if getattr(i, "channel_id", None) is None and _family_base(i) == base)
     return tuple(dict.fromkeys(names))
 
 
 def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False, previous_forms=None):
-    """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``.
-
-    With *previous_forms*, the claim over every form decides what is renamed, so no guard filters the plans.
-    """
+    """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
     missing = _unavailable_rule_variables(rule, variables)
     if report_only and not missing:
         return
-    raw = _raw_name_matchers(module)
-    raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
     # NetBox before 4.7 moves only the module row: its interfaces and nested bays keep the old placement.
     if any(interface.device_id != module.device_id for interface in interfaces):
@@ -370,24 +329,8 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     if _has_stale_parent_bay(module_bay):
         yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
         return
-    planned = family_ops.plan_module_families(
-        module,
-        rule,
-        variables,
-        interfaces,
-        # The guard runs while it can still see every claimed row, before two of them that intend
-        # one family are collapsed into it.
-        admit_leftover=None
-        if previous_forms is not None
-        else lambda plain: _collect_unrenamed(plain, rule, raw_names, force_reapply, raw.matchers, module),
-        previous_forms=previous_forms,
-    )
-    installed = (
-        list(planned.installed)
-        if previous_forms is not None
-        else _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
-    )
-    leftover = planned.leftover
+    bases = family_ops.module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    installed, leftover = _module_plans(module, rule, variables, interfaces, bases, force_reapply)
     plans = [*installed, *leftover]
 
     if missing:
@@ -688,21 +631,6 @@ def device_interface_rule_outcomes(device, report_only=False) -> Iterator[Rename
         # A caller that extends a list keeps these facts when a later family raises.
         for outcomes in by_family.values():
             yield from outcomes
-
-
-def _raw_name_matchers(module):
-    """Delegate current and historical raw name resolution."""
-    return family_template_names.raw_name_matchers(module)
-
-
-def _get_raw_interface_names(module):
-    """Return the original interface names NetBox assigned from templates."""
-    return _raw_name_matchers(module).names
-
-
-def _raw_name_patterns(module):
-    """Delegate historical raw-name pattern construction."""
-    return family_template_names.raw_name_patterns(module)
 
 
 def _flag_rule_potentially_deprecated(rule):

@@ -432,13 +432,15 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_force_apply_builds_no_family_beside_the_flat_one(self):
-        """A parent built on one sibling would strand the other three — the hybrid the docs rule out."""
-        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
+        """A parent built on one sibling would strand the other three — the hybrid the docs rule out.
+
+        The rule's names no longer spell the flat family, so no template claims its interfaces and a
+        forced reapply leaves them alone.
+        """
+        changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
 
         self.assertEqual(changed, 0)
         self._assert_untouched()
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""

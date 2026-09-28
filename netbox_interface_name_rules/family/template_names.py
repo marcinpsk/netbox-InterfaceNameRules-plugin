@@ -10,7 +10,6 @@ import contextlib
 import copy
 import re
 import threading
-from collections import namedtuple
 from dataclasses import dataclass
 from re import Pattern
 
@@ -33,9 +32,6 @@ _VC_SENTINEL = "InrVcPositionSentinel{}End"
 _VC_SENTINEL_RE = re.compile(r"InrVcPositionSentinel(\d+)End")
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
 VC_POSITION_DIGITS = r"\d{1,10}"
-
-RawMatcher = namedtuple("RawMatcher", ("template_name", "resolved", "pattern"))
-RawNames = namedtuple("RawNames", ("names", "matchers"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,26 +155,6 @@ def resolve_templates(templates, module) -> tuple[ResolvedTemplateName, ...]:
         )
         for template in templates
     )
-
-
-def raw_names_from(templates) -> RawNames:
-    """Return the current names and historical matchers of already-resolved templates."""
-    matchers = [
-        RawMatcher(template.template_name, template.resolved, template.historical_pattern)
-        for template in templates
-        if template.historical_pattern is not None  # pragma: no cover - token templates only
-    ]
-    return RawNames({template.resolved for template in templates}, matchers)
-
-
-def raw_name_matchers(module):
-    """Return current and historical raw template names for *module*."""
-    return raw_names_from(resolved_template_names(module))
-
-
-def raw_name_patterns(module):
-    """Return historical matchers for the module's token templates."""
-    return [matcher.pattern for matcher in raw_name_matchers(module).matchers]
 
 
 def resolved_template_names(module) -> tuple[ResolvedTemplateName, ...]:

@@ -1560,23 +1560,6 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
         self.assertEqual(iface_names, ["0"])
 
 
-# ---------------------------------------------------------------------------
-# engine.py — _get_raw_interface_names with no templates
-# ---------------------------------------------------------------------------
-
-
-class GetRawInterfaceNamesNoTemplatesTest(EngineAdvancedFixtures):
-    """Test _get_raw_interface_names when module_type has no InterfaceTemplate entries."""
-
-    def test_no_templates_returns_empty_set(self):
-        """_get_raw_interface_names returns empty set when module_type has no templates."""
-        from netbox_interface_name_rules.engine import _get_raw_interface_names
-
-        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        result = _get_raw_interface_names(module)
-        self.assertEqual(result, set())
-
-
 class PredictRuleOutputTest(EngineAdvancedFixtures):
     """Tests for predict_rule_output — pure name prediction without DB mutations."""
 

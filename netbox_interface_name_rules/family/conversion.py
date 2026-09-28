@@ -33,15 +33,10 @@ from .domain import (
     InterfaceSnapshot,
     MemberOutcome,
 )
-from .installed import (
-    family_names_for,
-    flat_family_bases,
-    interfaces_by_module,
-    is_plain_interface,
-)
+from .installed import interfaces_by_module, module_raw_bases
 from .names import COLLISION_REASON, is_name_collision, name_is_taken
 from .targets import channelized_family_names, used_parent_template
-from .template_names import TemplateNames, pinned_template_cache
+from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +97,10 @@ def _family_rows(by_name, channel_names):  # pragma: no cover - requires channel
     A sibling is taken whatever it has become, so a row that now belongs to another parent is
     reported against this family instead of quietly leaving a gap where it used to be.
     """
-    base = by_name.get(channel_names[0])
-    if base is None or not is_plain_interface(base):
-        return None
     siblings = [
         (channel_id, by_name[name]) for channel_id, name in enumerate(channel_names[1:], start=2) if name in by_name
     ]
-    return [base, *siblings]
+    return [by_name[channel_names[0]], *siblings]
 
 
 def plan_module_conversions(
@@ -116,29 +108,22 @@ def plan_module_conversions(
 ) -> tuple[ConversionPlan, ...]:  # pragma: no cover - requires channelization support
     """Return one plan for every flat family *rule* names on *module*, complete or not.
 
-    The parent takes the name the rule resolves for this module now, so a family named before a
-    virtual-chassis renumber converts to the parent an apply would give it; the channels keep the
-    names they already carry, because converting retypes those rows in place.
+    A family converts only when one template alone claims it. The parent takes the name the rule
+    resolves for this module now, so a family named before a virtual-chassis renumber converts to the
+    parent an apply would give it; the channels keep the names they already carry, because converting
+    retypes those rows in place.
     """
-    catalog = TemplateNames(module)
+    bases = module_raw_bases(module, rule, variables, interfaces)
     by_name = {interface.name: interface for interface in interfaces}
     channelization_supported = supports_channelization()
     plans = []
-    claimed = set()
-    for base_name, source_base in flat_family_bases(module, rule, variables, interfaces, catalog):
-        names = family_names_for(rule, variables, base_name, source_base)
-        if names is None:
-            continue
-        _target_names, channel_names = names
-        rows = _family_rows(by_name, channel_names)
-        if rows is None or rows[0].pk in claimed:
-            continue
-        claimed.add(rows[0].pk)
+    for family in bases.flat_families():
+        rows = _family_rows(by_name, family.names)
         try:
-            parent_name, _channels = channelized_family_names(rule, base_name, base_name, variables)
+            parent_name, _channels = channelized_family_names(rule, family.base_name, family.base_name, variables)
         except (TypeError, ValueError) as exc:
             # One family that cannot resolve must not lose the outcome the batch already accumulated.
-            plan = _conversion_plan(module, "", channel_names, rows, channelization_supported)
+            plan = _conversion_plan(module, "", family.names, rows, channelization_supported)
             if channelization_supported:
                 plan = replace(
                     plan,
@@ -147,15 +132,7 @@ def plan_module_conversions(
                 )
             plans.append(plan)
             continue
-        plans.append(
-            _conversion_plan(
-                module,
-                parent_name,
-                channel_names,
-                rows,
-                channelization_supported,
-            )
-        )
+        plans.append(_conversion_plan(module, parent_name, family.names, rows, channelization_supported))
     return tuple(plans)
 
 
