@@ -164,13 +164,13 @@ not rename a flat breakout family either. The journal entry goes on the module
 in the bay. The plugin does not repair names that bay edits left wrong before
 this version, for the same reason as after a move.
 
-Several edits of one bay in one transaction rename once, from the state before
-the first edit, and an edit that the same transaction undoes renames nothing.
-When one transaction edits a bay and moves the module in it, the plugin renames
-once, from the state before the first of these changes. When one transaction
-edits a bay and a bay nested below it, each module is renamed from the state
-before the first edit. A module installed in the same transaction is named as
-an install names it, also under a flat breakout rule.
+The plugin renames each module at most once per transaction, from the state
+before the first change in that transaction. Several edits of one bay rename
+once, and an edit that the same transaction undoes renames nothing. When one
+transaction edits a bay and a bay nested below it, or edits a bay and moves,
+installs or changes the type of a module in it, each module is renamed once. A
+module installed in the same transaction is named as an install names it, also
+under a flat breakout rule.
 
 ### Journal entries after an automatic rename
 
@@ -182,8 +182,9 @@ interface unrenamed although a rule matched it, or fails, the plugin writes one
 journal entry. The entry goes on the module, or on the device for a
 virtual-chassis change. The entry for a move goes on the moved module, and the
 entry for a bay edit goes on the module in the bay. Each also lists the
-interfaces of the modules nested in that module. It lists each interface and
-the reason:
+interfaces of the modules nested in that module, also of a nested module that
+was moved, edited or installed in the same transaction. It lists each interface
+and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
