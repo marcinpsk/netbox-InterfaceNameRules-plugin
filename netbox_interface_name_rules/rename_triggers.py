@@ -333,8 +333,9 @@ def after_save(sender, instance, created):
         if reapply.covers(callback):
             successor = reapply.succeeding(callback)
             if successor is not None:
-                # Ahead of the pending reapply, in this savepoint: a rollback drops it and leaves that one as it was.
-                connection.run_on_commit.insert(index, (set(connection.savepoint_ids), successor, False))
+                # Django tags the entry with this savepoint; moved ahead of the pending reapply, a rollback drops only it.
+                transaction.on_commit(successor)
+                connection.run_on_commit.insert(index, connection.run_on_commit.pop())
             return
     reapply.author = _request_user()
     transaction.on_commit(reapply)
