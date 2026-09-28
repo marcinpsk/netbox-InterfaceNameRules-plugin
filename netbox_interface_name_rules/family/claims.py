@@ -59,7 +59,8 @@ def resolve_template_claims(claims, *, module):
 
 def _covering(units, names):
     """Return the units that hold every one of *names*."""
-    return [unit for unit in units if len(unit) == len(names)]
+    wanted = set(names)
+    return [unit for unit in units if wanted.issubset(unit)]
 
 
 def _index_claims(claims):

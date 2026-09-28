@@ -67,11 +67,7 @@ def _flat_plan(module, target_names, interfaces, status=None, reason=""):
 
 
 def _claimed_flat_plan(module, rule, variables, family, interfaces):
-    """Return the plan for a flat family one template claims, or None when its first row builds it again.
-
-    A complete family takes the names the rule gives it now. A family that lost a member keeps its
-    names, unless the rule gives it those names already: its first row then builds it again.
-    """
+    """Return the plan for a claimed flat family, or None when its first row builds it again (ADR 0013)."""
     kept = tuple(interface.name for interface in interfaces)
     try:
         target_names = flat_family_names(rule, variables, family.base_name)

@@ -18,6 +18,7 @@ from .domain import (
     FlatCreationPlan,
     InstalledFamilyPlan,
     MemberOutcome,
+    RunScope,
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
@@ -29,7 +30,13 @@ from .installed import (
     plan_kept_interface,
 )
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
-from .targets import UNCLAIMED_BASE_REASON, builds_channelized_family, intended_family_names, one_family_per_name_set
+from .targets import (
+    UNCLAIMED_BASE_REASON,
+    breaks_out,
+    builds_channelized_family,
+    intended_family_names,
+    one_family_per_name_set,
+)
 from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
@@ -135,22 +142,37 @@ def _creation_plans(module, rule, variables, plain, bases):
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces, bases, admit_leftover=None) -> ModuleFamilyPlans:
-    """Return one executable plan for every family *rule* intends on *module*.
+def _scoped(interfaces, rule, bases, scope):
+    """Return ``(admitted, kept)``: the leftover *interfaces* in *scope* this run plans, and those it reports."""
+    admitted, kept = [], []
+    for interface in interfaces:
+        claim = bases.claim(interface.name)
+        if scope == RunScope.INSTALL and not claim.raw:
+            continue
+        # A refused name keeps its name; a breakout rule builds only on a name one template alone claims.
+        if claim.accepted or not (claim.claimed or breaks_out(rule)):
+            admitted.append(interface)
+        elif claim.claimed or _is_top_level(interface):
+            kept.append(interface)
+    return admitted, kept
 
-    Every interface belongs to at most one plan: an installed family claims its members first, and
-    what is left over is planned as the family the rule would build on it. *bases* is the claim over
-    the module's interface names that ``module_raw_bases`` returns.
 
-    *admit_leftover* returns ``(admitted, kept)`` for the interfaces no installed family claimed. The
-    rule plans the admitted ones, and each kept one keeps its name and is reported as unclaimed. It
-    runs before two admitted interfaces that intend one family are collapsed into it, so a caller
-    that must not touch one of the two cannot have it survive the collapse as the row the family is
-    built on.
+def _in_scope_installed(plans, bases, scope):
+    """Return the installed families *scope* reaches: a channelized one always, a flat one on install by a raw name."""
+    if scope == RunScope.FORCED:
+        return plans
+    return tuple(
+        plan
+        for plan in plans
+        if plan.topology == FamilyTopology.CHANNELIZED
+        or any(bases.claim(member.snapshot.name).raw for member in plan.members)
+    )
 
-    When *bases* holds the previous state of a move, the plans rename only what a template claims,
-    and no installed flat family. While any top-level interface is unclaimed, they rename nothing
-    on the module and report every interface.
+
+def plan_module_families(module, rule, variables, interfaces, bases, scope=None) -> ModuleFamilyPlans:
+    """Return one plan for every family *rule* intends on *module*, from the claim *bases*.
+
+    A *scope* limits an automatic run before interfaces that intend one family collapse (ADR 0013).
     """
     previous_forms = bases.previous_forms
     if previous_forms is not None and any(
@@ -176,9 +198,9 @@ def plan_module_families(module, rule, variables, interfaces, bases, admit_lefto
         and (previous_forms is None or _is_top_level(interface))
     ]
     kept = ()
-    if admit_leftover is not None:
-        plain, kept = admit_leftover(plain)
-    if rule.channel_count <= 0:
+    if scope is not None:
+        plain, kept = _scoped(plain, rule, bases, scope)
+    if not breaks_out(rule):
         leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
@@ -192,7 +214,8 @@ def plan_module_families(module, rule, variables, interfaces, bases, admit_lefto
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
     unclaimed = tuple(plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON) for interface in kept)
-    return ModuleFamilyPlans(installed=installed.plans, leftover=(*leftover, *unclaimed))
+    installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
+    return ModuleFamilyPlans(installed=installed_plans, leftover=(*leftover, *unclaimed))
 
 
 def _selection_pks(plan):

@@ -39,6 +39,7 @@ from .domain import (
     ProspectiveFamilyPlan,
     ProspectiveFamilyPlanSet,
     ProspectiveMember,
+    RunScope,
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan, execute_installed_plan_set
@@ -70,6 +71,7 @@ from .structural import (
 )
 from .targets import (
     UNCLAIMED_BASE_REASON,
+    builds_flat_family,
     channelized_family_names,
     names_installed_parent,
     one_family_per_name_set,
@@ -103,8 +105,10 @@ __all__ = (
     "ProspectiveFamilyPlanSet",
     "ProspectiveInterface",
     "ProspectiveMember",
+    "RunScope",
     "StructuralFamilyPlan",
     "apply_rule_to_modules",
+    "builds_flat_family",
     "channelized_family_names",
     "conversion_offered",
     "convert_rule_families",

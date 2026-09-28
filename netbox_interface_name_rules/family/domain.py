@@ -24,6 +24,13 @@ class FamilyStatus(StrEnum):
     FAILED = "failed"
 
 
+class RunScope(StrEnum):
+    """The interfaces an automatic run may touch: an install those with a raw name, a forced reapply all."""
+
+    INSTALL = "install"
+    FORCED = "forced"
+
+
 class MemberRole(StrEnum):
     """A member's role in its installed family."""
 

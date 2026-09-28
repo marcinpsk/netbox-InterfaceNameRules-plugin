@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
-from .targets import flat_family_names, used_parent_template
+from .targets import breaks_out, flat_family_names, used_parent_template
 from .template_names import VC_POSITION_DIGITS, ResolvedTemplateName
 
 logger = logging.getLogger(__name__)
@@ -127,14 +127,14 @@ class FlatFamily(NamedTuple):
 
 
 class NameClaim(NamedTuple):
-    """How the claim treats one interface name that a template claims.
+    """Whether a template claims one name, one template alone does, and one does as a raw name now or earlier."""
 
-    *accepted* is whether one template alone claims it. *raw* is whether a template claims it as its
-    raw name, now or at an earlier virtual-chassis position.
-    """
-
+    claimed: bool
     accepted: bool
     raw: bool
+
+
+_UNCLAIMED = NameClaim(claimed=False, accepted=False, raw=False)
 
 
 class _Resolution(NamedTuple):
@@ -146,21 +146,9 @@ class _Resolution(NamedTuple):
 
 
 class RawBases:
-    """The one claim over every name of a module's interfaces under one module rule.
+    """The one claim over every name form of a module's interfaces under one rule (ADR 0013).
 
-    *families* maps each of the module's interface names outside any channel to its channels, as
-    ``(name, channel_id)`` pairs, and *plain* names the interfaces a flat family can hold. *catalog*
-    is shared with the family planners, so the module's templates load once.
-
-    A template claims a name through its raw name, a raw name at an earlier virtual-chassis position
-    that is no template's raw name now, a name the rule gives it at any position, and after a move
-    the forms of the previous state in *previous_forms*. It claims a flat family whole: the plain
-    interfaces that a breakout rule's channel names spell as siblings, which a flat breakout rule gives
-    and which a channelized rule gave while it was flat. A move recognises no flat family (ADR 0015).
-
-    ``base_for`` reads the claim for a rule that reads ``{base}``, and after a move for every rule.
-    Otherwise each name is its own base, and so is it on a module type without templates outside a
-    move. That module type claims as one template whose raw name is the bay position.
+    *families* maps each name outside a channel to its channels; *plain* names the flat-family candidates.
     """
 
     def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None):
@@ -173,7 +161,7 @@ class RawBases:
         self.catalog = catalog
         self.previous_forms = previous_forms
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
-        self._claims_flat = previous_forms is None and rule.channel_count > 0
+        self._claims_flat = previous_forms is None and breaks_out(rule)
         self._resolution = None
 
     def base_for(self, name):
@@ -188,11 +176,11 @@ class RawBases:
         if not self._reads_base or self._resolved().bases is None:
             return False
         claim = self.claim(name)
-        return claim is not None and not claim.accepted
+        return claim.claimed and not claim.accepted
 
     def claim(self, name):
-        """Return how the claim treats *name*, or None when no template claims it."""
-        return self._resolved().claims.get(name)
+        """Return how the claim treats *name*."""
+        return self._resolved().claims.get(name, _UNCLAIMED)
 
     def flat_families(self):
         """Return every flat family that one template alone claims."""
@@ -207,12 +195,7 @@ class RawBases:
         return self._resolution
 
     def _claim(self):
-        """Resolve every form of every template in one pass.
-
-        A raw name beats another template's historical raw name, as in the drift guard, but never a
-        name the rule gives. A parent name without ``{base}`` fits every template, so a template claims
-        it only through a channel the rule gave that template's base.
-        """
+        """Resolve every form of every template in one pass, in the order ADR 0013 lists."""
         templates = [template for template in self.catalog.get() if template.channel_id is None]
         own_bases = not templates and self.previous_forms is None
         if own_bases:
@@ -236,7 +219,7 @@ class RawBases:
         return _Resolution(
             bases=None if own_bases else bases,
             families=tuple(flat[pair] for pair in accepted if pair in flat),
-            claims={name: NameClaim(name in bases, name in raw_claimed) for name in claimed},
+            claims={name: NameClaim(True, name in bases, name in raw_claimed) for name in claimed},
         )
 
     def _single_names(self, template, raw_names):

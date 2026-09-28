@@ -29,7 +29,7 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from netbox_interface_name_rules import engine, family
+from netbox_interface_name_rules import family
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.family.template_names import ResolvedTemplateName
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -282,15 +282,14 @@ def _paths(layout):
     variables = _variables(NEW_VC, NEW_BAY)
     interfaces = _interfaces(layout)
     bases = _claim(layout, rule, interfaces, moved=False)
-    views = {
-        path: _plan_view([*installed, *leftover])
-        for path, (installed, leftover) in (
-            ("install", engine._module_plans(MODULE, rule, variables, interfaces, bases, force_reapply=False)),
-            ("forced reapply", engine._module_plans(MODULE, rule, variables, interfaces, bases, force_reapply=True)),
+    return {
+        path: _plan_view(family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope).plans)
+        for path, scope in (
+            ("install", family.RunScope.INSTALL),
+            ("forced reapply", family.RunScope.FORCED),
+            ("Apply Rules", None),
         )
     }
-    views["Apply Rules"] = _plan_view(family.plan_module_families(MODULE, rule, variables, interfaces, bases).plans)
-    return views
 
 
 def _expected_paths(layout):

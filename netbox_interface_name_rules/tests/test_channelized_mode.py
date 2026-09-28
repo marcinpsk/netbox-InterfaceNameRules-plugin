@@ -437,7 +437,7 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_force_apply_builds_no_family_beside_the_flat_one(self):
-        """A parent built on one sibling would strand the other three — the hybrid the docs rule out.
+        """A parent built on one sibling would strand the other three: the hybrid the docs rule out.
 
         The rule's names no longer spell the flat family, so no template claims its interfaces: each
         keeps its name and is reported.
