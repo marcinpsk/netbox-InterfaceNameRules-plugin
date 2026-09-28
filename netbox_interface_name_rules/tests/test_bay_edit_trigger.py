@@ -346,6 +346,18 @@ class BayEditTransactionTest(BayEditTestCase):
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/5"])
 
+    def test_an_edit_in_a_rolled_back_savepoint_schedules_no_reapply(self):
+        bay = self._bay(self.device)
+        module = self._install(self.plain_type, bay)
+
+        with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self._save_edit(bay, position="9")
+                raise RuntimeError("roll back the savepoint")
+
+        self.assertEqual([callback for callback in callbacks if isinstance(callback, ModuleReapply)], [])
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
     def test_an_edit_rolled_back_after_an_earlier_edit_keeps_the_earlier_reapply(self):
         bay = self._bay(self.device)
         module = self._install(self.plain_type, bay)
