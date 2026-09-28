@@ -1154,6 +1154,33 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
         )
         self.assertEqual(self._names(module), ["0", "x0:1", "xx0:1:0"])
 
+    def test_a_blocked_family_takes_no_name_from_another_interface(self):
+        """The family on ``0`` is blocked, so ``x0:1`` keeps its own outcome although the family names it."""
+        module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer, model="BrkGate-CH", part_number="BrkGate-CH"
+        )
+        InterfaceTemplate.objects.create(module_type=module_type, name="0", type=PARENT_TYPE)
+        module, _ = self._install(module_type, "5")
+        Interface.objects.create(device=self.device, module=module, name="x0:1", type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="x{base}:{channel}",
+            parent_name_template="p{base}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        outcome = apply_rule_to_existing(
+            rule, interface_ids=Interface.objects.filter(module=module).values_list("pk", flat=True)
+        )
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["0", "x0:1"])
+        reasons = {member.current_name: member.reason for family in outcome.families for member in family.members}
+        self.assertEqual(sorted(reasons), ["0", "x0:1"])
+        self.assertEqual(reasons["x0:1"], UNCLAIMED_BASE_REASON)
+
     def test_prediction_keeps_the_names_the_claim_refuses(self):
         module, bay = self._install(self.module_type, "5")
         InterfaceNameRule.objects.create(

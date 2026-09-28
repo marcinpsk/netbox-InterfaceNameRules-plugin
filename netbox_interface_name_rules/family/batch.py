@@ -29,6 +29,7 @@ from .installed import (
     plan_interface_rename,
     plan_kept_interface,
 )
+from .names import COLLISION_REASON
 from .structural import (
     carries_flat_expansion,
     execute_flat_family,
@@ -40,7 +41,6 @@ from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
     builds_channelized_family,
-    intended_family_names,
     one_family_per_name_set,
 )
 from .template_names import pinned_template_cache
@@ -136,23 +136,28 @@ def _creation_plan(module, rule, variables, base, base_name, flat_expansion):
 
 
 def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion):
-    """Return one creation plan per family that *selected_pks* reaches, so no family is built twice."""
-    candidates = []
-    for base in plain:
-        base_name = bases.builds_on(base.name)
-        target_names = (
-            (base.name,) if base_name is None else intended_family_names(rule, variables, base.name, base_name)
-        )
-        candidates.append((base, base_name, target_names))
-    kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
-    planned = [
-        (_creation_plan(module, rule, variables, *candidates[index][:2], flat_expansion), candidates[index])
-        for index in kept
+    """Return a plan for each selected interface: each family is built once, and every other interface is reported."""
+    candidates = [
+        _creation_plan(module, rule, variables, base, bases.builds_on(base.name), flat_expansion) for base in plain
     ]
-    planned = [(plan, candidate) for plan, candidate in planned if _reaches(plan, selected_pks)]
-    # A name that a selected family builds on belongs to that family, so it is not reported on its own.
-    taken = {name for _plan, (_base, base_name, targets) in planned if base_name is not None for name in targets}
-    return [plan for plan, (base, base_name, _targets) in planned if base_name is not None or base.name not in taken]
+    candidates = [plan for plan in candidates if _reaches(plan, selected_pks)]
+    builders = [plan for plan in candidates if plan.precondition_status is None]
+    built = [
+        builders[index] for index in one_family_per_name_set([(plan.base.name, plan.target_names) for plan in builders])
+    ]
+    built_ids = {id(plan) for plan in built}
+    # A flat family adopts an interface that already has one of its channel names; a channelized one refuses it.
+    adopted = {name for plan in built if isinstance(plan, FlatCreationPlan) for name in plan.target_names[1:]}
+    return [
+        plan if id(plan) in built_ids or plan.precondition_status is not None else _built_by_another(module, plan)
+        for plan in candidates
+        if id(plan) in built_ids or plan.base.name not in adopted
+    ]
+
+
+def _built_by_another(module, plan):
+    """Return a plan that keeps the base of *plan*, because another interface builds the same family."""
+    return plan_kept_interface(module, plan.base, f"{COLLISION_REASON}: {plan.target_names[0]}")
 
 
 def _is_candidate(interface, rule, bases, previous_forms):
