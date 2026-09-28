@@ -281,8 +281,11 @@ def _flat_outcome(plan, status, members, reason=""):
     )
 
 
-def _flat_refused(plan, status, reason):
-    """Log why the family was not built and return an outcome that touched no row."""
+def _flat_refused(plan, status, reason, adopted=()):
+    """Log why the family was not built and return an outcome that touched no row.
+
+    *adopted* are the outcomes of the rows the family would have adopted, which the planner gave it.
+    """
     logger.warning("Cannot build a flat family on interface %r: %s.", plan.base.name, reason)
     member = MemberOutcome(
         interface_pk=plan.base.pk,
@@ -291,7 +294,16 @@ def _flat_refused(plan, status, reason):
         status=status,
         reason=reason,
     )
-    return _flat_outcome(plan, status, (member,), reason)
+    return _flat_outcome(plan, status, (member, *adopted), reason)
+
+
+def _refused_at_execution(plan, status, reason):
+    """Refuse the family and report every existing row it would have adopted, with the same *reason*."""
+    rows = _module_rows(plan)
+    adopted = tuple(
+        MemberOutcome(rows[name], name, name, status, reason) for name in plan.target_names[1:] if name in rows
+    )
+    return _flat_refused(plan, status, reason, adopted)
 
 
 def _rename_flat_base(plan, base):
@@ -362,14 +374,14 @@ def _install_flat_family(plan):
         with transaction.atomic():
             base = _locked_base(plan)
             if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
-                return _flat_refused(plan, FamilyStatus.STALE, STALE_REASON)
+                return _refused_at_execution(plan, FamilyStatus.STALE, STALE_REASON)
             members = _build_flat_family(plan, base)
     except ValidationError as error:
-        return _flat_refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
+        return _refused_at_execution(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
     except IntegrityError as error:
         if not is_name_collision(error):
             raise
-        return _flat_refused(plan, FamilyStatus.BLOCKED, COLLISION_REASON)
+        return _refused_at_execution(plan, FamilyStatus.BLOCKED, COLLISION_REASON)
     return _flat_outcome(plan, _flat_status(members), members)
 
 
