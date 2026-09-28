@@ -5,32 +5,32 @@ Machine-time values are evidence for a same-hardware before/after comparison. Th
 
 This run measured machine time. Statement counts are reproducible and carry the verdict.
 
-Host load averaged 3.02 over the minute before the run and 1.89 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
+Host load averaged 0.59 over the minute before the run and 1.27 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
 
 | Scenario | Layer | SQL calls | Planner cost | Shared hits | Wall median (ms) | Wall p95 (ms) | CPU median (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `module.complete_model_save.no_matching_rule` | complete_model_save | 76 | 1348.770 | 247 | 79.868 | 84.432 | 58.676 |
-| `module.direct_callback.no_matching_rule` | direct_callback | 5 | 8.480 | 8 | 8.129 | 9.023 | 6.673 |
-| `module.complete_model_save.plain_rename` | complete_model_save | 112 | 1681.010 | 434 | 114.016 | 121.091 | 82.842 |
-| `module.direct_callback.plain_rename` | direct_callback | 41 | 316.280 | 195 | 41.646 | 44.059 | 30.848 |
-| `module.complete_model_save.structural_creation` | complete_model_save | 183 | 2529.780 | 755 | 173.940 | 180.784 | 128.522 |
-| `module.direct_callback.structural_creation` | direct_callback | 112 | 1282.370 | 508 | 102.830 | 111.631 | 77.234 |
-| `module.complete_model_save.existing_family` | complete_model_save | 379 | 4141.780 | 1519 | 322.852 | 335.219 | 246.956 |
-| `module.direct_callback.existing_family` | direct_callback | 191 | 1665.340 | 646 | 154.602 | 160.979 | 119.245 |
-| `module.complete_model_save.reconciliation` | complete_model_save | 488 | 6094.870 | 2040 | 416.055 | 423.777 | 313.712 |
-| `module.direct_callback.reconciliation` | direct_callback | 300 | 3520.600 | 1065 | 246.419 | 254.721 | 185.246 |
-| `vc.complete_model_save.reapply_1` | complete_model_save | 70 | 601.910 | 340 | 68.681 | 73.275 | 49.581 |
-| `vc.direct_callback.reapply_1` | direct_callback | 45 | 338.380 | 206 | 49.371 | 53.006 | 36.827 |
-| `vc.complete_model_save.reapply_8` | complete_model_save | 336 | 2734.370 | 1059 | 291.617 | 298.068 | 217.854 |
-| `vc.direct_callback.reapply_8` | direct_callback | 311 | 2557.900 | 1016 | 273.917 | 282.469 | 207.781 |
-| `move.complete_model_save.no_matching_rule` | complete_model_save | 86 | 1049.480 | 371 | 104.071 | 107.185 | 72.502 |
-| `move.direct_callback.no_matching_rule` | direct_callback | 3 | 28.820 | 17 | 13.662 | 15.951 | 8.616 |
-| `move.complete_model_save.plain_rename` | complete_model_save | 104 | 988.730 | 325 | 118.386 | 123.892 | 83.937 |
-| `move.direct_callback.plain_rename` | direct_callback | 38 | 339.620 | 130 | 43.521 | 45.831 | 31.343 |
-| `move.complete_model_save.nested_4` | complete_model_save | 272 | 2873.450 | 1005 | 273.770 | 282.516 | 196.893 |
-| `move.direct_callback.nested_4` | direct_callback | 140 | 1263.540 | 454 | 131.239 | 135.397 | 96.258 |
+| `module.complete_model_save.no_matching_rule` | complete_model_save | 76 | 1378.630 | 245 | 73.926 | 81.022 | 53.316 |
+| `module.direct_callback.no_matching_rule` | direct_callback | 5 | 8.480 | 8 | 7.147 | 7.960 | 5.739 |
+| `module.complete_model_save.plain_rename` | complete_model_save | 112 | 1566.880 | 443 | 104.612 | 107.277 | 75.384 |
+| `module.direct_callback.plain_rename` | direct_callback | 41 | 317.230 | 196 | 37.646 | 38.907 | 27.397 |
+| `module.complete_model_save.structural_creation` | complete_model_save | 183 | 2532.620 | 756 | 160.257 | 163.615 | 117.208 |
+| `module.direct_callback.structural_creation` | direct_callback | 112 | 1283.310 | 514 | 92.538 | 97.142 | 69.126 |
+| `module.complete_model_save.existing_family` | complete_model_save | 379 | 4155.560 | 1545 | 295.228 | 308.084 | 222.212 |
+| `module.direct_callback.existing_family` | direct_callback | 191 | 1669.740 | 657 | 140.191 | 150.800 | 106.038 |
+| `module.complete_model_save.reconciliation` | complete_model_save | 488 | 6212.830 | 2062 | 381.861 | 386.770 | 284.606 |
+| `module.direct_callback.reconciliation` | direct_callback | 300 | 3596.790 | 1093 | 225.291 | 238.311 | 166.776 |
+| `vc.complete_model_save.reapply_1` | complete_model_save | 70 | 594.440 | 329 | 62.884 | 68.913 | 44.621 |
+| `vc.direct_callback.reapply_1` | direct_callback | 45 | 363.320 | 225 | 44.015 | 47.692 | 32.021 |
+| `vc.complete_model_save.reapply_8` | complete_model_save | 336 | 2707.970 | 1031 | 266.523 | 281.867 | 196.753 |
+| `vc.direct_callback.reapply_8` | direct_callback | 311 | 2543.580 | 991 | 249.103 | 272.199 | 183.787 |
+| `move.complete_model_save.no_matching_rule` | complete_model_save | 86 | 1040.850 | 360 | 94.894 | 99.776 | 64.829 |
+| `move.direct_callback.no_matching_rule` | direct_callback | 3 | 28.820 | 17 | 12.583 | 13.880 | 7.756 |
+| `move.complete_model_save.plain_rename` | complete_model_save | 104 | 974.110 | 310 | 108.806 | 111.962 | 76.881 |
+| `move.direct_callback.plain_rename` | direct_callback | 38 | 330.310 | 119 | 40.065 | 44.741 | 27.896 |
+| `move.complete_model_save.nested_4` | complete_model_save | 272 | 2878.260 | 1018 | 255.959 | 270.029 | 182.503 |
+| `move.direct_callback.nested_4` | direct_callback | 140 | 1271.700 | 458 | 119.290 | 124.417 | 87.000 |
 
-Plugin revision: `4c34db147a842acfdf131a99eb94628d2080a989`
+Plugin revision: `df652c0ead95b0298cb1280af5eeb82e2c21ba75`
 
 NetBox revision: `sha256:65c8e2f394278a2ed5ef0b5d963cbe757b347483e830347bfd8370345a010721`
 
