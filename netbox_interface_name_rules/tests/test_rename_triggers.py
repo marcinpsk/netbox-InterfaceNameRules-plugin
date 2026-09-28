@@ -908,6 +908,33 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("injected reapply failure", entry.comments)
         self.assertEqual(self._names(blocked), ["et-1/0/0"])
 
+    def test_a_device_reapply_that_fails_on_one_device_interface_family_keeps_the_earlier_outcomes(self):
+        Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="eth0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="mgmt-2", type=PLAIN_TYPE)
+        # The longer pattern sorts first, so the blocked mgmt0 family runs before the failing eth0 family.
+        InterfaceNameRule.objects.create(
+            name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
+        )
+        InterfaceNameRule.objects.create(
+            name_template="lan-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="eth0"
+        )
+        with self.captureOnCommitCallbacks() as callbacks:
+            self._move_to_position(2)
+
+        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+            for callback in callbacks:
+                callback()
+
+        (entry,) = _journal(self.device)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("`mgmt0` to `mgmt-2`", entry.comments)
+        self.assertIn("injected reapply failure", entry.comments)
+        self.assertEqual(
+            sorted(Interface.objects.filter(device=self.device, module=None).values_list("name", flat=True)),
+            ["eth0", "mgmt-2", "mgmt0"],
+        )
+
     def test_a_module_reapply_that_fails_on_one_family_keeps_the_earlier_outcomes(self):
         module_type, _ = self._module_type_with_rule("RenTrig Pair", ("a{module}", "b{module}"), "{base}.{vc_position}")
         Interface.objects.create(device=self.device, name="a0.1", type=PLAIN_TYPE)

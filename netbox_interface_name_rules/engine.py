@@ -622,30 +622,37 @@ def apply_device_interface_rules(device):
     return renamed_count(device_interface_rule_outcomes(device))
 
 
-def device_interface_rule_outcomes(device, report_only=False) -> tuple[RenameOutcome, ...]:
-    """Apply the device-interface rules and return the outcome facts.
+def device_interface_rule_outcomes(device, report_only=False) -> Iterator[RenameOutcome]:
+    """Apply the device-interface rules and yield the outcome facts.
 
     Unlike ``apply_device_interface_rules``, this also runs for a device without a virtual-chassis
     position: a rule that reads ``{vc_position}`` then renames nothing and reports each interface it
     matches as unresolved. With *report_only*, no rule renames anything.
+
+    The facts are yielded after the last rule, because a later rule can replace a family's facts.
+    When a rule fails, the facts recorded before the failure are yielded before the error propagates.
     """
     from dcim.models import Interface
 
     vc_position = device.vc_position if device.virtual_chassis_id is not None else None
     rules = _device_interface_rules(device)
     if not rules:
-        return ()
+        return
 
     interfaces = list(Interface.objects.filter(device=device, module=None).order_by("pk"))
     if not interfaces:
-        return ()
+        return
 
     families = family_ops.device_interface_families(interfaces)
     claimed_pks: set[int] = set()
     by_family: dict[int, list] = {}
-    for rule in rules:
-        _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family)
-    return tuple(outcome for outcomes in by_family.values() for outcome in outcomes)
+    try:
+        for rule in rules:
+            _apply_device_rule_to_families(device, vc_position, rule, families, claimed_pks, report_only, by_family)
+    finally:
+        # A caller that extends a list keeps these facts when a later family raises.
+        for outcomes in by_family.values():
+            yield from outcomes
 
 
 def _raw_name_matchers(module):
