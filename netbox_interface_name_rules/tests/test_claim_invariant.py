@@ -18,8 +18,9 @@ its base is that template's raw name now.
 
 The same claim decides every path. After a move it decides alone. Without a move, the plans of an
 install, of a forced reapply and of Apply Rules read it: an install touches a name that still carries a
-raw name, a forced reapply of a plain rule touches every name, and each keeps a name the claim refuses.
-Apply Rules gives a rule that does not read ``{base}`` every name, as the operator decided.
+raw name, and a forced reapply and Apply Rules touch every name. A rule that reads ``{base}`` keeps a
+name that no single template claims. A rule without channels that does not read ``{base}`` needs no
+template, so it renames every name it touches (ADR 0013).
 """
 
 import itertools
@@ -301,16 +302,13 @@ def _expected_paths(layout):
     def target(name):
         return prefix + (verdict.bases[name] if reads_base else NEW_BAY)
 
-    def automatic(name):
-        refused = name in verdict.claimed and name not in verdict.bases
-        return UNCLAIMED if refused or (reads_base and name not in verdict.bases) else target(name)
+    def planned(name):
+        return UNCLAIMED if reads_base and name not in verdict.bases else target(name)
 
     return {
-        "install": {name: automatic(name) for name in layout.present if name in verdict.raw},
-        "forced reapply": {name: automatic(name) for name in layout.present},
-        "Apply Rules": {
-            name: target(name) if not reads_base or name in verdict.bases else UNCLAIMED for name in layout.present
-        },
+        "install": {name: planned(name) for name in layout.present if name in verdict.raw},
+        "forced reapply": {name: planned(name) for name in layout.present},
+        "Apply Rules": {name: planned(name) for name in layout.present},
     }
 
 

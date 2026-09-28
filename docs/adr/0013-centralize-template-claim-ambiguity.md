@@ -16,12 +16,12 @@ The pass collects every form of every template as evidence, in this one order:
 1. the template's raw name now;
 2. a raw name at an earlier virtual-chassis position that is no template's raw name now, so a raw
    name beats another template's earlier virtual-chassis form;
-3. a name the rule gives the template, with `{base}` as the raw name now or at any virtual-chassis
-   position and `{vc_position}` at any position; a parent name without `{base}` counts only through
-   a channel the rule gave that template's base;
+3. a name the rule gives the template. `{base}` stands for the raw name now or at any virtual-chassis
+   position, and `{vc_position}` stands for any position. A parent name without `{base}` counts only
+   through a channel that the rule gave the template's base;
 4. a flat family: the plain interfaces that the rule's channel names spell from one of those bases,
-   when the module carries the first one; a flat breakout rule gives it, and a channelized rule gave
-   it while it was flat;
+   when the module carries the first one. A flat breakout rule gives it. A channelized rule gave it
+   while the rule was flat;
 5. after a move or a bay edit, the raw name and the names the previous rule gave, from the previous
    state. A move recognises no flat family (ADR 0015), so its pass has no flat family forms.
 
@@ -38,17 +38,18 @@ uses only the standard library and does not discover candidates.
 The paths read the result as follows:
 
 - A rule that reads `{base}` gets the raw name of the accepted claim. A name that no single template
-  claims has no base, and nothing renames it. After a move every rule reads the claim this way.
-  Otherwise a rule that does not read `{base}` takes each name as its own base, and so does a module
-  type without templates.
+  claims has no base, so the rule does not rename it. After a move every rule reads the claim this
+  way. Otherwise a rule that does not read `{base}` takes each name as its own base, and so does a
+  module type without templates.
 - The engine chooses the scope of an automatic run, and the family package applies it with the
-  claim. An install touches an interface that a
-  template claims as its raw name, now or at an earlier position. A forced reapply touches every
-  interface. An interface in scope that the claim refuses keeps its name and is reported as
-  unclaimed. A breakout rule builds no family on an interface that no template claims, so that
-  interface keeps its name and is reported as unclaimed too. A subinterface that no template claims
-  is no candidate of its own, so a breakout rule neither touches nor reports it. This scope check
-  runs before two admitted interfaces that intend one family collapse into it, as required by ADR 0011.
+  claim. An install touches an interface that a template claims as its raw name, now or at an
+  earlier position. A forced reapply and Apply Rules touch every interface. In scope, a rule without
+  channels that does not read `{base}` needs no template, so it renames every interface. A rule that
+  reads `{base}` keeps an interface that no single template claims and reports it as unclaimed. A
+  breakout rule builds a family only on an interface that one template alone claims. On an automatic
+  run it keeps every other interface and reports it as unclaimed. A subinterface that no template
+  claims is no candidate of its own, so a breakout rule neither touches nor reports it. The scope
+  applies before two interfaces that intend one family collapse into one (ADR 0011).
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
   reports a family that lost a member, unless the rule gives the family those names already: the
   family's first interface then builds it again. A channelized rule renames no flat family, and
