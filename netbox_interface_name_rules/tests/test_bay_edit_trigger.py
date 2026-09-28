@@ -451,6 +451,22 @@ class SubtreeTriggerMixTest(BayEditTestCase):
         self.assertEqual((self._names(optic), reapplies.call_count), ([f"et-1/2/{port.position}"], 2))
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
+    def test_an_optic_installed_while_the_card_bay_is_edited_and_restored_is_named_from_its_raw_name(self):
+        chained_optic_type = self._module_type("Chained Optic", "{module}/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=chained_optic_type, name_template="et-{vc_position}/{slot}/{bay_position}"
+        )
+        bay = self._bay(self.device)
+        card, port = self._install_card(self.card_type, bay)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            optic = Module.objects.create(device=self.device, module_bay=port, module_type=chained_optic_type)
+            self._save_edit(bay, position="0")
+
+        self.assertEqual(self._names(optic), ["et-1/0/1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
     def test_a_rolled_back_nested_edit_leaves_the_outer_edit_to_rename_the_nested_module(self):
         bay, card, port, optic = self._card_with_optic()
 

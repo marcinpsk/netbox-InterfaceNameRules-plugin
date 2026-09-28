@@ -209,9 +209,10 @@ def _outermost(pks, roots):
 def _reapply_modules(triggers):
     """Reapply each module that the module *triggers* reach once, and report each journal owner once.
 
-    A module reapplies as after a type change when its type changed, from its earliest naming when it
-    or a module whose naming read it moved or had its bay edited, and as an install otherwise. Its
-    outcomes go to the outermost of those modules that read its naming, or to the module itself.
+    A module reapplies as after a type change when its type changed. It reapplies from its earliest
+    naming when it or a module whose naming read it moved or had its bay edited, or when it was
+    installed in the transaction and a naming was read for it. It reapplies as an install otherwise.
+    Its outcomes go to the outermost of those modules that read its naming, or to the module itself.
     """
     from .engine import committed_modules, module_rule_outcomes, pinned_reapply
 
@@ -238,7 +239,8 @@ def _reapply_modules(triggers):
             if root is not None and current.module_type_id != root.baseline.module_type_id:
                 # The module's earlier names came from another module type, so it reapplies as a type change.
                 options = {"force_reapply": True}
-            elif entry is not None and (pk in changed or covering):
+            elif entry is not None and (pk in changed or covering or entry.raw_only):
+                # An installed module's raw names were resolved when it was installed, so its naming recognises them.
                 options = {"naming": entry}
             elif root is not None and (root.installed or current != root.baseline):
                 options = {"force_reapply": current != root.baseline}
