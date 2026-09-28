@@ -23,7 +23,7 @@ Two names are pinned here as the fix's public surface:
 
 * ``engine.supports_vc_position_token()`` — the feature check, probed lazily from
   ``dcim.constants.VC_POSITION_RE`` the way ``supports_channelization()`` probes the Interface model.
-* the ``historical_pattern`` of each ``family.resolved_template_names(module)`` entry — the structural
+* the ``historical_pattern`` of each ``family.resolved_template_names(module)`` entry: the structural
   matchers, one per interface template whose name carries the token, None for every other template
   and on every release without the constant.
 

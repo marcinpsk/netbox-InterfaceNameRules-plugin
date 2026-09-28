@@ -58,7 +58,7 @@ A change to an interface name made by an actor other than this plugin, such as a
 _Avoid_: External rename, manual fix
 
 **Engine facade**:
-The compatibility surface downstream callers import. It selects rules, builds template variables and decides which interfaces an automatic path may touch on a run; it holds no family discovery, planning or mutation.
+The compatibility surface downstream callers import. It selects rules, builds template variables and chooses the scope of an automatic run: an install or a forced reapply. It holds no family discovery, planning or mutation.
 _Avoid_: Engine layer, core
 
 **Stored rule pattern**:

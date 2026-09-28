@@ -41,7 +41,8 @@ The paths read the result as follows:
   claims has no base, and nothing renames it. After a move every rule reads the claim this way.
   Otherwise a rule that does not read `{base}` takes each name as its own base, and so does a module
   type without templates.
-- The engine decides only the scope of an automatic run. An install touches an interface that a
+- The engine chooses the scope of an automatic run, and the family package applies it with the
+  claim. An install touches an interface that a
   template claims as its raw name, now or at an earlier position. A forced reapply touches every
   interface. An interface in scope that the claim refuses keeps its name and is reported as
   unclaimed. A breakout rule builds no family on an interface that no template claims, so that

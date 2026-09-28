@@ -16,7 +16,6 @@ from django.core.exceptions import ValidationError
 
 from . import family as family_ops
 from . import name_template, naming, rule_selection
-from .choices import BreakoutModeChoices
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
@@ -88,40 +87,6 @@ def _family_base(interface):
     return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
 
 
-def _carries_a_raw_name(claim) -> bool:
-    """Return whether a template claims the name as its raw name, now or at an earlier virtual-chassis position."""
-    return claim is not None and claim.raw
-
-
-def _in_scope(claim, interface, rule, force_reapply) -> bool:
-    """Return whether this run may touch *interface*, whose name the claim treats as *claim*.
-
-    An install touches an interface that still carries a raw name, which keeps it idempotent. A
-    forced reapply touches every interface, except a subinterface that no template claims under a
-    breakout rule: it is no candidate of its own, and a breakout rule builds nothing on it.
-    """
-    if not force_reapply:
-        return _carries_a_raw_name(claim)
-    return claim is not None or rule.channel_count <= 0 or getattr(interface, "parent_id", None) is None
-
-
-def _admitted_leftover(plain, rule, bases, force_reapply):
-    """Return ``(admitted, kept)``: the leftover interfaces this run renames, and those it keeps and reports.
-
-    The claim over every form has already decided which template each name stands for, so this only
-    decides the scope of the run. An interface in scope that the claim refuses keeps its name. So does
-    one that no template claims under a breakout rule, which builds no family on it.
-    """
-    admitted, kept = [], []
-    for interface in plain:
-        claim = bases.claim(interface.name)
-        if not _in_scope(claim, interface, rule, force_reapply):
-            continue
-        unclaimed_and_renamed = claim is None and rule.channel_count <= 0
-        (admitted if unclaimed_and_renamed or (claim is not None and claim.accepted) else kept).append(interface)
-    return admitted, kept
-
-
 def _touches_a_family(plan) -> bool:
     """Return whether *plan* acts on a family rather than one standalone interface."""
     if isinstance(plan, family_ops.InstalledFamilyPlan):
@@ -129,40 +94,11 @@ def _touches_a_family(plan) -> bool:
     return True
 
 
-def _admitted_installed(plans, bases, force_reapply):
-    """Return the installed families this install path should execute.
-
-    A channelized family is always executed: its parent decides the family's names. A flat family is
-    executed on an install only while a member keeps a raw name.
-    """
-    if force_reapply:
-        return list(plans)
-    return [
-        plan
-        for plan in plans
-        if plan.topology == family_ops.FamilyTopology.CHANNELIZED
-        or any(_carries_a_raw_name(bases.claim(member.snapshot.name)) for member in plan.members)
-    ]
-
-
-def _module_plans(module, rule, variables, interfaces, bases, force_reapply):
-    """Return ``(installed, leftover)``: the plans an automatic path executes on *module*.
-
-    With the previous state of a move in *bases*, the claim over every form decides alone what is
-    renamed, so no scope filters the plans.
-    """
-    if bases.previous_forms is not None:
-        planned = family_ops.plan_module_families(module, rule, variables, interfaces, bases)
-        return list(planned.installed), planned.leftover
-    planned = family_ops.plan_module_families(
-        module,
-        rule,
-        variables,
-        interfaces,
-        bases,
-        admit_leftover=lambda plain: _admitted_leftover(plain, rule, bases, force_reapply),
-    )
-    return _admitted_installed(planned.installed, bases, force_reapply), planned.leftover
+def _run_scope(force_reapply, previous_forms):
+    """Return the scope of an automatic run; after a move the claim decides alone, without one."""
+    if previous_forms is not None:
+        return None
+    return family_ops.RunScope.FORCED if force_reapply else family_ops.RunScope.INSTALL
 
 
 _MEMBER_OUTCOME_KINDS = {
@@ -242,7 +178,11 @@ def module_rule_outcomes(
     rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
     previous_forms = None if naming is None else naming.previous_forms()
 
-    if previous_forms is not None and _builds_flat_families(previous_forms.rule):
+    if (
+        previous_forms is not None
+        and previous_forms.rule is not None
+        and family_ops.builds_flat_family(previous_forms.rule)
+    ):
         yield from _kept_flat_family(module)
         return
     if not rule:
@@ -252,11 +192,6 @@ def module_rule_outcomes(
     # One pin for the module: the claim and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
         yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, previous_forms)
-
-
-def _builds_flat_families(rule) -> bool:
-    """Return whether *rule* is a flat breakout rule."""
-    return rule is not None and rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
 
 
 def _kept_flat_family(module) -> Iterator[RenameOutcome]:
@@ -333,7 +268,10 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
         yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
         return
     bases = family_ops.module_raw_bases(module, rule, variables, interfaces, previous_forms)
-    installed, leftover = _module_plans(module, rule, variables, interfaces, bases, force_reapply)
+    planned = family_ops.plan_module_families(
+        module, rule, variables, interfaces, bases, _run_scope(force_reapply, previous_forms)
+    )
+    installed, leftover = planned.installed, planned.leftover
     plans = [*installed, *leftover]
 
     if missing:
