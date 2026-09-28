@@ -167,7 +167,7 @@ class PerformancePackageTest(unittest.TestCase):
         samples = [float(value) for value in re.findall(r"\d+\.\d+", load_row)]
 
         self.assertEqual(len(samples), 4)
-        quiet = max(samples) < compare._COMPARABLE_ONE_MINUTE_LOAD
+        quiet = compare._is_comparable_load(*samples[:2]) and compare._is_comparable_load(*samples[2:])
         expected = compare._MACHINE_TIME_COMPARABLE_NOTE if quiet else compare._MACHINE_TIME_UNPROVEN_NOTE
 
         self.assertIn(expected, machine_time)
@@ -596,7 +596,7 @@ class MachineTimeNoteTest(unittest.TestCase):
         return compare._machine_time_note(_artifact(settings, before_load), _artifact(settings, after_load))
 
     def test_a_load_that_displays_as_the_ceiling_withholds_the_claim(self):
-        """1.999 prints as 2.00, so the note must not claim every load stayed below 2.00."""
+        """1.999 prints as 2.00, so the note must not claim the run started below 2.00."""
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
         boundary = {"started": {"one_minute": 1.999}, "finished": {"one_minute": 0.9}}
 
@@ -610,7 +610,7 @@ class MachineTimeNoteTest(unittest.TestCase):
         note = self._note(before, after)
 
         self.assertEqual(note, compare._MACHINE_TIME_COMPARABLE_NOTE)
-        self.assertIn("1-minute load stayed below 2.00", _unwrapped(note))
+        self.assertIn("1-minute load below 2.00 and finished below 4.00", _unwrapped(note))
 
     def test_one_busy_sample_withholds_the_claim(self):
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
@@ -619,9 +619,22 @@ class MachineTimeNoteTest(unittest.TestCase):
         self.assertEqual(self._note(quiet, busy), compare._MACHINE_TIME_UNPROVEN_NOTE)
         self.assertEqual(self._note(busy, quiet), compare._MACHINE_TIME_UNPROVEN_NOTE)
 
-    def test_the_ceiling_itself_is_too_busy(self):
+    def test_the_start_ceiling_itself_is_too_busy(self):
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
-        at_ceiling = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 2.0}}
+        at_ceiling = {"started": {"one_minute": 2.0}, "finished": {"one_minute": 0.9}}
+
+        self.assertEqual(self._note(quiet, at_ceiling), compare._MACHINE_TIME_UNPROVEN_NOTE)
+
+    def test_a_run_may_finish_above_the_start_ceiling_that_its_own_work_adds(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        own_work = {"started": {"one_minute": 1.34}, "finished": {"one_minute": 3.99}}
+
+        self.assertEqual(self._note(quiet, own_work), compare._MACHINE_TIME_COMPARABLE_NOTE)
+        self.assertEqual(self._note(own_work, quiet), compare._MACHINE_TIME_COMPARABLE_NOTE)
+
+    def test_the_finish_ceiling_itself_is_too_busy(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        at_ceiling = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 4.0}}
 
         self.assertEqual(self._note(quiet, at_ceiling), compare._MACHINE_TIME_UNPROVEN_NOTE)
 
