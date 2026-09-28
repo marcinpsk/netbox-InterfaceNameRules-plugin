@@ -145,6 +145,7 @@ and the reason:
 - no single interface template claims the interface, so the rule cannot find its
   `{base}`, or, after a move, the plugin cannot tell which name the interface had,
 - no rule matches a moved module at its new position,
+- a moved flat family has another channel count than the rule at its new position,
 - the rule failed, for example on a division by zero in its template.
 
 When an error stops the rename, the entry also has one line for that error,
