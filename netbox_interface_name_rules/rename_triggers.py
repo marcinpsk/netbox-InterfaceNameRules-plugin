@@ -50,6 +50,24 @@ class DeviceState:
     vc_position: int | None
 
 
+@dataclasses.dataclass(frozen=True)
+class BayState:
+    """The module bay values a rename trigger compares, and the module installed in the bay.
+
+    ``naming_values`` are the bay's ``bay_naming_values``. ``module_pk`` and ``module_state`` are None
+    for an empty bay.
+    """
+
+    naming_values: tuple[str, str]
+    module_pk: int | None
+    module_state: ModuleState | None
+
+
+def _bay_values(bay):
+    """Return the ``bay_naming_values`` of *bay*."""
+    return bay_naming_values(bay.position, bay.name)
+
+
 def _state_of(state_class, instance):
     """Return the *state_class* values that *instance* holds."""
     return state_class(**{field.name: getattr(instance, field.name) for field in dataclasses.fields(state_class)})
@@ -95,14 +113,13 @@ class ModuleReapply:
         successor.author = pending.author
         return successor
 
-    def _naming_changed(self, module, current):
-        """Return whether the module has moved, or its bay builds names from other values, since ``naming`` was read."""
+    def _moved_or_bay_changed(self, module, current):
+        """Return whether the module moved since ``naming`` was read, or its bay values differ from ``naming``."""
         if not self.naming:
             return False
-        bay = module.module_bay
         return (
             current.placement() != self.baseline.placement()
-            or bay_naming_values(bay.position, bay.name) != self.naming[0].bay_values
+            or _bay_values(module.module_bay) != self.naming[0].bay_values
         )
 
     def _outcomes(self, module, current):
@@ -110,7 +127,7 @@ class ModuleReapply:
         from .engine import module_rule_outcomes, subtree_rule_outcomes
 
         naming = self.naming
-        if not self._naming_changed(module, current):
+        if not self._moved_or_bay_changed(module, current):
             yield from module_rule_outcomes(module, module.module_bay, force_reapply=current != self.baseline)
             return
         if current.module_type_id != self.baseline.module_type_id:
@@ -138,7 +155,7 @@ class ModuleReapply:
             return
         module_bay = module.module_bay
         current = _state_of(ModuleState, module)
-        if current == self.baseline and not (self.installed or self._naming_changed(module, current)):
+        if current == self.baseline and not (self.installed or self._moved_or_bay_changed(module, current)):
             return
         outcomes = []
         try:
@@ -310,12 +327,7 @@ def _read_device(device):
 
 
 def _read_bay(bay):
-    """Return ``(values, occupant, naming)`` of a module bay before its save, or None without a row.
-
-    *values* are the bay's ``bay_naming_values``. *occupant* is ``(pk, state)`` of the module in the
-    bay, or None when the bay is empty. *naming* is the naming of that module's subtree when the save
-    changes *values*; it is empty otherwise.
-    """
+    """Return ``(state, naming)``: the bay's previous state, and its module's subtree naming if the save changes it."""
     row = (
         type(bay)
         .objects.filter(pk=bay.pk)
@@ -324,28 +336,31 @@ def _read_bay(bay):
     )
     if row is None:
         return None
-    values = bay_naming_values(row["position"], row["name"])
     module_pk = row["installed_module"]
-    if module_pk is None:
-        return values, None, ()
-    occupant = (module_pk, ModuleState(row["installed_module__module_type"], bay.pk, row["installed_module__device"]))
-    if bay_naming_values(bay.position, bay.name) == values:
-        return values, occupant, ()
+    module_state = (
+        None
+        if module_pk is None
+        else ModuleState(
+            module_type_id=row["installed_module__module_type"],
+            module_bay_id=bay.pk,
+            device_id=row["installed_module__device"],
+        )
+    )
+    state = BayState(bay_naming_values(row["position"], row["name"]), module_pk, module_state)
+    if module_pk is None or _bay_values(bay) == state.naming_values:
+        return state, ()
     from .engine import read_subtree_naming
 
-    return values, occupant, read_subtree_naming(module_pk)
+    return state, read_subtree_naming(module_pk)
 
 
 def _bay_reapply(bay, created, previous):
     """Return the reapply of the module in *bay* that a bay save asks for, or None when it is not a rename trigger."""
-    if created or previous is None:
+    state, naming = previous or (None, ())
+    if created or state is None or state.module_pk is None or _bay_values(bay) == state.naming_values:
         return None
-    values, occupant, naming = previous
-    if occupant is None or bay_naming_values(bay.position, bay.name) == values:
-        return None
-    pk, state = occupant
-    logger.debug("Module bay %s changed from %s; scheduling a reapply of module %s", bay.pk, values, pk)
-    return ModuleReapply(pk, state, installed=False, naming=naming)
+    logger.debug("Module bay %s changed from %s; scheduling a reapply of module %s", bay.pk, state, state.module_pk)
+    return ModuleReapply(state.module_pk, state.module_state, installed=False, naming=naming)
 
 
 _TRIGGERS = {

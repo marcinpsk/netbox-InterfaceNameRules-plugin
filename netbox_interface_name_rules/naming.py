@@ -71,9 +71,9 @@ def _resolve_bay_position(module_bay):
 def bay_naming_values(position, name) -> tuple[str, str]:
     """Return what the names in a bay with *position* and *name* are built from.
 
-    That is the stored position, which NetBox's raw template names and the variables of nested
-    modules read, and the position that the variables of the module in the bay read. A bay name
-    edit that changes neither changes no name.
+    The first value is the stored position. NetBox's raw template names read it, and so do the
+    variables of nested modules. The second value is the position that the variables of the module
+    in the bay read. A bay name edit that changes neither value changes no name.
     """
     return position, _variable_position(position, name)
 
