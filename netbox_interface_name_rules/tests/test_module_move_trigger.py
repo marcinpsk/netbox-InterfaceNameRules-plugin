@@ -92,14 +92,14 @@ def _module_reapplies():
 
 @contextmanager
 def _naming_reads():
-    """Record the queries of each subtree naming read; each call still runs the real function."""
+    """Record the queries and the result of each subtree naming read; each call still runs the real function."""
     reads = []
     real = engine.read_subtree_naming
 
     def read(module_pk):
         with CaptureQueriesContext(connection) as queries:
             naming = real(module_pk)
-        reads.append(queries.captured_queries)
+        reads.append((queries.captured_queries, naming))
         return naming
 
     with patch.object(engine, "read_subtree_naming", read):
@@ -658,7 +658,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
             self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-1/0/1"])
-        (read,) = reads
+        ((read, _naming),) = reads
         self.assertEqual(_writes(read), [])
         writes = _writes(queries.captured_queries)
         self.assertEqual(
@@ -837,6 +837,22 @@ class MoveTransactionTest(ModuleMoveTestCase):
 
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual((self._names(returned), self._names(moved)), (["operator-name"], ["et-1/0/10"]))
+
+    def test_a_bay_edited_before_the_move_in_one_transaction_leaves_the_name_and_reports_it(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+        bay = self._bay(self.device)
+
+        with _naming_reads() as reads, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            bay.position = "5"
+            bay.save()
+            self._save_move(module, self._bay(self.device, "Bay 1"))
+
+        ((_queries, (naming,)),) = reads
+        self.assertEqual(naming.variables["bay_position"], "5")
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn(f"`et-1/0/0`: {UNCLAIMED}", entry.comments)
 
 
 @skipIf(NETBOX_MOVES_SUBTREES, "NetBox 4.7 moves a module's components and nested bays with it")
