@@ -5,26 +5,26 @@ Machine-time values are evidence for a same-hardware before/after comparison. Th
 
 This run measured machine time. Statement counts are reproducible and carry the verdict.
 
-Host load averaged 2.57 over the minute before the run and 1.87 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
+Host load averaged 0.82 over the minute before the run and 1.30 over the minute it ended. Machine time is evidence only when both runs were taken under a comparable load.
 
 | Scenario | Layer | SQL calls | Planner cost | Shared hits | Wall median (ms) | Wall p95 (ms) | CPU median (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `module.complete_model_save.no_matching_rule` | complete_model_save | 76 | 1348.770 | 247 | 79.470 | 82.876 | 58.616 |
-| `module.direct_callback.no_matching_rule` | direct_callback | 5 | 8.480 | 8 | 8.265 | 8.993 | 6.572 |
-| `module.complete_model_save.plain_rename` | complete_model_save | 112 | 1681.010 | 434 | 111.340 | 120.061 | 82.242 |
-| `module.direct_callback.plain_rename` | direct_callback | 41 | 341.030 | 193 | 41.151 | 43.058 | 30.733 |
-| `module.complete_model_save.structural_creation` | complete_model_save | 183 | 2734.190 | 748 | 170.077 | 177.043 | 127.128 |
-| `module.direct_callback.structural_creation` | direct_callback | 112 | 1394.550 | 511 | 100.498 | 102.400 | 76.374 |
-| `module.complete_model_save.existing_family` | complete_model_save | 379 | 4071.780 | 1443 | 317.566 | 329.862 | 242.013 |
-| `module.direct_callback.existing_family` | direct_callback | 191 | 1618.740 | 600 | 155.500 | 159.974 | 118.714 |
-| `module.complete_model_save.reconciliation` | complete_model_save | 488 | 6094.870 | 2074 | 415.666 | 425.637 | 312.354 |
-| `module.direct_callback.reconciliation` | direct_callback | 300 | 3588.970 | 1139 | 253.499 | 264.662 | 189.693 |
-| `vc.complete_model_save.reapply_1` | complete_model_save | 70 | 603.770 | 343 | 69.451 | 71.584 | 50.004 |
-| `vc.direct_callback.reapply_1` | direct_callback | 45 | 363.340 | 232 | 48.306 | 51.091 | 35.224 |
-| `vc.complete_model_save.reapply_8` | complete_model_save | 336 | 2927.010 | 1260 | 294.236 | 299.105 | 221.729 |
-| `vc.direct_callback.reapply_8` | direct_callback | 311 | 2454.940 | 908 | 274.617 | 284.831 | 206.805 |
+| `module.complete_model_save.no_matching_rule` | complete_model_save | 76 | 1378.630 | 245 | 73.455 | 78.158 | 52.765 |
+| `module.direct_callback.no_matching_rule` | direct_callback | 5 | 8.480 | 8 | 7.036 | 8.063 | 5.601 |
+| `module.complete_model_save.plain_rename` | complete_model_save | 112 | 1567.120 | 441 | 104.003 | 107.857 | 74.408 |
+| `module.direct_callback.plain_rename` | direct_callback | 41 | 317.310 | 196 | 37.368 | 40.996 | 27.240 |
+| `module.complete_model_save.structural_creation` | complete_model_save | 183 | 2532.870 | 756 | 159.218 | 166.640 | 116.747 |
+| `module.direct_callback.structural_creation` | direct_callback | 112 | 1284.480 | 515 | 92.418 | 98.891 | 68.719 |
+| `module.complete_model_save.existing_family` | complete_model_save | 379 | 4156.350 | 1545 | 293.546 | 304.456 | 221.856 |
+| `module.direct_callback.existing_family` | direct_callback | 191 | 1618.390 | 600 | 139.648 | 146.360 | 105.917 |
+| `module.complete_model_save.reconciliation` | complete_model_save | 488 | 5997.080 | 1984 | 380.863 | 415.846 | 285.281 |
+| `module.direct_callback.reconciliation` | direct_callback | 300 | 3578.970 | 1144 | 229.110 | 262.606 | 170.070 |
+| `vc.complete_model_save.reapply_1` | complete_model_save | 70 | 611.770 | 351 | 62.065 | 65.656 | 44.429 |
+| `vc.direct_callback.reapply_1` | direct_callback | 45 | 371.340 | 240 | 44.292 | 47.623 | 32.505 |
+| `vc.complete_model_save.reapply_8` | complete_model_save | 336 | 2991.010 | 1324 | 264.976 | 285.451 | 196.868 |
+| `vc.direct_callback.reapply_8` | direct_callback | 311 | 2750.580 | 1224 | 250.533 | 255.360 | 185.699 |
 
-Plugin revision: `0c02e59093e387db182a2b21ad734dde0bb896db`
+Plugin revision: `78cd973779b4b9243ae66a438ab521c17e159050`
 
 NetBox revision: `sha256:65c8e2f394278a2ed5ef0b5d963cbe757b347483e830347bfd8370345a010721`
 
