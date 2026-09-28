@@ -4,7 +4,7 @@
 
 The generator places one or two interface templates on a module at virtual-chassis position 2, bay 1,
 which a move brought from position 1, bay 0. The rule is a plain rule that reads ``{base}``, one that
-does not, or the flat breakout rule ``z{base}:{channel}`` with two channels. The rule of the previous
+does not, or a flat breakout rule with two channels that reads ``{base}`` or does not. The rule of the previous
 state is the same rule, another plain rule, or none. The generator adds up to three interfaces from
 the names the templates' forms spell, and a stray interface.
 
@@ -42,10 +42,12 @@ HISTORICAL_VCS = (3, 4)
 MODULE = SimpleNamespace(pk=1, device_id=1)
 RULES = {"base": ("x", "{base}"), "bay": ("y", "{bay_position}")}
 FLAT_PREFIX = "z"
+FLAT_RULES = {"flat": "{base}", "flat without base": "{bay_position}"}
 FLAT_NAME = re.compile(rf"{FLAT_PREFIX}(?P<base>.+):0")
 UNCLAIMED = "kept as unclaimed"
+MISSING = ("blocked", "the flat family is missing 1 of its 2 interfaces")
 LAYOUT_COUNT = 7808
-FLAT_LAYOUT_COUNT = 2502
+FLAT_LAYOUT_COUNT = 2846
 
 
 @dataclass(frozen=True)
@@ -135,17 +137,22 @@ def _layouts():
             yield from _with_present(rule_key, previous_key, templates, pool)
 
 
+def _flat_targets(rule_key, base):
+    """Return the names the flat rule *rule_key* gives the family of *base*."""
+    return _family(base if rule_key == "flat" else NEW_BAY)
+
+
 def _flat_layouts():
     """Yield every flat-rule layout the module docstring describes; a move recognises no flat family."""
-    for kinds in TEMPLATE_SETS:
+    for rule_key, kinds in itertools.product(FLAT_RULES, TEMPLATE_SETS):
         templates = tuple(_Template(pk, kind) for pk, kind in enumerate(kinds, start=1))
         pool = dict.fromkeys(
             name
             for template in templates
             for base in (template.current, *template.examples(NEW_BAY))
-            for name in (base, *_family(base))
+            for name in (base, *_flat_targets(rule_key, base))
         )
-        yield from _with_present("flat", None, templates, pool)
+        yield from _with_present(rule_key, None, templates, pool)
 
 
 def _with_present(rule_key, previous_key, templates, pool):
@@ -190,9 +197,13 @@ def _units(template, layout, currents, moved):
         ):
             units.add((name,))
         match = FLAT_NAME.fullmatch(name)
-        if layout.rule_key == "flat" and not moved and match is not None:
+        if layout.rule_key in FLAT_RULES and not moved and match is not None:
             base = match["base"]
-            if base == template.current or (template.now is not None and template.now.fullmatch(base)):
+            if layout.rule_key != "flat":
+                spelled = base == NEW_BAY
+            else:
+                spelled = base == template.current or (template.now is not None and template.now.fullmatch(base))
+            if spelled:
                 families.add(tuple(member for member in _family(base) if member in layout.present))
     return units, families
 
@@ -225,9 +236,9 @@ def _expected(layout, moved):
 
 
 def _rule(rule_key):
-    if rule_key == "flat":
+    if rule_key in FLAT_RULES:
         return InterfaceNameRule(
-            name_template=FLAT_PREFIX + "{base}:{channel}",
+            name_template=f"{FLAT_PREFIX}{FLAT_RULES[rule_key]}:{{channel}}",
             breakout_mode=BreakoutModeChoices.FLAT,
             channel_count=2,
             channel_start=0,
@@ -264,16 +275,20 @@ def _admitted(bases, layout):
 
 
 def _plan_view(plans):
-    """Return, for each interface the plans touch, the name it takes or ``UNCLAIMED`` when it is kept."""
+    """Return, for each interface the plans touch, what it becomes: a name, a family it builds, or why it is kept."""
     view = {}
     for plan in plans:
-        for member in plan.members:
+        if isinstance(plan, family.FlatCreationPlan):
+            rows = ((plan.base.name, plan.target_names),)
+        else:
+            rows = ((member.snapshot.name, member.target_name) for member in plan.members)
+        for name, target in rows:
             if plan.precondition_status is None:
-                view[member.snapshot.name] = member.target_name
+                view[name] = target
             elif plan.precondition_reason == family.UNCLAIMED_BASE_REASON:
-                view[member.snapshot.name] = UNCLAIMED
+                view[name] = UNCLAIMED
             else:
-                view[member.snapshot.name] = (plan.precondition_status, plan.precondition_reason)
+                view[name] = (str(plan.precondition_status), plan.precondition_reason)
     return view
 
 
@@ -290,6 +305,50 @@ def _paths(layout):
             ("forced reapply", family.RunScope.FORCED),
             ("Apply Rules", None),
         )
+    }
+
+
+def _expected_flat_paths(layout):
+    """Return the plan view each path gives a flat layout under the rule stated in the module docstring.
+
+    A complete family takes its names now. A family that lost a member keeps its names, unless the rule
+    gives it those names now: its interfaces then build it again, once. On an automatic run a breakout
+    rule builds only on a name one template alone claims; an install touches only raw names.
+    """
+    verdict = _expected(layout, moved=False)
+    reads_base = layout.rule_key == "flat"
+    installed = {}
+    for unit in verdict.families:
+        base, targets = FLAT_NAME.fullmatch(unit[0])["base"], _flat_targets(layout.rule_key, verdict.bases[unit[0]])
+        if len(unit) == len(targets):
+            installed.update(zip(unit, targets, strict=True))
+        elif _family(base) != targets:
+            installed.update(dict.fromkeys(unit, MISSING))
+    leftover = [name for name in layout.present if name not in installed]
+
+    def built(names):
+        view, kept = {}, {}
+        for name in names:
+            base = verdict.bases.get(name) if reads_base else name
+            if base is None:
+                view[name] = UNCLAIMED
+                continue
+            targets = _flat_targets(layout.rule_key, base)
+            if targets not in kept or (name == targets[0] and kept[targets] != targets[0]):
+                kept[targets] = name
+        return {**view, **{name: targets for targets, name in kept.items()}}
+
+    def automatic(names):
+        names = list(names)
+        return {
+            **built(name for name in names if name in verdict.bases),
+            **dict.fromkeys((name for name in names if name not in verdict.bases), UNCLAIMED),
+        }
+
+    return {
+        "install": automatic(name for name in leftover if name in verdict.raw),
+        "forced reapply": {**installed, **automatic(leftover)},
+        "Apply Rules": {**installed, **built(leftover)},
     }
 
 
@@ -310,6 +369,16 @@ def _expected_paths(layout):
         "forced reapply": {name: planned(name) for name in layout.present},
         "Apply Rules": {name: planned(name) for name in layout.present},
     }
+
+
+def _rebuilds(layout):
+    """Return whether an incomplete family the rule names now is built again in *layout*."""
+    verdict = _expected(layout, moved=False)
+    return any(
+        len(unit) < 2
+        and _family(FLAT_NAME.fullmatch(unit[0])["base"]) == _flat_targets(layout.rule_key, verdict.bases[unit[0]])
+        for unit in verdict.families
+    )
 
 
 class ClaimInvariantTest(SimpleTestCase):
@@ -352,16 +421,40 @@ class ClaimInvariantTest(SimpleTestCase):
         for layout in layouts:
             expected = _expected(layout, moved=False)
             families += bool(expected.families)
-            bases = _claim(layout, _rule("flat"), _interfaces(layout), moved=False)
+            bases = _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False)
+            own_bases = {name: name for name in layout.present}
+            want = (
+                frozenset(expected.bases),
+                expected.bases if layout.rule_key == "flat" else own_bases,
+                expected.families,
+            )
             got = (
+                frozenset(name for name in layout.present if bases.claim(name).accepted),
                 _admitted(bases, layout),
                 frozenset(
                     tuple(name for name in flat.names if name in layout.present) for flat in bases.flat_families()
                 ),
             )
-            if got != (expected.bases, expected.families):
-                failures.append((layout.present, got, (expected.bases, expected.families)))
+            if got != want:
+                failures.append((layout.rule_key, layout.present, got, want))
 
         self.assertEqual(len(layouts), FLAT_LAYOUT_COUNT)
         self.assertGreater(families, 0)
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+
+    def test_every_path_plans_what_the_flat_claim_accepts(self):
+        layouts = list(_flat_layouts())
+        failures = []
+        missing = rebuilt = 0
+        for layout in layouts:
+            expected = _expected_flat_paths(layout)
+            missing += MISSING in expected["Apply Rules"].values()
+            rebuilt += _rebuilds(layout)
+            got = _paths(layout)
+            if got != expected:
+                failures.append((layout.rule_key, layout.present, got, expected))
+
+        self.assertEqual(len(layouts), FLAT_LAYOUT_COUNT)
+        self.assertGreater(missing, 0)
+        self.assertGreater(rebuilt, 0)
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
