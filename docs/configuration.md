@@ -138,10 +138,12 @@ Limits:
 - NetBox before 4.7 saves a move as a change of the module row only. After a
   move to another bay of the same device, the plugin renames the moved module's
   interfaces, and recognises the raw template names from the old bay. The
-  modules nested in the moved module keep their names, because their module
-  bays keep the old parent bay. After a move to another device, the interfaces
-  stay on the old device. The plugin then renames no interface of that module,
-  and the journal entry lists each of them.
+  module bays of the moved module keep the old parent bay, which no longer
+  holds the moved module. The plugin renames no interface of a module installed
+  in such a bay, after the move and after a later virtual-chassis change, and
+  the journal entry lists each of them. After a move to another device, the
+  interfaces stay on the old device. The plugin then renames no interface of
+  that module, and the journal entry lists each of them.
 
 ### Journal entries after an automatic rename
 
@@ -162,6 +164,8 @@ and the reason:
 - no rule matches a moved module at its new position,
 - the interface is not on the device of its module, which NetBox before 4.7
   leaves after a move to another device,
+- the module bay still has the parent bay it had before its module moved,
+  which NetBox before 4.7 leaves for the modules nested in a moved module,
 - a moved module's rule before the move is a flat breakout rule,
 - another interface of a moved module is unclaimed, so nothing on the module is
   renamed,

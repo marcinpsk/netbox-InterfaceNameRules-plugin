@@ -55,6 +55,7 @@ FLAT = "a flat breakout family is not renamed after a move"
 NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
 NO_RULE = "no rule matches the module at its new position"
 ELSEWHERE = "the interface is not on the device of its module"
+STALE_BAY = "the module bay still has the parent bay it had before its module moved"
 WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
 NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
 
@@ -875,8 +876,9 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
 
     The interfaces keep their raw names from the old bay, and the nested bays keep their parent. The
     reapply recognises the moved module's raw names from its previous state; the nested modules keep
-    the variables their names came from, so their names stay correct and unchanged. After a move to
-    another device the interfaces stay on the old device, so nothing renames them.
+    the variables their names came from, but the old parent bay no longer holds their parent module, so
+    nothing renames them. After a move to another device the interfaces stay on the old device, so
+    nothing renames them either.
     """
 
     @classmethod
@@ -885,7 +887,7 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
         cls.plain_type = cls._module_type("Plain", "{module}")
         InterfaceNameRule.objects.create(module_type=cls.plain_type, name_template="et-{vc_position}/0/{bay_position}")
 
-    def test_a_move_renames_the_moved_module_from_its_old_raw_names_and_leaves_the_nested_modules(self):
+    def test_a_move_renames_the_moved_module_from_its_old_raw_names_and_reports_the_nested_modules(self):
         card_type = self._card_type("Card", "1")
         InterfaceTemplate.objects.create(module_type=card_type, name="c{module}", type=PLAIN_TYPE)
         optic_type = self._module_type("Optic", "{module}")
@@ -902,7 +904,45 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
             callback()
 
         self.assertEqual((self._names(card), self._names(optic)), (["ge-1/2"], ["et-1/0/1"]))
-        self.assertEqual(_journal(card), [])
+        (entry,) = _journal(card)
+        self.assertIn(f"`et-1/0/1`: {STALE_BAY}", entry.comments)
+        self.assertNotIn("ge-1/2", entry.comments)
+
+    def _scoped_optic(self):
+        """Install a card in Bay 0 with an optic whose rule the card's type scopes; return both."""
+        card_type = self._card_type("Scoping Card", "1")
+        optic_type = self._module_type("Scoped Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=optic_type, parent_module_type=card_type, name_template="a-{bay_position}"
+        )
+        InterfaceNameRule.objects.create(module_type=optic_type, name_template="b-{bay_position}")
+        card, port = self._install_card(card_type, self._bay(self.device))
+        optic = self._install(optic_type, port)
+        self.assertEqual(self._names(optic), ["a-1"])
+        return card, optic
+
+    def test_a_nested_module_whose_bay_keeps_the_old_parent_is_not_renamed_by_another_rule(self):
+        card, optic = self._scoped_optic()
+
+        self._move(card, self._bay(self.device, "Bay 2"))
+
+        self.assertEqual(self._names(optic), ["a-1"])
+        (entry,) = _journal(card)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn(f"`a-1`: {STALE_BAY}", entry.comments)
+
+    def test_a_position_change_after_a_move_does_not_rename_a_nested_module_whose_bay_keeps_the_old_parent(self):
+        card, optic = self._scoped_optic()
+        with self.captureOnCommitCallbacks():
+            self._save_move(card, self._bay(self.device, "Bay 2"))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.device.vc_position = 3
+            self.device.save()
+
+        self.assertEqual(self._names(optic), ["a-1"])
+        (entry,) = _journal(self.device)
+        self.assertIn(f"`a-1`: {STALE_BAY}", entry.comments)
 
     def test_a_move_to_another_device_renames_nothing_while_the_interfaces_stay_on_the_old_device(self):
         module = self._install(self.plain_type, self._bay(self.device))

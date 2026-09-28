@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 NO_RULE_REASON = "no rule matches the module at its new position"
 FLAT_MOVE_REASON = "a flat breakout family is not renamed after a move"
 ELSEWHERE_REASON = "the interface is not on the device of its module"
+STALE_BAY_REASON = "the module bay still has the parent bay it had before its module moved"
 
 
 def pinned_rule_cache():
@@ -264,7 +265,8 @@ def module_rule_outcomes(
     Without a rule now, each interface the previous rule named keeps its name and is reported. When
     the previous rule is a flat breakout rule, nothing on the module is renamed and every interface
     is reported: NetBox keeps no link to a family, so it could be recognised by name only (ADR 0015).
-    When an interface of the module is on another device, nothing is renamed and every interface is reported.
+    When an interface of the module is on another device, or the module's bay has a parent bay that does not
+    hold the module that owns the bay, nothing is renamed and every interface is reported.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
@@ -303,6 +305,17 @@ def _left_without_a_rule(module, previous_forms) -> Iterator[RenameOutcome]:
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
     for name in family_ops.names_the_previous_rule_gave(previous_forms, interfaces):
         yield RenameOutcome(OutcomeKind.BLOCKED, name, NO_RULE_REASON)
+
+
+def _has_stale_parent_bay(module_bay) -> bool:
+    """Return whether *module_bay* belongs to a module but its parent bay does not hold that module.
+
+    NetBox sets a bay's parent to the bay of the module that owns it; rule selection read both already.
+    """
+    if module_bay.module_id is None:
+        return False
+    installed = getattr(module_bay.parent, "installed_module", None)
+    return installed is None or installed.pk != module_bay.module_id
 
 
 def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
@@ -348,9 +361,12 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
+    # NetBox before 4.7 moves only the module row: its interfaces and nested bays keep the old placement.
     if any(interface.device_id != module.device_id for interface in interfaces):
-        # NetBox before 4.7 moves only the module row, so its interfaces stay on the old device.
         yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, ELSEWHERE_REASON) for i in interfaces)
+        return
+    if _has_stale_parent_bay(module_bay):
+        yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
         return
     planned = family_ops.plan_module_families(
         module,
