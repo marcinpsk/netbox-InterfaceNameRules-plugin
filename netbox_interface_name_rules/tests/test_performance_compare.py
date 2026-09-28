@@ -105,6 +105,12 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertNotIn("never goes to disk", readme)
 
+    def test_readme_measurement_command_keeps_the_test_database(self):
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
+        command = readme.split("python manage.py test", 1)[1].split("```", 1)[0]
+
+        self.assertIn("--keepdb", command)
+
     def test_readme_does_not_infer_planner_cost_from_statement_counts(self):
         readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
 
