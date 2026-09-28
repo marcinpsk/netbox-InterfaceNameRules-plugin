@@ -309,7 +309,10 @@ def _plan_view(plans):
     view = {}
     for plan in plans:
         if isinstance(plan, family.FlatCreationPlan):
-            rows = ((plan.base.name, plan.target_names),)
+            rows = (
+                (plan.base.name, plan.target_names),
+                *((member.name, ("member of", plan.base.name)) for member in plan.members),
+            )
         else:
             rows = ((member.snapshot.name, member.target_name) for member in plan.members)
         for name, target in rows:
@@ -343,9 +346,8 @@ def _expected_flat_paths(layout):
 
     A complete family takes its names now. A family that lost a member keeps its names, unless the rule
     gives it those names now: its interfaces then build it again, once. On every path a breakout rule
-    builds only on a name one template alone claims; an install touches only raw names. A family that is
-    built adopts an interface with one of its channel names; another interface that would build the same
-    family is blocked, because its names are in use.
+    builds only on a name one template alone claims; an install touches only raw names. A family keeps
+    only the rows the claim gave it; each other interface has its own plan, even one with a family's name.
     """
     verdict = _expected(layout, moved=False)
     installed = {}
@@ -358,24 +360,10 @@ def _expected_flat_paths(layout):
     leftover = [name for name in layout.present if name not in installed]
 
     def built(names):
-        names, kept = list(names), {}
-        for name in names:
-            if name in verdict.bases:
-                targets = _flat_targets(layout.rule_key, verdict.bases[name])
-                if targets not in kept or (name == targets[0] and kept[targets] != targets[0]):
-                    kept[targets] = name
-        builders = {name: targets for targets, name in kept.items()}
-        adopted = {member for targets in kept for member in targets[1:]}
-        view = {}
-        for name in names:
-            if name in builders or name in adopted:
-                continue
-            if name not in verdict.bases:
-                view[name] = UNCLAIMED
-            else:
-                duplicate = _flat_targets(layout.rule_key, verdict.bases[name])[0]
-                view[name] = ("blocked", f"target name is already in use: {duplicate}")
-        return {**view, **builders}
+        return {
+            name: _flat_targets(layout.rule_key, verdict.bases[name]) if name in verdict.bases else UNCLAIMED
+            for name in names
+        }
 
     return {
         "install": built(name for name in leftover if name in verdict.raw),
@@ -403,13 +391,12 @@ def _expected_paths(layout):
     }
 
 
-def _plan_counts(plans, present):
-    """Return how many plans each interface is in: as a member, as a base, or as a row a flat family adopts."""
+def _plan_counts(plans):
+    """Return how many plans each interface is in: as a member, as a base, or as a row a flat family keeps."""
     counts = Counter()
     for plan in plans:
         if isinstance(plan, family.FlatCreationPlan):
-            adopted = plan.target_names[1:] if plan.precondition_status is None else ()
-            counts.update([plan.base.name, *(name for name in adopted if name in present)])
+            counts.update([plan.base.name, *(member.name for member in plan.members)])
         elif isinstance(plan, family.StructuralFamilyPlan):
             counts[plan.base.name] += 1
         else:
@@ -437,7 +424,7 @@ def _unplanned(layout):
     wrong = {}
     for label, scope, selected, in_scope in runs:
         plans = family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope, selected).plans
-        counts = _plan_counts(plans, present)
+        counts = _plan_counts(plans)
         bad = {name: counts[name] for name in present if counts[name] > 1 or (name in in_scope and not counts[name])}
         if bad:
             wrong[label] = bad
@@ -516,7 +503,7 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
     def test_every_interface_in_scope_is_in_exactly_one_plan(self):
-        """Each run plans every interface it may touch once: built, adopted by its family, or kept and reported."""
+        """Each run plans every interface it may touch once: built, kept by its family, or kept and reported."""
         layouts = [
             *(layout for layout in _layouts() if layout.previous_key == layout.rule_key),
             *_flat_layouts(),

@@ -1767,8 +1767,8 @@ class NameCollisionTest(EngineAdvancedFixtures):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "0")
 
-    def test_breakout_collision_skips_only_that_channel(self):
-        """A breakout channel whose name is taken elsewhere on the device is skipped; the rest are created."""
+    def test_a_breakout_channel_name_in_use_refuses_the_whole_family(self):
+        """A flat family is built whole or not at all, so a channel name taken elsewhere refuses it (ADR 0001)."""
         # Rule looked up internally by apply_interface_name_rules via module_type.
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
@@ -1783,10 +1783,8 @@ class NameCollisionTest(EngineAdvancedFixtures):
 
         renamed = apply_interface_name_rules(module, self.bay0)
 
-        # base→:0, plus :1 and :3 created; :2 skipped (collision)
-        self.assertEqual(renamed, 3)
-        module_names = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
-        self.assertEqual(module_names, ["Hu0/0/0/0:0", "Hu0/0/0/0:1", "Hu0/0/0/0:3"])
+        self.assertEqual(renamed, 0)
+        self.assertEqual(list(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0"])
         # The pre-existing device-level interface is untouched.
         self.assertTrue(Interface.objects.filter(device=self.device, module=None, name="Hu0/0/0/0:2").exists())
 

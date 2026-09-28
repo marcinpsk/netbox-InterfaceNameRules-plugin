@@ -153,7 +153,11 @@ class StructuralFamilyPlan:
 
 @dataclass(frozen=True, slots=True)
 class FlatCreationPlan:
-    """An executable plan that expands one plain interface into a flat breakout family."""
+    """An executable plan that expands one plain interface into a flat breakout family.
+
+    *members* are the rows of a half-built family that the claim gave the base's template, which
+    the family keeps under the names they carry.
+    """
 
     family_id: str
     device_id: int
@@ -162,6 +166,7 @@ class FlatCreationPlan:
     target_names: tuple[str, ...]
     precondition_status: FamilyStatus | None = None
     precondition_reason: str = ""
+    members: tuple[InterfaceSnapshot, ...] = ()
 
     @property
     def topology(self) -> FamilyTopology:
@@ -169,9 +174,17 @@ class FlatCreationPlan:
         return FamilyTopology.FLAT
 
     @property
+    def member_pks(self) -> tuple[int, ...]:
+        """Return the base and every planned member, by primary key."""
+        return (self.base.pk, *(member.pk for member in self.members))
+
+    @property
     def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the base row this plan rewrites."""
-        return (PlannedMember(self.base, self.target_names[0], MemberRole.FLAT_MEMBER),)
+        """Return the base row this plan rewrites and the rows it keeps."""
+        return (
+            PlannedMember(self.base, self.target_names[0], MemberRole.FLAT_MEMBER),
+            *(PlannedMember(member, member.name, MemberRole.FLAT_MEMBER) for member in self.members),
+        )
 
 
 @dataclass(frozen=True, slots=True)

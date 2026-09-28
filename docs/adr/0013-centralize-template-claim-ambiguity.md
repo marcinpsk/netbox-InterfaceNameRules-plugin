@@ -52,15 +52,18 @@ The paths read the result as follows:
 - A breakout rule builds a family only on an interface that one template alone claims. This holds on
   every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
   does not read `{base}`, and on a module type without templates. Every other interface keeps its
-  name and is reported as unclaimed, unless a flat family that the rule builds adopts it by one of
-  its channel names. When NetBox or a concurrent change stops that family at execution, the outcome
-  reports each interface it would adopt with the same reason. A family that a precondition blocks
-  adopts nothing, and a channelized family
-  refuses a name in use. When two interfaces would build one family, one builds it and the other is
-  reported, because its names are in use. In Apply Rules only a family that the operator selected
-  adopts a name. So every interface in scope is built, adopted or reported, once. A subinterface that no template claims is no
-  candidate of its own, so a breakout rule neither touches nor reports it. Prediction refuses a given
-  name that the claim finds ambiguous, and predicts every other given name from itself.
+  name and is reported as unclaimed. No family takes an interface by its name. A flat family keeps
+  only the other interfaces of the flat family unit that the claim gave its template, and its plan
+  holds them by primary key. Another interface that has one of the family's names is a collision:
+  the family is refused, and that interface has its own plan. So when two interfaces would build one
+  family, the first plan builds it and the other is refused, because its names are in use. At
+  execution the executor locks the base and the interfaces the family keeps, and refuses the family
+  when one of them changed (ADR 0002). It builds the whole family or nothing (ADR 0001), and a refusal
+  reports each planned interface once with the same reason. In Apply Rules a selection of any
+  interface that a flat family keeps reaches that family. So every interface in scope is built, kept
+  by its family or reported, once. A subinterface that no template claims is no candidate of its
+  own, so a breakout rule neither touches nor reports it. Prediction refuses a given name that the
+  claim finds ambiguous, and predicts every other given name from itself.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
   reports a family that lost a member, unless the rule gives the family those names already: the
   family's first interface then builds it again. A channelized rule renames no flat family, and
@@ -74,3 +77,12 @@ refuses both and reports them. Keeping the stages and aligning their filters was
 each stage decides without the evidence the others hold. Dropping a historical base that some
 template resolves to now was also rejected: that filter ran before the claim, and a name the rule
 gives two templates belongs to neither.
+
+A flat family used to take each module interface that had one of its channel names, and to skip a
+sibling whose name another interface held while it created the rest. A match by name put one
+interface in two plans, or in none: a raw name that another template's family would take, or an
+interface renamed after planning to one of the family's names, was reported twice or not at all. A
+flat family now keeps interfaces by primary key, and only those that the claim gave it. This changes
+what an operator sees. A sibling name in use now refuses the whole flat family, where the family used
+to be built without that sibling. When a port still has its raw name, an interface that has one of
+its family's names is now reported on its own, and the family is not built.
