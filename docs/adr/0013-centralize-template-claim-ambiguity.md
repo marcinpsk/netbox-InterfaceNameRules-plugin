@@ -53,7 +53,9 @@ The paths read the result as follows:
   every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
   does not read `{base}`, and on a module type without templates. Every other interface keeps its
   name and is reported as unclaimed, unless a flat family that the rule builds adopts it by one of
-  its channel names. A family that a precondition blocks adopts nothing, and a channelized family
+  its channel names. When NetBox or a concurrent change stops that family at execution, the outcome
+  reports each interface it would adopt with the same reason. A family that a precondition blocks
+  adopts nothing, and a channelized family
   refuses a name in use. When two interfaces would build one family, one builds it and the other is
   reported, because its names are in use. In Apply Rules only a family that the operator selected
   adopts a name. So every interface in scope is built, adopted or reported, once. A subinterface that no template claims is no
