@@ -782,6 +782,27 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertNotIn("operator-name", entry.comments)
         self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
 
+    def test_a_breakout_rule_the_device_cannot_evaluate_reports_the_raw_interface(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Flat",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=flat_type,
+            )
+
+        (entry,) = _journal(module)
+        self.assertIn("`0`: {vc_position} is not available", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+
     def test_leaving_the_virtual_chassis_reports_every_member_of_a_flat_family(self):
         flat_type, _ = self._module_type_with_rule(
             "RenTrig Flat",

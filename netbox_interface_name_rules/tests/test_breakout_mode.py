@@ -42,6 +42,7 @@ from netbox_interface_name_rules.engine import (
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -1013,6 +1014,28 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
             channel_count=4,
             channel_start=0,
         )
+        cls.first_channel_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkFlat-FIRST", part_number="BrkFlat-FIRST"
+        )
+        InterfaceTemplate.objects.create(
+            module_type=cls.first_channel_type, name="Ethernet{module}/1", type=PARENT_TYPE
+        )
+        cls.first_channel_rule = InterfaceNameRule.objects.create(
+            module_type=cls.first_channel_type,
+            name_template="Ethernet{bay_position}/{channel}",
+            breakout_mode=FLAT,
+            channel_count=4,
+            channel_start=1,
+        )
+        cls.second_channel_fails_type = _plain_module_type(manufacturer, "BrkFlat-DIV")
+        # The second channel divides by zero, so the rule can name no family at all.
+        cls.second_channel_fails_rule = InterfaceNameRule.objects.create(
+            module_type=cls.second_channel_fails_type,
+            name_template="x{base}:{12 // ({channel} - 2)}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=1,
+        )
 
     def _assert_flat_family(self, module, bay_position):
         """Assert *module* carries N plain siblings and no channelized structure at all."""
@@ -1038,6 +1061,28 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay), 4)
         self._assert_flat_family(module, "4")
+
+    def test_a_name_that_spells_a_family_the_rule_cannot_name_is_no_claim(self):
+        """``x3:-12`` spells the first channel, but no family exists, so the raw name stays one claim."""
+        module, _ = self._install(self.second_channel_fails_type, "3")
+        Interface.objects.create(device=self.device, module=module, name="x3:-12", type=PARENT_TYPE)
+
+        outcome = apply_rule_to_existing(self.second_channel_fails_rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["3", "x3:-12"])
+        reasons = {member.current_name: member.reason for member in outcome.skipped_members}
+        self.assertTrue(reasons["3"].startswith("failed to evaluate the family names"), reasons)
+        self.assertEqual(reasons["x3:-12"], UNCLAIMED_BASE_REASON)
+
+    def test_a_raw_name_that_is_the_first_name_of_its_family_builds_the_family(self):
+        """The template claims ``Ethernet3/1`` as its raw name and as its family's first name: one claim."""
+        module, _ = self._install(self.first_channel_type, "3")
+        family = [f"Ethernet3/{channel}" for channel in range(1, 5)]
+
+        self.assertEqual(self._names(module), family)
+        self.assertEqual(apply_rule_to_existing(self.first_channel_rule).changed_count, 0)
+        self.assertEqual(self._names(module), family)
 
 
 @skipIf(supports_channelization(), "requires a NetBox that cannot model channelized interfaces (4.6 and older)")

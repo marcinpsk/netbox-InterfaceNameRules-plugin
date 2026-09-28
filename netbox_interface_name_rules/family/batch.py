@@ -29,7 +29,7 @@ from .installed import (
     plan_kept_interface,
 )
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
-from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
+from .targets import UNCLAIMED_BASE_REASON, builds_channelized_family, intended_family_names, one_family_per_name_set
 from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
@@ -135,23 +135,24 @@ def _creation_plans(module, rule, variables, plain, bases):
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
-def plan_module_families(
-    module, rule, variables, interfaces, admit_leftover=None, previous_forms=None
-) -> ModuleFamilyPlans:
+def plan_module_families(module, rule, variables, interfaces, bases, admit_leftover=None) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
-    what is left over is planned as the family the rule would build on it.
+    what is left over is planned as the family the rule would build on it. *bases* is the claim over
+    the module's interface names that ``module_raw_bases`` returns.
 
-    *admit_leftover* filters the interfaces no installed family claimed.  It runs before two of
-    them that intend one family are collapsed into it, so a caller that must not touch one of the
-    two cannot have it survive the collapse as the row the family is built on.
+    *admit_leftover* returns ``(admitted, kept)`` for the interfaces no installed family claimed. The
+    rule plans the admitted ones, and each kept one keeps its name and is reported as unclaimed. It
+    runs before two admitted interfaces that intend one family are collapsed into it, so a caller
+    that must not touch one of the two cannot have it survive the collapse as the row the family is
+    built on.
 
-    *previous_forms* holds what named the module's templates before a move. The plans then rename
-    only what a template claims, and no installed flat family. While any top-level interface is
-    unclaimed, they rename nothing on the module and report every interface.
+    When *bases* holds the previous state of a move, the plans rename only what a template claims,
+    and no installed flat family. While any top-level interface is unclaimed, they rename nothing
+    on the module and report every interface.
     """
-    bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    previous_forms = bases.previous_forms
     if previous_forms is not None and any(
         _is_top_level(interface) and bases.base_for(interface.name) is None for interface in interfaces
     ):
@@ -174,8 +175,9 @@ def plan_module_families(
         and not _is_channel(interface)
         and (previous_forms is None or _is_top_level(interface))
     ]
+    kept = ()
     if admit_leftover is not None:
-        plain = list(admit_leftover(plain))
+        plain, kept = admit_leftover(plain)
     if rule.channel_count <= 0:
         leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
@@ -189,7 +191,8 @@ def plan_module_families(
             )
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
-    return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
+    unclaimed = tuple(plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON) for interface in kept)
+    return ModuleFamilyPlans(installed=installed.plans, leftover=(*leftover, *unclaimed))
 
 
 def _selection_pks(plan):
@@ -221,7 +224,8 @@ def execute_module_families(plans):
 def _apply_module(rule, module, interfaces, selected_pks):
     """Plan and execute every selected family on one module."""
     variables = build_variables(module.module_bay, device=module.device)
-    plans = _selected(plan_module_families(module, rule, variables, interfaces).plans, selected_pks)
+    bases = module_raw_bases(module, rule, variables, interfaces)
+    plans = _selected(plan_module_families(module, rule, variables, interfaces, bases).plans, selected_pks)
     return list(execute_module_families(plans))
 
 

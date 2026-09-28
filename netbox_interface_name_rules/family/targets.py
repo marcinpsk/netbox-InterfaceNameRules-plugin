@@ -66,6 +66,11 @@ def builds_channelized_family(rule) -> bool:
     return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
 
 
+def builds_flat_family(rule) -> bool:
+    """Return whether *rule* builds a flat breakout family of sibling interfaces."""
+    return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
+
+
 def names_installed_parent(rule) -> bool:
     """Return whether *rule* gives the parent of an installed channelized family a new name."""
     if rule.channel_count <= 0:
