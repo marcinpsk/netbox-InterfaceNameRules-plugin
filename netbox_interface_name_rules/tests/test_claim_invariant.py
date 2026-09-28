@@ -2,8 +2,9 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """The one claim over every name form, checked on every small layout against a declarative statement.
 
-The generator places one or two interface templates on a module at virtual-chassis position 2, bay 1,
-which a move brought from position 1, bay 0. The rule is a plain rule that reads ``{base}``, one that
+The generator places no interface template, or one or two, on a module at virtual-chassis position 2,
+bay 1, which a move brought from position 1, bay 0. Without templates, the module type claims as one
+template whose raw name is the bay position, except after a move, where it claims nothing. The rule is a plain rule that reads ``{base}``, one that
 does not, or a flat breakout rule with two channels that reads ``{base}`` or does not. The rule of the previous
 state is the same rule, another plain rule, or none. The generator adds up to three interfaces from
 the names the templates' forms spell, and a stray interface.
@@ -47,8 +48,8 @@ FLAT_RULES = {"flat": "{base}", "flat without base": "{bay_position}"}
 FLAT_NAME = re.compile(rf"{FLAT_PREFIX}(?P<base>.+):0")
 UNCLAIMED = "kept as unclaimed"
 MISSING = ("blocked", "the flat family is missing 1 of its 2 interfaces")
-LAYOUT_COUNT = 7808
-FLAT_LAYOUT_COUNT = 2846
+LAYOUT_COUNT = 7884
+FLAT_LAYOUT_COUNT = 2862
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,8 @@ class _Kind:
 
 
 KINDS = (_Kind("mgmt"), _Kind("{module}"), _Kind("{vc_position}"), _Kind("{vc_position}/{module}"))
-TEMPLATE_SETS = [(kind,) for kind in KINDS] + list(itertools.combinations(KINDS, 2))
+# None stands for a module type without interface templates.
+TEMPLATE_SETS = [None, *((kind,) for kind in KINDS), *itertools.combinations(KINDS, 2)]
 
 
 def _variables(vc, bay):
@@ -89,9 +91,10 @@ def _family(base):
 
 
 class _Template:
-    def __init__(self, pk, kind):
+    def __init__(self, pk, kind, stand_in=False):
         self.pk = pk
         self.kind = kind
+        self.stand_in = stand_in
         self.current = kind.resolved(NEW_VC, NEW_BAY)
         self.previous = kind.resolved(OLD_VC, OLD_BAY)
         self.now = kind.historical(NEW_BAY)
@@ -115,11 +118,18 @@ class _Layout:
     present: tuple
 
 
+def _templates(kinds):
+    """Return the templates of *kinds*; without templates, a stand-in that resolves to the bay position."""
+    if kinds is None:
+        return (_Template(None, _Kind("{module}"), stand_in=True),)
+    return tuple(_Template(pk, kind) for pk, kind in enumerate(kinds, start=1))
+
+
 def _layouts():
     """Yield every plain-rule layout the module docstring describes."""
     for rule_key, kinds in itertools.product(RULES, TEMPLATE_SETS):
         for previous_key in (rule_key, *(key for key in RULES if key != rule_key), None):
-            templates = tuple(_Template(pk, kind) for pk, kind in enumerate(kinds, start=1))
+            templates = _templates(kinds)
             pool = dict.fromkeys(
                 name
                 for template in templates
@@ -146,7 +156,7 @@ def _flat_targets(rule_key, base):
 def _flat_layouts():
     """Yield every flat-rule layout the module docstring describes; a move recognises no flat family."""
     for rule_key, kinds in itertools.product(FLAT_RULES, TEMPLATE_SETS):
-        templates = tuple(_Template(pk, kind) for pk, kind in enumerate(kinds, start=1))
+        templates = _templates(kinds)
         pool = dict.fromkeys(
             name
             for template in templates
@@ -220,19 +230,20 @@ class _Verdict:
 
 
 def _expected(layout, moved):
-    """Return the verdict of the rule stated in the module docstring."""
-    currents = {template.current for template in layout.templates}
-    units = {template.pk: _units(template, layout, currents, moved) for template in layout.templates}
+    """Return the verdict of the rule stated in the module docstring; after a move a stand-in claims nothing."""
+    templates = [template for template in layout.templates if not (moved and template.stand_in)]
+    currents = {template.current for template in templates}
+    units = {template.pk: _units(template, layout, currents, moved) for template in templates}
     names = {pk: {name for unit in (*singles, *flat) for name in unit} for pk, (singles, flat) in units.items()}
     bases, families = {}, set()
-    for template in layout.templates:
+    for template in templates:
         singles, flat = units[template.pk]
         others = set().union(*(claimed for pk, claimed in names.items() if pk != template.pk))
         covering = [unit for unit in singles | flat if set(unit) == names[template.pk]]
         if len(covering) == 1 and others.isdisjoint(names[template.pk]):
             bases.update(dict.fromkeys(names[template.pk], template.current))
             families.update(unit for unit in covering if unit in flat)
-    raw = {name for template in layout.templates for name in names[template.pk] if _is_raw(template, name, currents)}
+    raw = {name for template in templates for name in names[template.pk] if _is_raw(template, name, currents)}
     return _Verdict(bases, frozenset(families), frozenset().union(*names.values()), frozenset(raw))
 
 
@@ -257,7 +268,11 @@ def _interfaces(layout):
 def _claim(layout, rule, interfaces, moved):
     """Return the plugin's one claim over *layout*, after a move or without one."""
     catalog = SimpleNamespace(
-        get=lambda: tuple(template.catalog_entry(NEW_VC, NEW_BAY, template.now) for template in layout.templates)
+        get=lambda: tuple(
+            template.catalog_entry(NEW_VC, NEW_BAY, template.now)
+            for template in layout.templates
+            if not template.stand_in
+        )
     )
     previous_forms = None
     if moved:
@@ -265,7 +280,11 @@ def _claim(layout, rule, interfaces, moved):
         previous_forms = family.PreviousForms(
             previous_rule,
             _variables(OLD_VC, OLD_BAY),
-            {template.pk: template.catalog_entry(OLD_VC, OLD_BAY, template.before) for template in layout.templates},
+            {
+                template.pk: template.catalog_entry(OLD_VC, OLD_BAY, template.before)
+                for template in layout.templates
+                if not template.stand_in
+            },
         )
     return family.module_raw_bases(MODULE, rule, _variables(NEW_VC, NEW_BAY), interfaces, previous_forms, catalog)
 
