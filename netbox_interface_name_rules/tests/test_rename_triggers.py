@@ -29,6 +29,7 @@ from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization
 from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.rename_outcomes import OutcomeKind
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -847,6 +848,54 @@ class RenameJournalTest(RenameTriggerTestCase):
         (entry,) = _journal(module)
         self.assertIn("`0`: {vc_position} is not available", entry.comments)
         self.assertEqual(self._names(module), ["0"])
+
+    def test_a_breakout_rule_the_device_cannot_evaluate_does_not_report_an_interface_out_of_scope(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Scope",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=flat_type,
+            )
+            # No template claims "0:5", so the install scope leaves it out of every plan.
+            Interface.objects.create(device=standalone, module=module, name="0:5", type=PLAIN_TYPE)
+
+        (entry,) = _journal(module)
+        self.assertIn("`0`: {vc_position} is not available", entry.comments)
+        self.assertNotIn("0:5", entry.comments)
+        self.assertEqual(self._names(module), ["0", "0:5"])
+
+    def test_a_breakout_rule_the_device_cannot_evaluate_reports_each_row_a_half_built_family_keeps(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Half",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=3,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+        module = Module.objects.create(
+            device=standalone,
+            module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+            module_type=flat_type,
+        )
+        rename_out_of_band(Interface.objects.get(module=module, name="0"), "et-1/0:0")
+        Interface.objects.create(device=standalone, module=module, name="et-1/0:1", type=PLAIN_TYPE)
+
+        outcomes = list(engine.device_module_rule_outcomes(standalone, report_only=True))
+
+        self.assertEqual(
+            [(outcome.kind, outcome.interface_name) for outcome in outcomes],
+            [(OutcomeKind.UNRESOLVED_VARIABLE, "et-1/0:0"), (OutcomeKind.UNRESOLVED_VARIABLE, "et-1/0:1")],
+        )
 
     def test_leaving_the_virtual_chassis_reports_every_member_of_a_flat_family(self):
         flat_type, _ = self._module_type_with_rule(

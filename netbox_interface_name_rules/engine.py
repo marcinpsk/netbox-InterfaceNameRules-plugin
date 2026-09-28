@@ -80,13 +80,6 @@ def supports_vc_position_token():
     return _vc_position_re() is not None
 
 
-def _family_base(interface):
-    """Return the base name of the flat or channelized family *interface* belongs to."""
-    # A channelized parent is its own base: its channels are separate rows, so the name needs no
-    # ":"-splitting to find them.
-    return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
-
-
 def _touches_a_family(plan) -> bool:
     """Return whether *plan* acts on a family rather than one standalone interface."""
     if isinstance(plan, family_ops.InstalledFamilyPlan):
@@ -233,7 +226,7 @@ def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
     )
 
 
-def _acted_on_names(rule, plans, interfaces):
+def _acted_on_names(rule, plans):
     """Return the name of every interface the admitted *plans* act on, in plan order."""
     names = []
     for plan in plans:
@@ -245,9 +238,9 @@ def _acted_on_names(rule, plans, interfaces):
                 if not (keeps_parent and member.role == family_ops.MemberRole.PARENT)
             )
             continue
-        # A creation plan stands for its base's whole flat family.
-        base = _family_base(plan.base)
-        names.extend(i.name for i in interfaces if getattr(i, "channel_id", None) is None and _family_base(i) == base)
+        names.append(plan.base.name)
+        if isinstance(plan, family_ops.FlatCreationPlan):
+            names.extend(member.name for member in plan.members)
     return tuple(dict.fromkeys(names))
 
 
@@ -275,7 +268,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     plans = [*installed, *leftover]
 
     if missing:
-        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
+        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans))
         return
 
     any_outcome = False
