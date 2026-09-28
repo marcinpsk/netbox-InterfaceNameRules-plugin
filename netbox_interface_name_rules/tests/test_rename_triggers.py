@@ -544,12 +544,11 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_module")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            _run_the_reapply(callbacks)
 
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_module read failure"])
         self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
@@ -560,12 +559,11 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_moduletype")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            _run_the_reapply(callbacks)
 
         self.assertEqual(
             [str(record.exc_info[1]) for record in logs.records], ["injected dcim_moduletype read failure"]
@@ -577,16 +575,24 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.DeviceReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_device")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            _run_the_reapply(callbacks)
 
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_device read failure"])
         self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 2)
         self.assertEqual(self._names(module), ["et-1/0/0"])
+
+
+def _run_the_reapply(callbacks):
+    """Run the rename-trigger callbacks among *callbacks*: each trigger, then the plan after them."""
+    for callback in callbacks:
+        if isinstance(
+            callback, (rename_triggers.ModuleTrigger, rename_triggers.DeviceTrigger, rename_triggers.ReapplyPlan)
+        ):
+            callback()
 
 
 def _reject_reads_of(table):

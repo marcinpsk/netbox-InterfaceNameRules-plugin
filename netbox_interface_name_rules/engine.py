@@ -6,6 +6,7 @@ This module is imported lazily by rename_triggers.py so that model imports happe
 after Django is fully initialised.
 """
 
+import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
@@ -486,8 +487,8 @@ class ModuleNaming:
     The module type and the scope select the rule that state gave the module. The template variables
     and the templates as they resolved then rebuild the names that rule gave. ``bay_values`` are the
     ``naming.bay_naming_values`` of the module's bay then. ``raw_only`` is set when no rule has named
-    the module's interfaces yet, because its install reapply has not run: they carry raw template
-    names only.
+    the module's interfaces yet, because the module was installed in the same transaction: they carry
+    raw template names only.
     """
 
     module_pk: int
@@ -549,19 +550,18 @@ def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
         return tuple(ModuleNaming.of(module) for module in modules)
 
 
-def subtree_rule_outcomes(namings) -> Iterator[RenameOutcome]:
-    """Reapply the rules to each module *namings* describes, and yield the outcome facts.
-
-    *namings* comes from ``read_subtree_naming``. Each module is read as committed, and its earlier
-    names are recognised from its naming; a module deleted since is skipped.
-    """
+def committed_modules(module_pks) -> dict:
+    """Return the committed modules that *module_pks* name, by primary key, with every relation a reapply reads."""
     from dcim.models import Module
 
-    committed = Module.objects.select_related(*_NAMING_RELATIONS).in_bulk([naming.module_pk for naming in namings])
-    pairs = [(committed[naming.module_pk], naming) for naming in namings if naming.module_pk in committed]
-    with pinned_rule_cache(), family_ops.pinned_template_cache(committed.values()):
-        for module, naming in pairs:
-            yield from module_rule_outcomes(module, module.module_bay, naming=naming)
+    return Module.objects.select_related(*_NAMING_RELATIONS).in_bulk(module_pks)
+
+
+@contextlib.contextmanager
+def pinned_reapply(modules):
+    """Share one enabled-rule snapshot, and the resolved templates of *modules*, across one reapply."""
+    with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
+        yield
 
 
 def _device_interface_rules(device):

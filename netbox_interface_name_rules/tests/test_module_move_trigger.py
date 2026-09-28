@@ -32,7 +32,7 @@ from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import ModuleReapply
+from netbox_interface_name_rules.rename_triggers import ReapplyPlan
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
@@ -435,8 +435,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
             for callback in callbacks:
-                if isinstance(callback, ModuleReapply):
-                    callback()
+                callback()
 
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
@@ -452,9 +451,9 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.remote, "Bay 1"))
-        reapplies = [callback for callback in callbacks if isinstance(callback, ModuleReapply)]
-        self.assertEqual(len(reapplies), 1)
-        reapplies[0]()
+        self.assertEqual(sum(isinstance(callback, ReapplyPlan) for callback in callbacks), 1)
+        for callback in callbacks:
+            callback()
 
         self.assertEqual(self._names(optic), ["et-1/0/1"])
         (entry,) = _journal(card)

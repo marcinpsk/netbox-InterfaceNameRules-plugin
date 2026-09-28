@@ -58,7 +58,13 @@ from netbox_interface_name_rules.engine import (
     supports_vc_position_token,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import DeviceReapply, DeviceState, ModuleReapply, ModuleState
+from netbox_interface_name_rules.rename_triggers import (
+    DeviceState,
+    DeviceTrigger,
+    ModuleState,
+    ModuleTrigger,
+    reapply,
+)
 from performance.artifact import SCHEMA_VERSION, validate_artifact
 
 _OUTPUT_VARIABLE = "INTERFACE_FAMILY_PERFORMANCE_OUTPUT"
@@ -763,7 +769,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
             holder["module"] = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
 
             def operation():
-                ModuleReapply.after_install(holder["module"])()
+                reapply([ModuleTrigger.after_install(holder["module"])])
 
         else:
 
@@ -866,7 +872,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
             Device.objects.filter(pk=device.pk).update(vc_position=2)
 
             def operation():
-                DeviceReapply(device.pk, DeviceState(virtual_chassis.pk, 1))()
+                reapply([DeviceTrigger(device.pk, DeviceState(virtual_chassis.pk, 1))])
 
         else:
 
@@ -944,7 +950,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
                 move()
 
             def operation():
-                ModuleReapply(module.pk, baseline, installed=False, naming=naming)()
+                reapply([ModuleTrigger(module.pk, baseline, naming=naming)])
 
         def verify():
             names = sorted(Interface.objects.filter(device=device).values_list("name", flat=True))

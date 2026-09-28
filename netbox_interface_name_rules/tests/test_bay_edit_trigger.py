@@ -20,7 +20,7 @@ from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import ModuleReapply
+from netbox_interface_name_rules.rename_triggers import ModuleTrigger, ReapplyPlan
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
     NETBOX_MOVES_COMPONENTS,
@@ -39,13 +39,14 @@ from netbox_interface_name_rules.tests.test_rename_triggers import _previous_sta
 BAY_STATE_READ = re.compile(r'SELECT "dcim_modulebay"\."position".* FROM "dcim_modulebay"')
 
 
-def _flat_rule(module_type, name_template):
+def _flat_rule(module_type, name_template, **scope):
     return InterfaceNameRule.objects.create(
         module_type=module_type,
         name_template=name_template,
         breakout_mode=BreakoutModeChoices.FLAT,
         channel_count=2,
         channel_start=0,
+        **scope,
     )
 
 
@@ -202,11 +203,12 @@ class NestedBayEditTest(BayEditTestCase):
         Interface.objects.create(device=self.device, name="et-1/2/1", type=PLAIN_TYPE)
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_edit(bay, position="2")
-        reapplies = [callback for callback in callbacks if isinstance(callback, ModuleReapply)]
-        self.assertEqual([reapply.pk for reapply in reapplies], [card.pk])
+        (plan,) = [callback for callback in callbacks if isinstance(callback, ReapplyPlan)]
+        self.assertEqual([trigger.pk for trigger in plan.triggers], [card.pk])
 
         with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
-            reapplies[0]()
+            for callback in callbacks:
+                callback()
 
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
@@ -284,6 +286,65 @@ class NestedBayEditTest(BayEditTestCase):
         self.assertEqual(self._names(optic), ["x-2/1:0", "x-2/1:1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
+    def test_an_optic_installed_in_a_card_before_an_edit_of_the_card_bay_builds_its_family_once(self):
+        flat_optic_type = self._module_type("Flat Optic", "{module}")
+        _flat_rule(flat_optic_type, "x-{slot}/{bay_position}:{channel}")
+        bay = self._bay(self.device)
+        card, port = self._install_card(self._card_type("Card", "1"), bay)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            optic = Module.objects.create(device=self.device, module_bay=port, module_type=flat_optic_type)
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["x-2/1:0", "x-2/1:1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_an_optic_installed_before_edits_of_the_card_bay_and_its_own_bay_builds_its_family_once(self):
+        flat_optic_type = self._module_type("Flat Optic", "{module}")
+        _flat_rule(flat_optic_type, "x-{slot}/{bay_position}:{channel}")
+        bay = self._bay(self.device)
+        card, port = self._install_card(self._card_type("Card", "1"), bay)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            optic = Module.objects.create(device=self.device, module_bay=port, module_type=flat_optic_type)
+            self._save_edit(bay, position="2")
+            self._save_edit(port, position="3")
+
+        self.assertEqual(self._names(optic), ["x-2/3:0", "x-2/3:1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_an_optic_moved_into_a_card_before_an_edit_of_the_card_bay_builds_its_family_once(self):
+        card_type = self._card_type("Card", "1")
+        optic_type = self._module_type("Scoped Optic", "{module}")
+        InterfaceNameRule.objects.create(module_type=optic_type, name_template="p{bay_position}")
+        _flat_rule(optic_type, "x-{slot}/{bay_position}:{channel}", parent_module_type=card_type)
+        bay = self._bay(self.device)
+        card, port = self._install_card(card_type, bay)
+        optic = self._install(optic_type, self._bay(self.device, "Bay 1"))
+        self.assertEqual(self._names(optic), ["p1"])
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_move(optic, port)
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["x-2/1:0", "x-2/1:1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_an_optic_whose_raw_name_reads_the_card_bay_is_renamed_after_an_edit_of_that_bay(self):
+        chained_optic_type = self._module_type("Chained Optic", "{module}/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=chained_optic_type, name_template="et-{vc_position}/{slot}/{bay_position}"
+        )
+        bay = self._bay(self.device)
+        card, port = self._install_card(self._card_type("Card", "1"), bay)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            optic = Module.objects.create(device=self.device, module_bay=port, module_type=chained_optic_type)
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["et-1/2/1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
     def test_the_bay_post_saves_netbox_sends_in_a_move_are_not_bay_triggers(self):
         card, port = self._install_card(self._card_type("Token Card", "{module}"), self._bay(self.device))
@@ -292,14 +353,156 @@ class NestedBayEditTest(BayEditTestCase):
 
         with _naming_reads() as reads, self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.device, "Bay 2"))
-        reapplies = [callback for callback in callbacks if isinstance(callback, ModuleReapply)]
+        (plan,) = [callback for callback in callbacks if isinstance(callback, ReapplyPlan)]
         for callback in callbacks:
             callback()
 
         port.refresh_from_db()
         self.assertEqual(port.position, "2")
-        self.assertEqual(([reapply.pk for reapply in reapplies], len(reads)), ([card.pk], 1))
+        self.assertEqual(([trigger.pk for trigger in plan.triggers], len(reads)), ([card.pk], 1))
         self.assertEqual(self._names(optic), ["et-1/2/2"])
+
+
+class SubtreeTriggerMixTest(BayEditTestCase):
+    """Triggers of a module and of a module nested in it, in one transaction, reapply each module once.
+
+    Each module reapplies from its earliest naming. A nested module reports in the journal entry of
+    the outermost moved or edited module whose naming read it.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.card_type = cls._card_type("Card", "1")
+        cls.optic_type = cls._module_type("Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.optic_type, name_template="et-{vc_position}/{slot}/{bay_position}"
+        )
+
+    def _card_with_optic(self):
+        """Install a card in Bay 0 with an optic in its port; return the bay, the card, the port and the optic."""
+        bay = self._bay(self.device)
+        card, port = self._install_card(self.card_type, bay)
+        optic = self._install(self.optic_type, port)
+        self.assertEqual(self._names(optic), ["et-1/0/1"])
+        return bay, card, port, optic
+
+    def test_a_nested_module_with_its_own_trigger_reports_on_the_module_in_the_outer_edited_bay(self):
+        bay, card, port, optic = self._card_with_optic()
+        Interface.objects.create(device=self.device, name="et-1/2/3", type=PLAIN_TYPE)
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            self._save_edit(port, position="3")
+
+        self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
+        (entry,) = _journal(card)
+        self.assertIn("`et-1/0/1` to `et-1/2/3`: target name is already in use", entry.comments)
+        self.assertEqual(_journal(optic), [])
+
+    def test_a_nested_type_change_and_an_outer_edit_reapply_the_nested_module_once_as_a_type_change(self):
+        bay, card, _port, optic = self._card_with_optic()
+        other_optic_type = self._module_type("Other Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=other_optic_type, name_template="ge-{vc_position}/{slot}/{bay_position}"
+        )
+        Interface.objects.create(device=self.device, name="ge-1/2/1", type=PLAIN_TYPE)
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            optic.module_type = other_optic_type
+            optic.save()
+            self._save_edit(bay, position="2")
+
+        self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
+        (entry,) = _journal(card)
+        self.assertIn("`et-1/0/1` to `ge-1/2/1`: target name is already in use", entry.comments)
+        self.assertEqual(_journal(optic), [])
+
+    def test_an_outer_edit_and_a_move_of_the_nested_module_out_reapply_it_once(self):
+        bay, _card, _port, optic = self._card_with_optic()
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            self._save_move(optic, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/1/1"], 2))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    def test_an_outer_move_and_a_nested_bay_edit_reapply_each_module_once(self):
+        _bay, card, port, optic = self._card_with_optic()
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_move(card, self._bay(self.device, "Bay 2"))
+            port.refresh_from_db()
+            self._save_edit(port, position="3")
+
+        self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/2/3"], 2))
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    def test_a_nested_bay_edit_and_an_outer_move_reapply_each_module_once(self):
+        _bay, card, port, optic = self._card_with_optic()
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(port, position="3")
+            self._save_move(card, self._bay(self.device, "Bay 2"))
+
+        port.refresh_from_db()
+        self.assertEqual((self._names(optic), reapplies.call_count), ([f"et-1/2/{port.position}"], 2))
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_a_rolled_back_nested_edit_leaves_the_outer_edit_to_rename_the_nested_module(self):
+        bay, card, port, optic = self._card_with_optic()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self._save_edit(port, position="3")
+                raise RuntimeError("roll back the savepoint")
+
+        self.assertEqual(self._names(optic), ["et-1/2/1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_a_rolled_back_outer_edit_leaves_the_nested_edit_to_rename_its_module(self):
+        bay, card, port, optic = self._card_with_optic()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(port, position="3")
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self._save_edit(bay, position="2")
+                raise RuntimeError("roll back the savepoint")
+
+        self.assertEqual(self._names(optic), ["et-1/0/3"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_a_naming_read_in_a_rolled_back_savepoint_is_not_used(self):
+        other_card_type = self._card_type("Other Card", "1")
+        scoped_optic_type = self._module_type("Scoped Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=scoped_optic_type, parent_module_type=self.card_type, name_template="a-{slot}/{bay_position}"
+        )
+        InterfaceNameRule.objects.create(
+            module_type=scoped_optic_type, parent_module_type=other_card_type, name_template="b-{slot}/{bay_position}"
+        )
+        bay = self._bay(self.device)
+        card, port = self._install_card(self.card_type, bay)
+        optic = self._install(scoped_optic_type, port)
+        self.assertEqual(self._names(optic), ["a-0/1"])
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            other = Module.objects.create(
+                device=self.device, module_bay=self._bay(self.device, "Bay 1"), module_type=self.plain_type
+            )
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                card.module_type = other_card_type
+                card.save()
+                self._save_edit(bay, position="2")
+                raise RuntimeError("roll back the savepoint")
+            bay.refresh_from_db()
+            self._save_edit(bay, position="3")
+
+        self.assertEqual((self._names(optic), self._names(other)), (["a-3/1"], ["et-1/0/1"]))
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
 
 class BayEditTransactionTest(BayEditTestCase):
@@ -355,7 +558,7 @@ class BayEditTransactionTest(BayEditTestCase):
                 self._save_edit(bay, position="9")
                 raise RuntimeError("roll back the savepoint")
 
-        self.assertEqual([callback for callback in callbacks if isinstance(callback, ModuleReapply)], [])
+        self.assertEqual([callback for callback in callbacks if isinstance(callback, (ReapplyPlan, ModuleTrigger))], [])
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
     def test_an_edit_rolled_back_after_an_earlier_edit_keeps_the_earlier_reapply(self):
