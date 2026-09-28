@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.6.0 (2026-09-28)
+
+### Bug Fixes
+
+- **rename-triggers**: Keep earlier device-interface outcomes when a later family fails
+  ([`cc3757c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/cc3757cd5a2717c7aef5c5faceea32d3e3dc9975))
+
+
 ## v1.5.5 (2026-09-27)
 
 ### Bug Fixes
