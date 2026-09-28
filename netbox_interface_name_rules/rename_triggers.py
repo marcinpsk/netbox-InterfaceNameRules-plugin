@@ -13,7 +13,9 @@ A save that moves a module, or that changes what the names in an occupied bay ar
 reads before the save what named the interfaces of that module and of every module nested in it.
 After the save that naming is gone. The reapply of the module renames its subtree and recognises the
 earlier names from that naming. A bay edit schedules the reapply of the module in the bay, so a bay
-edit and a move of that module in one transaction share one reapply, with the earliest naming.
+edit and a move of that module in one transaction share one reapply, with the earliest naming. The
+reapplies of one transaction share the naming of each module too: a later read takes the entry that a
+pending reapply read earlier.
 """
 
 import dataclasses
@@ -293,7 +295,7 @@ def _module_reapply(module, created, previous):
     if current == state:
         return None
     logger.debug("Module %s changed from %s to %s; scheduling a reapply", module.pk, state, current)
-    return ModuleReapply(module.pk, state, installed=False, naming=naming)
+    return ModuleReapply(module.pk, state, installed=False, naming=_earliest_naming(naming))
 
 
 def _device_reapply(device, created, previous):
@@ -360,7 +362,29 @@ def _bay_reapply(bay, created, previous):
     if created or state is None or state.module_pk is None or _bay_values(bay) == state.naming_values:
         return None
     logger.debug("Module bay %s changed from %s; scheduling a reapply of module %s", bay.pk, state, state.module_pk)
-    return ModuleReapply(state.module_pk, state.module_state, installed=False, naming=naming)
+    return ModuleReapply(state.module_pk, state.module_state, installed=False, naming=_earliest_naming(naming))
+
+
+def _scheduled(connection):
+    """Return the entries of the callbacks that the open transaction of *connection* holds."""
+    # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
+    return connection.run_on_commit if connection.in_atomic_block else ()
+
+
+def _earliest_naming(naming):
+    """Return *naming* with the earliest entry of the transaction for each module in it.
+
+    A pending module reapply read its entries earlier, so its entry for a module wins.
+    """
+    if not naming:
+        return naming
+    earlier = {}
+    for _, callback, _ in _scheduled(transaction.get_connection()):
+        if not isinstance(callback, ModuleReapply) or callback.started:
+            continue
+        for entry in callback.naming:
+            earlier.setdefault(entry.module_pk, entry)
+    return tuple(earlier.get(entry.module_pk, entry) for entry in naming)
 
 
 _TRIGGERS = {
@@ -396,8 +420,7 @@ def after_save(sender, instance, created):
     if reapply is None:
         return
     connection = transaction.get_connection()
-    # Django drops the callbacks of a rolled-back savepoint or transaction from run_on_commit.
-    for index, (_, callback, _) in enumerate(connection.run_on_commit if connection.in_atomic_block else ()):
+    for index, (_, callback, _) in enumerate(_scheduled(connection)):
         if reapply.covers(callback):
             successor = reapply.succeeding(callback)
             if successor is not None:

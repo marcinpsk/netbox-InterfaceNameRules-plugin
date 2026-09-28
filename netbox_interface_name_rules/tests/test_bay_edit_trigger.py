@@ -217,6 +217,48 @@ class NestedBayEditTest(BayEditTestCase):
 
         self.assertEqual(self._names(optic), ["et-1/2/1"])
 
+    def _card_with_optic(self):
+        """Install a card in Bay 0 with an optic in its port; return the bay, the card, the port and the optic."""
+        bay = self._bay(self.device)
+        card, port = self._install_card(self._card_type("Card", "1"), bay)
+        optic = self._install(self.optic_type, port)
+        self.assertEqual(self._names(optic), ["et-1/0/1"])
+        return bay, card, port, optic
+
+    def test_an_outer_edit_undone_around_a_nested_edit_renames_the_nested_module_for_its_own_edit(self):
+        bay, card, port, optic = self._card_with_optic()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            self._save_edit(port, position="3")
+            self._save_edit(bay, position="0")
+
+        self.assertEqual(self._names(optic), ["et-1/0/3"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_a_nested_edit_before_an_outer_edit_renames_the_nested_module_without_a_report(self):
+        bay, card, port, optic = self._card_with_optic()
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(port, position="3")
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["et-1/2/3"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    def test_an_outer_reapply_that_runs_first_renames_the_nested_module_from_its_earliest_naming(self):
+        bay, card, port, optic = self._card_with_optic()
+        other_card_type = self._card_type("Other Card", "1")
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            card.module_type = other_card_type
+            card.save()
+            self._save_edit(port, position="3")
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["et-1/2/3"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
     def test_the_bay_post_saves_netbox_sends_in_a_move_are_not_bay_triggers(self):
         card, port = self._install_card(self._card_type("Token Card", "{module}"), self._bay(self.device))
