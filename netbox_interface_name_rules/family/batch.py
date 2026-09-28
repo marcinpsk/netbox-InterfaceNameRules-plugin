@@ -138,6 +138,14 @@ def plan_module_families(
     the interfaces and flat families that the previous state named, and report the rest.
     """
     bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    return plan_module_families_from(module, rule, variables, interfaces, bases, admit_leftover)
+
+
+def plan_module_families_from(module, rule, variables, interfaces, bases, admit_leftover=None) -> ModuleFamilyPlans:
+    """Return the plans ``plan_module_families`` builds, with ``{base}``, templates and claims from *bases*.
+
+    After a move, an interface in two plans is refused before any plan runs: planning raises.
+    """
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
@@ -150,7 +158,7 @@ def plan_module_families(
         leftover = tuple(  # pragma: no cover - requires channelization support
             plan_interface_rename(module, rule, variables, interface, bases)
             for interface in plain
-            if previous_forms is not None and bases.base_for(interface.name) is None
+            if bases.previous_forms is not None and bases.base_for(interface.name) is None
         )
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
@@ -160,7 +168,20 @@ def plan_module_families(
             )
     else:
         leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
-    return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
+    planned = ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
+    if bases.previous_forms is not None:
+        _refuse_overlapping_plans(planned.plans)
+    return planned
+
+
+def _refuse_overlapping_plans(plans):
+    """Raise when one live interface is in two plans: running both could rename part of a family."""
+    seen = set()
+    for plan in plans:
+        for member in plan.live_members:
+            if member.snapshot.pk in seen:
+                raise ValueError(f"interface {member.snapshot.name!r} is in more than one planned family")
+            seen.add(member.snapshot.pk)
 
 
 def _selection_pks(plan):

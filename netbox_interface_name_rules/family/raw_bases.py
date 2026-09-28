@@ -144,7 +144,7 @@ class RawBases:
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._claimed = False
         self._by_name = None
-        self._claimant_by_name = {}
+        self._accepted = {}
         self._ambiguous = frozenset()
 
     def base_for(self, name):
@@ -156,17 +156,16 @@ class RawBases:
             return name
         return self._by_name.get(name)
 
-    def claimant_for(self, name):
-        """Return the primary key of the one template that claims *name*, or None."""
-        self._load()
-        return self._claimant_by_name.get(name)
-
     def admitted_flat_families(self):
-        """Return, after a move, the flat families whose template alone claims every member."""
+        """Return, after a move, each flat family that is the whole group its template's claim won.
+
+        A family that another group of its template holds was absorbed into that group, so it is no plan.
+        """
+        self._load()
         return [
             family
             for family in self.flat_families
-            if all(self.claimant_for(member.name) == family.template_pk for member in family.members)
+            if self._accepted.get(family.template_pk) == tuple(member.name for member in family.members)
         ]
 
     def is_ambiguous(self, name):
@@ -179,11 +178,11 @@ class RawBases:
     def _load(self):
         """Compute the claims on first use."""
         if not self._claimed:
-            self._by_name, self._claimant_by_name, self._ambiguous = self._claim()
+            self._by_name, self._accepted, self._ambiguous = self._claim()
             self._claimed = True
 
     def _claim(self):
-        """Return ``(raw name by claimed name, template by claimed name, ambiguous names)``.
+        """Return ``(raw name by claimed name, group each accepted template claims, ambiguous names)``.
 
         Without templates the first is None, and a name is its own base, except after a move.
         A template claims its raw name, its historical raw forms and the names the rule gives it. A
@@ -217,10 +216,9 @@ class RawBases:
         accepted, messages = self._resolve(claims)
         for message in messages:
             logger.warning("%s", message)
-        claimant_by_name = {name: claimant_id for claimant_id, group in accepted for name in group}
-        by_name = {name: raw_by_claimant[claimant_id] for name, claimant_id in claimant_by_name.items()}
+        by_name = {name: raw_by_claimant[claimant_id] for claimant_id, group in accepted for name in group}
         claimed = {name for claim in claims for group in self._groups(claim) for name in group}
-        return by_name, claimant_by_name, frozenset(claimed - by_name.keys())
+        return by_name, dict(accepted), frozenset(claimed - by_name.keys())
 
     def _groups(self, claim):
         """Return the groups of names *claim* holds: one per interface, and after a move one per flat family."""

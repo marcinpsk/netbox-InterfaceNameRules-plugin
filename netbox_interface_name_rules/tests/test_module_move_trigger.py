@@ -700,6 +700,29 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         for name in names:
             self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_family_with_more_channels_than_the_new_rule_keeps_every_name(self):
+        module_type = self._module_type("Wide Flat", "{vc_position}")
+        for platform, count in ((self.platform, 4), (self.other_platform, 2)):
+            InterfaceNameRule.objects.create(
+                module_type=module_type,
+                platform=platform,
+                name_template="{base}:{channel}",
+                breakout_mode=BreakoutModeChoices.FLAT,
+                channel_count=count,
+                channel_start=0,
+            )
+        module = self._install(module_type, self._bay(self.device))
+        names = ["1:0", "1:1", "1:2", "1:3"]
+        self.assertEqual(self._names(module), names)
+
+        self._move(module, self._bay(self.peer, "Bay 1"))
+
+        self.assertEqual(self._names(module), names)
+        (entry,) = _journal(module)
+        for name in names:
+            self.assertIn(f"`{name}`: installed family has 4 channels but the rule defines 2", entry.comments)
+
     def test_a_raw_name_inside_its_own_templates_family_is_one_claim(self):
         module_type = self._module_type("Fixed Flat", "0:0")
         InterfaceNameRule.objects.create(
