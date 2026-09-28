@@ -21,12 +21,20 @@ from .domain import (
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
-from .installed import interfaces_by_module, module_raw_bases, plan_installed_families_from, plan_interface_rename
+from .installed import (
+    interfaces_by_module,
+    module_raw_bases,
+    plan_installed_families_from,
+    plan_interface_rename,
+    plan_kept_interface,
+)
 from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
 from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
 from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
+
+NOT_RENAMED_REASON = "the module is not renamed while one of its interfaces is unclaimed"
 
 # A member left with the name it had for a reason the operator can act on.  An unsupported topology
 # is not one of them: the release cannot hold the family, so nothing was dropped by this batch.
@@ -102,6 +110,11 @@ def _is_channel(interface) -> bool:
     return getattr(interface, "channel_id", None) is not None
 
 
+def _is_top_level(interface) -> bool:
+    """Return whether *interface* is neither a channel nor a subinterface of another interface."""
+    return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
+
+
 def _creation_plan(module, rule, variables, base, base_name):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
@@ -122,7 +135,9 @@ def _creation_plans(module, rule, variables, plain, bases):
     return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
 
 
-def plan_module_families(module, rule, variables, interfaces, admit_leftover=None) -> ModuleFamilyPlans:
+def plan_module_families(
+    module, rule, variables, interfaces, admit_leftover=None, previous_forms=None
+) -> ModuleFamilyPlans:
     """Return one executable plan for every family *rule* intends on *module*.
 
     Every interface belongs to at most one plan: an installed family claims its members first, and
@@ -131,11 +146,34 @@ def plan_module_families(module, rule, variables, interfaces, admit_leftover=Non
     *admit_leftover* filters the interfaces no installed family claimed.  It runs before two of
     them that intend one family are collapsed into it, so a caller that must not touch one of the
     two cannot have it survive the collapse as the row the family is built on.
+
+    *previous_forms* holds what named the module's templates before a move. The plans then rename
+    only what a template claims, and no installed flat family. While any top-level interface is
+    unclaimed, they rename nothing on the module and report every interface.
     """
-    bases = module_raw_bases(module, rule, variables, interfaces)
+    bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    if previous_forms is not None and any(
+        _is_top_level(interface) and bases.base_for(interface.name) is None for interface in interfaces
+    ):
+        # An unclaimed interface may belong to a family, so its module keeps every name.
+        return ModuleFamilyPlans(
+            installed=(),
+            leftover=tuple(
+                plan_interface_rename(module, rule, variables, interface, bases)
+                if _is_top_level(interface) and bases.base_for(interface.name) is None
+                else plan_kept_interface(module, interface, NOT_RENAMED_REASON)
+                for interface in interfaces
+            ),
+        )
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
-    plain = [interface for interface in interfaces if interface.pk not in claimed and not _is_channel(interface)]
+    plain = [
+        interface
+        for interface in interfaces
+        if interface.pk not in claimed
+        and not _is_channel(interface)
+        and (previous_forms is None or _is_top_level(interface))
+    ]
     if admit_leftover is not None:
         plain = list(admit_leftover(plain))
     if rule.channel_count <= 0:

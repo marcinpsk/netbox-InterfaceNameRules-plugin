@@ -132,10 +132,12 @@ def channelized_family_names(rule, current_name, base_name, variables):  # pragm
 def intended_family_names(rule, variables, current_name, base_name):
     """Return every name *rule* intends for the family it builds on *current_name*, with *base_name* as ``{base}``.
 
-    A base whose names cannot be evaluated is its own family: it names nothing else, so nothing
-    else can be grouped with it.
+    A rule without channels intends one name. A base whose names cannot be evaluated is its own
+    family: it names nothing else, so nothing else can be grouped with it.
     """
     try:
+        if rule.channel_count <= 0:
+            return (evaluate_name_template(rule.name_template, {**variables, "base": base_name}),)
         if builds_channelized_family(rule):
             parent_name, channels = channelized_family_names(rule, current_name, base_name, variables)
             return (parent_name, *(name for _channel_id, name in channels))

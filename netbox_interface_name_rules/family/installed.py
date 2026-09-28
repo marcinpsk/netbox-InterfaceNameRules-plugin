@@ -157,11 +157,11 @@ def flat_family_candidates(module, rule, variables, interfaces, catalog):
     return _singly_claimed(candidates)
 
 
-def _flat_candidates(module, rule, variables, interfaces, catalog):
-    """Return the flat families a flat-mode rule owns on this module."""
-    if rule.breakout_mode != BreakoutModeChoices.FLAT:
+def _flat_candidates(module, rule, variables, interfaces, bases):
+    """Return the flat families a flat-mode rule owns on this module; a move renames none (ADR 0015)."""
+    if rule.breakout_mode != BreakoutModeChoices.FLAT or bases.previous_forms is not None:
         return []
-    return flat_family_candidates(module, rule, variables, interfaces, catalog)
+    return flat_family_candidates(module, rule, variables, interfaces, bases.catalog)
 
 
 def _flat_plan(module, target_names, interfaces):
@@ -271,6 +271,25 @@ def device_interface_families(interfaces):
     )
 
 
+def plan_kept_interface(module, interface, reason) -> InstalledFamilyPlan:
+    """Return a plan that keeps the name of one interface of *module* and reports *reason*."""
+    return InstalledFamilyPlan(
+        family_id=f"flat:{interface.pk}",
+        topology=FamilyTopology.FLAT,
+        device_id=module.device_id,
+        module_id=module.pk,
+        members=(
+            PlannedMember(
+                snapshot=InterfaceSnapshot.from_interface(interface),
+                target_name=interface.name,
+                role=MemberRole.FLAT_MEMBER,
+            ),
+        ),
+        precondition_status=FamilyStatus.BLOCKED,
+        precondition_reason=reason,
+    )
+
+
 def _interface_rename_plan(device_id, module_id, rule, variables, interface, base_name) -> InstalledFamilyPlan:
     """Return a plan that renames one interface which belongs to no family, from *base_name* as ``{base}``."""
     status, reason, target_name = None, "", interface.name
@@ -323,13 +342,25 @@ def plan_device_interface_rename(device, rule, variables, interface, children=()
     return _channelized_plan(device.pk, None, interface, children, targets)
 
 
-def module_raw_bases(module, rule, variables, interfaces) -> RawBases:
-    """Return the raw template name behind each of *module*'s interfaces outside a channel."""
+def module_raw_bases(module, rule, variables, interfaces, previous_forms=None) -> RawBases:
+    """Return the raw template name behind each of *module*'s interfaces outside a channel.
+
+    *previous_forms* holds what named the templates before a move; see ``RawBases``.
+    """
+    return move_raw_bases(module, rule, variables, interfaces, TemplateNames(module), previous_forms)
+
+
+def move_raw_bases(module, rule, variables, interfaces, catalog, previous_forms) -> RawBases:
+    """Return the raw bases of *interfaces*, with the templates *catalog* resolves and *previous_forms*.
+
+    Pure over its inputs: *catalog* has ``get()`` for the resolved templates, and *previous_forms* is
+    None outside a move.
+    """
     families = {
         interface.name: tuple((child.name, child.channel_id) for child in children)
         for interface, children in device_interface_families(interfaces)
     }
-    return RawBases(module, rule, variables, families, TemplateNames(module))
+    return RawBases(module, rule, variables, families, catalog, previous_forms)
 
 
 def given_raw_names(module, rule, variables, names) -> GivenRawNames:
@@ -341,7 +372,7 @@ def plan_installed_flat_families(module, rule, variables, interfaces, bases) -> 
     """Return a plan for every installed flat family a flat-mode rule renames on *module*."""
     return [
         _flat_plan(module, target_names, members)
-        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, bases.catalog)
+        for _base_name, target_names, members in _flat_candidates(module, rule, variables, interfaces, bases)
     ]
 
 
