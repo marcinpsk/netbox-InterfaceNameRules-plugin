@@ -104,8 +104,11 @@ The plugin renames an interface only when exactly one interface template claims
 it. A template claims an interface through its raw template name before or after
 the move, or through the name that the old rule or the new rule gives it. When one
 template claims two interfaces, or two templates claim one interface, the plugin
-renames none of them. These interfaces, and each interface that no template
-claims, keep their names, and the journal entry lists them.
+renames none of them. A flat breakout family counts as one claim over all of its
+interfaces, so another template's claim on any one of them stops the whole family.
+These interfaces, and each interface that no template claims, keep their names,
+and the journal entry lists them. A module type without interface templates
+claims nothing, so after a move its interfaces keep their names and are listed.
 
 When no rule matches the module at its new position, the interfaces keep their
 names. The journal entry lists each interface that the old rule named. When no
