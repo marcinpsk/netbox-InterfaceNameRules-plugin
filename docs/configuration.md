@@ -129,12 +129,18 @@ Limits:
 - The plugin does not repair names that module moves left wrong before this
   version. Apply Rules cannot repair them either, because it has no state from
   before the move. Rename these interfaces by hand.
-- When one transaction first changes a device's virtual-chassis position or edits
-  an occupied module bay, and then moves a module out of that device or bay, the
-  move reads the values after the first change. The plugin cannot rebuild the
-  earlier names from those values, so these interfaces keep their names and the
-  journal entry lists them. A web UI or REST API request changes objects of one
-  model only, so only scripts and shell sessions do this.
+- When one transaction first changes a device's virtual-chassis position, and
+  then moves a module out of that device, the move reads the values after the
+  change. The plugin cannot rebuild the earlier names from those values, so
+  these interfaces keep their names and the journal entry lists them. A web UI
+  or REST API request changes objects of one model only, so only scripts and
+  shell sessions do this. A bay edit before a move does not have this limit:
+  see [Editing a module bay](#editing-a-module-bay).
+- When one transaction changes a device's virtual-chassis position and also
+  installs, moves or changes the type of a module on that device, or edits the
+  bay that holds it, the plugin can rename that module twice: the names come
+  out right, but a rename that collides is reported in the journal entry of the
+  module and again in the journal entry of the device.
 - NetBox before 4.7 saves a move as a change of the module row only. After a
   move to another bay of the same device, the plugin renames the moved module's
   interfaces, and recognises the raw template names from the old bay. The
@@ -145,30 +151,64 @@ Limits:
   interfaces stay on the old device. The plugin then renames no interface of
   that module, and the journal entry lists each of them.
 
+### Editing a module bay
+
+NetBox renames no interface when the position or the name of a module bay
+changes. When you change the position of a bay that holds a module, the plugin
+renames the interfaces of that module and of every module nested in it for the
+new position. When you change the name of such a bay, the plugin renames them
+only when a template variable reads the name: a bay whose position is a
+template token, such as `{module}`, takes its position from the number at the
+end of its name. Any other name change renames nothing. An edit of an empty bay
+renames nothing.
+
+The plugin finds the interfaces that it renamed earlier as it does after a
+move. It reads the bay's position and name before the save, and rebuilds the
+earlier names from them. The claim rules of a move apply, and a bay edit does
+not rename a flat breakout family either. The journal entry goes on the module
+in the bay. The plugin does not repair names that bay edits left wrong before
+this version, for the same reason as after a move.
+
+The plugin renames each module at most once per transaction, from the state
+before the first change in that transaction. A virtual-chassis position change
+of the module's device in the same transaction is the exception: the device
+also renames the module, as the limits under [Moving a module](#moving-a-module)
+say. Several edits of one bay rename once, and an edit that the same
+transaction undoes renames nothing. When one transaction edits a bay and a bay
+nested below it, or edits a bay and moves, installs or changes the type of a
+module in it, each module is renamed once. A module installed in the same
+transaction is named as an install names it, also under a flat breakout rule.
+
 ### Journal entries after an automatic rename
 
 The plugin renames interfaces again after a save that can make a name wrong: a
 module install, a module type change, a module move to another bay or device,
-and a device that joins or changes position in a virtual chassis. When that
-rename leaves an interface unrenamed although a rule matched it, or fails, the
-plugin writes one journal entry. The entry goes on the module, or on the device
-for a virtual-chassis change. The entry for a move goes on the moved module and
-also lists the interfaces of the modules nested in it. It lists each interface
+an edit of the position or the name of an occupied module bay, and a device
+that joins or changes position in a virtual chassis. When that rename leaves an
+interface unrenamed although a rule matched it, or fails, the plugin writes one
+journal entry. The entry goes on the module, or on the device for a
+virtual-chassis change. The entry for a move goes on the moved module, and the
+entry for a bay edit goes on the module in the bay. Each also lists the
+interfaces of the modules nested in that module, also of a nested module that
+was moved, edited or installed in the same transaction. It lists each interface
 and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
   outside a virtual chassis,
 - no single interface template claims the interface, so the rule cannot find its
-  `{base}`, or, after a move, the plugin cannot tell which name the interface had,
-- no rule matches a moved module at its new position,
+  `{base}`, or, after a move or a bay edit, the plugin cannot tell which name the
+  interface had,
+- no rule matches a moved module, or the module in an edited bay, at its new
+  position,
 - the interface is not on the device of its module, which NetBox before 4.7
   leaves after a move to another device,
 - the module bay still has the parent bay it had before its module moved,
   which NetBox before 4.7 leaves for the modules nested in a moved module,
-- a moved module's rule before the move is a flat breakout rule,
-- another interface of a moved module is unclaimed, so nothing on the module is
-  renamed,
+- the rule of a moved module, or of the module in an edited bay, before the
+  change is a flat breakout rule,
+- another interface of the module is unclaimed after a move or a bay edit, so
+  nothing on the module is renamed,
 - the rule failed, for example on a division by zero in its template.
 
 When an error stops the rename, the entry also has one line for that error,

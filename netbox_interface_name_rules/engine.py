@@ -6,6 +6,7 @@ This module is imported lazily by rename_triggers.py so that model imports happe
 after Django is fully initialised.
 """
 
+import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
@@ -23,7 +24,7 @@ from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 logger = logging.getLogger(__name__)
 
 NO_RULE_REASON = "no rule matches the module at its new position"
-FLAT_MOVE_REASON = "a flat breakout family is not renamed after a move"
+FLAT_REASON = "a flat breakout family is not renamed after a move or a bay edit"
 ELSEWHERE_REASON = "the interface is not on the device of its module"
 STALE_BAY_REASON = "the module bay still has the parent bay it had before its module moved"
 
@@ -260,13 +261,14 @@ def module_rule_outcomes(
     family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
     device lacks gives facts.
 
-    *naming* is the module's ``ModuleNaming`` read before a move. The rule then renames every name
-    one template claims through its current or previous forms, and reports every other interface.
-    Without a rule now, each interface the previous rule named keeps its name and is reported. When
-    the previous rule is a flat breakout rule, nothing on the module is renamed and every interface
-    is reported: NetBox keeps no link to a family, so it could be recognised by name only (ADR 0015).
-    When an interface of the module is on another device, or the module's bay has a parent bay that does not
-    hold the module that owns the bay, nothing is renamed and every interface is reported.
+    *naming* is the module's ``ModuleNaming`` read before a move or a bay edit. The rule then renames
+    every name one template claims through its current or previous forms, and reports every other
+    interface. Without a rule now, each interface the previous rule named keeps its name and is
+    reported. When the previous rule is a flat breakout rule, nothing on the module is renamed and
+    every interface is reported: NetBox keeps no link to a family, so it could be recognised by name
+    only (ADR 0015). When an interface of the module is on another device, or the module's bay has a
+    parent bay that does not hold the module that owns the bay, nothing is renamed and every
+    interface is reported.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
@@ -274,7 +276,7 @@ def module_rule_outcomes(
     previous_forms = None if naming is None else naming.previous_forms()
 
     if previous_forms is not None and _builds_flat_families(previous_forms.rule):
-        yield from _kept_after_move(module)
+        yield from _kept_flat_family(module)
         return
     if not rule:
         if previous_forms is not None and previous_forms.rule is not None:
@@ -290,12 +292,12 @@ def _builds_flat_families(rule) -> bool:
     return rule is not None and rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
 
 
-def _kept_after_move(module) -> Iterator[RenameOutcome]:
-    """Yield a blocked fact for every interface of *module*, which a move under a flat breakout rule leaves alone."""
+def _kept_flat_family(module) -> Iterator[RenameOutcome]:
+    """Yield a blocked fact for every interface of *module*, which a flat breakout rule before the save leaves alone."""
     from dcim.models import Interface
 
     for name in Interface.objects.filter(module_id=module.pk).order_by("pk").values_list("name", flat=True):
-        yield RenameOutcome(OutcomeKind.BLOCKED, name, FLAT_MOVE_REASON)
+        yield RenameOutcome(OutcomeKind.BLOCKED, name, FLAT_REASON)
 
 
 def _left_without_a_rule(module, previous_forms) -> Iterator[RenameOutcome]:
@@ -480,10 +482,13 @@ _NAMING_RELATIONS = (
 
 @dataclass(frozen=True, eq=False)
 class ModuleNaming:
-    """What named one module's interfaces at the time it was read: a move reads it before the save.
+    """What named one module's interfaces at the time it was read: a move or a bay edit reads it before the save.
 
     The module type and the scope select the rule that state gave the module. The template variables
-    and the templates as they resolved then rebuild the names that rule gave.
+    and the templates as they resolved then rebuild the names that rule gave. ``bay_values`` are the
+    ``naming.bay_naming_values`` of the module's bay then. ``raw_only`` is set when no rule has named
+    the module's interfaces yet, because the module was installed in the same transaction: they carry
+    raw template names only.
     """
 
     module_pk: int
@@ -493,32 +498,41 @@ class ModuleNaming:
     platform: object | None
     variables: dict
     templates: tuple
+    bay_values: tuple
+    raw_only: bool = False
 
     @classmethod
     def of(cls, module):
         """Return the naming of *module*, which carries ``_NAMING_RELATIONS``, as it is now."""
         device = module.device
+        module_bay = module.module_bay
         return cls(
             module_pk=module.pk,
             module_type=module.module_type,
-            parent_module_type=_get_parent_module_type(module.module_bay),
+            parent_module_type=_get_parent_module_type(module_bay),
             device_type=device.device_type,
             platform=device.platform,
-            variables=build_variables(module.module_bay, device=device),
+            variables=build_variables(module_bay, device=device),
             templates=family_ops.resolved_template_names(module),
+            bay_values=naming.bay_naming_values(module_bay.position, module_bay.name),
         )
 
     def previous_forms(self) -> family_ops.PreviousForms:
-        """Return what rebuilds the names this naming gave, under the rule it selects now."""
-        rule = find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+        """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
+        rule = (
+            None
+            if self.raw_only
+            else find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+        )
         return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
 
 
 def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
-    """Return the naming of the module and of every module nested in it, the moved module first.
+    """Return the naming of the module and of every module nested in it, the module itself first.
 
     A move reads this before its save: in the same save NetBox can re-resolve the position and name
-    of each bay the module holds, so the nested modules' naming is gone afterwards.
+    of each bay the module holds, so the nested modules' naming is gone afterwards. A bay edit reads
+    it before its save, because the save changes what the names in the bay are built from.
     """
     from dcim.models import Module
 
@@ -536,19 +550,18 @@ def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
         return tuple(ModuleNaming.of(module) for module in modules)
 
 
-def subtree_rule_outcomes(namings) -> Iterator[RenameOutcome]:
-    """Reapply the rules to each module *namings* describes, and yield the outcome facts.
-
-    *namings* comes from ``read_subtree_naming``. Each module is read as committed, and its earlier
-    names are recognised from its naming; a module deleted since is skipped.
-    """
+def committed_modules(module_pks) -> dict:
+    """Return the committed modules that *module_pks* name, by primary key, with every relation a reapply reads."""
     from dcim.models import Module
 
-    committed = Module.objects.select_related(*_NAMING_RELATIONS).in_bulk([naming.module_pk for naming in namings])
-    pairs = [(committed[naming.module_pk], naming) for naming in namings if naming.module_pk in committed]
-    with pinned_rule_cache(), family_ops.pinned_template_cache(committed.values()):
-        for module, naming in pairs:
-            yield from module_rule_outcomes(module, module.module_bay, naming=naming)
+    return Module.objects.select_related(*_NAMING_RELATIONS).in_bulk(module_pks)
+
+
+@contextlib.contextmanager
+def pinned_reapply(modules):
+    """Share one enabled-rule snapshot, and the resolved templates of *modules*, across one reapply."""
+    with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
+        yield
 
 
 def _device_interface_rules(device):

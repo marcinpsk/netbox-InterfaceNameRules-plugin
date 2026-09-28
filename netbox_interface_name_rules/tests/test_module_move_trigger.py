@@ -32,7 +32,7 @@ from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import ModuleReapply
+from netbox_interface_name_rules.rename_triggers import PlanRunner
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
@@ -51,7 +51,7 @@ NETBOX_MOVES_COMPONENTS = importlib.util.find_spec("dcim.models.module_moves") i
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 REQUIRES_DEVICE_MOVES = "requires a NetBox that moves a module's interfaces to its new device (4.7+)"
 UNCLAIMED = "no single interface template claims"
-FLAT = "a flat breakout family is not renamed after a move"
+FLAT = "a flat breakout family is not renamed after a move or a bay edit"
 NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
 NO_RULE = "no rule matches the module at its new position"
 ELSEWHERE = "the interface is not on the device of its module"
@@ -435,8 +435,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
             for callback in callbacks:
-                if isinstance(callback, ModuleReapply):
-                    callback()
+                callback()
 
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
@@ -452,9 +451,9 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
 
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.remote, "Bay 1"))
-        reapplies = [callback for callback in callbacks if isinstance(callback, ModuleReapply)]
-        self.assertEqual(len(reapplies), 1)
-        reapplies[0]()
+        self.assertEqual(sum(isinstance(callback, PlanRunner) for callback in callbacks), 1)
+        for callback in callbacks:
+            callback()
 
         self.assertEqual(self._names(optic), ["et-1/0/1"])
         (entry,) = _journal(card)
@@ -779,6 +778,19 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`p1:0`: {NOT_RENAMED}", entry.comments)
         self.assertIn(f"`p1:1`: {UNCLAIMED}", entry.comments)
 
+    def test_an_install_and_a_move_in_one_transaction_build_the_family_of_a_flat_rule(self):
+        module_type = self._module_type("Installed Flat", "{module}")
+        self._flat_rule(module_type, "f-{bay_position}:{channel}")
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            module = Module.objects.create(
+                device=self.device, module_bay=self._bay(self.device), module_type=module_type
+            )
+            self._save_move(module, self._bay(self.device, "Bay 2"))
+
+        self.assertEqual(self._names(module), ["f-2:0", "f-2:1"])
+        self.assertEqual(_journal(module), [])
+
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):
@@ -853,21 +865,18 @@ class MoveTransactionTest(ModuleMoveTestCase):
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual((self._names(returned), self._names(moved)), (["operator-name"], ["et-1/0/10"]))
 
-    def test_a_bay_edited_before_the_move_in_one_transaction_leaves_the_name_and_reports_it(self):
+    def test_a_bay_edited_before_the_move_in_one_transaction_is_renamed_from_the_state_before_the_edit(self):
         module = self._install(self.plain_type, self._bay(self.device))
         bay = self._bay(self.device)
 
-        with _naming_reads() as reads, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             bay.position = "5"
             bay.save()
             self._save_move(module, self._bay(self.device, "Bay 1"))
 
-        ((_queries, (naming,)),) = reads
-        self.assertEqual(naming.variables["bay_position"], "5")
-        self.assertEqual(self._names(module), ["et-1/0/0"])
-        (entry,) = _journal(module)
-        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
-        self.assertIn(f"`et-1/0/0`: {UNCLAIMED}", entry.comments)
+        self.assertEqual(reapplies.call_count, 1)
+        self.assertEqual(self._names(module), ["et-1/0/1"])
+        self.assertEqual(_journal(module), [])
 
 
 @skipIf(NETBOX_MOVES_COMPONENTS, "NetBox 4.7 moves a module's components and nested bays with it")

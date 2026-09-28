@@ -28,6 +28,7 @@ from netbox_interface_name_rules import engine, rename_triggers
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
@@ -544,12 +545,11 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_module")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            run_the_reapply(callbacks)
 
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_module read failure"])
         self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
@@ -560,12 +560,11 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.ModuleReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_moduletype")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            run_the_reapply(callbacks)
 
         self.assertEqual(
             [str(record.exc_info[1]) for record in logs.records], ["injected dcim_moduletype read failure"]
@@ -577,12 +576,11 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        (reapply,) = [callback for callback in callbacks if isinstance(callback, rename_triggers.DeviceReapply)]
         with (
             connection.execute_wrapper(_reject_reads_of("dcim_device")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
-            reapply()
+            run_the_reapply(callbacks)
 
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_device read failure"])
         self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 2)

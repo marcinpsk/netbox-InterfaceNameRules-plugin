@@ -50,7 +50,7 @@ from netbox_interface_name_rules.family import (
     template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rename_triggers import DeviceReapply
+from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
 
@@ -500,9 +500,8 @@ class VirtualChassisReapplyCostTest(VirtualChassisReapplyTestCase):
             self.device.virtual_chassis = self.virtual_chassis
             self.device.vc_position = position
             self.device.save()
-        [reapply] = [callback for callback in callbacks if isinstance(callback, DeviceReapply)]
         with CaptureQueriesContext(connection) as captured:
-            reapply()
+            run_the_reapply(callbacks)
         return captured.captured_queries
 
     def test_the_reapply_reads_the_interface_templates_once_for_the_module_type(self):

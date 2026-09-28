@@ -21,7 +21,7 @@ The engine retains regex matching, comparison forms, exact-name precedence,
 forced-base ordering and the preference for channel `:0`.
 Its admission guard stays at the same point in `_collect_unrenamed`, before
 interfaces that intend one family collapse, as required by ADR 0011.
-A reapply after a move skips that guard: the raw-base claim then runs for every rule,
+A reapply after a move or a bay edit skips that guard: the raw-base claim then runs for every rule,
 with the previous state's forms added, and decides alone (ADR 0015).
 
 Message construction belongs to the primitive so callers cannot drift in wording.
