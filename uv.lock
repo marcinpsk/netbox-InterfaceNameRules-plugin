@@ -697,7 +697,7 @@ wheels = [
 
 [[package]]
 name = "netbox-interface-name-rules"
-version = "1.5.5"
+version = "1.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-re2" },
