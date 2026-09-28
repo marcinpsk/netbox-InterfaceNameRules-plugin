@@ -161,6 +161,14 @@ class RawBases:
         self._load()
         return self._claimant_by_name.get(name)
 
+    def admitted_flat_families(self):
+        """Return, after a move, the flat families whose template alone claims every member."""
+        return [
+            family
+            for family in self.flat_families
+            if all(self.claimant_for(member.name) == family.template_pk for member in family.members)
+        ]
+
     def is_ambiguous(self, name):
         """Return whether more than one template claims *name*, or its template claims another name too."""
         if not self._reads_base:

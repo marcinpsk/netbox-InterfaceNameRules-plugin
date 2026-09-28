@@ -67,13 +67,22 @@ def _shared_label_message(label, ids, by_id, module, label_kind):
     )
 
 
+def _absorbed(groups):
+    """Return *groups* without each group that another of them holds: a group inside another is the same claim."""
+    distinct = tuple(dict.fromkeys(tuple(group) for group in groups))
+    return tuple(group for group in distinct if not any(set(group) < set(other) for other in distinct))
+
+
 def resolve_group_claims(claims, *, module):
     """Return accepted pairs and messages for claims whose labels are groups of interface names.
 
-    A group is one interface, or every member of one interface family. A template's group is
-    accepted only when the template claims no other group and no other template claims any name
-    in it, in any group: groups that share a name are one ambiguity, as equal labels are.
+    A group is one interface, or every member of one interface family. Within one template, a group
+    that another of its groups holds is the same claim; two groups that only overlap are two claims.
+    A template's group is accepted only when the template claims no other group and no other
+    template claims any name in it, in any group: groups that share a name are one ambiguity, as
+    equal labels are. Pass every group of every template at once.
     """
+    claims = tuple(TemplateClaim(claim.claimant_id, claim.template_name, _absorbed(claim.labels)) for claim in claims)
     accepted, messages = resolve_template_claims(claims, module=module, label_kind=_RAW_BASE)
     by_id, claimants_by_group = _index_claims(claims)
     claimants_by_name = defaultdict(set)

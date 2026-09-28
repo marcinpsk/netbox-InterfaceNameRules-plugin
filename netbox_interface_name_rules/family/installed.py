@@ -162,7 +162,7 @@ class FlatFamily(NamedTuple):
 
 def _previous_family_bases(catalog, previous_forms):
     """Return ``(template, template base, source base, source)`` for each flat family the previous rule named."""
-    rule = None if previous_forms is None else previous_forms.rule
+    rule = previous_forms.rule
     if rule is None or rule.channel_count <= 0 or rule.breakout_mode != BreakoutModeChoices.FLAT:
         return ()
     return tuple(
@@ -172,21 +172,9 @@ def _previous_family_bases(catalog, previous_forms):
     )
 
 
-def _template_flat_families(module, rule, variables, interfaces, catalog, previous_forms=None):
-    """Return every complete flat family on this module that a template's bases spell, once each.
-
-    *previous_forms* adds the families a flat rule named in the state before a move.
-    """
+def _complete_families(rule, variables, interfaces, bases):
+    """Return, once each, the complete flat family each ``(template, base, source base, source)`` spells."""
     by_name = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
-    if not by_name:
-        return []
-    bases = [
-        (template, base_name, source_base, None)
-        for template, base_name, source_base in _template_flat_family_bases(
-            module, rule, variables, interfaces, catalog
-        )
-    ]
-    bases.extend(_previous_family_bases(catalog, previous_forms))
     families = []
     for template, base_name, source_base, source in bases:
         names = family_names_for(rule, variables, base_name, source_base, source)
@@ -201,6 +189,26 @@ def _template_flat_families(module, rule, variables, interfaces, catalog, previo
     return families
 
 
+def _move_family_bases(rule, variables, interfaces, catalog, previous_forms):
+    """Return ``(template, template base, source base, source)`` for every base a template spells a family from.
+
+    After a move every base is evidence: the current one, each historical ``{vc_position}`` one that is not
+    some template's current raw name, and the previous one. None is dropped here, because the one claim
+    over all of them decides.
+    """
+    templates = catalog.get()
+    resolved_now = {template.resolved for template in templates}
+    bases = [(template, template.resolved, template.resolved, None) for template in templates]
+    bases.extend(
+        (template, template.resolved, source_base, None)
+        for template in templates
+        for source_base in _historical_bases(rule, variables, template, interfaces)
+        if source_base not in resolved_now
+    )
+    bases.extend(_previous_family_bases(catalog, previous_forms))
+    return bases
+
+
 def flat_family_candidates(module, rule, variables, interfaces, catalog):
     """Return complete, unambiguous flat-family candidates on this module.
 
@@ -208,9 +216,14 @@ def flat_family_candidates(module, rule, variables, interfaces, catalog):
     channelized rule it later became spell those identically, so the caller decides whether the
     rule's current breakout mode makes these families its own to rename or its own to convert.
     """
-    families = _template_flat_families(module, rule, variables, interfaces, catalog)
+    bases = [
+        (template, base_name, source_base, None)
+        for template, base_name, source_base in _template_flat_family_bases(
+            module, rule, variables, interfaces, catalog
+        )
+    ]
     candidates = []
-    for family in families:
+    for family in _complete_families(rule, variables, interfaces, bases):
         candidate = (family.base_name, family.target_names, family.members)
         if candidate not in candidates:  # pragma: no branch - duplicates require historical matchers
             candidates.append(candidate)
@@ -220,17 +233,13 @@ def flat_family_candidates(module, rule, variables, interfaces, catalog):
 def _flat_candidates(module, rule, variables, interfaces, bases):
     """Return the flat families a flat-mode rule owns on this module.
 
-    After a move, a family is renamed only when its template alone claims every one of its members.
+    After a move, only the families the one claim admitted; see ``RawBases.admitted_flat_families``.
     """
     if rule.breakout_mode != BreakoutModeChoices.FLAT:
         return []
     if bases.previous_forms is None:
         return flat_family_candidates(module, rule, variables, interfaces, bases.catalog)
-    return [
-        (family.base_name, family.target_names, family.members)
-        for family in bases.flat_families
-        if all(bases.claimant_for(member.name) == family.template_pk for member in family.members)
-    ]
+    return [(family.base_name, family.target_names, family.members) for family in bases.admitted_flat_families()]
 
 
 def _flat_plan(module, target_names, interfaces):
@@ -408,15 +417,30 @@ def module_raw_bases(module, rule, variables, interfaces, previous_forms=None) -
     *previous_forms* holds what named the templates before a move; see ``RawBases``. A flat-mode rule
     then also claims the flat families found for each template.
     """
-    families = {
+    if previous_forms is not None:
+        return move_raw_bases(module, rule, variables, interfaces, TemplateNames(module), previous_forms)
+    return RawBases(module, rule, variables, _channels_by_name(interfaces), TemplateNames(module))
+
+
+def _channels_by_name(interfaces):
+    """Map each interface name outside any channel to its channels, as ``(name, channel_id)`` pairs."""
+    return {
         interface.name: tuple((child.name, child.channel_id) for child in children)
         for interface, children in device_interface_families(interfaces)
     }
-    catalog = TemplateNames(module)
+
+
+def move_raw_bases(module, rule, variables, interfaces, catalog, previous_forms) -> RawBases:
+    """Return the claim after a move: every form and every flat family of every template, resolved at once.
+
+    Pure over its inputs: *catalog* has ``get()`` for the resolved templates and *interfaces* are rows or
+    values with ``pk``, ``name``, ``parent_id``, ``channel_id`` and ``channels``.
+    """
     flat_families = ()
-    if previous_forms is not None and rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT:
-        flat_families = _template_flat_families(module, rule, variables, interfaces, catalog, previous_forms)
-    return RawBases(module, rule, variables, families, catalog, previous_forms, flat_families)
+    if rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT:
+        bases = _move_family_bases(rule, variables, interfaces, catalog, previous_forms)
+        flat_families = _complete_families(rule, variables, interfaces, bases)
+    return RawBases(module, rule, variables, _channels_by_name(interfaces), catalog, previous_forms, flat_families)
 
 
 def given_raw_names(module, rule, variables, names) -> GivenRawNames:

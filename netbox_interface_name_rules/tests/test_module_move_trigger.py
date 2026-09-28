@@ -566,6 +566,23 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`a-0:0`: {NO_RULE}", entry.comments)
         self.assertIn(f"`a-0:1`: {NO_RULE}", entry.comments)
 
+    def test_a_move_from_a_plain_rule_to_a_flat_breakout_rule_builds_the_family(self):
+        self._rule("a-{bay_position}", device_type=self.device_type)
+        self._rule(
+            "b-{bay_position}:{channel}",
+            device_type=self.other_device_type,
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        module = self._install(self.module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["a-0"])
+
+        self._move(module, self._bay(self.remote, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["b-1:0", "b-1:1"])
+        self.assertEqual(_journal(module), [])
+
     def test_a_flat_family_whose_channel_count_changes_with_the_rule_is_blocked(self):
         for device_type, template, count in ((self.device_type, "a", 2), (self.other_device_type, "b", 4)):
             self._rule(
@@ -660,6 +677,45 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         (entry,) = _journal(module)
         for name in names:
             self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_one_template_that_matches_three_flat_families_renames_none(self):
+        module_type = self._module_type("Three Flat", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="{base}:{channel}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        module = self._install(module_type, self._bay(self.device))
+        for name in ("3/1:0", "3/1:1", "4/1:0", "4/1:1"):
+            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+
+        self._move(module, self._bay(self.peer, "Bay 1"))
+
+        names = ["1/0:0", "1/0:1", "3/1:0", "3/1:1", "4/1:0", "4/1:1"]
+        self.assertEqual(self._names(module), names)
+        (entry,) = _journal(module)
+        for name in names:
+            self.assertIn(f"`{name}`: {UNCLAIMED}", entry.comments)
+
+    def test_a_raw_name_inside_its_own_templates_family_is_one_claim(self):
+        module_type = self._module_type("Fixed Flat", "0:0")
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="{bay_position}:{channel}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["0:0", "0:1"])
+
+        self._move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(self._names(module), ["1:0", "1:1"])
+        self.assertEqual(_journal(module), [])
 
     def test_a_family_member_another_template_claims_refuses_the_whole_family(self):
         module_type = self._module_type("Member Flat", "{module}", "0:1")
