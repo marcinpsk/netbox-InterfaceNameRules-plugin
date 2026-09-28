@@ -1208,13 +1208,13 @@ arithmetic. They are also correct for a plain numeric position, so <code>_num</c
 the raw variable still gives the position as it is stored.</p>
 <h2 id="virtual-chassis-support">Virtual Chassis Support</h2>
 <h3 id="module-interface-rules-linecardsfp">Module Interface Rules (linecard/SFP)</h3>
-<p>When a module is installed on a device that belongs to a Virtual Chassis, the <code>{vc_position}</code> variable is injected automatically and reflects the device's chassis position (<code>device.vc_position</code>). Templates that use <code>{vc_position}</code> on non-VC devices will fail gracefully (the rename is skipped).</p>
+<p>When a module is installed on a device that belongs to a Virtual Chassis, the <code>{vc_position}</code> variable is injected automatically and reflects the device's chassis position (<code>device.vc_position</code>). Templates that use <code>{vc_position}</code> on non-VC devices rename nothing: the interfaces keep their names, and a journal entry on the module lists them.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"Gi{vc_position}/{bay_position_num}"</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># Member at VC position 1, bay "linecard2" → Gi1/2</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Member at VC position 2, bay "linecard3" → Gi2/3</span>
 </code></pre></div>
 <h3 id="device-interface-rules-vc-port-renaming">Device Interface Rules (VC port renaming)</h3>
-<p>When a device <strong>joins</strong> a Virtual Chassis or <strong>changes position</strong>, the plugin fires <code>apply_device_interface_rules()</code> for that device. This renames native device-type interfaces (those not created by a module, i.e. <code>module=None</code>) using the <code>{vc_position}</code>, <code>{base}</code>, and <code>{port}</code> variables.</p>
+<p>When a device <strong>joins</strong> a Virtual Chassis or <strong>changes position</strong>, the plugin reapplies the device-interface rules for that device. This renames native device-type interfaces (those not created by a module, i.e. <code>module=None</code>) using the <code>{vc_position}</code>, <code>{base}</code>, and <code>{port}</code> variables.</p>
 <p>Enable <strong>Applies to Device Interfaces</strong> on the rule and set the <strong>Module Type Pattern</strong> as an interface-name filter (regex).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Cisco Catalyst 9000 stack — member 2 gets GigabitEthernet2/0/1..4</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">applies_to_device_interfaces</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
@@ -1281,11 +1281,12 @@ templates and the candidates. Module types that do not use the token keep the ex
 always had, and so does every release older than NetBox 4.6.</p>
 <p>Note that the drift is only reachable on a <strong>re-apply</strong>: at install time the interfaces are named
 and the rule is applied in the same instant, so the two always agree.</p>
-<p><strong>Leaving a virtual chassis does not rename anything.</strong> The plugin deliberately schedules no
-re-apply when a device is removed from a VC — a rule using <code>{vc_position}</code> cannot even be evaluated
-off a chassis, so what the interfaces should be called instead is an operator decision. Re-apply the
-rule manually from <strong>Apply Rules → Preview &amp; Apply</strong> when you want it; the matching above finds the
-interfaces whether they were named at a position or at the fallback.</p>
+<p><strong>Leaving a virtual chassis does not rename anything.</strong> A device that leaves its VC, or stays in
+one without a position, keeps every interface name, whatever its rules use. A rule using
+<code>{vc_position}</code> cannot give a name off a chassis, so a journal entry on the device lists its
+interfaces. What they should be called instead is an operator decision: change the rule, then
+re-apply it from <strong>Apply Rules → Preview &amp; Apply</strong>. The matching above finds the interfaces whether
+they were named at a position or at the fallback.</p>
 <h2 id="examples">Examples</h2>
 <h3 id="simple-rename">Simple Rename</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"et-0/0/{bay_position}"</span>
