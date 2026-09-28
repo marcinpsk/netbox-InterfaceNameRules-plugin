@@ -20,7 +20,13 @@ from .domain import (
     PlannedChannel,
     StructuralFamilyPlan,
 )
-from .names import COLLISION_REASON, is_name_collision, reconcile_after_parent_cascade
+from .names import (
+    COLLISION_REASON,
+    first_taken_name,
+    is_name_collision,
+    name_owners,
+    reconcile_after_parent_cascade,
+)
 from .targets import UNCLAIMED_BASE_REASON, channelized_family_names, flat_family_names
 
 logger = logging.getLogger(__name__)
@@ -136,12 +142,7 @@ def _first_taken_name(plan, own_pks):
 
     One query, because the caller holds the plan's row locks while this runs.
     """
-    taken = set(
-        Interface.objects.filter(device_id=plan.device_id, name__in=plan.target_names)
-        .exclude(pk__in=own_pks)
-        .values_list("name", flat=True)
-    )
-    return next((name for name in plan.target_names if name in taken), None)
+    return first_taken_name(plan.target_names, name_owners(plan.device_id, plan.target_names), own_pks)
 
 
 def _create_channels(plan, parent):  # pragma: no cover - requires channelization support
