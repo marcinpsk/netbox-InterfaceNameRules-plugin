@@ -130,7 +130,8 @@ class BayEditTest(BayEditTestCase):
         ):
             self._save_edit(occupied, label="Uplink", description="unrelated edit")
             self._save_edit(self._bay(self.device, "Bay 2"), position="7", name="Bay 7")
-            ModuleBay.objects.create(device=self.device, name="Bay 20", position="20")
+            unused_pk = ModuleBay.objects.latest("pk").pk + 1000
+            ModuleBay.objects.create(pk=unused_pk, device=self.device, name="Bay 20", position="20")
             self._save_edit(self._bay(self.device, "Bay 1"), position="4")
 
         self.assertEqual([naming[0].module_pk for _queries, naming in reads], [control.pk])
