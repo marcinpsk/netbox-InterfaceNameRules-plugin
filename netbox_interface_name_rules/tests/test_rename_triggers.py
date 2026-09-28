@@ -877,18 +877,26 @@ class RenameJournalTest(RenameTriggerTestCase):
     def test_an_interface_a_lower_priority_rule_renames_is_not_reported(self):
         Interface.objects.create(device=self.device, name="mgmt0", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="mgmt-2", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="eth0", type=PLAIN_TYPE)
+        Interface.objects.create(device=self.device, name="lan-2", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             name_template="mgmt-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt0"
         )
         InterfaceNameRule.objects.create(
             name_template="oob-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="mgmt."
         )
+        # A control: eth0 stays blocked, so the entry exists and must still leave mgmt0 out.
+        InterfaceNameRule.objects.create(
+            name_template="lan-{vc_position}", applies_to_device_interfaces=True, module_type_pattern="eth0"
+        )
 
         with self.captureOnCommitCallbacks(execute=True):
             self._move_to_position(2)
 
         self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
-        self.assertEqual(_journal(self.device), [])
+        (entry,) = _journal(self.device)
+        self.assertIn("`eth0` to `lan-2`", entry.comments)
+        self.assertNotIn("mgmt0", entry.comments)
 
     def test_a_device_reapply_that_fails_on_one_module_keeps_the_earlier_outcomes(self):
         blocked = self._install()
@@ -962,6 +970,14 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self.assertEqual((self._names(renamed), self._names(kept)), (["et-2/0/0"], ["ge-1"]))
         self.assertFalse(JournalEntry.objects.exists())
+
+        # A control: a later trigger that leaves a name taken writes the entry the first one did not.
+        Interface.objects.create(device=self.device, name="et-3/0/0", type=PLAIN_TYPE)
+        with self.captureOnCommitCallbacks(execute=True):
+            self._move_to_position(3)
+
+        (entry,) = JournalEntry.objects.all()
+        self.assertIn("`et-2/0/0` to `et-3/0/0`", entry.comments)
 
     def test_a_failed_journal_write_is_logged_and_does_not_raise(self):
         module = self._install()
