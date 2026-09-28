@@ -46,19 +46,36 @@ def numeric_suffix(value) -> str:
     return str(int(digits)) if digits else "0"
 
 
+def _variable_position(position, name):
+    """Return the bay position that template variables read from a bay with *position* and *name*.
+
+    A template expression such as ``{module}`` resolves from trailing digits in the bay name.
+    """
+    bay_position = position or "0"
+    if bay_position.startswith("{"):
+        return _extract_trailing_digits(name) or "0"
+    return bay_position
+
+
 def _resolve_bay_position(module_bay):
     """Return the raw and numeric positions for *module_bay*.
 
-    A template expression such as ``{module}`` resolves from trailing digits in
-    the bay name. The numeric position comes from ``numeric_suffix``, the one
-    function every numeric variable is derived through, so a zero-padded
-    position such as ``"02"`` reaches arithmetic as ``"2"``.
+    The raw position comes from ``_variable_position``. The numeric position comes from
+    ``numeric_suffix``, the one function every numeric variable is derived through, so a
+    zero-padded position such as ``"02"`` reaches arithmetic as ``"2"``.
     """
-    bay_position = module_bay.position or "0"
-    if bay_position.startswith("{"):
-        digits = _extract_trailing_digits(module_bay.name)
-        bay_position = digits or "0"
+    bay_position = _variable_position(module_bay.position, module_bay.name)
     return bay_position, numeric_suffix(bay_position)
+
+
+def bay_naming_values(position, name) -> tuple[str, str]:
+    """Return what the names in a bay with *position* and *name* are built from.
+
+    That is the stored position, which NetBox's raw template names and the variables of nested
+    modules read, and the position that the variables of the module in the bay read. A bay name
+    edit that changes neither changes no name.
+    """
+    return position, _variable_position(position, name)
 
 
 def _resolve_slot(module_bay, bay_position, parent_bay_position):

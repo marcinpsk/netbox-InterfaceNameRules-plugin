@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Django receivers: module and device saves go to the rename-trigger lifecycle."""
+"""Django receivers: module, module bay and device saves go to the rename-trigger lifecycle."""
 
 import logging
 
@@ -23,6 +23,18 @@ def on_module_pre_save(sender, instance, **kwargs):
 @receiver(post_save, sender="dcim.Module", dispatch_uid="interface_name_rules_post_save_module")
 def on_module_saved(sender, instance, created, **kwargs):
     """Pass a module save to the rename-trigger lifecycle after the row is written."""
+    rename_triggers.after_save(sender, instance, created)
+
+
+@receiver(pre_save, sender="dcim.ModuleBay", dispatch_uid="interface_name_rules_pre_save_module_bay")
+def on_module_bay_pre_save(sender, instance, **kwargs):
+    """Pass a module bay save to the rename-trigger lifecycle before the row is written."""
+    rename_triggers.before_save(sender, instance)
+
+
+@receiver(post_save, sender="dcim.ModuleBay", dispatch_uid="interface_name_rules_post_save_module_bay")
+def on_module_bay_saved(sender, instance, created, **kwargs):
+    """Pass a module bay save to the rename-trigger lifecycle after the row is written."""
     rename_triggers.after_save(sender, instance, created)
 
 

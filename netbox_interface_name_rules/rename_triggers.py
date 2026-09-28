@@ -2,16 +2,18 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Rename triggers: read the previous state, decide, and reapply the rules after commit.
 
-The receivers in ``signals.py`` pass every module and device save here. ``before_save`` reads the
-previous state; ``after_save`` compares it with the saved values and schedules one reapply per
-module or device per transaction. The reapply compares the earliest previous state of the
-transaction with the committed row, so it acts on the net change. A reapply that leaves an
+The receivers in ``signals.py`` pass every module, module bay and device save here. ``before_save``
+reads the previous state; ``after_save`` compares it with the saved values and schedules one
+reapply per module or device per transaction. The reapply compares the earliest previous state of
+the transaction with the committed row, so it acts on the net change. A reapply that leaves an
 interface unrenamed, or fails, writes one journal entry on the module or device. A reapply that
 cannot read the committed row is logged only.
 
-A save that moves a module also reads, before the save, what named the interfaces of the module and
-of every module nested in it. The reapply renames that subtree and recognises the earlier names
-from it, because NetBox can change the nested bays in the same save.
+A save that moves a module, or that changes what the names in an occupied bay are built from, also
+reads before the save what named the interfaces of that module and of every module nested in it.
+After the save that naming is gone. The reapply of the module renames its subtree and recognises the
+earlier names from that naming. A bay edit schedules the reapply of the module in the bay, so a bay
+edit and a move of that module in one transaction share one reapply, with the earliest naming.
 """
 
 import dataclasses
@@ -21,6 +23,7 @@ import weakref
 from django.db import transaction
 from netbox.context import current_request
 
+from .naming import bay_naming_values
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 
 logger = logging.getLogger("netbox_interface_name_rules")
@@ -58,8 +61,8 @@ class ModuleReapply:
 
     ``baseline`` is the earliest previous state of the transaction, or the state the module was
     installed with when ``installed`` is set. ``naming`` is the ``ModuleNaming`` of the module and of
-    each module nested in it, read by a save that moved the module; it is empty otherwise.
-    ``replaces`` is the pending reapply this one takes the place of, which then does nothing.
+    each module nested in it, read by a save that moved the module or edited its bay; it is empty
+    otherwise. ``replaces`` is the pending reapply this one takes the place of, which then does nothing.
     """
 
     pk: int
@@ -82,7 +85,7 @@ class ModuleReapply:
         return isinstance(pending, ModuleReapply) and pending.pk == self.pk and not (pending.started or self.installed)
 
     def succeeding(self, pending):
-        """Return the reapply that takes the place of *pending* with this move's naming, or None if it needs none.
+        """Return the reapply that takes the place of *pending* with this save's naming, or None if it needs none.
 
         It keeps the earliest previous state of *pending*: only the naming comes from this save.
         """
@@ -92,12 +95,22 @@ class ModuleReapply:
         successor.author = pending.author
         return successor
 
+    def _naming_changed(self, module, current):
+        """Return whether the module has moved, or its bay builds names from other values, since ``naming`` was read."""
+        if not self.naming:
+            return False
+        bay = module.module_bay
+        return (
+            current.placement() != self.baseline.placement()
+            or bay_naming_values(bay.position, bay.name) != self.naming[0].bay_values
+        )
+
     def _outcomes(self, module, current):
         """Yield the outcome facts of the reapply that the change from the baseline to *current* asks for."""
         from .engine import module_rule_outcomes, subtree_rule_outcomes
 
         naming = self.naming
-        if not naming or current.placement() == self.baseline.placement():
+        if not self._naming_changed(module, current):
             yield from module_rule_outcomes(module, module.module_bay, force_reapply=current != self.baseline)
             return
         if current.module_type_id != self.baseline.module_type_id:
@@ -125,7 +138,7 @@ class ModuleReapply:
             return
         module_bay = module.module_bay
         current = _state_of(ModuleState, module)
-        if current == self.baseline and not self.installed:
+        if current == self.baseline and not (self.installed or self._naming_changed(module, current)):
             return
         outcomes = []
         try:
@@ -296,8 +309,48 @@ def _read_device(device):
     return _read_state(type(device), DeviceState, device.pk)
 
 
+def _read_bay(bay):
+    """Return ``(values, occupant, naming)`` of a module bay before its save, or None without a row.
+
+    *values* are the bay's ``bay_naming_values``. *occupant* is ``(pk, state)`` of the module in the
+    bay, or None when the bay is empty. *naming* is the naming of that module's subtree when the save
+    changes *values*; it is empty otherwise.
+    """
+    row = (
+        type(bay)
+        .objects.filter(pk=bay.pk)
+        .values("position", "name", "installed_module", "installed_module__module_type", "installed_module__device")
+        .first()
+    )
+    if row is None:
+        return None
+    values = bay_naming_values(row["position"], row["name"])
+    module_pk = row["installed_module"]
+    if module_pk is None:
+        return values, None, ()
+    occupant = (module_pk, ModuleState(row["installed_module__module_type"], bay.pk, row["installed_module__device"]))
+    if bay_naming_values(bay.position, bay.name) == values:
+        return values, occupant, ()
+    from .engine import read_subtree_naming
+
+    return values, occupant, read_subtree_naming(module_pk)
+
+
+def _bay_reapply(bay, created, previous):
+    """Return the reapply of the module in *bay* that a bay save asks for, or None when it is not a rename trigger."""
+    if created or previous is None:
+        return None
+    values, occupant, naming = previous
+    if occupant is None or bay_naming_values(bay.position, bay.name) == values:
+        return None
+    pk, state = occupant
+    logger.debug("Module bay %s changed from %s; scheduling a reapply of module %s", bay.pk, values, pk)
+    return ModuleReapply(pk, state, installed=False, naming=naming)
+
+
 _TRIGGERS = {
     "dcim.Module": (_read_module, _module_reapply),
+    "dcim.ModuleBay": (_read_bay, _bay_reapply),
     "dcim.Device": (_read_device, _device_reapply),
 }
 
