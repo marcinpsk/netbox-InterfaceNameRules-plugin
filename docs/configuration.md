@@ -104,10 +104,12 @@ The plugin renames an interface only when exactly one interface template claims
 it. A template claims an interface through its raw template name before or after
 the move, or through the name that the old rule or the new rule gives it. When one
 template claims two interfaces, or two templates claim one interface, the plugin
-renames none of them. These interfaces, and each interface that no template
-claims, keep their names, and the journal entry lists them. A module type without
-interface templates claims nothing, so after a move its interfaces keep their
-names and are listed.
+renames none of them. When any interface of the module is left unclaimed, the
+plugin renames nothing on that module, because the unclaimed interface can belong
+to a breakout family: every interface keeps its name, and the journal entry lists
+them all. A channel or a subinterface of another interface does not count. A
+module type without interface templates claims nothing, so after a move its
+interfaces keep their names and are listed.
 
 When no rule matches the module at its new position, the interfaces keep their
 names. The journal entry lists each interface that the old rule named. When no
@@ -123,8 +125,7 @@ Limits:
   tell with certainty which interfaces form a flat family. On NetBox 4.7, use the
   channelized breakout mode to have a move rename a breakout family, or rename the
   interfaces by hand. A move into the scope of a flat breakout rule builds the
-  family as an install does, but only when every interface of the module is
-  claimed.
+  family as an install does.
 - The plugin does not repair names that module moves left wrong before this
   version. Apply Rules cannot repair them either, because it has no state from
   before the move. Rename these interfaces by hand.
@@ -156,9 +157,9 @@ and the reason:
 - no single interface template claims the interface, so the rule cannot find its
   `{base}`, or, after a move, the plugin cannot tell which name the interface had,
 - no rule matches a moved module at its new position,
-- a moved module's rule before the move is a flat breakout rule, or a flat
-  breakout family is not built after a move because an interface of the module
-  is unclaimed,
+- a moved module's rule before the move is a flat breakout rule,
+- another interface of a moved module is unclaimed, so nothing on the module is
+  renamed,
 - the rule failed, for example on a division by zero in its template.
 
 When an error stops the rename, the entry also has one line for that error,
