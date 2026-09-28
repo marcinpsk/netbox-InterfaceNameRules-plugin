@@ -102,7 +102,7 @@ Running the rules again on interfaces that already exist. An operator reapplies 
 _Avoid_: Re-run, refresh
 
 **Previous state**:
-The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change". The previous state of a move, or of an occupied bay's edit, also holds what named the interfaces of the module (the moved module, or the module in the bay) and of each module nested in it: the template variables, the raw template names, the device type, platform and parent module type that selected the rule, and the position and name of the module's bay. A reapply recognises the names the plugin gave earlier by rebuilding them from it.
+The values a rename trigger compares against: what the database held just before the save. A previous state that cannot be read is never taken to mean "no change". The previous state of a move, or of an occupied bay's edit, also holds what named the interfaces of the module (the moved module, or the module in the bay) and of each module nested in it: the template variables, the raw template names, the device type, platform and parent module type that selected the rule, and the naming values of the module's bay (its stored position, and the position that its template variables read, which can come from the bay's name). A reapply recognises the names the plugin gave earlier by rebuilding them from it. When several triggers in one transaction read what named one module, the reapplies use the earliest read. A module installed in the same transaction has no names from a rule yet, so its previous state names no rule.
 _Avoid_: Old values, snapshot (NetBox's change-log snapshot is a different thing)
 
 **Rename outcome**:

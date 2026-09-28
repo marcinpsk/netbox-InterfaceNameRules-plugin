@@ -167,7 +167,10 @@ this version, for the same reason as after a move.
 Several edits of one bay in one transaction rename once, from the state before
 the first edit, and an edit that the same transaction undoes renames nothing.
 When one transaction edits a bay and moves the module in it, the plugin renames
-once, from the state before the first of these changes.
+once, from the state before the first of these changes. When one transaction
+edits a bay and a bay nested below it, each module is renamed from the state
+before the first edit. A module installed in the same transaction is named as
+an install names it, also under a flat breakout rule.
 
 ### Journal entries after an automatic rename
 
