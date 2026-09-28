@@ -136,6 +136,11 @@ Limits:
   or REST API request changes objects of one model only, so only scripts and
   shell sessions do this. A bay edit before a move does not have this limit:
   see [Editing a module bay](#editing-a-module-bay).
+- When one transaction changes a device's virtual-chassis position and also
+  installs, moves or changes the type of a module on that device, or edits the
+  bay that holds it, the plugin can rename that module twice: the names come
+  out right, but a rename that collides is reported in the journal entry of the
+  module and again in the journal entry of the device.
 - NetBox before 4.7 saves a move as a change of the module row only. After a
   move to another bay of the same device, the plugin renames the moved module's
   interfaces, and recognises the raw template names from the old bay. The
