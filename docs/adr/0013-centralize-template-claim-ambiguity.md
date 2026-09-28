@@ -21,13 +21,8 @@ The engine retains regex matching, comparison forms, exact-name precedence,
 forced-base ordering and the preference for channel `:0`.
 Its admission guard stays at the same point in `_collect_unrenamed`, before
 interfaces that intend one family collapse, as required by ADR 0011.
-A reapply after a move skips that guard: the raw-base claim then runs for every rule
-and decides alone (ADR 0015). It gathers every form and every complete flat family that
-each template spells from its current, historical and previous bases, and resolves them
-in one `resolve_group_claims` pass; the staged historical family claim is not used there.
-A group inside another group of the same template is the same claim, and a group is
-accepted only when its template claims nothing else and no other template claims any
-name in it.
+A reapply after a move skips that guard: the raw-base claim then runs for every rule,
+with the previous state's forms added, and decides alone (ADR 0015).
 
 Message construction belongs to the primitive so callers cannot drift in wording.
 The primitive does not log. Callers emit its messages through their own logger,
