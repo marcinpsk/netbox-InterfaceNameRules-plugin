@@ -779,6 +779,19 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`p1:0`: {NOT_RENAMED}", entry.comments)
         self.assertIn(f"`p1:1`: {UNCLAIMED}", entry.comments)
 
+    def test_an_install_and_a_move_in_one_transaction_build_the_family_of_a_flat_rule(self):
+        module_type = self._module_type("Installed Flat", "{module}")
+        self._flat_rule(module_type, "f-{bay_position}:{channel}")
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            module = Module.objects.create(
+                device=self.device, module_bay=self._bay(self.device), module_type=module_type
+            )
+            self._save_move(module, self._bay(self.device, "Bay 2"))
+
+        self.assertEqual(self._names(module), ["f-2:0", "f-2:1"])
+        self.assertEqual(_journal(module), [])
+
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):

@@ -485,7 +485,9 @@ class ModuleNaming:
 
     The module type and the scope select the rule that state gave the module. The template variables
     and the templates as they resolved then rebuild the names that rule gave. ``bay_values`` are the
-    ``naming.bay_naming_values`` of the module's bay then.
+    ``naming.bay_naming_values`` of the module's bay then. ``raw_only`` is set when no rule has named
+    the module's interfaces yet, because its install reapply has not run: they carry raw template
+    names only.
     """
 
     module_pk: int
@@ -496,6 +498,7 @@ class ModuleNaming:
     variables: dict
     templates: tuple
     bay_values: tuple
+    raw_only: bool = False
 
     @classmethod
     def of(cls, module):
@@ -514,8 +517,12 @@ class ModuleNaming:
         )
 
     def previous_forms(self) -> family_ops.PreviousForms:
-        """Return what rebuilds the names this naming gave, under the rule it selects now."""
-        rule = find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+        """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
+        rule = (
+            None
+            if self.raw_only
+            else find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+        )
         return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
 
 

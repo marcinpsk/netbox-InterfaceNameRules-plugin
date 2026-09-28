@@ -18,6 +18,7 @@ from extras.choices import JournalEntryKindChoices
 from rest_framework import status
 from utilities.testing import APITestCase
 
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleReapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
@@ -36,6 +37,16 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
 from netbox_interface_name_rules.tests.test_rename_triggers import _previous_state_read_fails
 
 BAY_STATE_READ = re.compile(r'SELECT "dcim_modulebay"\."position".* FROM "dcim_modulebay"')
+
+
+def _flat_rule(module_type, name_template):
+    return InterfaceNameRule.objects.create(
+        module_type=module_type,
+        name_template=name_template,
+        breakout_mode=BreakoutModeChoices.FLAT,
+        channel_count=2,
+        channel_start=0,
+    )
 
 
 class BayEditTestCase(ModuleMoveTestCase):
@@ -259,6 +270,20 @@ class NestedBayEditTest(BayEditTestCase):
         self.assertEqual(self._names(optic), ["et-1/2/3"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
+    def test_a_card_and_an_optic_installed_before_an_edit_of_the_card_bay_build_the_optic_family(self):
+        flat_optic_type = self._module_type("Flat Optic", "{module}")
+        _flat_rule(flat_optic_type, "x-{slot}/{bay_position}:{channel}")
+        bay = self._bay(self.device)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            card = Module.objects.create(device=self.device, module_bay=bay, module_type=self._card_type("Card", "1"))
+            port = ModuleBay.objects.get(module=card)
+            optic = Module.objects.create(device=self.device, module_bay=port, module_type=flat_optic_type)
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["x-2/1:0", "x-2/1:1"])
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
     def test_the_bay_post_saves_netbox_sends_in_a_move_are_not_bay_triggers(self):
         card, port = self._install_card(self._card_type("Token Card", "{module}"), self._bay(self.device))
@@ -343,6 +368,18 @@ class BayEditTransactionTest(BayEditTestCase):
 
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/5"])
+
+    def test_an_install_and_an_edit_of_its_bay_under_a_flat_rule_build_the_family(self):
+        flat_type = self._module_type("Flat", "{module}")
+        _flat_rule(flat_type, "f-{bay_position}:{channel}")
+        bay = self._bay(self.device)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=flat_type)
+            self._save_edit(bay, position="5")
+
+        self.assertEqual(self._names(module), ["f-5:0", "f-5:1"])
+        self.assertEqual(_journal(module), [])
 
     def test_a_module_moved_into_a_bay_that_is_then_edited_reapplies_once_for_the_edited_bay(self):
         module = self._install(self.plain_type, self._bay(self.device))

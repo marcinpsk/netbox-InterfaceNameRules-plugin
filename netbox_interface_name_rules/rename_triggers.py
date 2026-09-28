@@ -374,17 +374,26 @@ def _scheduled(connection):
 def _earliest_naming(naming):
     """Return *naming* with the earliest entry of the transaction for each module in it.
 
-    A pending module reapply read its entries earlier, so its entry for a module wins.
+    A pending module reapply read its entries earlier, so its entry for a module wins. The interfaces
+    of a module whose install reapply is pending carry raw template names only, so its entry is
+    ``raw_only``.
     """
     if not naming:
         return naming
     earlier = {}
+    installing = set()
     for _, callback, _ in _scheduled(transaction.get_connection()):
         if not isinstance(callback, ModuleReapply) or callback.started:
             continue
         for entry in callback.naming:
             earlier.setdefault(entry.module_pk, entry)
-    return tuple(earlier.get(entry.module_pk, entry) for entry in naming)
+        if callback.installed:
+            installing.add(callback.pk)
+    return tuple(
+        earlier.get(entry.module_pk)
+        or (dataclasses.replace(entry, raw_only=True) if entry.module_pk in installing else entry)
+        for entry in naming
+    )
 
 
 _TRIGGERS = {
