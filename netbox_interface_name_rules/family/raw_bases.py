@@ -161,7 +161,8 @@ class RawBases:
         self.catalog = catalog
         self.previous_forms = previous_forms
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
-        self._claims_flat = previous_forms is None and breaks_out(rule)
+        self._breaks_out = breaks_out(rule)
+        self._claims_flat = previous_forms is None and self._breaks_out
         self._resolution = None
 
     def base_for(self, name):
@@ -171,9 +172,13 @@ class RawBases:
         bases = self._resolved().bases
         return name if bases is None else bases.get(name)
 
+    def builds_on(self, name):
+        """Return the base a breakout rule builds a family on from *name*, or None unless one template alone claims it."""
+        return self.base_for(name) if self.claim(name).accepted else None
+
     def is_ambiguous(self, name):
-        """Return whether ``base_for`` finds *name* claimed, but not by one template alone."""
-        if not self._reads_base or self._resolved().bases is None:
+        """Return whether a rule that reads the claim finds *name* claimed, but not by one template alone."""
+        if not (self._reads_base or self._breaks_out) or self._resolved().bases is None:
             return False
         claim = self.claim(name)
         return claim.claimed and not claim.accepted
@@ -313,3 +318,5 @@ class GivenRawNames:
     def base_for(self, name):
         """Return *name*, or None when the claim over the given names finds it ambiguous."""
         return None if self._bases.is_ambiguous(name) else name
+
+    builds_on = base_for

@@ -460,8 +460,15 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
         self.assertEqual(changed.changed_count, 0)
         self._assert_untouched()
-        self.assertTrue(changed.skipped_members, "the skipped module was not reported to the Apply view")
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in changed.skipped_members),
+            [(name, UNCLAIMED_BASE_REASON) for name in self.FLAT_NAMES],
+        )
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_preview_offers_no_family_it_would_not_build(self):
         """The Apply page must not promise a family the apply path refuses to create."""

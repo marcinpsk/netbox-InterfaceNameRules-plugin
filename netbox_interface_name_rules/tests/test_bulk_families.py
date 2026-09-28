@@ -505,6 +505,9 @@ class VirtualChassisReapplyCostTest(VirtualChassisReapplyTestCase):
         return captured.captured_queries
 
     def test_the_reapply_reads_the_interface_templates_once_for_the_module_type(self):
+        # A rule that reads {base} needs the claim, so the reapply reads the templates.
+        self.rule.name_template = "et-{vc_position}/{base}"
+        self.rule.save()
         self._install_and_name(("1", "2", "3", "4"))
 
         queries = self._reapply_queries(4)

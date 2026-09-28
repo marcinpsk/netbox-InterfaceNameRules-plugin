@@ -78,6 +78,8 @@ class _NamesAreRaw:
     def base_for(name):
         return name
 
+    builds_on = base_for
+
 
 _NAMES_ARE_RAW = _NamesAreRaw()
 
