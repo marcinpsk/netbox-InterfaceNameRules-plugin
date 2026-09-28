@@ -385,6 +385,23 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         (entry,) = _journal(card)
         self.assertIn(f"`p0-1`: {UNCLAIMED}", entry.comments)
 
+    def test_a_move_rolled_back_in_a_savepoint_leaves_the_pending_reapply_as_it_was(self):
+        card, port = self._install_card(self.card_type, self._bay(self.device))
+        optic = self._install(self.optic_type, port)
+        other_card_type = self._card_type("Other Card", "1")
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            card.module_type = other_card_type
+            card.save()
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                Module.objects.get(pk=optic.pk).delete()
+                self._save_move(card, self._bay(self.device, "Bay 1"))
+                raise RuntimeError("roll back the savepoint")
+            card.refresh_from_db()
+            self._save_move(card, self._bay(self.device, "Bay 2"))
+
+        self.assertEqual(self._names(optic), ["et-1/2/1"])
+
     def test_a_family_whose_channel_count_changes_with_the_rule_is_blocked_and_the_subtree_still_reapplies(self):
         card_type = self._card_type("Flat Card", "1")
         InterfaceTemplate.objects.create(module_type=card_type, name="{module}", type=PLAIN_TYPE)

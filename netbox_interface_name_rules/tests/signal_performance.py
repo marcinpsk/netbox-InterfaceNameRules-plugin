@@ -938,12 +938,13 @@ class SignalPathPerformanceTest(TransactionTestCase):
 
         operation = move
         if direct:
-            baseline = ModuleState(module.module_type_id, source.pk, device.pk, naming=read_subtree_naming(module.pk))
+            baseline = ModuleState(module.module_type_id, source.pk, device.pk)
+            naming = read_subtree_naming(module.pk)
             with patch.object(rename_triggers, "before_save"), patch.object(rename_triggers, "after_save"):
                 move()
 
             def operation():
-                ModuleReapply(module.pk, baseline, installed=False)()
+                ModuleReapply(module.pk, baseline, installed=False, naming=naming)()
 
         def verify():
             names = sorted(Interface.objects.filter(device=device).values_list("name", flat=True))
