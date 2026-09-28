@@ -170,12 +170,14 @@ in the bay. The plugin does not repair names that bay edits left wrong before
 this version, for the same reason as after a move.
 
 The plugin renames each module at most once per transaction, from the state
-before the first change in that transaction. Several edits of one bay rename
-once, and an edit that the same transaction undoes renames nothing. When one
-transaction edits a bay and a bay nested below it, or edits a bay and moves,
-installs or changes the type of a module in it, each module is renamed once. A
-module installed in the same transaction is named as an install names it, also
-under a flat breakout rule.
+before the first change in that transaction. A virtual-chassis position change
+of the module's device in the same transaction is the exception: the device
+also renames the module, as the limits under [Moving a module](#moving-a-module)
+say. Several edits of one bay rename once, and an edit that the same
+transaction undoes renames nothing. When one transaction edits a bay and a bay
+nested below it, or edits a bay and moves, installs or changes the type of a
+module in it, each module is renamed once. A module installed in the same
+transaction is named as an install names it, also under a flat breakout rule.
 
 ### Journal entries after an automatic rename
 
