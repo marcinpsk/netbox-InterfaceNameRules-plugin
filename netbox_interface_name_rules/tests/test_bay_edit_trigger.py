@@ -646,6 +646,77 @@ class BayEditTransactionTest(BayEditTestCase):
         self.assertEqual(self._names(module), ["et-1/0/5"])
 
 
+class ChassisPositionMixTest(BayEditTestCase):
+    """A bay edit and a virtual-chassis position change of the device in one transaction, in either order.
+
+    The module reapply and the device reapply both reach the nested module, and its names come out
+    right for the new bay position and the new chassis position.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.card_type = cls._card_type("Card", "1")
+        cls.optic_type = cls._module_type("Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.optic_type, name_template="et-{vc_position}/{slot}/{bay_position}"
+        )
+        cls.arithmetic_optic_type = cls._module_type("Arithmetic Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.arithmetic_optic_type, name_template="x{{vc_position} * 10 + {slot_num}}/{bay_position}"
+        )
+
+    def _card_with(self, optic_type):
+        """Install a card in Bay 0 with an optic of *optic_type*, and a plain module in Bay 10; return them."""
+        bay = self._bay(self.device)
+        _card, port = self._install_card(self.card_type, bay)
+        optic = self._install(optic_type, port)
+        other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
+        return bay, optic, other
+
+    def _change_the_chassis_position(self):
+        self.device.vc_position = 3
+        self.device.save()
+
+    def test_a_bay_edit_then_a_chassis_position_change_rename_for_both(self):
+        bay, optic, other = self._card_with(self.optic_type)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            self._change_the_chassis_position()
+
+        self.assertEqual((self._names(optic), self._names(other)), (["et-3/2/1"], ["et-3/0/10"]))
+
+    def test_a_chassis_position_change_then_a_bay_edit_rename_for_both(self):
+        bay, optic, other = self._card_with(self.optic_type)
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._change_the_chassis_position()
+            self._save_edit(bay, position="2")
+
+        self.assertEqual((self._names(optic), self._names(other)), (["et-3/2/1"], ["et-3/0/10"]))
+
+    def test_a_bay_edit_then_a_chassis_position_change_rename_a_rule_with_the_position_in_arithmetic(self):
+        bay, optic, _other = self._card_with(self.arithmetic_optic_type)
+        self.assertEqual(self._names(optic), ["x10/1"])
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_edit(bay, position="2")
+            self._change_the_chassis_position()
+
+        self.assertEqual(self._names(optic), ["x32/1"])
+
+    def test_a_chassis_position_change_then_a_bay_edit_rename_a_rule_with_the_position_in_arithmetic(self):
+        bay, optic, _other = self._card_with(self.arithmetic_optic_type)
+        self.assertEqual(self._names(optic), ["x10/1"])
+
+        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._change_the_chassis_position()
+            self._save_edit(bay, position="2")
+
+        self.assertEqual(self._names(optic), ["x32/1"])
+
+
 class BayEditPreviousStateTest(BayEditTestCase):
     """A bay save whose previous state cannot be read fails with the read error."""
 
