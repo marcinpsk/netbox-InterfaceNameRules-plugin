@@ -47,12 +47,14 @@ from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION
 
 PLAIN_TYPE = "10gbase-x-sfpp"
 BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
-NETBOX_MOVES_SUBTREES = importlib.util.find_spec("dcim.models.module_moves") is not None
+NETBOX_MOVES_COMPONENTS = importlib.util.find_spec("dcim.models.module_moves") is not None
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
+REQUIRES_DEVICE_MOVES = "requires a NetBox that moves a module's interfaces to its new device (4.7+)"
 UNCLAIMED = "no single interface template claims"
 FLAT = "a flat breakout family is not renamed after a move"
 NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
 NO_RULE = "no rule matches the module at its new position"
+ELSEWHERE = "the interface is not on the device of its module"
 WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
 NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
 
@@ -214,6 +216,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["et-1/0/1"])
         self.assertEqual(_journal(module), [])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_module_moved_to_another_device_in_the_chassis_is_renamed_for_its_position(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -221,6 +224,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["et-2/0/2"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_module_moved_to_a_device_in_another_chassis_is_renamed_for_its_position(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -228,6 +232,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["et-5/0/1"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_base_rule_is_renamed_from_the_raw_name_of_the_new_bay(self):
         module = self._install(self.base_type, self._bay(self.device))
         self.assertEqual(self._names(module), ["p0-1"])
@@ -319,7 +324,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(_journal(module), [])
 
 
-@skipUnless(NETBOX_MOVES_SUBTREES, REQUIRES_SUBTREE_MOVES)
+@skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
 class NestedModuleMoveTest(ModuleMoveTestCase):
     """The modules nested in a moved module are renamed for their new position too."""
 
@@ -472,6 +477,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
             module_type=module_type or self.module_type, name_template=template, **scope
         )
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_to_another_device_type_renames_with_its_rule(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule("b-{bay_position}", device_type=self.other_device_type)
@@ -482,6 +488,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_to_another_platform_renames_with_its_rule(self):
         self._rule("a-{bay_position}", platform=self.platform)
         self._rule("b-{bay_position}", platform=self.other_platform)
@@ -506,6 +513,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_without_a_rule_before_the_move_the_raw_names_are_renamed_as_an_install_does(self):
         self._rule("b-{bay_position}", device_type=self.other_device_type)
         module = self._install(self.module_type, self._bay(self.device))
@@ -515,6 +523,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_raw_name_matched_by_the_current_and_the_previous_form_of_one_template_is_renamed(self):
         self._rule("{base}-{bay_position}", module_type=self.fixed_type, device_type=self.other_device_type)
         module = self._install(self.fixed_type, self._bay(self.device))
@@ -539,6 +548,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`a0`: {NO_RULE}", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_plain_rule_to_a_flat_breakout_rule_builds_the_family(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule(
@@ -556,6 +566,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["b-1:0", "b-1:1"])
         self.assertEqual(_journal(module), [])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_into_a_flat_rule_builds_no_family_while_an_interface_is_unclaimed(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule(
@@ -749,6 +760,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
 
         self._assert_kept_and_reported(module, saved)
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_second_move_under_a_simple_rule_does_not_split_the_family(self):
         module_type = self._module_type("Port", "port")
         self._flat_rule(module_type, "p{bay_position}:{channel}", device_type=self.device_type)
@@ -767,6 +779,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`p1:1`: {UNCLAIMED}", entry.comments)
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):
         module_type = self._module_type("Flat To Simple", "{vc_position}")
         self._flat_rule(module_type, "{base}:{channel}", platform=self.platform)
@@ -815,6 +828,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/2"])
 
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_two_moves_in_one_transaction_reapply_once_from_the_state_before_it(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -855,14 +869,21 @@ class MoveTransactionTest(ModuleMoveTestCase):
         self.assertIn(f"`et-1/0/0`: {UNCLAIMED}", entry.comments)
 
 
-@skipIf(NETBOX_MOVES_SUBTREES, "NetBox 4.7 moves a module's components and nested bays with it")
+@skipIf(NETBOX_MOVES_COMPONENTS, "NetBox 4.7 moves a module's components and nested bays with it")
 class ModuleRowMoveTest(ModuleMoveTestCase):
     """Before 4.7 NetBox writes a moved module's row alone.
 
     The interfaces keep their raw names from the old bay, and the nested bays keep their parent. The
     reapply recognises the moved module's raw names from its previous state; the nested modules keep
-    the variables their names came from, so their names stay correct and unchanged.
+    the variables their names came from, so their names stay correct and unchanged. After a move to
+    another device the interfaces stay on the old device, so nothing renames them.
     """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.plain_type = cls._module_type("Plain", "{module}")
+        InterfaceNameRule.objects.create(module_type=cls.plain_type, name_template="et-{vc_position}/0/{bay_position}")
 
     def test_a_move_renames_the_moved_module_from_its_old_raw_names_and_leaves_the_nested_modules(self):
         card_type = self._card_type("Card", "1")
@@ -882,6 +903,31 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
 
         self.assertEqual((self._names(card), self._names(optic)), (["ge-1/2"], ["et-1/0/1"]))
         self.assertEqual(_journal(card), [])
+
+    def test_a_move_to_another_device_renames_nothing_while_the_interfaces_stay_on_the_old_device(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["et-1/0/0"])
+
+        self._move(module, self._bay(self.peer, "Bay 2"))
+
+        interface = Interface.objects.get(module=module)
+        self.assertEqual((interface.device, interface.name), (self.device, "et-1/0/0"))
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        self.assertIn(f"`et-1/0/0`: {ELSEWHERE}", entry.comments)
+
+    def test_a_position_change_of_the_new_device_renames_nothing_while_the_interfaces_stay_on_the_old_device(self):
+        module = self._install(self.plain_type, self._bay(self.device))
+        self._move(module, self._bay(self.peer, "Bay 2"))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.peer.vc_position = 3
+            self.peer.save()
+
+        interface = Interface.objects.get(module=module)
+        self.assertEqual((interface.device, interface.name), (self.device, "et-1/0/0"))
+        (entry,) = _journal(self.peer)
+        self.assertIn(f"`et-1/0/0`: {ELSEWHERE}", entry.comments)
 
 
 class ModuleMoveAPITest(_MoveFixture, APITestCase):

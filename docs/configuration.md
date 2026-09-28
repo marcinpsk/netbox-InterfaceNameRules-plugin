@@ -135,10 +135,13 @@ Limits:
   earlier names from those values, so these interfaces keep their names and the
   journal entry lists them. A web UI or REST API request changes objects of one
   model only, so only scripts and shell sessions do this.
-- NetBox before 4.7 saves a move as a change of the module row only. The
-  plugin renames the moved module's interfaces, and recognises the raw template
-  names from the old bay. The modules nested in the moved module keep their
-  names, because their module bays keep the old parent bay.
+- NetBox before 4.7 saves a move as a change of the module row only. After a
+  move to another bay of the same device, the plugin renames the moved module's
+  interfaces, and recognises the raw template names from the old bay. The
+  modules nested in the moved module keep their names, because their module
+  bays keep the old parent bay. After a move to another device, the interfaces
+  stay on the old device. The plugin then renames no interface of that module,
+  and the journal entry lists each of them.
 
 ### Journal entries after an automatic rename
 
@@ -157,6 +160,8 @@ and the reason:
 - no single interface template claims the interface, so the rule cannot find its
   `{base}`, or, after a move, the plugin cannot tell which name the interface had,
 - no rule matches a moved module at its new position,
+- the interface is not on the device of its module, which NetBox before 4.7
+  leaves after a move to another device,
 - a moved module's rule before the move is a flat breakout rule,
 - another interface of a moved module is unclaimed, so nothing on the module is
   renamed,

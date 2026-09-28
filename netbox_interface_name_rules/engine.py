@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 NO_RULE_REASON = "no rule matches the module at its new position"
 FLAT_MOVE_REASON = "a flat breakout family is not renamed after a move"
+ELSEWHERE_REASON = "the interface is not on the device of its module"
 
 
 def pinned_rule_cache():
@@ -263,6 +264,7 @@ def module_rule_outcomes(
     Without a rule now, each interface the previous rule named keeps its name and is reported. When
     the previous rule is a flat breakout rule, nothing on the module is renamed and every interface
     is reported: NetBox keeps no link to a family, so it could be recognised by name only (ADR 0015).
+    When an interface of the module is on another device, nothing is renamed and every interface is reported.
     """
     device_type = module.device.device_type if module.device else None
     platform = module.device.platform if module.device else None
@@ -346,6 +348,10 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     raw = _raw_name_matchers(module)
     raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
+    if any(interface.device_id != module.device_id for interface in interfaces):
+        # NetBox before 4.7 moves only the module row, so its interfaces stay on the old device.
+        yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, ELSEWHERE_REASON) for i in interfaces)
+        return
     planned = family_ops.plan_module_families(
         module,
         rule,
