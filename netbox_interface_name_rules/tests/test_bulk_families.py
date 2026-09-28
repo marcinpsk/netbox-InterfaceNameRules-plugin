@@ -34,6 +34,7 @@ from netbox_interface_name_rules.engine import (
     supports_channelization,
 )
 from netbox_interface_name_rules.family import (
+    UNCLAIMED_BASE_REASON,
     FamilyStatus,
     FamilyTopology,
     InstalledFamilyPlan,
@@ -49,6 +50,7 @@ from netbox_interface_name_rules.family import (
     plan_prospective_families,
     template_names,
 )
+from netbox_interface_name_rules.family.names import COLLISION_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
@@ -650,17 +652,26 @@ class FlatFamilyCreationTest(BulkTestCase):
         """Plan the flat family the rule builds on this module's only interface."""
         return plan_flat_family(self.module, self.rule, self.variables, self.base, self.base.name)
 
-    def test_a_sibling_whose_name_is_taken_is_skipped_and_the_rest_are_created(self):
-        """One sibling's collision is that sibling's own; the family keeps the names it can take."""
+    def test_a_sibling_name_in_use_refuses_the_whole_family(self):
+        """A flat family is built whole or not at all, so one taken sibling name refuses it (ADR 0001)."""
         Interface.objects.create(device=self.device, name="xe-0/0/1:2", type=PLAIN_TYPE)
 
         outcome = execute_flat_family(self._plan())
 
-        self.assertEqual(outcome.status, FamilyStatus.CHANGED)
-        self.assertEqual(outcome.changed_count, 3)
-        blocked = [member for member in outcome.members if member.status == FamilyStatus.BLOCKED]
-        self.assertEqual([member.target_name for member in blocked], ["xe-0/0/1:2"])
-        self.assertEqual(self._names(self.module), ["xe-0/0/1:0", "xe-0/0/1:1", "xe-0/0/1:3"])
+        self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            [(member.current_name, member.reason) for member in outcome.members],
+            [("1", f"{COLLISION_REASON}: xe-0/0/1:2")],
+        )
+        self.assertEqual(self._names(self.module), ["1"])
+
+    def test_a_kept_row_without_a_sibling_name_is_refused_at_planning(self):
+        """The batch gives a family only the rows the claim gave it, so any other row is a caller error."""
+        stray = Interface.objects.create(device=self.device, module=self.module, name="stray", type=PLAIN_TYPE)
+
+        with self.assertRaises(ValueError):
+            plan_flat_family(self.module, self.rule, self.variables, self.base, self.base.name, (stray,))
 
     def test_a_base_renamed_after_planning_is_refused_as_stale(self):
         """Planning is not a lock: the row it described has to still be the row it finds."""
@@ -798,11 +809,18 @@ class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):
             )
 
     def test_a_family_that_can_take_no_name_is_reported_blocked(self):
+        """The rows with the family's other names are not its members, so each is reported on its own."""
         outcome = apply_rule_to_existing(self.rule)
 
         self.assertEqual(outcome.changed_count, 0)
-        self.assertEqual([family.status for family in outcome.families], [FamilyStatus.BLOCKED])
-        self.assertEqual([member.target_name for member in outcome.skipped_members], ["xe-0/0/1:0"])
+        self.assertEqual({family.status for family in outcome.families}, {FamilyStatus.BLOCKED})
+        self.assertEqual(
+            {member.current_name: member.reason for member in outcome.skipped_members},
+            {
+                "1": f"{COLLISION_REASON}: xe-0/0/1:0",
+                **dict.fromkeys(("xe-0/0/1:1", "xe-0/0/1:2", "xe-0/0/1:3"), UNCLAIMED_BASE_REASON),
+            },
+        )
 
     def test_the_background_job_warns_about_what_it_skipped(self):
         from netbox_interface_name_rules.jobs import ApplyRuleJob
@@ -814,7 +832,7 @@ class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):
 
         job.logger.info.assert_called_once()
         job.logger.warning.assert_called_once()
-        self.assertEqual(job.logger.warning.call_args.args[1], 1)
+        self.assertEqual(job.logger.warning.call_args.args[1], 4)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

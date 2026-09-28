@@ -24,12 +24,12 @@ from .domain import (
 from .execution import execute_installed_plan
 from .installed import (
     interfaces_by_module,
+    is_plain_interface,
     module_raw_bases,
     plan_installed_families_from,
     plan_interface_rename,
     plan_kept_interface,
 )
-from .names import COLLISION_REASON
 from .structural import (
     carries_flat_expansion,
     execute_flat_family,
@@ -41,7 +41,7 @@ from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
     builds_channelized_family,
-    one_family_per_name_set,
+    builds_flat_family,
 )
 from .template_names import pinned_template_cache
 
@@ -128,36 +128,33 @@ def _is_top_level(interface) -> bool:
     return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
 
 
-def _creation_plan(module, rule, variables, base, base_name, flat_expansion):
+def _creation_plan(module, rule, variables, base, base_name, flat_expansion, members):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
         return plan_structural_family(module, rule, variables, base, base_name, flat_expansion)
-    return plan_flat_family(module, rule, variables, base, base_name)
+    return plan_flat_family(module, rule, variables, base, base_name, members)
 
 
-def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion):
-    """Return a plan for each selected interface: each family is built once, and every other interface is reported."""
-    candidates = [
-        _creation_plan(module, rule, variables, base, bases.builds_on(base.name), flat_expansion) for base in plain
+def _half_built_members(interfaces, bases):
+    """Return, by the name of its first row, the other rows of each half-built flat family the claim accepted."""
+    rows = {interface.name: interface for interface in interfaces if is_plain_interface(interface)}
+    return {
+        family.names[0]: tuple(rows[name] for name in family.names[1:] if name in rows)
+        for family in bases.flat_families()
+    }
+
+
+def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members):
+    """Return a plan for each selected interface; a row that a half-built family keeps is in that family's plan."""
+    plans = [
+        _creation_plan(
+            module, rule, variables, base, bases.builds_on(base.name), flat_expansion, members.get(base.name, ())
+        )
+        for base in plain
     ]
-    candidates = [plan for plan in candidates if _reaches(plan, selected_pks)]
-    builders = [plan for plan in candidates if plan.precondition_status is None]
-    built = [
-        builders[index] for index in one_family_per_name_set([(plan.base.name, plan.target_names) for plan in builders])
-    ]
-    built_ids = {id(plan) for plan in built}
-    # A flat family adopts an interface that already has one of its channel names; a channelized one refuses it.
-    adopted = {name for plan in built if isinstance(plan, FlatCreationPlan) for name in plan.target_names[1:]}
-    return [
-        plan if id(plan) in built_ids or plan.precondition_status is not None else _built_by_another(module, plan)
-        for plan in candidates
-        if id(plan) in built_ids or plan.base.name not in adopted
-    ]
-
-
-def _built_by_another(module, plan):
-    """Return a plan that keeps the base of *plan*, because another interface builds the same family."""
-    return plan_kept_interface(module, plan.base, f"{COLLISION_REASON}: {plan.target_names[0]}")
+    plans = [plan for plan in plans if _reaches(plan, selected_pks)]
+    kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
+    return [plan for plan in plans if plan.base.pk not in kept]
 
 
 def _is_candidate(interface, rule, bases, previous_forms):
@@ -233,7 +230,8 @@ def plan_module_families(
             )
     else:
         flat_expansion = builds_channelized_family(rule) and carries_flat_expansion(interfaces, bases.catalog.get())
-        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion)
+        members = _half_built_members(interfaces, bases) if builds_flat_family(rule) else {}
+        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
     return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
 
@@ -248,6 +246,8 @@ def _selection_pks(plan):
         if plan.parent_pk is None:
             return plan.member_pks
         return (plan.parent_pk,)  # pragma: no cover - requires channelization support
+    if isinstance(plan, FlatCreationPlan):
+        return plan.member_pks
     return (plan.base.pk,)
 
 

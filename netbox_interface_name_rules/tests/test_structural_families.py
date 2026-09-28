@@ -321,7 +321,7 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         _module, _bay, plan = self._plan()
 
         with CaptureQueriesContext(connection) as queries:
-            taken = structural._first_taken_name(plan)
+            taken = structural._first_taken_name(plan, (plan.base.pk,))
 
         self.assertIsNone(taken)
         self.assertEqual(len(plan.target_names), 5)
@@ -332,13 +332,13 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
 
-        self.assertEqual(structural._first_taken_name(plan), "xe-0/0/3:1")
+        self.assertEqual(structural._first_taken_name(plan, (plan.base.pk,)), "xe-0/0/3:1")
 
     def test_the_base_row_never_counts_as_a_collision(self):
         _module, _bay, plan = self._plan()
         rename_out_of_band(Interface.objects.get(pk=plan.base.pk), plan.target_names[0])
 
-        self.assertIsNone(structural._first_taken_name(plan))
+        self.assertIsNone(structural._first_taken_name(plan, (plan.base.pk,)))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
