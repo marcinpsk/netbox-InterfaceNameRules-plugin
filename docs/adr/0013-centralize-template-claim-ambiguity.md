@@ -51,7 +51,9 @@ The paths read the result as follows:
   every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
   does not read `{base}`, and on a module type without templates, where only the interface named as
   the bay position qualifies. Every other interface keeps its name and is reported as unclaimed,
-  unless a family that the rule builds takes that name. A subinterface that no template claims is no
+  unless a family that the rule builds takes that name. In Apply Rules only a family that the operator
+  selected takes a name, so a selected interface is always built or reported. A subinterface that no
+  template claims is no
   candidate of its own, so a breakout rule neither touches nor reports it. Prediction refuses a given
   name that the claim finds ambiguous, and predicts every other given name from itself.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and

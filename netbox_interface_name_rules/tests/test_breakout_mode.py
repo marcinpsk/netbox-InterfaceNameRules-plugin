@@ -1121,6 +1121,39 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
             [(name, UNCLAIMED_BASE_REASON) for name in ("x-1:0", "x-1:1", "z")],
         )
 
+    def test_a_selected_interface_the_claim_refuses_is_reported(self):
+        """Template ``x0:1`` claims its raw name and the family ``xx0:1:0``, so it is refused.
+
+        The family that template ``0`` would build takes the name ``x0:1``. Apply Rules with only
+        ``x0:1`` selected must still report it.
+        """
+        module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer, model="BrkGate-TWO", part_number="BrkGate-TWO"
+        )
+        for name in ("0", "x0:1"):
+            InterfaceTemplate.objects.create(module_type=module_type, name=name, type=PARENT_TYPE)
+        module, _ = self._install(module_type, "5")
+        Interface.objects.create(device=self.device, module=module, name="xx0:1:0", type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="x{base}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        selected = Interface.objects.get(module=module, name="x0:1")
+
+        preview, _checked = find_interfaces_for_rule(rule)
+        outcome = apply_rule_to_existing(rule, interface_ids=[selected.pk])
+
+        self.assertEqual([(entry["current_name"], entry["new_names"]) for entry in preview], [("0", ["x0:0", "x0:1"])])
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            [(member.current_name, member.reason) for member in outcome.skipped_members],
+            [("x0:1", UNCLAIMED_BASE_REASON)],
+        )
+        self.assertEqual(self._names(module), ["0", "x0:1", "xx0:1:0"])
+
     def test_prediction_keeps_the_names_the_claim_refuses(self):
         module, bay = self._install(self.module_type, "5")
         InterfaceNameRule.objects.create(
