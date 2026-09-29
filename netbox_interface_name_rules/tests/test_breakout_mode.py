@@ -1163,6 +1163,7 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
         )
         self.assertEqual(self._names(module), ["0", "x0:1", "xx0:1:0"])
 
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_blocked_family_takes_no_name_from_another_interface(self):
         """The family on ``0`` is blocked, so ``x0:1`` keeps its own outcome although the family names it."""
         module_type = ModuleType.objects.create(

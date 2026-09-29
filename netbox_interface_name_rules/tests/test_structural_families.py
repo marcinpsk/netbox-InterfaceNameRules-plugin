@@ -10,7 +10,7 @@ the active NetBox release can hold it.
 
 from unittest import skipIf, skipUnless
 
-from dcim.models import DeviceType, Interface, Manufacturer
+from dcim.models import DeviceType, Interface, InterfaceTemplate, Manufacturer
 from django.db import IntegrityError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -24,7 +24,6 @@ from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
     execute_structural_family,
-    has_flat_expansion,
     plan_structural_family,
     structural,
 )
@@ -68,7 +67,9 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
         variables = build_variables(bay, device=self.device)
-        plan = plan_structural_family(module, self.rule, variables, base, base.name, has_flat_expansion(module))
+        templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
+        flat_expansion = structural.carries_flat_expansion(Interface.objects.filter(module=module), templates)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, flat_expansion)
         return module, bay, plan
 
 
