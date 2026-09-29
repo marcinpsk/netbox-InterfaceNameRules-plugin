@@ -30,6 +30,7 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
     TAKEN,
+    UNAVAILABLE,
     _journal,
     _MoveFixture,
     _reapplied,
@@ -248,16 +249,44 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
     def test_a_chassis_position_change_then_a_type_change_rename_the_nested_module_once(self):
         self._assert_the_nested_module_is_renamed_once(chassis_first=True)
 
-    def test_a_nested_module_whose_rule_does_not_change_is_renamed_for_the_chassis_position_change(self):
+    def _assert_an_unchanged_nested_rule_is_left_to_the_chassis_position_change(self, chassis_first):
         card, second_port, optic = self._card_with_optic()
         fixed = self._install(self.plain_type, second_port)
         self.assertEqual((self._names(optic), self._names(fixed)), (["a-0/1"], ["et-1/0/2"]))
 
-        reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first=True)
+        reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first)
 
         self.assertEqual((self._names(optic), self._names(fixed)), (["b-0/1"], ["et-3/0/2"]))
         self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, fixed.pk)))
         self.assertEqual((_journal(card), _journal(fixed), _journal(self.device)), ([], [], []))
+
+    def test_a_type_change_then_a_chassis_position_change_rename_a_nested_module_whose_rule_does_not_change(self):
+        self._assert_an_unchanged_nested_rule_is_left_to_the_chassis_position_change(chassis_first=False)
+
+    def test_a_nested_module_whose_rule_does_not_change_is_renamed_for_the_chassis_position_change(self):
+        self._assert_an_unchanged_nested_rule_is_left_to_the_chassis_position_change(chassis_first=True)
+
+    def _assert_leaving_with_a_type_change_renames_nothing_and_reports_once(self, leave_first):
+        module = self._install(self.plain_type, self._bay(self.device))
+        other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
+
+        reapplies = self._save_with_a_device_change(
+            self._leave_the_chassis, functools.partial(self._save_type, module, self.other_plain_type), leave_first
+        )
+
+        self.assertEqual((self._names(module), self._names(other)), (["et-1/0/0"], ["et-1/0/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
+        (module_entry,) = _journal(module)
+        (device_entry,) = _journal(self.device)
+        self.assertEqual(module_entry.comments.count(f"`et-1/0/0`: {UNAVAILABLE}"), 1)
+        self.assertIn(f"`et-1/0/10`: {UNAVAILABLE}", device_entry.comments)
+        self.assertNotIn("`et-1/0/0`", device_entry.comments)
+
+    def test_a_type_change_then_leaving_the_chassis_rename_nothing_and_report_once(self):
+        self._assert_leaving_with_a_type_change_renames_nothing_and_reports_once(leave_first=False)
+
+    def test_leaving_the_chassis_then_a_type_change_rename_nothing_and_report_once(self):
+        self._assert_leaving_with_a_type_change_renames_nothing_and_reports_once(leave_first=True)
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
         module = self._install(self.plain_type, self._bay(self.device))

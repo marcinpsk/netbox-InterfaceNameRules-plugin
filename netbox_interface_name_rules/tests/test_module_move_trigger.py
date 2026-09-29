@@ -1039,17 +1039,52 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     def test_leaving_the_chassis_then_moves_out_of_the_device_recognise_the_names_before_it(self):
         self._assert_moved_out_with_a_leave(leave_first=True)
 
-    def test_a_move_the_transaction_undoes_leaves_the_module_to_the_chassis_position_change(self):
+    def _assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(self, change_at):
         module = self._install(self.module_types[0], self._bay(self.device))
-
-        reapplies = self._save_in_one_transaction(
+        saves = [
             functools.partial(self._save_move, module, self._bay(self.device, "Bay 5")),
-            self._change_the_chassis_position,
             functools.partial(self._save_move, module, self._bay(self.device)),
-        )
+        ]
+        saves.insert(change_at, self._change_the_chassis_position)
+
+        reapplies = self._save_in_one_transaction(*saves)
 
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def test_a_chassis_position_change_then_a_move_the_transaction_undoes_leave_the_module_to_the_change(self):
+        self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=0)
+
+    def test_a_move_the_transaction_undoes_leaves_the_module_to_the_chassis_position_change(self):
+        self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=1)
+
+    def test_a_move_the_transaction_undoes_then_a_chassis_position_change_leave_the_module_to_the_change(self):
+        self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=2)
+
+    def _assert_joining_with_a_move_renames_once(self, join_first):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        module = self._install(self.module_types[0], self._bay(self.device))
+        other = self._install(self.module_types[0], self._bay(self.device, "Bay 10"))
+        self.assertEqual((self._names(module), self._names(other)), (["0"], ["10"]))
+        entries = JournalEntry.objects.count()
+
+        reapplies = self._save_with_a_device_change(
+            functools.partial(self._join_the_chassis, chassis),
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 5")),
+            join_first,
+        )
+
+        self.assertEqual((self._names(module), self._names(other)), (["et-3/5/5"], ["et-3/10/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
+        self.assertEqual(JournalEntry.objects.count(), entries)
+
+    def test_a_move_then_joining_a_chassis_rename_each_module_once(self):
+        self._assert_joining_with_a_move_renames_once(join_first=False)
+
+    def test_joining_a_chassis_then_a_move_rename_each_module_once(self):
+        self._assert_joining_with_a_move_renames_once(join_first=True)
 
     def _assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(self, chassis_first):
         module = self._install(self.token_type, self._bay(self.device))
@@ -1090,6 +1125,64 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self._assert_a_collision_is_reported_once(chassis_first=False)
 
     def test_a_chassis_position_change_then_a_move_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=True)
+
+
+class ChassisPositionInstallTest(ModuleMoveTestCase):
+    """An install and a virtual-chassis position change of the device in one transaction, in either order.
+
+    The install names the new module once, for the new position, and reports it on the module. The
+    device reapply renames the other modules.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.plain_type = cls._module_type(CHASSIS_RULES[0].model, "{module}")
+        InterfaceNameRule.objects.create(module_type=cls.plain_type, name_template=CHASSIS_RULES[0].name_template)
+
+    def _install_with_the_chassis_change(self, chassis_first):
+        """Install a module in Bay 0 with a position change in one transaction; return it, the module in Bay 10 and the spy."""
+        other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
+        installed = []
+
+        def install():
+            installed.append(
+                Module.objects.create(
+                    device=self.device, module_bay=self._bay(self.device), module_type=self.plain_type
+                )
+            )
+
+        reapplies = self._save_with_a_device_change(self._change_the_chassis_position, install, chassis_first)
+        return installed[0], other, reapplies
+
+    def _assert_an_install_is_named_once(self, chassis_first):
+        module, other, reapplies = self._install_with_the_chassis_change(chassis_first)
+
+        self.assertEqual((self._names(module), self._names(other)), (["et-3/0/0"], ["et-3/10/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def test_an_install_then_a_chassis_position_change_name_the_module_once(self):
+        self._assert_an_install_is_named_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_an_install_name_the_module_once(self):
+        self._assert_an_install_is_named_once(chassis_first=True)
+
+    def _assert_a_collision_is_reported_once(self, chassis_first):
+        Interface.objects.create(device=self.device, name="et-3/0/0", type=PLAIN_TYPE)
+
+        module, _other, reapplies = self._install_with_the_chassis_change(chassis_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["0"], 1))
+        (entry,) = _journal(module)
+        self.assertEqual(entry.comments.count(f"`0` to `et-3/0/0`: {TAKEN}"), 1)
+        self.assertEqual(_journal(self.device), [])
+
+    def test_an_install_then_a_chassis_position_change_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_an_install_report_a_collision_once(self):
         self._assert_a_collision_is_reported_once(chassis_first=True)
 
 
