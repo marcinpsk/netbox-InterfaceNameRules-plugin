@@ -28,6 +28,7 @@ device reapply leaves out each module that already reapplied.
 
 import dataclasses
 import functools
+import importlib.util
 import logging
 import math
 import weakref
@@ -109,13 +110,15 @@ class ModuleTrigger(_Trigger):
     ``baseline`` is the module's state before the save, or the state it was installed with when
     ``installed`` is set. ``naming`` is the ``ModuleNaming`` of the module and of each module nested in
     it, read by a save that moved the module, edited its bay or changed its type while a rule is scoped
-    to the old or the new type as a parent module type; it is empty otherwise.
+    to the old or the new type as a parent module type; it is empty otherwise. ``moved`` is set when the
+    save moved the module, and with it every module that ``naming`` holds.
     """
 
     pk: int
     baseline: ModuleState
     installed: bool = False
     naming: tuple = ()
+    moved: bool = False
 
     @classmethod
     def after_install(cls, module):
@@ -268,25 +271,52 @@ def _reapply_from_naming(module, entry, covering, changed):
     return bool(covering) and entry.selects_another_rule(module)
 
 
-def _reapply_options(module, root, entry, covering, changed, device_pairs):
+def _reapply_options(module, root, entry, covering, changed, device_pairs, moved_at):
     """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
 
     *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
     the modules that moved or had their bay values changed. *device_pairs* are the ``(place, trigger)``
-    pairs of the module's device. A module installed in the transaction that reapplies as an install
-    also recognises its raw names at the position of its install, when a device trigger changed it.
+    pairs of the module's device, and *moved_at* is the place of the last move that renamed the
+    module's raw names, or None; see ``_earlier_positions``.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
+    earlier_positions = _earlier_positions(root, entry, device_pairs, moved_at)
     if entry is not None and _reapply_from_naming(module, entry, covering, changed):
-        return {"naming": entry}
+        return {"naming": entry, "earlier_positions": earlier_positions}
     if root is not None and (root.installed or current != root.baseline):
-        state = _state_when_named(device_pairs, root.start, math.inf) if root.installed else None
-        earlier_positions = () if state is None else (chassis_position(state),)
         return {"force_reapply": current != root.baseline, "earlier_positions": earlier_positions}
     return None
+
+
+def _earlier_positions(root, entry, device_pairs, moved_at):
+    """Return the chassis positions at which NetBox gave the module's current templates their raw names.
+
+    There is one only when a device trigger in *device_pairs* changed the position since. NetBox 4.7
+    names a moved module's raw names for the new bay, at the position its device has at the move
+    *moved_at*. A module installed in the transaction without a naming has the raw names of its install.
+    """
+    if moved_at is not None:
+        named_at = moved_at
+    elif root is not None and root.installed and entry is None:
+        named_at = root.start
+    else:
+        return ()
+    state = _state_when_named(device_pairs, named_at, math.inf)
+    return () if state is None else (chassis_position(state),)
+
+
+@functools.cache
+def _netbox_renames_moved_components():
+    """Return whether NetBox renames the raw names of a moved module's components (4.7+)."""
+    return importlib.util.find_spec("dcim.models.module_moves") is not None
+
+
+def _last_moves(module_triggers):
+    """Return, for each module that a move carried, the place of the last move that carried it."""
+    return {entry.module_pk: place for place, trigger in module_triggers if trigger.moved for entry in trigger.naming}
 
 
 def _reapply_module(module, decide, outcomes):
@@ -343,6 +373,8 @@ def _reapply_modules(module_triggers, device_triggers):
     retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
+    # NetBox before 4.7 renames nothing at a move, so there a move gives no raw names of its own.
+    moved_at = _last_moves(module_triggers) if _netbox_renames_moved_components() else {}
     outcomes_by_owner = {}
     attempted_pks = set()
     with pinned_reapply(modules.values()):
@@ -351,9 +383,15 @@ def _reapply_modules(module_triggers, device_triggers):
             if module is None:
                 continue
             covering = [other for other in covers if other != pk and pk in roots[other].members]
-            device_pairs = device_triggers.get(module.device_id, ())
             decide = functools.partial(
-                _reapply_options, module, roots.get(pk), entries.get(pk), covering, changed, device_pairs
+                _reapply_options,
+                module,
+                roots.get(pk),
+                entries.get(pk),
+                covering,
+                changed,
+                device_triggers.get(module.device_id, ()),
+                moved_at.get(pk),
             )
             outcomes = outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), [])
             if _reapply_module(module, decide, outcomes):
@@ -467,7 +505,7 @@ def _module_trigger(module, created, previous):
     if current == state:
         return None
     logger.debug("Module %s changed from %s to %s; adding it to the reapply plan", module.pk, state, current)
-    return ModuleTrigger(module.pk, state, naming=naming)
+    return ModuleTrigger(module.pk, state, naming=naming, moved=current.placement() != state.placement())
 
 
 def _device_trigger(device, created, previous):

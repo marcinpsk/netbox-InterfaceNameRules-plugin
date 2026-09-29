@@ -982,9 +982,22 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             name_template="et-{vc_position}/{slot}/{bay_position}",
         )
         cls.adjacent_type = cls._module_type("Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
-        cls.adjacent_rule = InterfaceNameRule.objects.create(
+        InterfaceNameRule.objects.create(
             module_type=cls.adjacent_type,
             parent_module_type=cls.card_type,
+            name_template="et-{vc_position}/{slot}/{bay_position}",
+        )
+        cls.card_two_type = cls._card_type("Card Two", "2")
+        cls.fallback_type = cls._module_type("Fallback Bay", "xe-{vc_position:{module}}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.fallback_type,
+            parent_module_type=cls.card_two_type,
+            name_template="et-{vc_position}/{slot}/{bay_position}",
+        )
+        cls.peer_optic_type = cls._module_type("Peer Optic", "xe-{vc_position}{vc_position}/0/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.peer_optic_type,
+            platform=cls.other_platform,
             name_template="et-{vc_position}/{slot}/{bay_position}",
         )
 
@@ -1137,8 +1150,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self._assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(chassis_first=True)
 
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
-    def test_a_name_netbox_gives_at_a_move_with_adjacent_tokens_is_reported_after_a_later_position_change(self):
-        # The limit that docs/configuration.md lists under "Moving a module".
+    def test_a_name_netbox_gives_at_a_move_is_recognised_after_a_later_position_change(self):
         module = self._install(self.adjacent_type, self._bay(self.device))
         _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
 
@@ -1146,14 +1158,55 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, port), self._change_the_chassis_position
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["xe-11/0/1"], 1))
-        (entry,) = _journal(module)
-        self.assertEqual(entry.comments.count(f"`xe-11/0/1`: {UNCLAIMED}"), 1)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
-        engine.apply_rule_to_existing(self.adjacent_rule)
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_move_off_a_chassis_then_a_join_recognise_the_name_netbox_gave_at_the_move(self):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        module = self._install(self.fallback_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["xe-0"])
+        _card, port = self._install_card(self.card_two_type, self._bay(self.device, "Bay 1"))
 
-        self.assertEqual(self._names(module), ["et-3/1/1"])
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, port), functools.partial(self._join_the_chassis, chassis)
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/2"], 1))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_card_moved_to_another_device_then_its_position_change_recognise_the_nested_name(self):
+        card, port = self._install_card(self.card_type, self._bay(self.device))
+        optic = self._install(self.peer_optic_type, port)
+        self.assertEqual(self._names(optic), ["xe-11/0/1"])
+
+        def renumber_the_peer():
+            self.peer.vc_position = 4
+            self.peer.save()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, card, self._bay(self.peer, "Bay 2")), renumber_the_peer
+        )
+
+        self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["et-4/2/1"], 1))
+        self.assertEqual((_journal(card), _journal(optic), _journal(self.peer)), ([], [], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):
+        _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
+        undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
+        outcomes = []
+
+        for device_changes in ((), undone):
+            module = self._install(self.adjacent_type, self._bay(self.device))
+            self._save_in_one_transaction(functools.partial(self._save_move, module, port), *device_changes)
+            outcomes.append((self._names(module), [entry.comments for entry in _journal(module)]))
+            module.delete()
+
+        self.assertEqual(outcomes, [(["et-1/1/1"], []), (["et-1/1/1"], [])])
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
         module = self._install(self.module_types[0], self._bay(self.device))
