@@ -23,6 +23,7 @@ entry of the outermost one.
 """
 
 import dataclasses
+import functools
 import logging
 import weakref
 
@@ -233,31 +234,48 @@ def _journal_owner(pk, covering, roots):
     )
 
 
-def _reapply_options(module, root, entry, naming_changed):
+def _reapply_from_naming(module, entry, covering, changed):
+    """Return whether *module* reapplies from its naming *entry*; the rule comparison reads the rule cache.
+
+    It does when *entry* is ``raw_only``: the raw names were resolved at the install, so the naming
+    recognises them. It does when the module, or a module of *covering*, is in *changed*. It does when a
+    module of *covering* changed type and the module now selects another rule than *entry*.
+    """
+    if entry.raw_only or module.pk in changed or not changed.isdisjoint(covering):
+        return True
+    return bool(covering) and entry.selects_another_rule(module)
+
+
+def _reapply_options(module, root, entry, covering, changed):
     """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
 
-    *naming_changed* is whether the module, or a module whose naming read it, moved or had its bay
-    values changed, or whether a module whose naming read it changed type and the module now selects
-    another rule than its naming.
+    *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
+    the modules that moved or had their bay values changed.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
-    if entry is not None and (naming_changed or entry.raw_only):
-        # An installed module's raw names were resolved when it was installed, so its naming recognises them.
+    if entry is not None and _reapply_from_naming(module, entry, covering, changed):
         return {"naming": entry}
     if root is not None and (root.installed or current != root.baseline):
         return {"force_reapply": current != root.baseline}
     return None
 
 
-def _reapply_module(module, options, outcomes):
-    """Reapply *module* with *options*, and add its outcome facts to *outcomes*. A failure is one more fact."""
+def _reapply_module(module, decide, outcomes):
+    """Reapply *module* with the options that *decide* returns, and add its outcome facts to *outcomes*.
+
+    *decide* returns None when the module needs no reapply. It can read the rules, so a failure to
+    decide is one more fact, as a failure to reapply is.
+    """
     from .engine import module_rule_outcomes
 
     renamed_before = renamed_count(outcomes)
     try:
+        options = decide()
+        if options is None:
+            return
         # extend() keeps the facts the generator yielded before a later family raised.
         outcomes.extend(module_rule_outcomes(module, module.module_bay, **options))
     except Exception as error:
@@ -301,16 +319,8 @@ def _reapply_modules(triggers):
             if module is None:
                 continue
             covering = [other for other in covers if other != pk and pk in roots[other].members]
-            entry = entries.get(pk)
-            naming_changed = (
-                pk in changed
-                or not changed.isdisjoint(covering)
-                or (bool(covering) and entry is not None and entry.selects_another_rule(module))
-            )
-            options = _reapply_options(module, roots.get(pk), entry, naming_changed)
-            if options is not None:
-                owner = _journal_owner(pk, covering, roots)
-                _reapply_module(module, options, outcomes_by_owner.setdefault(owner, []))
+            decide = functools.partial(_reapply_options, module, roots.get(pk), entries.get(pk), covering, changed)
+            _reapply_module(module, decide, outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), []))
     for owner, outcomes in outcomes_by_owner.items():
         _report(modules[owner], outcomes, roots[owner].author)
 

@@ -19,6 +19,7 @@ from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.test_bay_edit_trigger import BayEditTestCase, _flat_rule
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
     FLAT,
@@ -30,6 +31,7 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     _journal,
     _MoveFixture,
 )
+from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
 
 TAKEN = "target name is already in use"
 
@@ -181,6 +183,32 @@ class TypeChangeTransactionTest(TypeChangeTestCase):
 
         self.assertEqual(self._names(optic), ["b-2/1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+
+class TypeChangeFailureTest(TypeChangeTestCase):
+    """A reapply that cannot read the rules reports one failure per module, and the later modules still reapply."""
+
+    def test_a_rule_read_failure_is_reported_for_each_module_and_the_later_modules_still_report(self):
+        card, _second_port, optic = self._card_with_optic()
+        other = self._install(self.plain_type, self._bay(self.device, "Bay 1"))
+        with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():
+            self._save_type(card, self.second_card_type)
+            self._save_move(other, self._bay(self.device, "Bay 2"))
+        failure = f"injected {InterfaceNameRule._meta.db_table} read failure"
+
+        with (
+            connection.execute_wrapper(_reject_reads_of(InterfaceNameRule._meta.db_table)),
+            self.assertLogs("netbox_interface_name_rules", "ERROR"),
+        ):
+            run_the_reapply(callbacks)
+
+        (card_entry,) = _journal(card)
+        self.assertEqual(card_entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertEqual(card_entry.comments.count(failure), 2)
+        (other_entry,) = _journal(other)
+        self.assertEqual(other_entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertEqual(other_entry.comments.count(failure), 1)
+        self.assertEqual((self._names(optic), self._names(other), _journal(optic)), (["a-0/1"], ["et-1/0/1"], []))
 
 
 class TypeChangeCostTest(TypeChangeTestCase):
