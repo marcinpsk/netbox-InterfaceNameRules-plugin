@@ -155,17 +155,19 @@ def reapply(triggers):
     """Reapply the rules once for what *triggers*, in save order, ask for.
 
     The modules that the module triggers reach are reapplied first. Then each device is reapplied from
-    its first trigger, in the order of those triggers, without the modules that already reapplied.
+    its first trigger, in the order of those triggers, without the modules that the module reapply
+    attempted. The place of a trigger is its index in *triggers*.
     """
-    reapplied = frozenset()
-    if any(isinstance(trigger, ModuleTrigger) for trigger in triggers):
-        reapplied = _reapply_modules(triggers)
+    module_triggers = []
     first_device_triggers = {}
-    for trigger in triggers:
+    for place, trigger in enumerate(triggers):
         if isinstance(trigger, DeviceTrigger):
-            first_device_triggers.setdefault(trigger.pk, trigger)
-    for trigger in first_device_triggers.values():
-        _reapply_device(trigger, reapplied)
+            first_device_triggers.setdefault(trigger.pk, (place, trigger))
+        else:
+            module_triggers.append((place, trigger))
+    attempted_pks = _reapply_modules(module_triggers, first_device_triggers) if module_triggers else frozenset()
+    for _, trigger in first_device_triggers.values():
+        _reapply_device(trigger, attempted_pks)
 
 
 @dataclasses.dataclass
@@ -183,41 +185,37 @@ class _ModuleRoot:
     members: dict = dataclasses.field(default_factory=dict)
 
 
-def _module_roots(triggers):
-    """Return the ``_ModuleRoot`` of each module that the module *triggers* name, in the order of its first trigger."""
+def _module_roots(module_triggers):
+    """Return the ``_ModuleRoot`` of each module that the ``(place, trigger)`` *module_triggers* name, in order."""
     roots = {}
-    for index, trigger in enumerate(triggers):
-        if not isinstance(trigger, ModuleTrigger):
-            continue
+    for place, trigger in module_triggers:
         root = roots.get(trigger.pk)
         if root is None or trigger.installed:
             # An install starts over: an earlier trigger with this key was for a module deleted since.
-            root = roots[trigger.pk] = _ModuleRoot(trigger.baseline, trigger.installed, trigger.author, index)
+            root = roots[trigger.pk] = _ModuleRoot(trigger.baseline, trigger.installed, trigger.author, place)
         root.members.update(dict.fromkeys(entry.module_pk for entry in trigger.naming))
     return roots
 
 
-def _earliest_naming(triggers, roots):
-    """Return the first ``ModuleNaming`` that the module *triggers* read for each module.
+def _earliest_naming(module_triggers, roots, first_device_triggers):
+    """Return the first ``ModuleNaming`` that the ``(place, trigger)`` *module_triggers* read for each module.
 
     The entry of a module installed in the transaction is ``raw_only``, and an entry read before that
-    install was for a module deleted since. An entry read after a trigger of its device holds the
-    virtual-chassis position of the device before its first trigger, because nothing renamed the
-    interfaces in between.
+    install was for a module deleted since. An entry read after the first trigger of its device, in
+    *first_device_triggers*, takes the virtual-chassis position of the device before that trigger,
+    because nothing renamed the interfaces in between.
     """
-    devices = {}
     entries = {}
-    for index, trigger in enumerate(triggers):
-        if isinstance(trigger, DeviceTrigger):
-            devices.setdefault(trigger.pk, trigger.baseline)
-            continue
+    for place, trigger in module_triggers:
         for entry in trigger.naming:
             root = roots.get(entry.module_pk)
             installed = root is not None and root.installed
-            if entry.module_pk in entries or (installed and index < root.start):
+            if entry.module_pk in entries or (installed and place < root.start):
                 continue
-            earlier = devices.get(entry.device_pk)
-            positioned = entry if earlier is None else entry.at_chassis_position(chassis_position(earlier))
+            device_place, device_trigger = first_device_triggers.get(entry.device_pk, (None, None))
+            positioned = entry
+            if device_trigger is not None and device_place < place:
+                positioned = entry.at_chassis_position(chassis_position(device_trigger.baseline))
             entries[entry.module_pk] = dataclasses.replace(positioned, raw_only=True) if installed else positioned
     return entries
 
@@ -279,8 +277,8 @@ def _reapply_module(module, decide, outcomes):
     """Reapply *module* with the options that *decide* returns, and add its outcome facts to *outcomes*.
 
     *decide* returns None when the module needs no reapply. It can read the rules, so a failure to
-    decide is one more fact, as a failure to reapply is. Return False only when the module needs no
-    reapply.
+    decide is one more fact, as a failure to reapply is. Return True when the module reapplied or
+    failed to, and False when it needs no reapply.
     """
     from .engine import module_rule_outcomes
 
@@ -302,20 +300,21 @@ def _reapply_module(module, decide, outcomes):
     return True
 
 
-def _reapply_modules(triggers):
-    """Reapply each module that the module *triggers* reach once, and report each journal owner once.
+def _reapply_modules(module_triggers, first_device_triggers):
+    """Reapply each module that the ``(place, trigger)`` *module_triggers* reach once, and report each owner once.
 
     A module reapplies as after a type change when its type changed. It reapplies from its earliest
     naming when it or a module whose naming read it moved or had its bay edited, when a module whose
     naming read it changed type and it now selects another rule, or when it was installed in the
     transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
     the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
-    Return the primary key of each module that reapplied, or that failed to.
+    *first_device_triggers* give each naming the position of its device before that device's first
+    trigger. Return the primary key of each module that reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
 
-    roots = _module_roots(triggers)
-    entries = _earliest_naming(triggers, roots)
+    roots = _module_roots(module_triggers)
+    entries = _earliest_naming(module_triggers, roots, first_device_triggers)
     try:
         modules = committed_modules({*roots, *entries})
     except Exception:
@@ -328,7 +327,7 @@ def _reapply_modules(triggers):
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
-    reapplied = set()
+    attempted_pks = set()
     with pinned_reapply(modules.values()):
         for pk in walked:
             module = modules.get(pk)
@@ -338,16 +337,17 @@ def _reapply_modules(triggers):
             decide = functools.partial(_reapply_options, module, roots.get(pk), entries.get(pk), covering, changed)
             outcomes = outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), [])
             if _reapply_module(module, decide, outcomes):
-                reapplied.add(pk)
+                attempted_pks.add(pk)
     for owner, outcomes in outcomes_by_owner.items():
         _report(modules[owner], outcomes, roots[owner].author)
-    return frozenset(reapplied)
+    return frozenset(attempted_pks)
 
 
-def _reapply_device(trigger, reapplied):
+def _reapply_device(trigger, attempted_pks):
     """Reapply the module and device-interface rules of the device of its first *trigger*, once.
 
-    The modules in *reapplied* are left out: the module reapply read the device after commit too.
+    The modules in *attempted_pks* are left out: the module reapply reapplied them, reading the device
+    after commit too, or reported that it failed to.
     """
     from dcim.models import Device
 
@@ -370,7 +370,7 @@ def _reapply_device(trigger, reapplied):
         from .engine import device_module_rule_outcomes
 
         # extend() keeps the facts the generator yielded before a later module raised.
-        outcomes.extend(device_module_rule_outcomes(device, report_only=report_only, excluded=reapplied))
+        outcomes.extend(device_module_rule_outcomes(device, report_only=report_only, excluded_pks=attempted_pks))
     except Exception as error:
         logger.exception("Failed to re-apply module rules for device %s after VC change", pk)
         outcomes.append(_failure(error))
