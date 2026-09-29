@@ -99,6 +99,9 @@ rebuilds their earlier names from the state before the move: the old module bay,
 the old device and its virtual-chassis position, and the rule that matched there.
 It reads that state before the save, because in the same save NetBox can change
 the position and the name of the module bays that the moved module holds.
+When the same transaction first changes the virtual-chassis position of the old
+device, the plugin rebuilds the earlier names from the position before that
+change, also after a move to another device.
 
 The plugin renames an interface only when exactly one interface template claims
 it. A template claims an interface through its raw template name before or after
@@ -129,18 +132,6 @@ Limits:
 - The plugin does not repair names that module moves left wrong before this
   version. Apply Rules cannot repair them either, because it has no state from
   before the move. Rename these interfaces by hand.
-- When one transaction first changes a device's virtual-chassis position, and
-  then moves a module out of that device, the move reads the values after the
-  change. The plugin cannot rebuild the earlier names from those values, so
-  these interfaces keep their names and the journal entry lists them. A web UI
-  or REST API request changes objects of one model only, so only scripts and
-  shell sessions do this. A bay edit before a move does not have this limit:
-  see [Editing a module bay](#editing-a-module-bay).
-- When one transaction changes a device's virtual-chassis position and also
-  installs, moves or changes the type of a module on that device, or edits the
-  bay that holds it, the plugin can rename that module twice: the names come
-  out right, but a rename that collides is reported in the journal entry of the
-  module and again in the journal entry of the device.
 - NetBox before 4.7 saves a move as a change of the module row only. After a
   move to another bay of the same device, the plugin renames the moved module's
   interfaces, and recognises the raw template names from the old bay. The
@@ -170,14 +161,15 @@ in the bay. The plugin does not repair names that bay edits left wrong before
 this version, for the same reason as after a move.
 
 The plugin renames each module at most once per transaction, from the state
-before the first change in that transaction. A virtual-chassis position change
-of the module's device in the same transaction is the exception: the device
-also renames the module, as the limits under [Moving a module](#moving-a-module)
-say. Several edits of one bay rename once, and an edit that the same
-transaction undoes renames nothing. When one transaction edits a bay and a bay
-nested below it, or edits a bay and moves, installs or changes the type of a
-module in it, each module is renamed once. A module installed in the same
-transaction is named as an install names it, also under a flat breakout rule.
+before the first change in that transaction. This includes a virtual-chassis
+position change of the module's device in the same transaction: the plugin
+rebuilds the earlier names from the position before that change, and the
+device does not rename the module again. Several edits of one bay rename once,
+and an edit that the same transaction undoes renames nothing. When one
+transaction edits a bay and a bay nested below it, or edits a bay and moves,
+installs or changes the type of a module in it, each module is renamed once. A
+module installed in the same transaction is named as an install names it, also
+under a flat breakout rule.
 
 ### Changing a module's type
 
@@ -214,8 +206,10 @@ virtual-chassis change. The entry for a move goes on the moved module, the
 entry for a bay edit goes on the module in the bay, and the entry for a type
 change goes on the module whose type changed. Each also lists the interfaces of
 the modules nested in that module, also of a nested module that was moved,
-edited or installed in the same transaction. It lists each interface and the
-reason:
+edited or installed in the same transaction. When the same transaction also
+changes the virtual-chassis position of the device, the entry of the device
+does not list the modules that these entries list. An entry lists each
+interface and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
