@@ -179,6 +179,29 @@ nested below it, or edits a bay and moves, installs or changes the type of a
 module in it, each module is renamed once. A module installed in the same
 transaction is named as an install names it, also under a flat breakout rule.
 
+### Changing a module's type
+
+When you change the type of an installed module, the plugin renames the
+interfaces of that module with the rule that matches its new type. A rule can
+be scoped to a parent module type, so a module nested in the changed module can
+get a different rule too. The plugin also renames the interfaces of each nested
+module whose rule changes. A nested module whose rule does not change keeps its
+names, and the journal entry does not list it.
+
+The plugin finds the interfaces of a nested module that it renamed earlier as it
+does after a move. It reads what named them before the save, and rebuilds the
+names that the old rule gave. It reads this state only when an enabled rule has
+the old type or the new type as its parent module type, because only then can a
+nested module get a different rule. The claim rules of a move apply, and a type
+change does not rename the flat breakout family of a nested module either. When
+no rule matches a nested module after the change, its interfaces keep their
+names, and the journal entry lists each interface that the old rule named. The
+journal entry goes on the module whose type changed.
+
+When one transaction changes the type of a module and then moves the module or
+edits the bay that holds it, the plugin recognises the names of the nested
+modules from the state before the type change.
+
 ### Journal entries after an automatic rename
 
 The plugin renames interfaces again after a save that can make a name wrong: a
@@ -187,11 +210,12 @@ an edit of the position or the name of an occupied module bay, and a device
 that joins or changes position in a virtual chassis. When that rename leaves an
 interface unrenamed although a rule matched it, or fails, the plugin writes one
 journal entry. The entry goes on the module, or on the device for a
-virtual-chassis change. The entry for a move goes on the moved module, and the
-entry for a bay edit goes on the module in the bay. Each also lists the
-interfaces of the modules nested in that module, also of a nested module that
-was moved, edited or installed in the same transaction. It lists each interface
-and the reason:
+virtual-chassis change. The entry for a move goes on the moved module, the
+entry for a bay edit goes on the module in the bay, and the entry for a type
+change goes on the module whose type changed. Each also lists the interfaces of
+the modules nested in that module, also of a nested module that was moved,
+edited or installed in the same transaction. It lists each interface and the
+reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
@@ -199,22 +223,23 @@ and the reason:
 - no single interface template claims the interface: two templates claim it,
   its template also claims another interface or flat family, or no template
   claims it. This applies to a rule that uses `{base}`, to a breakout rule, and
-  after a move or a bay edit. An install reports only an interface that still
-  carries a raw name. A breakout rule does not report a subinterface that no
-  template claims,
+  after a move, a bay edit or a type change of the parent module. An install
+  reports only an interface that still carries a raw name. A breakout rule does
+  not report a subinterface that no template claims,
 - a flat breakout family that the rule named at another virtual-chassis
   position lost one of its interfaces, so the plugin keeps the names of the
   rest,
-- no rule matches a moved module, or the module in an edited bay, at its new
-  position,
+- no rule matches a moved module, the module in an edited bay, or a module
+  nested in a module whose type changed, after the change,
 - the interface is not on the device of its module, which NetBox before 4.7
   leaves after a move to another device,
 - the module bay still has the parent bay it had before its module moved,
   which NetBox before 4.7 leaves for the modules nested in a moved module,
-- the rule of a moved module, or of the module in an edited bay, before the
-  change is a flat breakout rule,
-- another interface of the module is unclaimed after a move or a bay edit, so
-  nothing on the module is renamed,
+- the rule of a moved module, of the module in an edited bay, or of a module
+  nested in a module whose type changed, before the change is a flat breakout
+  rule,
+- another interface of the module is unclaimed after a move, a bay edit or a
+  type change of the parent module, so nothing on the module is renamed,
 - the rule failed, for example on a division by zero in its template.
 
 When an error stops the rename, the entry also has one line for that error,

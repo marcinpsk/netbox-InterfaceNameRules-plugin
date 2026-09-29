@@ -14,13 +14,16 @@ entry. A reapply that cannot read the committed rows is logged only.
 
 A save that moves a module, or that changes what the names in an occupied bay are built from, also
 reads before the save what named the interfaces of that module and of every module nested in it.
-After the save that naming is gone. The plan recognises the earlier names of each module from the
-first naming read for it in the transaction. The interfaces of a module installed in the transaction
-carry raw template names only. A module inside the subtree of another moved or edited module reports
-in the journal entry of the outermost one.
+After the save that naming is gone. A save that changes a module's type reads it too when a rule is
+scoped to the old or the new type as a parent module type, because a nested module can then select
+another rule. The plan recognises the earlier names of each module from the first naming read for it
+in the transaction. The interfaces of a module installed in the transaction carry raw template names
+only. A module inside the subtree of another moved, edited or retyped module reports in the journal
+entry of the outermost one.
 """
 
 import dataclasses
+import functools
 import logging
 import weakref
 
@@ -29,6 +32,7 @@ from netbox.context import current_request
 
 from .naming import bay_naming_values
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
+from .rule_selection import parent_type_scopes_a_rule
 
 logger = logging.getLogger("netbox_interface_name_rules")
 
@@ -44,6 +48,10 @@ class ModuleState:
     def placement(self):
         """Return the bay and the device that hold the module."""
         return self.module_bay_id, self.device_id
+
+    def retyped_from(self, earlier):
+        """Return whether the module type differs from the module type of the *earlier* state."""
+        return self.module_type_id != earlier.module_type_id
 
 
 @dataclasses.dataclass(frozen=True)
@@ -95,7 +103,8 @@ class ModuleTrigger(_Trigger):
 
     ``baseline`` is the module's state before the save, or the state it was installed with when
     ``installed`` is set. ``naming`` is the ``ModuleNaming`` of the module and of each module nested in
-    it, read by a save that moved the module or edited its bay; it is empty otherwise.
+    it, read by a save that moved the module, edited its bay or changed its type while a rule is scoped
+    to the old or the new type as a parent module type; it is empty otherwise.
     """
 
     pk: int
@@ -212,8 +221,8 @@ def _moved_or_bay_changed(root, entry, module):
 def _journal_owner(pk, covering, roots):
     """Return the module whose journal entry reports module *pk*.
 
-    That is the first of *covering*, the changed modules whose naming read *pk*, that no other of them
-    read, or *pk* itself when *covering* is empty.
+    That is the first of *covering*, the moved, edited or retyped modules whose naming read *pk*, that
+    no other of them read, or *pk* itself when *covering* is empty.
     """
     return next(
         (
@@ -225,30 +234,48 @@ def _journal_owner(pk, covering, roots):
     )
 
 
-def _reapply_options(module, root, entry, naming_changed):
+def _reapply_from_naming(module, entry, covering, changed):
+    """Return whether *module* reapplies from its naming *entry*; the rule comparison reads the rule cache.
+
+    It does when *entry* is ``raw_only``: the raw names were resolved at the install, so the naming
+    recognises them. It does when the module, or a module of *covering*, is in *changed*. It does when a
+    module of *covering* changed type and the module now selects another rule than *entry*.
+    """
+    if entry.raw_only or module.pk in changed or not changed.isdisjoint(covering):
+        return True
+    return bool(covering) and entry.selects_another_rule(module)
+
+
+def _reapply_options(module, root, entry, covering, changed):
     """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
 
-    *naming_changed* is whether the module, or a module whose naming read it, moved or had its bay
-    values changed.
+    *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
+    the modules that moved or had their bay values changed.
     """
     current = _state_of(ModuleState, module)
-    if root is not None and current.module_type_id != root.baseline.module_type_id:
+    if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
-    if entry is not None and (naming_changed or entry.raw_only):
-        # An installed module's raw names were resolved when it was installed, so its naming recognises them.
+    if entry is not None and _reapply_from_naming(module, entry, covering, changed):
         return {"naming": entry}
     if root is not None and (root.installed or current != root.baseline):
         return {"force_reapply": current != root.baseline}
     return None
 
 
-def _reapply_module(module, options, outcomes):
-    """Reapply *module* with *options*, and add its outcome facts to *outcomes*. A failure is one more fact."""
+def _reapply_module(module, decide, outcomes):
+    """Reapply *module* with the options that *decide* returns, and add its outcome facts to *outcomes*.
+
+    *decide* returns None when the module needs no reapply. It can read the rules, so a failure to
+    decide is one more fact, as a failure to reapply is.
+    """
     from .engine import module_rule_outcomes
 
     renamed_before = renamed_count(outcomes)
     try:
+        options = decide()
+        if options is None:
+            return
         # extend() keeps the facts the generator yielded before a later family raised.
         outcomes.extend(module_rule_outcomes(module, module.module_bay, **options))
     except Exception as error:
@@ -265,9 +292,10 @@ def _reapply_modules(triggers):
     """Reapply each module that the module *triggers* reach once, and report each journal owner once.
 
     A module reapplies as after a type change when its type changed. It reapplies from its earliest
-    naming when it or a module whose naming read it moved or had its bay edited, or when it was
-    installed in the transaction and a naming was read for it. It reapplies as an install otherwise.
-    Its outcomes go to the outermost of those modules that read its naming, or to the module itself.
+    naming when it or a module whose naming read it moved or had its bay edited, when a module whose
+    naming read it changed type and it now selects another rule, or when it was installed in the
+    transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
+    the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
     """
     from .engine import committed_modules, pinned_reapply
 
@@ -279,21 +307,20 @@ def _reapply_modules(triggers):
         # No committed row was read, so no object can carry a journal entry.
         logger.exception("Failed to read modules %s for their rename trigger reapply", sorted(roots))
         return
-    changed = [
-        pk for pk, root in roots.items() if pk in modules and _moved_or_bay_changed(root, entries.get(pk), modules[pk])
-    ]
-    walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in changed else ())))
+    present = [pk for pk in roots if pk in modules]
+    changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
+    retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
+    covers = [pk for pk in present if pk in changed or pk in retyped]
+    walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
     with pinned_reapply(modules.values()):
         for pk in walked:
             module = modules.get(pk)
             if module is None:
                 continue
-            covering = [other for other in changed if other != pk and pk in roots[other].members]
-            options = _reapply_options(module, roots.get(pk), entries.get(pk), pk in changed or bool(covering))
-            if options is not None:
-                owner = _journal_owner(pk, covering, roots)
-                _reapply_module(module, options, outcomes_by_owner.setdefault(owner, []))
+            covering = [other for other in covers if other != pk and pk in roots[other].members]
+            decide = functools.partial(_reapply_options, module, roots.get(pk), entries.get(pk), covering, changed)
+            _reapply_module(module, decide, outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), []))
     for owner, outcomes in outcomes_by_owner.items():
         _report(modules[owner], outcomes, roots[owner].author)
 
@@ -425,10 +452,21 @@ def _read_state(model, state_class, pk):
     return None if row is None else state_class(**row)
 
 
+def _needs_subtree_naming(state, current):
+    """Return whether a module save from *state* to *current* needs the naming of the module's subtree.
+
+    A move needs it. A type change needs it when a rule is scoped to the old or the new type as a parent
+    module type: only then can a module nested in the module select another rule.
+    """
+    if current.placement() != state.placement():
+        return True
+    return current.retyped_from(state) and parent_type_scopes_a_rule((state.module_type_id, current.module_type_id))
+
+
 def _read_module(module):
-    """Return ``(state, naming)``: the module's previous state, and the naming of its subtree if the save moves it."""
+    """Return ``(state, naming)``: the module's previous state, and the naming of its subtree if the save needs it."""
     state = _read_state(type(module), ModuleState, module.pk)
-    if state is None or _state_of(ModuleState, module).placement() == state.placement():
+    if state is None or not _needs_subtree_naming(state, _state_of(ModuleState, module)):
         return state, ()
     from .engine import read_subtree_naming
 
