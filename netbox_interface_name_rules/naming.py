@@ -126,6 +126,17 @@ def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_positi
     return _filter_variables(NamingContext.MODULE_MEMBER, TemplateVariableSource.MODULE_BAY_CHAIN, values, vc_position)
 
 
+def chassis_position(device):
+    """Return the virtual-chassis position that the variables of *device* hold, or None.
+
+    *device* is a device or any value with its ``virtual_chassis_id`` and ``vc_position``. Only a
+    member device that has a position has one; position zero is a valid position.
+    """
+    if device is None or getattr(device, "virtual_chassis_id", None) is None:
+        return None
+    return device.vc_position
+
+
 def build_variables(module_bay, device=None):
     """Build template variables from a module bay and optional device.
 
@@ -148,18 +159,11 @@ def build_variables(module_bay, device=None):
 
     slot = _resolve_slot(module_bay, bay_position, parent_bay_position)
 
-    vc_position = None
-    if (
-        device is not None
-        and getattr(device, "virtual_chassis_id", None) is not None
-        and device.vc_position is not None
-    ):
-        vc_position = device.vc_position
     return build_bay_chain_variables(
         slot,
         bay_position,
         parent_bay_position,
-        vc_position=vc_position,
+        vc_position=chassis_position(device),
         bay_position_num=bay_position_num,
     )
 

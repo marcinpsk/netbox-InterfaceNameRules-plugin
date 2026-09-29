@@ -557,7 +557,7 @@ def device_interface_rule_outcomes(device, report_only=False) -> Iterator[Rename
     """
     from dcim.models import Interface
 
-    vc_position = device.vc_position if device.virtual_chassis_id is not None else None
+    vc_position = naming.chassis_position(device)
     rules = _device_interface_rules(device)
     if not rules:
         return
