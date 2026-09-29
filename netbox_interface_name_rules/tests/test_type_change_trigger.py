@@ -20,13 +20,13 @@ from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.engine import supports_vc_position_token
+from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.test_bay_edit_trigger import BayEditTestCase, _flat_rule
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
     FLAT,
     NAMING_READ,
-    NETBOX_MOVES_COMPONENTS,
     NO_RULE,
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
@@ -193,7 +193,7 @@ class TypeChangeTransactionTest(TypeChangeTestCase):
         self.assertEqual(self._names(optic), ["b-2/1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_a_type_change_then_a_move_rename_the_nested_module_from_the_names_before_the_type_change(self):
         card, _second_port, optic = self._card_with_optic()
 

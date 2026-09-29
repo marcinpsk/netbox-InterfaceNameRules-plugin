@@ -12,7 +12,7 @@ alone: the interfaces keep their raw names, and nested bays keep their parent, p
 """
 
 import functools
-import importlib.util
+import os
 import re
 from contextlib import contextmanager
 from typing import NamedTuple
@@ -33,6 +33,7 @@ from utilities.testing import APITestCase
 from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
+from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import PlanRunner
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
@@ -51,7 +52,6 @@ from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION
 
 PLAIN_TYPE = "10gbase-x-sfpp"
 BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
-NETBOX_MOVES_COMPONENTS = importlib.util.find_spec("dcim.models.module_moves") is not None
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 REQUIRES_DEVICE_MOVES = "requires a NetBox that moves a module's interfaces to its new device (4.7+)"
 REQUIRES_MOVE_RENAMES = "requires a NetBox that renames a moved module's raw interface names (4.7+)"
@@ -273,7 +273,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["et-1/0/1"])
         self.assertEqual(_journal(module), [])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_module_moved_to_another_device_in_the_chassis_is_renamed_for_its_position(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -281,7 +281,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["et-2/0/2"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_module_moved_to_a_device_in_another_chassis_is_renamed_for_its_position(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -289,7 +289,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["et-5/0/1"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_base_rule_is_renamed_from_the_raw_name_of_the_new_bay(self):
         module = self._install(self.base_type, self._bay(self.device))
         self.assertEqual(self._names(module), ["p0-1"])
@@ -381,7 +381,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(_journal(module), [])
 
 
-@skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+@skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
 class NestedModuleMoveTest(ModuleMoveTestCase):
     """The modules nested in a moved module are renamed for their new position too."""
 
@@ -532,7 +532,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
             module_type=module_type or self.module_type, name_template=template, **scope
         )
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_to_another_device_type_renames_with_its_rule(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule("b-{bay_position}", device_type=self.other_device_type)
@@ -543,7 +543,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_to_another_platform_renames_with_its_rule(self):
         self._rule("a-{bay_position}", platform=self.platform)
         self._rule("b-{bay_position}", platform=self.other_platform)
@@ -568,7 +568,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_without_a_rule_before_the_move_the_raw_names_are_renamed_as_an_install_does(self):
         self._rule("b-{bay_position}", device_type=self.other_device_type)
         module = self._install(self.module_type, self._bay(self.device))
@@ -578,7 +578,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
 
         self.assertEqual(self._names(module), ["b-1"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_raw_name_matched_by_the_current_and_the_previous_form_of_one_template_is_renamed(self):
         self._rule("{base}-{bay_position}", module_type=self.fixed_type, device_type=self.other_device_type)
         module = self._install(self.fixed_type, self._bay(self.device))
@@ -603,7 +603,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertIn(f"`a0`: {NO_RULE}", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_plain_rule_to_a_flat_breakout_rule_builds_the_family(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule(
@@ -621,7 +621,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(module), ["b-1:0", "b-1:1"])
         self.assertEqual(_journal(module), [])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_into_a_flat_rule_builds_no_family_while_an_interface_is_unclaimed(self):
         self._rule("a-{bay_position}", device_type=self.device_type)
         self._rule(
@@ -837,7 +837,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
 
         self._assert_kept_and_reported(module, saved)
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_second_move_under_a_simple_rule_does_not_split_the_family(self):
         module_type = self._module_type("Port", "port")
         self._flat_rule(module_type, "p{bay_position}:{channel}", device_type=self.device_type)
@@ -869,7 +869,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         self.assertEqual(_journal(module), [])
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_from_a_flat_rule_to_a_simple_rule_renames_no_member(self):
         module_type = self._module_type("Flat To Simple", "{vc_position}")
         self._flat_rule(module_type, "{base}:{channel}", platform=self.platform)
@@ -918,7 +918,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/2"])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_two_moves_in_one_transaction_reapply_once_from_the_state_before_it(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
@@ -1045,15 +1045,15 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     def test_a_chassis_position_change_then_moves_rename_each_module_once(self):
         self._assert_moved_with_a_position_change(self._device_bays(), True, [["et-3/5/5"], ["p6-3/6"], ["x37/7"]])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_moves_out_of_the_device_then_a_chassis_position_change_rename_each_module_once(self):
         self._assert_moved_with_a_position_change(self._peer_bays(), False, [["et-2/0/0"], ["p1-2/1"], ["x22/2"]])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_chassis_position_change_then_moves_out_of_the_device_recognise_the_names_before_it(self):
         self._assert_moved_with_a_position_change(self._peer_bays(), True, [["et-2/0/0"], ["p1-2/1"], ["x22/2"]])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_chassis_position_change_then_moves_into_the_device_recognise_the_names_of_the_old_device(self):
         modules = [
             self._install(module_type, self._bay(self.peer, f"Bay {index}"))
@@ -1078,11 +1078,11 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         (entry,) = _journal(self.device)
         self.assertIn(f"`et-1/10/10`: {UNAVAILABLE}", entry.comments)
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_moves_out_of_the_device_then_leaving_the_chassis_rename_each_module_once(self):
         self._assert_moved_out_with_a_leave(leave_first=False)
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_leaving_the_chassis_then_moves_out_of_the_device_recognise_the_names_before_it(self):
         self._assert_moved_out_with_a_leave(leave_first=True)
 
@@ -1104,7 +1104,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
         # Only the module unit passes the naming points of the moves.
         moves = [point.move for call in reapplies.call_args_list for point in call.kwargs.get("naming_points", ())]
-        self.assertEqual(any(moves), change_at == 1 and NETBOX_MOVES_COMPONENTS)
+        self.assertEqual(any(moves), change_at == 1 and supports_module_moves())
 
     def test_a_chassis_position_change_then_a_move_the_transaction_undoes_leave_the_module_to_the_change(self):
         self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=0)
@@ -1160,7 +1160,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     def test_a_chassis_position_change_then_a_move_into_a_rule_recognise_the_raw_name_before_it(self):
         self._assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(chassis_first=True)
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_name_netbox_gives_at_a_move_is_recognised_after_a_later_position_change(self):
         module = self._install(self.adjacent_type, self._bay(self.device))
         _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
@@ -1172,7 +1172,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_off_a_chassis_then_a_join_recognise_the_name_netbox_gave_at_the_move(self):
         chassis = self.device.virtual_chassis
         with self.captureOnCommitCallbacks(execute=True):
@@ -1188,7 +1188,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/2"], 1))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_card_moved_to_another_device_then_its_position_change_recognise_the_nested_name(self):
         card, port = self._install_card(self.card_type, self._bay(self.device))
         optic = self._install(self.peer_optic_type, port)
@@ -1205,7 +1205,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["et-4/2/1"], 1))
         self.assertEqual((_journal(card), _journal(optic), _journal(self.peer)), ([], [], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_into_a_bay_whose_position_is_the_token_then_its_position_change_recognise_the_name(self):
         module = self._install(self.bay_token_type, self._bay(self.device))
         self.assertEqual(self._names(module), ["0"])
@@ -1220,7 +1220,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-4/7"], 1))
         self.assertEqual((_journal(module), _journal(self.peer)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_two_moves_around_a_chassis_position_change_recognise_the_name_of_the_first_move(self):
         module_type = self._module_type("Twice Moved", "{vc_position}/{module}")
         module = self._install(module_type, self._bay(self.device))
@@ -1244,7 +1244,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         InterfaceNameRule.objects.create(module_type=module_type, name_template="p{base}")
         return module
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_out_and_back_around_a_chassis_position_change_recognise_the_name_of_the_move_out(self):
         module = self._install_a_raw_module_with_a_base_rule()
 
@@ -1266,7 +1266,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         InterfaceNameRule.objects.create(module_type=optic_type, name_template="p{base}")
         return card, port, optic
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_card_moved_out_and_back_around_a_chassis_position_change_recognise_the_nested_name(self):
         card, _port, optic = self._install_a_raw_optic_in_a_card_with_a_base_rule()
 
@@ -1279,7 +1279,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["p3/0"], 1))
         self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_card_moved_out_and_back_around_a_port_edit_that_is_undone_recognise_the_nested_name(self):
         card, port, optic = self._install_a_raw_optic_in_a_card_with_a_base_rule()
 
@@ -1298,7 +1298,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(optic), _reapplied(reapplies)), (["p1/0"], [optic.pk]))
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_position_change_of_a_device_the_module_left_before_its_return_recognise_the_name_given_there(self):
         module = self._install_a_raw_module_with_a_base_rule()
 
@@ -1316,7 +1316,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device), _journal(self.peer)), ([], [], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_out_an_edit_of_the_new_bay_and_a_move_back_recognise_the_name_of_the_move_out(self):
         module = self._install_a_raw_module_with_a_base_rule()
         new_bay = self._bay(self.device, "Bay 1")
@@ -1335,7 +1335,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
         self.assertEqual(_journal(module), [])
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):
         _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
         undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
@@ -1460,7 +1460,7 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_replacement_under_the_key_of_a_moved_module_is_recognised_at_the_position_of_its_install(self):
         module = self._install(self.adjacent_type, self._bay(self.device))
         keys, installed = [], []
@@ -1688,7 +1688,25 @@ class InstallPositionInvariantTest(ModuleMoveTestCase):
         self.assertEqual(self._install_outcome(module_type, bay, (), *undone), alone)
 
 
-@skipIf(NETBOX_MOVES_COMPONENTS, "NetBox 4.7 moves a module's components and nested bays with it")
+class ModuleMoveFeatureDetectionTest(ModuleMoveTestCase):
+    """The module move probe must track what NetBox does at a move on every NetBox leg (never skipped)."""
+
+    def test_supports_module_moves_matches_what_netbox_does_at_a_move(self):
+        """NetBox renames a raw name at a move exactly when the probe says that it does."""
+        module = self._install(self._module_type("Probe", "{module}"), self._bay(self.device))
+        self.assertEqual(self._names(module), ["0"])
+
+        self._move(module, self._bay(self.device, "Bay 1"))
+
+        self.assertEqual(self._names(module) == ["1"], supports_module_moves())
+
+    @skipUnless(os.environ.get("EXPECT_NETBOX_MODULE_MOVES") == "1", "EXPECT_NETBOX_MODULE_MOVES is not set")
+    def test_module_move_leg_reports_support(self):
+        """CI guard: on the module move leg a false probe would silently skip every NetBox 4.7 move test."""
+        self.assertTrue(supports_module_moves())
+
+
+@skipIf(supports_module_moves(), "NetBox 4.7 moves a module's components and nested bays with it")
 class ModuleRowMoveTest(ModuleMoveTestCase):
     """Before 4.7 NetBox writes a moved module's row alone.
 

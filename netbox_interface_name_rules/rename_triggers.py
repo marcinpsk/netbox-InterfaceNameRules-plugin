@@ -27,7 +27,6 @@ that already reapplied.
 
 import dataclasses
 import functools
-import importlib.util
 import logging
 import math
 import weakref
@@ -299,11 +298,12 @@ def _naming_points(module, root, reads, device_triggers):
     module deleted since.
     """
     from .engine import NamingPoint
+    from .family import supports_module_moves
 
     start = root.start if root is not None and root.installed else None
     after = [(place, naming, moved) for place, naming, moved in reads if start is None or place > start]
     places = [] if start is None else [(start, False)]
-    if _netbox_renames_moved_components():
+    if supports_module_moves():  # pragma: no cover - requires a NetBox that renames moved components
         places += [(place, True) for place, _, moved in after if moved]
     points = []
     for named_at, move in places:
@@ -318,13 +318,7 @@ def _naming_points(module, root, reads, device_triggers):
     return tuple(points)
 
 
-@functools.cache
-def _netbox_renames_moved_components():
-    """Return whether NetBox renames the raw names of a moved module's components (4.7+)."""
-    return importlib.util.find_spec("dcim.models.module_moves") is not None
-
-
-def _may_keep_a_name_of_a_move(reads, device_triggers):
+def _may_keep_a_name_of_a_move(reads, device_triggers):  # pragma: no cover - requires a NetBox that moves components
     """Return whether a module can keep a raw name that a move gave it, also when it is back where it was.
 
     NetBox renames a raw name back at a later move only when nothing that the name is built from changed
@@ -332,7 +326,7 @@ def _may_keep_a_name_of_a_move(reads, device_triggers):
     a read that is not a move shows. *reads* are the module's ``(place, naming, moved)``.
     """
     moves = [place for place, _, moved in reads if moved]
-    if len(moves) < 2 or not _netbox_renames_moved_components():
+    if len(moves) < 2:
         return False
     first, last = moves[0], moves[-1]
     if any(first < place < last and not moved for place, _, moved in reads):
@@ -390,6 +384,7 @@ def _reapply_modules(module_triggers, device_triggers):
     primary key of each module that reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
+    from .family import supports_module_moves
 
     roots = _module_roots(module_triggers)
     entries = _earliest_naming(module_triggers, roots, device_triggers)
@@ -401,11 +396,12 @@ def _reapply_modules(module_triggers, device_triggers):
         return frozenset()
     present = [pk for pk in roots if pk in modules]
     reads = _reads(module_triggers)
+    moves_rename = supports_module_moves()
     changed = {
         pk
         for pk in present
         if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])
-        or _may_keep_a_name_of_a_move(reads.get(pk, ()), device_triggers)
+        or (moves_rename and _may_keep_a_name_of_a_move(reads.get(pk, ()), device_triggers))
     }
     retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]

@@ -11,7 +11,7 @@ from .batch import (
     execute_module_families,
     plan_module_families,
 )
-from .capabilities import supports_channelization
+from .capabilities import supports_channelization, supports_module_moves
 from .conversion import (
     conversion_offered,
     convert_rule_families,
@@ -146,5 +146,6 @@ __all__ = (
     "preview_rule_conversions",
     "resolved_template_names",
     "supports_channelization",
+    "supports_module_moves",
     "template_channel_suffixes",
 )

@@ -22,12 +22,12 @@ from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_vc_position_token
+from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, PlanRunner
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
     CHASSIS_RULES,
-    NETBOX_MOVES_COMPONENTS,
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
     TAKEN,
@@ -381,7 +381,7 @@ class NestedBayEditTest(BayEditTestCase):
         self.assertEqual(self._names(optic), ["et-1/2/1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_the_bay_post_saves_netbox_sends_in_a_move_are_not_bay_triggers(self):
         card, port = self._install_card(self._card_type("Token Card", "{module}"), self._bay(self.device))
         optic = self._install(self.optic_type, port)
@@ -463,7 +463,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/1/1"], 2))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_an_outer_move_and_a_nested_bay_edit_reapply_each_module_once(self):
         _bay, card, port, optic = self._card_with_optic()
 
@@ -475,7 +475,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/2/3"], 2))
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_a_nested_bay_edit_and_an_outer_move_reapply_each_module_once(self):
         _bay, card, port, optic = self._card_with_optic()
 

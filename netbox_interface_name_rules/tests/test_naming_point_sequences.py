@@ -20,10 +20,10 @@ from django.db import transaction
 from extras.models import JournalEntry
 
 from netbox_interface_name_rules.engine import supports_vc_position_token
+from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import bay_naming_values, chassis_position
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
-    NETBOX_MOVES_COMPONENTS,
     PLAIN_TYPE,
     ModuleMoveTestCase,
     _module_reapplies,
@@ -77,7 +77,7 @@ def _sequences(prefix):
         sequences = [(first,) for first in FIRST_OPERATIONS]
     else:
         sequences = [prefix, *((*prefix, last) for last in OPERATIONS)]
-    if not NETBOX_MOVES_COMPONENTS:
+    if not supports_module_moves():
         sequences = [sequence for sequence in sequences if "other device" not in sequence]
     return [sequence for sequence in sequences if _locations(sequence) is not None]
 

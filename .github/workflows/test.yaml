@@ -134,6 +134,8 @@ jobs:
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
           EXPECT_NETBOX_CHANNELIZATION: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
+          # The same guard for the module move tests, which need the move planner of NetBox 4.7.
+          EXPECT_NETBOX_MODULE_MOVES: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
           # A query count belongs to one NetBox release, and the baseline file holds one value per
           # key. The top supported version is the only leg that asserts it. Every other cell records
           # its count in this disposable checkout, so it reports plugin compatibility failures
