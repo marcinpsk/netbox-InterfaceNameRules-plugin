@@ -35,6 +35,7 @@ from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import PlanRunner
+from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
@@ -45,6 +46,7 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import REQUIRES_CHANNELIZATION, _channelized_module_type
+from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
 from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -1227,6 +1229,29 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_chassis_position_change_then_an_install_name_a_raw_name_with_adjacent_tokens(self):
         self._assert_an_adjacent_token_install_is_named_once(True, self._bay(self.device), ["et-3/0"])
+
+    def test_a_naming_at_install_that_fails_is_reported_on_each_module_and_not_by_the_device(self):
+        with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():
+            first = Module.objects.create(
+                device=self.device, module_bay=self._bay(self.device), module_type=self.plain_type
+            )
+            second = Module.objects.create(
+                device=self.device, module_bay=self._bay(self.device, "Bay 1"), module_type=self.plain_type
+            )
+            self._change_the_chassis_position()
+        failure = f"injected {InterfaceTemplate._meta.db_table} read failure"
+
+        with (
+            connection.execute_wrapper(_reject_reads_of(InterfaceTemplate._meta.db_table)),
+            self.assertLogs("netbox_interface_name_rules", "ERROR"),
+        ):
+            run_the_reapply(callbacks)
+
+        for module in (first, second):
+            (entry,) = _journal(module)
+            self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+            self.assertEqual(entry.comments.count(failure), 1)
+        self.assertEqual((self._names(first), self._names(second), _journal(self.device)), (["0"], ["1"], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_an_install_in_a_card_then_a_chassis_position_change_recognise_the_nested_raw_name(self):

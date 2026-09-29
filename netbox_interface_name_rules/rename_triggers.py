@@ -223,25 +223,20 @@ def _earliest_naming(module_triggers, roots, device_triggers):
     return entries
 
 
-def _namings_at_install(roots, entries, modules, device_triggers):
-    """Return a naming for each module installed in the transaction that has none, when its device changed position since.
+def _naming_at_install(module, root, device_pairs):
+    """Return the naming of *module*, installed in the transaction, at the position of its install, or None.
 
-    Every move and every change of what a bay's names are built from reads a naming, so nothing moved
-    such a module or changed its bay: its raw names are its templates at the committed bay, resolved at
-    the position that its device had at the install.
+    There is one only when a trigger in *device_pairs* changed that position after the install. Every
+    move and every change of what a bay's names are built from reads a naming, so nothing moved a module
+    without one or changed its bay: its raw names are its templates at the committed bay, at that position.
     """
+    state = _state_when_named(device_pairs, root.start, math.inf)
+    if state is None:
+        return None
     from .engine import ModuleNaming
 
-    namings = {}
-    for pk, root in roots.items():
-        module = modules.get(pk)
-        if module is None or not root.installed or pk in entries:
-            continue
-        state = _state_when_named(device_triggers.get(module.device_id, ()), root.start, math.inf)
-        if state is not None:
-            naming = ModuleNaming.of(module).at_chassis_position(chassis_position(state))
-            namings[pk] = dataclasses.replace(naming, raw_only=True)
-    return namings
+    naming = ModuleNaming.of(module).at_chassis_position(chassis_position(state))
+    return dataclasses.replace(naming, raw_only=True)
 
 
 def _state_when_named(pairs, named_at, read_at):
@@ -289,16 +284,20 @@ def _reapply_from_naming(module, entry, covering, changed):
     return bool(covering) and entry.selects_another_rule(module)
 
 
-def _reapply_options(module, root, entry, covering, changed):
+def _reapply_options(module, root, entry, covering, changed, device_pairs):
     """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
 
     *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
-    the modules that moved or had their bay values changed.
+    the modules that moved or had their bay values changed. *device_pairs* are the ``(place, trigger)``
+    pairs of the module's device, which give a module installed in the transaction without a naming one
+    at the position of its install.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
+    if entry is None and root is not None and root.installed:
+        entry = _naming_at_install(module, root, device_pairs)
     if entry is not None and _reapply_from_naming(module, entry, covering, changed):
         return {"naming": entry}
     if root is not None and (root.installed or current != root.baseline):
@@ -355,21 +354,23 @@ def _reapply_modules(module_triggers, device_triggers):
         # No committed row was read, so no object can carry a journal entry.
         logger.exception("Failed to read modules %s for their rename trigger reapply", sorted(roots))
         return frozenset()
+    present = [pk for pk in roots if pk in modules]
+    changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
+    retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
+    covers = [pk for pk in present if pk in changed or pk in retyped]
+    walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
     attempted_pks = set()
     with pinned_reapply(modules.values()):
-        entries.update(_namings_at_install(roots, entries, modules, device_triggers))
-        present = [pk for pk in roots if pk in modules]
-        changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
-        retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
-        covers = [pk for pk in present if pk in changed or pk in retyped]
-        walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
         for pk in walked:
             module = modules.get(pk)
             if module is None:
                 continue
             covering = [other for other in covers if other != pk and pk in roots[other].members]
-            decide = functools.partial(_reapply_options, module, roots.get(pk), entries.get(pk), covering, changed)
+            device_pairs = device_triggers.get(module.device_id, ())
+            decide = functools.partial(
+                _reapply_options, module, roots.get(pk), entries.get(pk), covering, changed, device_pairs
+            )
             outcomes = outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), [])
             if _reapply_module(module, decide, outcomes):
                 attempted_pks.add(pk)
