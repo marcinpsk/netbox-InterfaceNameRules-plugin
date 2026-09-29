@@ -1214,6 +1214,22 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((_journal(module), _journal(self.peer)), ([], []))
 
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_two_moves_around_a_chassis_position_change_recognise_the_name_of_the_first_move(self):
+        module_type = self._module_type("Twice Moved", "{vc_position}/{module}")
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["1/0"])
+        InterfaceNameRule.objects.create(module_type=module_type, name_template="et-{vc_position}/{bay_position}")
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 1")),
+            self._change_the_chassis_position,
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 2")),
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
     def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):
         _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
         undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
@@ -1377,6 +1393,25 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         self.assertEqual(replacement.pk, keys[0])
         self.assertEqual((self._names(replacement), _reapplied(reapplies)), (["et-5/0"], [replacement.pk]))
         self.assertEqual((_journal(replacement), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_two_templates_that_claim_one_name_at_different_naming_points_rename_nothing(self):
+        # At position 3 the first template resolves to the name that the second one gave at position 1.
+        pair_type = self._module_type("Pair", "{vc_position}/{module}", "3/{module}")
+        InterfaceNameRule.objects.create(module_type=pair_type, name_template="p{base}")
+        installed = []
+
+        def install():
+            installed.append(
+                Module.objects.create(device=self.device, module_bay=self._bay(self.device), module_type=pair_type)
+            )
+
+        self._save_in_one_transaction(install, self._change_the_chassis_position)
+
+        (module,) = installed
+        self.assertEqual(self._names(module), ["1/0", "3/0"])
+        (entry,) = _journal(module)
+        self.assertEqual((entry.comments.count("`1/0`"), entry.comments.count("`3/0`")), (1, 1))
 
     def test_a_failed_install_reapply_is_reported_on_each_module_and_not_by_the_device(self):
         with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():

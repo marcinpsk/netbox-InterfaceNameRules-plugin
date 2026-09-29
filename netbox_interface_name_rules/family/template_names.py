@@ -12,7 +12,6 @@ import re
 import threading
 from dataclasses import dataclass, replace
 from re import Pattern
-from typing import NamedTuple
 
 from dcim.models import InterfaceTemplate, Module, VirtualChassis
 
@@ -34,13 +33,6 @@ _VC_SENTINEL = "\x00{}\x00"
 _VC_SENTINEL_RE = re.compile(r"\x00(\d+)\x00")
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
 VC_POSITION_DIGITS = r"\d{1,10}"
-
-
-class NamingPoint(NamedTuple):
-    """The chassis position at which NetBox gave a module's current templates raw names, and whether a move did."""
-
-    vc_position: int | None
-    move: bool
 
 
 @dataclass(frozen=True, slots=True)

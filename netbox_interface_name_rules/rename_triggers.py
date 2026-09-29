@@ -17,13 +17,12 @@ reads before the save what named the interfaces of that module and of every modu
 After the save that naming is gone. A save that changes a module's type reads it too when a rule is
 scoped to the old or the new type as a parent module type, because a nested module can then select
 another rule. The plan recognises the earlier names of each module from the first naming read for it
-in the transaction. A naming takes the virtual-chassis position that its device had when the module's
-interfaces got their names: before the transaction, or at the install. The interfaces of a module
-installed in the transaction carry raw template names only; when it reapplies as an install, the
-install also recognises them at the position that its device had at the install.
-A module inside the subtree of another moved, edited or retyped module reports in the journal entry
-of the outermost one. The plan reapplies the modules of its module triggers before the devices, and a
-device reapply leaves out each module that already reapplied.
+in the transaction, at the virtual-chassis position that its device had then. It also recognises the
+raw names that NetBox gave at each naming point of the transaction: an install and, on NetBox 4.7,
+each move that carried the module; see ``_naming_points``. A module inside the subtree of another
+moved, edited or retyped module reports in the journal entry of the outermost one. The plan reapplies
+the modules of its module triggers before the devices, and a device reapply leaves out each module
+that already reapplied.
 """
 
 import dataclasses
@@ -271,47 +270,52 @@ def _reapply_from_naming(module, entry, covering, changed):
     return bool(covering) and entry.selects_another_rule(module)
 
 
-def _reapply_options(module, root, entry, covering, changed, device_pairs, moved_at):
+def _reapply_options(module, root, entry, covering, changed, device_triggers, reads):
     """Return the ``module_rule_outcomes`` options that reapply *module*, or None when it needs no reapply.
 
     *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
-    the modules that moved or had their bay values changed. *device_pairs* are the ``(place, trigger)``
-    pairs of the module's device, and *moved_at* is the place of the last move that carried the
-    module, or None; see ``_naming_point``.
+    the modules that moved or had their bay values changed. *device_triggers* and *reads* give the
+    naming points of the module; see ``_naming_points``.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
-    naming_point = _naming_point(root, entry, device_pairs, moved_at)
+    naming_points = _naming_points(module, root, reads, device_triggers)
     if entry is not None and _reapply_from_naming(module, entry, covering, changed):
-        return {"naming": entry, "naming_point": naming_point}
+        return {"naming": entry, "naming_points": naming_points}
     if root is not None and (root.installed or current != root.baseline):
-        return {"force_reapply": current != root.baseline, "naming_point": naming_point}
+        return {"force_reapply": current != root.baseline, "naming_points": naming_points}
     return None
 
 
-def _naming_point(root, entry, device_pairs, moved_at):
-    """Return where NetBox last gave the module's current templates raw names, or None.
+def _naming_points(module, root, reads, device_triggers):
+    """Return each point in the transaction at which NetBox gave *module*'s templates raw names.
 
-    That is the later of its last move, *moved_at*, on NetBox 4.7, which names them for the new bay,
-    and its install when no trigger read a naming for it. A move before the install of the same key
-    moved a module deleted since. There is a point only when a device trigger in *device_pairs*
-    changed the position after it.
+    Its install names them, and on NetBox 4.7 so does each move that carried it. *reads* are the
+    ``(place, naming, moved)`` of each trigger that read the module's naming, in save order. A point
+    names the bay chain that the next read holds, or the committed one after the last read, at the
+    position that the device had at that point. A read before the install of the module was for a
+    module deleted since.
     """
-    installed_at = root.start if root is not None and root.installed else None
-    if moved_at is not None and (installed_at is None or moved_at > installed_at):
-        named_at, move = moved_at, True
-    elif installed_at is not None and entry is None:
-        named_at, move = installed_at, False
-    else:
-        return None
-    state = _state_when_named(device_pairs, named_at, math.inf)
-    if state is None:
-        return None
-    from .family import NamingPoint
+    from .engine import NamingPoint
 
-    return NamingPoint(chassis_position(state), move)
+    start = root.start if root is not None and root.installed else None
+    after = [(place, naming, moved) for place, naming, moved in reads if start is None or place > start]
+    places = [] if start is None else [(start, False)]
+    if _netbox_renames_moved_components():
+        places += [(place, True) for place, _, moved in after if moved]
+    points = []
+    for named_at, move in places:
+        chain = next((naming for place, naming, _ in after if place > named_at), None)
+        device_pk = module.device_id if chain is None else chain.device_pk
+        state = _state_when_named(device_triggers.get(device_pk, ()), named_at, math.inf)
+        if state is not None:
+            position = chassis_position(state)
+        else:
+            position = chassis_position(module.device) if chain is None else chain.vc_position
+        points.append(NamingPoint(chain, position, move))
+    return tuple(points)
 
 
 @functools.cache
@@ -320,9 +324,13 @@ def _netbox_renames_moved_components():
     return importlib.util.find_spec("dcim.models.module_moves") is not None
 
 
-def _last_moves(module_triggers):
-    """Return, for each module that a move carried, the place of the last move that carried it."""
-    return {entry.module_pk: place for place, trigger in module_triggers if trigger.moved for entry in trigger.naming}
+def _reads(module_triggers):
+    """Return the ``(place, naming, moved)`` of each trigger that read a module's naming, by module."""
+    reads = {}
+    for place, trigger in module_triggers:
+        for naming in trigger.naming:
+            reads.setdefault(naming.module_pk, []).append((place, naming, trigger.moved))
+    return reads
 
 
 def _reapply_module(module, decide, outcomes):
@@ -379,8 +387,7 @@ def _reapply_modules(module_triggers, device_triggers):
     retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
-    # NetBox before 4.7 renames nothing at a move, so there a move gives no raw names of its own.
-    moved_at = _last_moves(module_triggers) if _netbox_renames_moved_components() else {}
+    reads = _reads(module_triggers)
     outcomes_by_owner = {}
     attempted_pks = set()
     with pinned_reapply(modules.values()):
@@ -396,8 +403,8 @@ def _reapply_modules(module_triggers, device_triggers):
                 entries.get(pk),
                 covering,
                 changed,
-                device_triggers.get(module.device_id, ()),
-                moved_at.get(pk),
+                device_triggers,
+                reads.get(pk, ()),
             )
             outcomes = outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), [])
             if _reapply_module(module, decide, outcomes):
@@ -431,10 +438,16 @@ def _reapply_device(trigger, attempted_pks):
     report_only = current.virtual_chassis_id is None or current.vc_position is None
     outcomes = []
     try:
-        from .engine import device_module_rule_outcomes
+        from .engine import NamingPoint, device_module_rule_outcomes
 
+        # The module names on the device come from its position before its first trigger.
+        before = (NamingPoint(None, chassis_position(baseline), move=False),)
         # extend() keeps the facts the generator yielded before a later module raised.
-        outcomes.extend(device_module_rule_outcomes(device, report_only=report_only, excluded_pks=attempted_pks))
+        outcomes.extend(
+            device_module_rule_outcomes(
+                device, report_only=report_only, excluded_pks=attempted_pks, naming_points=before
+            )
+        )
     except Exception as error:
         logger.exception("Failed to re-apply module rules for device %s after VC change", pk)
         outcomes.append(_failure(error))

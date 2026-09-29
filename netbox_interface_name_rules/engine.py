@@ -11,6 +11,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
 
@@ -134,6 +135,29 @@ def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
     return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
 
 
+class NamingPoint(NamedTuple):
+    """A point in the transaction at which NetBox gave a module's templates raw names.
+
+    ``naming`` is the ``ModuleNaming`` that holds the bay chain of the module then, or None for the
+    committed module; ``vc_position`` is its device's virtual-chassis position then, and ``move`` is
+    set when a move gave the names, which NetBox resolves with the resolver of its move planner.
+    """
+
+    naming: object
+    vc_position: int | None
+    move: bool
+
+
+def _raw_names_at(module, naming_points):
+    """Return, by template, the raw names that NetBox gave *module*'s templates at *naming_points*."""
+    names = defaultdict(set)
+    for point in naming_points:
+        templates = family_ops.resolved_template_names(module) if point.naming is None else point.naming.templates
+        for template in templates:
+            names[template.pk].add(template.at_chassis_position(point.vc_position, move=point.move).resolved)
+    return names
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -156,7 +180,7 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
 
 def module_rule_outcomes(
-    module, module_bay, force_reapply=False, report_only=False, naming=None, naming_point=None
+    module, module_bay, force_reapply=False, report_only=False, naming=None, naming_points=()
 ) -> Iterator[RenameOutcome]:
     """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
 
@@ -173,8 +197,8 @@ def module_rule_outcomes(
     or the module's bay has a parent bay that does not hold the module that owns the bay, nothing is
     renamed and every interface is reported.
 
-    *naming_point* is a ``family.NamingPoint``: where NetBox last gave the module's current templates
-    raw names in the transaction, at an install or a move. The claim recognises those names too.
+    *naming_points* are the ``NamingPoint`` values at which NetBox gave the module's templates raw
+    names in the transaction. The claim recognises the names of each point too.
     """
     rule = _selected_rule(module, module_bay)
     previous_forms = None if naming is None else naming.previous_forms()
@@ -193,7 +217,7 @@ def module_rule_outcomes(
     # One pin for the module: the claim and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
         yield from _apply_rule_to_module(
-            rule, module, module_bay, force_reapply, report_only, previous_forms, naming_point
+            rule, module, module_bay, force_reapply, report_only, previous_forms, naming_points
         )
 
 
@@ -255,7 +279,7 @@ def _acted_on_names(rule, plans):
 
 
 def _apply_rule_to_module(
-    rule, module, module_bay, force_reapply, report_only=False, previous_forms=None, naming_point=None
+    rule, module, module_bay, force_reapply, report_only=False, previous_forms=None, naming_points=()
 ):
     """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
@@ -272,7 +296,9 @@ def _apply_rule_to_module(
     if _has_stale_parent_bay(module_bay):
         yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
         return
-    bases = family_ops.module_raw_bases(module, rule, variables, interfaces, previous_forms, naming_point=naming_point)
+    bases = family_ops.module_raw_bases(
+        module, rule, variables, interfaces, previous_forms, earlier_raw_names=_raw_names_at(module, naming_points)
+    )
     planned = family_ops.plan_module_families(
         module, rule, variables, interfaces, bases, _run_scope(force_reapply, previous_forms)
     )
@@ -337,12 +363,14 @@ def reapply_module_rules(device):
     return renamed_count(device_module_rule_outcomes(device))
 
 
-def device_module_rule_outcomes(device, report_only=False, excluded_pks=()) -> Iterator[RenameOutcome]:
+def device_module_rule_outcomes(
+    device, report_only=False, excluded_pks=(), naming_points=()
+) -> Iterator[RenameOutcome]:
     """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and yield the outcome facts.
 
     Each module's facts are yielded before the next module runs, so a caller keeps them when a later
     module fails. *report_only* is passed to ``module_rule_outcomes``. The modules whose primary keys
-    are in *excluded_pks* are left out.
+    are in *excluded_pks* are left out. *naming_points* are passed to ``module_rule_outcomes``.
     """
     from dcim.models import Module
 
@@ -358,7 +386,13 @@ def device_module_rule_outcomes(device, report_only=False, excluded_pks=()) -> I
     )
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
         for module in modules:
-            yield from module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
+            yield from module_rule_outcomes(
+                module,
+                module.module_bay,
+                force_reapply=True,
+                report_only=report_only,
+                naming_points=naming_points,
+            )
 
 
 _NAMING_RELATIONS = (
