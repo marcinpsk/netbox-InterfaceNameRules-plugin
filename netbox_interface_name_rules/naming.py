@@ -129,12 +129,11 @@ def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_positi
 
 
 def chassis_position(device):
-    """Return the virtual-chassis position that the variables of *device* hold, or None.
+    """Return the virtual-chassis position that the template variables of *device* read, or None.
 
-    *device* is a device or any value with its ``virtual_chassis_id`` and ``vc_position``. Only a
-    member device that has a position has one; position zero is a valid position.
+    Only a virtual-chassis member that has a position has one; position zero is a valid position.
     """
-    if device is None or getattr(device, "virtual_chassis_id", None) is None:
+    if device is None or device.virtual_chassis_id is None:
         return None
     return device.vc_position
 
