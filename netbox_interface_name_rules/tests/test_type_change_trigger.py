@@ -36,7 +36,7 @@ from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads
 TAKEN = "target name is already in use"
 
 
-class _CardFixture:
+class _CardFixture(_MoveFixture):
     """Two card types with two ports each, and an optic whose rule each card type scopes as its parent."""
 
     @classmethod
@@ -231,18 +231,23 @@ class TypeChangeCostTest(TypeChangeTestCase):
         card, _second_port, optic = self._card_with_optic(old_type)
         self.assertEqual(self._names(optic), ["u-0/1"])
 
-        naming_reads, rule_reads = self._type_change_reads(card, new_type)
+        reads = self._type_change_reads(card, new_type)
 
-        self.assertEqual(naming_reads, 0)
-        self.assertLessEqual(rule_reads, 1)
+        self.assertEqual(reads, (0, 1))
         self.assertEqual(self._names(optic), ["u-0/1"])
         self.assertEqual(_journal(card), [])
-        # A control: a rule scoped to the new type makes the same count see the naming read.
-        self.assertGreater(self._type_change_reads(card, self.first_card_type)[0], 0)
-        self.assertEqual(self._names(optic), ["a-0/1"])
+
+    def test_a_type_change_reads_the_nested_naming_when_an_enabled_rule_is_scoped_to_the_new_type(self):
+        card, _second_port, optic = self._card_with_optic()
+
+        naming_reads, rule_reads = self._type_change_reads(card, self.second_card_type)
+
+        self.assertGreater(naming_reads, 0)
+        self.assertEqual(rule_reads, 1)
+        self.assertEqual(self._names(optic), ["b-0/1"])
 
 
-class TypeChangeAPITest(_CardFixture, _MoveFixture, APITestCase):
+class TypeChangeAPITest(_CardFixture, APITestCase):
     """A REST API type change reaches the rename trigger through NetBox's own write path."""
 
     model = Module
