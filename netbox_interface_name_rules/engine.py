@@ -368,10 +368,11 @@ class ModuleNaming:
     """What named one module's interfaces at the time it was read: a move, a bay edit or a type change reads it.
 
     The module type and the scope select the rule that state gave the module. The template variables
-    and the templates as they resolved then rebuild the names that rule gave. ``device_pk`` is the
-    device the module was on then. ``bay_values`` are the ``naming.bay_naming_values`` of the module's
-    bay then. ``raw_only`` is set when no rule has named the module's interfaces yet, because the
-    module was installed in the same transaction: they carry raw template names only.
+    and the templates as they resolved then rebuild the names that rule gave. The variables come from
+    ``bay_chain`` and ``vc_position``, the virtual-chassis position of the device then. ``device_pk``
+    is that device. ``bay_values`` are the ``naming.bay_naming_values`` of the module's bay then.
+    ``raw_only`` is set when no rule has named the module's interfaces yet, because the module was
+    installed in the same transaction: they carry raw template names only.
     """
 
     module_pk: int
@@ -380,7 +381,8 @@ class ModuleNaming:
     parent_module_type: object | None
     device_type: object | None
     platform: object | None
-    variables: dict
+    bay_chain: naming.BayChain
+    vc_position: int | None
     templates: tuple
     bay_values: tuple
     raw_only: bool = False
@@ -397,14 +399,20 @@ class ModuleNaming:
             parent_module_type=_get_parent_module_type(module_bay),
             device_type=device.device_type,
             platform=device.platform,
-            variables=build_variables(module_bay, device=device),
+            bay_chain=naming.bay_chain(module_bay),
+            vc_position=naming.chassis_position(device),
             templates=family_ops.resolved_template_names(module),
             bay_values=naming.bay_naming_values(module_bay.position, module_bay.name),
         )
 
+    @property
+    def variables(self):
+        """Return the template variables of this naming."""
+        return naming.bay_chain_variables(self.bay_chain, self.vc_position)
+
     def at_chassis_position(self, vc_position):
-        """Return this naming with *vc_position* in its variables; None leaves ``{vc_position}`` out."""
-        return replace(self, variables=naming.with_chassis_position(self.variables, vc_position))
+        """Return this naming at the virtual-chassis position *vc_position*; None means off a chassis."""
+        return replace(self, vc_position=vc_position)
 
     def rule(self):
         """Return the rule that the module type and the scope of this naming select now, or None."""
