@@ -48,6 +48,7 @@ from .template_names import pinned_template_cache
 logger = logging.getLogger(__name__)
 
 NOT_RENAMED_REASON = "the module is not renamed while one of its interfaces is unclaimed"
+CHANNELIZED_MODULE_REASON = "the module already models channelized families, so no family is added beside them"
 
 # A member left with the name it had for a reason the operator can act on.  An unsupported topology
 # is not one of them: the release cannot hold the family, so nothing was dropped by this batch.
@@ -204,12 +205,16 @@ def plan_module_families(
             [plan_interface_rename(module, rule, variables, interface, bases) for interface in plain], selected_pks
         )
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
-        # A breakout rule renames the families the module already models; it never adds one beside them.
+        # A breakout rule renames these families and adds none beside them; it reports a claimed one when selected.
         leftover = _selected(  # pragma: no cover - requires channelization support
             [
-                plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON)
+                plan_kept_interface(
+                    module,
+                    interface,
+                    UNCLAIMED_BASE_REASON if bases.builds_on(interface.name) is None else CHANNELIZED_MODULE_REASON,
+                )
                 for interface in plain
-                if bases.builds_on(interface.name) is None
+                if selected_pks is not None or bases.builds_on(interface.name) is None
             ],
             selected_pks,
         )

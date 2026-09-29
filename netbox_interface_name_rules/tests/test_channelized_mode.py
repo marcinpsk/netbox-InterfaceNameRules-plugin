@@ -16,7 +16,7 @@ instantiation and validation produce.  Mode-independent behaviour lives in test_
 from typing import ClassVar
 from unittest import skipUnless
 
-from dcim.models import Interface
+from dcim.models import Interface, InterfaceTemplate
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
@@ -34,6 +34,7 @@ from netbox_interface_name_rules.family import (
     execute_installed_plan,
     plan_installed_families,
 )
+from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.test_breakout_mode import (
@@ -562,6 +563,39 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
 
         self.assertEqual(self._names(module), ["4", "xe-0/0/4:0", "xe-0/0/4:1", "xe-0/0/4:2", "xe-0/0/4:3"])
         self.assertEqual(self._parent(module).channels, 4)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeClaimedPlainInterfaceTest(ChannelizationTestCase):
+    """A plain interface beside an installed channelized family keeps its name and is reported (ADR 0013)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanPlain", ["3"])
+        cls.module_type = _channelized_module_type(manufacturer, "ChanPlain-QSFP")
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="mgmt{module}", type=PLAIN_TYPE)
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_applying_only_the_claimed_plain_interface_reports_it(self):
+        module, _ = self._install(self.module_type, "3", run_rules=False)
+        plain = Interface.objects.get(module=module, name="mgmt3")
+        names = self._names(module)
+
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[plain.pk])
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            [(member.current_name, member.reason) for member in outcome.skipped_members],
+            [("mgmt3", CHANNELIZED_MODULE_REASON)],
+        )
+        self.assertEqual(self._names(module), names)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

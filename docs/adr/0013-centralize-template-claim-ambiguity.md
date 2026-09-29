@@ -61,7 +61,9 @@ The paths read the result as follows:
   when one of them changed (ADR 0002). It builds the whole family or nothing (ADR 0001), and a refusal
   reports each planned interface once with the same reason. In Apply Rules a selection of any
   interface that a flat family keeps reaches that family. So every interface in scope is built, kept
-  by its family or reported, once. A subinterface that no template claims is no candidate of its
+  by its family or reported, once. One exception: a breakout rule adds no family beside the
+  channelized families a module already models, and it reports a claimed interface there only when
+  Apply Rules selects it. A subinterface that no template claims is no candidate of its
   own, so a breakout rule neither touches nor reports it. Prediction refuses a given name that the
   claim finds ambiguous, and predicts every other given name from itself.
 - A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
