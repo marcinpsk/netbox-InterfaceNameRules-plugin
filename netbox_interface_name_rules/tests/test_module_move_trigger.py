@@ -241,9 +241,13 @@ class ModuleMoveTestCase(_MoveFixture, TestCase):
                 save()
         return reapplies
 
-    def _save_with_a_device_change(self, device_change, save, device_first):
-        """Run *device_change* and *save* in one transaction, *device_change* first when *device_first*."""
-        return self._save_in_one_transaction(*((device_change, save) if device_first else (save, device_change)))
+    def _save_with_a_device_change(self, device_change, save, device_first, before=()):
+        """Run *device_change* and *save* in one transaction, *device_change* first when *device_first*.
+
+        The saves in *before* run first in the same transaction.
+        """
+        ordered = (device_change, save) if device_first else (save, device_change)
+        return self._save_in_one_transaction(*before, *ordered)
 
 
 class ModuleMoveTest(ModuleMoveTestCase):
@@ -507,8 +511,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         self.assertEqual(self._names(optic), ["et-1/0/1"])
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
-        self.assertIn("`et-1/0/1` to `et-5/1/1`", entry.comments)
-        self.assertIn("already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `et-5/1/1`: {TAKEN}", entry.comments)
         self.assertEqual(_journal(optic), [])
 
 

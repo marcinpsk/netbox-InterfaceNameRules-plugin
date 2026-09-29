@@ -808,9 +808,7 @@ class ChassisPositionMixTest(BayEditTestCase):
             installed.append(Module.objects.create(device=self.device, module_bay=bay, module_type=self.token_type))
 
         edit = functools.partial(self._save_edit, bay, position="2")
-        reapplies = self._save_in_one_transaction(
-            install, *((device_change, edit) if device_first else (edit, device_change))
-        )
+        reapplies = self._save_with_a_device_change(device_change, edit, device_first, before=(install,))
         return installed[0], reapplies
 
     def _assert_an_installed_raw_name_is_renamed_once(self, chassis_first):
