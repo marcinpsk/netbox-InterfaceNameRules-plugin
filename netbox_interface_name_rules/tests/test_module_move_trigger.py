@@ -1087,6 +1087,10 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self._assert_moved_out_with_a_leave(leave_first=True)
 
     def _assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(self, change_at):
+        """Move the module out and back with a chassis-position change at *change_at*; it is reapplied once.
+
+        Around the moves the module unit reapplies it with its naming points; else its device does.
+        """
         module = self._install(self.module_types[0], self._bay(self.device))
         saves = [
             functools.partial(self._save_move, module, self._bay(self.device, "Bay 5")),
@@ -1098,11 +1102,14 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        # Only the module unit passes the naming points of the moves.
+        moves = [point.move for call in reapplies.call_args_list for point in call.kwargs.get("naming_points", ())]
+        self.assertEqual(any(moves), change_at == 1 and NETBOX_MOVES_COMPONENTS)
 
     def test_a_chassis_position_change_then_a_move_the_transaction_undoes_leave_the_module_to_the_change(self):
         self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=0)
 
-    def test_a_move_the_transaction_undoes_leaves_the_module_to_the_chassis_position_change(self):
+    def test_a_move_the_transaction_undoes_around_a_chassis_position_change_is_reapplied_once(self):
         self._assert_an_undone_move_leaves_the_module_to_the_chassis_position_change(change_at=1)
 
     def test_a_move_the_transaction_undoes_then_a_chassis_position_change_leave_the_module_to_the_change(self):
@@ -1228,6 +1235,105 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def _install_a_raw_module_with_a_base_rule(self):
+        """Install a module whose raw name reads the position in Bay 0, then enable a {base} rule for it."""
+        module_type = self._module_type("Moved Back", "{vc_position}/{module}")
+        module = self._install(module_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["1/0"])
+        InterfaceNameRule.objects.create(module_type=module_type, name_template="p{base}")
+        return module
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_move_out_and_back_around_a_chassis_position_change_recognise_the_name_of_the_move_out(self):
+        module = self._install_a_raw_module_with_a_base_rule()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 1")),
+            self._change_the_chassis_position,
+            functools.partial(self._save_move, module, self._bay(self.device)),
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p3/0"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def _install_a_raw_optic_in_a_card_with_a_base_rule(self):
+        """Install a card whose port position is the card's bay, a raw optic in it, and a {base} rule for the optic."""
+        card, port = self._install_card(self._card_type("Moved Back Card", "{module}"), self._bay(self.device))
+        optic_type = self._module_type("Moved Back Optic", "{vc_position}/{module}")
+        optic = self._install(optic_type, port)
+        self.assertEqual(self._names(optic), ["1/0"])
+        InterfaceNameRule.objects.create(module_type=optic_type, name_template="p{base}")
+        return card, port, optic
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_card_moved_out_and_back_around_a_chassis_position_change_recognise_the_nested_name(self):
+        card, _port, optic = self._install_a_raw_optic_in_a_card_with_a_base_rule()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, card, self._bay(self.device, "Bay 1")),
+            self._change_the_chassis_position,
+            functools.partial(self._save_move, card, self._bay(self.device)),
+        )
+
+        self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["p3/0"], 1))
+        self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_card_moved_out_and_back_around_a_port_edit_that_is_undone_recognise_the_nested_name(self):
+        card, port, optic = self._install_a_raw_optic_in_a_card_with_a_base_rule()
+
+        def edit_the_port(position):
+            port.refresh_from_db()
+            port.position = position
+            port.save()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, card, self._bay(self.device, "Bay 1")),
+            functools.partial(edit_the_port, "7"),
+            functools.partial(self._save_move, card, self._bay(self.device)),
+            functools.partial(edit_the_port, "0"),
+        )
+
+        self.assertEqual((self._names(optic), _reapplied(reapplies)), (["p1/0"], [optic.pk]))
+        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_position_change_of_a_device_the_module_left_before_its_return_recognise_the_name_given_there(self):
+        module = self._install_a_raw_module_with_a_base_rule()
+
+        def renumber_the_peer():
+            self.peer.vc_position = 4
+            self.peer.save()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, self._bay(self.peer, "Bay 1")),
+            renumber_the_peer,
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 1")),
+            functools.partial(self._save_move, module, self._bay(self.device)),
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device), _journal(self.peer)), ([], [], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_move_out_an_edit_of_the_new_bay_and_a_move_back_recognise_the_name_of_the_move_out(self):
+        module = self._install_a_raw_module_with_a_base_rule()
+        new_bay = self._bay(self.device, "Bay 1")
+
+        def edit_the_new_bay():
+            new_bay.refresh_from_db()
+            new_bay.position = "7"
+            new_bay.save()
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, new_bay),
+            edit_the_new_bay,
+            functools.partial(self._save_move, module, self._bay(self.device)),
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
+        self.assertEqual(_journal(module), [])
 
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
     def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):

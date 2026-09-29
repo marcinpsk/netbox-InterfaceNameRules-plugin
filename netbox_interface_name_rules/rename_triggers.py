@@ -324,6 +324,23 @@ def _netbox_renames_moved_components():
     return importlib.util.find_spec("dcim.models.module_moves") is not None
 
 
+def _may_keep_a_name_of_a_move(reads, device_triggers):
+    """Return whether a module can keep a raw name that a move gave it, also when it is back where it was.
+
+    NetBox renames a raw name back at a later move only when nothing that the name is built from changed
+    since the earlier move: the position of a device that the module was on, and its bay chain, which
+    a read that is not a move shows. *reads* are the module's ``(place, naming, moved)``.
+    """
+    moves = [place for place, _, moved in reads if moved]
+    if len(moves) < 2 or not _netbox_renames_moved_components():
+        return False
+    first, last = moves[0], moves[-1]
+    if any(first < place < last and not moved for place, _, moved in reads):
+        return True
+    devices = {naming.device_pk for _, naming, _ in reads}
+    return any(first < place < last for pk in devices for place, _ in device_triggers.get(pk, ()))
+
+
 def _reads(module_triggers):
     """Return the ``(place, naming, moved)`` of each trigger that read a module's naming, by module."""
     reads = {}
@@ -383,11 +400,16 @@ def _reapply_modules(module_triggers, device_triggers):
         logger.exception("Failed to read modules %s for their rename trigger reapply", sorted(roots))
         return frozenset()
     present = [pk for pk in roots if pk in modules]
-    changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
+    reads = _reads(module_triggers)
+    changed = {
+        pk
+        for pk in present
+        if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])
+        or _may_keep_a_name_of_a_move(reads.get(pk, ()), device_triggers)
+    }
     retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
-    reads = _reads(module_triggers)
     outcomes_by_owner = {}
     attempted_pks = set()
     with pinned_reapply(modules.values()):

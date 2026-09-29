@@ -104,7 +104,9 @@ device, the plugin rebuilds the earlier names from the position before that
 change, also after a move to another device. NetBox 4.7 renames the raw
 interface names of a moved module for the position that the new device has at
 the move. When the same transaction then changes the position of that device,
-the plugin recognises those names at the position of the move.
+the plugin recognises those names at the position of the move. NetBox can also
+keep those names when the module moves back to its bay after a position change
+or a bay edit, and the plugin recognises them there too.
 
 The plugin renames an interface only when exactly one interface template claims
 it. A template claims an interface through its raw template name before or after
