@@ -330,16 +330,19 @@ def reapply_module_rules(device):
     return renamed_count(device_module_rule_outcomes(device))
 
 
-def device_module_rule_outcomes(device, report_only=False) -> Iterator[RenameOutcome]:
+def device_module_rule_outcomes(device, report_only=False, excluded=()) -> Iterator[RenameOutcome]:
     """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and yield the outcome facts.
 
     Each module's facts are yielded before the next module runs, so a caller keeps them when a later
-    module fails. *report_only* is passed to ``module_rule_outcomes``.
+    module fails. *report_only* is passed to ``module_rule_outcomes``. The modules whose primary keys
+    are in *excluded* are left out.
     """
     from dcim.models import Module
 
     modules = list(
-        Module.objects.filter(device=device).select_related(
+        Module.objects.filter(device=device)
+        .exclude(pk__in=excluded)
+        .select_related(
             "module_type",
             "device__device_type",
             "device__platform",

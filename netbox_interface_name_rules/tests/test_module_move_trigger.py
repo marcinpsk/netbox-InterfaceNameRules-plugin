@@ -907,11 +907,11 @@ class MoveTransactionTest(ModuleMoveTestCase):
 
 
 class ChassisPositionMoveTest(ModuleMoveTestCase):
-    """Moves out of a device and a virtual-chassis change of that device in one transaction, in either order.
+    """Moves and a virtual-chassis change of the old device in one transaction, in either order.
 
-    A move recognises the names from the device's position before the change, for a plain rule, a rule
-    that reads `{base}` and a rule with the position in arithmetic. The device reapply renames the
-    modules that did not move. Each module is reapplied once.
+    A move recognises the names from the device's position before the change, also after a move to
+    another device, for a plain rule, a rule that reads `{base}` and a rule with the position in
+    arithmetic. The device reapply renames the modules that did not move. Each module is reapplied once.
     """
 
     # One rule shape per module type, installed in Bay 0, Bay 1 and Bay 2 of the device at position 1.
@@ -929,6 +929,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             module_type = cls._module_type(model, "{module}")
             InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template)
             cls.module_types.append(module_type)
+        for position in ("5", "6", "7"):
+            ModuleBay.objects.create(device=cls.device, name=f"Bay {position}", position=position)
 
     def _change_the_chassis_position(self):
         self.device.vc_position = 3
@@ -963,6 +965,9 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual([_journal(module) for module in modules], [[], [], []])
         return [self._names(module) for module in modules], self._names(other)
 
+    def _device_bays(self):
+        return [self._bay(self.device, f"Bay {position}") for position in ("5", "6", "7")]
+
     def _peer_bays(self):
         return [self._bay(self.peer, f"Bay {position}") for position in ("0", "1", "2")]
 
@@ -971,6 +976,12 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         self.assertEqual((moved, other), (names, ["et-3/0/10"]))
         self.assertEqual(_journal(self.device), [])
+
+    def test_moves_then_a_chassis_position_change_rename_each_module_once(self):
+        self._assert_moved_with_a_position_change(self._device_bays(), False, [["et-3/0/5"], ["p6-3"], ["x37/0"]])
+
+    def test_a_chassis_position_change_then_moves_rename_each_module_once(self):
+        self._assert_moved_with_a_position_change(self._device_bays(), True, [["et-3/0/5"], ["p6-3"], ["x37/0"]])
 
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_moves_out_of_the_device_then_a_chassis_position_change_rename_each_module_once(self):
@@ -994,6 +1005,39 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_leaving_the_chassis_then_moves_out_of_the_device_recognise_the_names_before_it(self):
         self._assert_moved_out_with_a_leave(leave_first=True)
+
+    def _assert_a_collision_is_reported_once(self, chassis_first):
+        module = self._install(self.module_types[0], self._bay(self.device))
+        Interface.objects.create(device=self.device, name="et-3/0/5", type=PLAIN_TYPE)
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            if chassis_first:
+                self._change_the_chassis_position()
+            self._save_move(module, self._bay(self.device, "Bay 5"))
+            if not chassis_first:
+                self._change_the_chassis_position()
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
+        (entry,) = _journal(module)
+        self.assertEqual(entry.comments.count("`et-1/0/0` to `et-3/0/5`: target name is already in use"), 1)
+        self.assertEqual(_journal(self.device), [])
+
+    def test_a_move_the_transaction_undoes_leaves_the_module_to_the_chassis_position_change(self):
+        module = self._install(self.module_types[0], self._bay(self.device))
+
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            self._save_move(module, self._bay(self.device, "Bay 5"))
+            self._change_the_chassis_position()
+            self._save_move(module, self._bay(self.device))
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def test_a_move_then_a_chassis_position_change_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_a_move_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=True)
 
 
 @skipIf(NETBOX_MOVES_COMPONENTS, "NetBox 4.7 moves a module's components and nested bays with it")

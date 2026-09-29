@@ -20,7 +20,8 @@ another rule. The plan recognises the earlier names of each module from the firs
 in the transaction. A naming read after a trigger of its device takes the virtual-chassis position
 that the device had before its first trigger. The interfaces of a module installed in the transaction
 carry raw template names only. A module inside the subtree of another moved, edited or retyped module
-reports in the journal entry of the outermost one.
+reports in the journal entry of the outermost one. The plan reapplies the modules of its module
+triggers before the devices, and a device reapply leaves out each module that already reapplied.
 """
 
 import dataclasses
@@ -153,19 +154,18 @@ class PlanRunner:
 def reapply(triggers):
     """Reapply the rules once for what *triggers*, in save order, ask for.
 
-    The module triggers are reapplied together, at the place of the first one. Each device is
-    reapplied at the place of its first trigger.
+    The modules that the module triggers reach are reapplied first. Then each device is reapplied from
+    its first trigger, in the order of those triggers, without the modules that already reapplied.
     """
-    units = {}
+    reapplied = frozenset()
+    if any(isinstance(trigger, ModuleTrigger) for trigger in triggers):
+        reapplied = _reapply_modules(triggers)
+    first_device_triggers = {}
     for trigger in triggers:
-        key = (DeviceTrigger, trigger.pk) if isinstance(trigger, DeviceTrigger) else (ModuleTrigger, None)
-        units.setdefault(key, []).append(trigger)
-    for (kind, _), unit in units.items():
-        if kind is DeviceTrigger:
-            _reapply_device(unit)
-        else:
-            # The module reapply reads the place of each device trigger too.
-            _reapply_modules(triggers)
+        if isinstance(trigger, DeviceTrigger):
+            first_device_triggers.setdefault(trigger.pk, trigger)
+    for trigger in first_device_triggers.values():
+        _reapply_device(trigger, reapplied)
 
 
 @dataclasses.dataclass
@@ -279,7 +279,8 @@ def _reapply_module(module, decide, outcomes):
     """Reapply *module* with the options that *decide* returns, and add its outcome facts to *outcomes*.
 
     *decide* returns None when the module needs no reapply. It can read the rules, so a failure to
-    decide is one more fact, as a failure to reapply is.
+    decide is one more fact, as a failure to reapply is. Return False only when the module needs no
+    reapply.
     """
     from .engine import module_rule_outcomes
 
@@ -287,7 +288,7 @@ def _reapply_module(module, decide, outcomes):
     try:
         options = decide()
         if options is None:
-            return
+            return False
         # extend() keeps the facts the generator yielded before a later family raised.
         outcomes.extend(module_rule_outcomes(module, module.module_bay, **options))
     except Exception as error:
@@ -298,6 +299,7 @@ def _reapply_module(module, decide, outcomes):
     renamed = renamed_count(outcomes) - renamed_before
     if renamed:
         logger.info("Renamed %d interface(s) for %s in %s", renamed, module.module_type, module.module_bay.name)
+    return True
 
 
 def _reapply_modules(triggers):
@@ -308,6 +310,7 @@ def _reapply_modules(triggers):
     naming read it changed type and it now selects another rule, or when it was installed in the
     transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
     the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
+    Return the primary key of each module that reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
 
@@ -318,13 +321,14 @@ def _reapply_modules(triggers):
     except Exception:
         # No committed row was read, so no object can carry a journal entry.
         logger.exception("Failed to read modules %s for their rename trigger reapply", sorted(roots))
-        return
+        return frozenset()
     present = [pk for pk in roots if pk in modules]
     changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
     retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
+    reapplied = set()
     with pinned_reapply(modules.values()):
         for pk in walked:
             module = modules.get(pk)
@@ -332,16 +336,22 @@ def _reapply_modules(triggers):
                 continue
             covering = [other for other in covers if other != pk and pk in roots[other].members]
             decide = functools.partial(_reapply_options, module, roots.get(pk), entries.get(pk), covering, changed)
-            _reapply_module(module, decide, outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), []))
+            outcomes = outcomes_by_owner.setdefault(_journal_owner(pk, covering, roots), [])
+            if _reapply_module(module, decide, outcomes):
+                reapplied.add(pk)
     for owner, outcomes in outcomes_by_owner.items():
         _report(modules[owner], outcomes, roots[owner].author)
+    return frozenset(reapplied)
 
 
-def _reapply_device(triggers):
-    """Reapply the module and device-interface rules of the device that *triggers* name, once."""
+def _reapply_device(trigger, reapplied):
+    """Reapply the module and device-interface rules of the device of its first *trigger*, once.
+
+    The modules in *reapplied* are left out: the module reapply read the device after commit too.
+    """
     from dcim.models import Device
 
-    pk, baseline, author = triggers[0].pk, triggers[0].baseline, triggers[0].author
+    pk, baseline, author = trigger.pk, trigger.baseline, trigger.author
     try:
         device = Device.objects.select_related("virtual_chassis").get(pk=pk)
     except Device.DoesNotExist:
@@ -360,7 +370,7 @@ def _reapply_device(triggers):
         from .engine import device_module_rule_outcomes
 
         # extend() keeps the facts the generator yielded before a later module raised.
-        outcomes.extend(device_module_rule_outcomes(device, report_only=report_only))
+        outcomes.extend(device_module_rule_outcomes(device, report_only=report_only, excluded=reapplied))
     except Exception as error:
         logger.exception("Failed to re-apply module rules for device %s after VC change", pk)
         outcomes.append(_failure(error))

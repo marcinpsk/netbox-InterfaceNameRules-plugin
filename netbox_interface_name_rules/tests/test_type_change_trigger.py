@@ -29,7 +29,9 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
     _journal,
+    _module_reapplies,
     _MoveFixture,
+    _reapplied,
 )
 from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
 
@@ -199,6 +201,89 @@ class TypeChangeTransactionTest(TypeChangeTestCase):
 
         self.assertEqual(self._names(optic), ["b-2/1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
+
+
+class ChassisPositionTypeChangeTest(TypeChangeTestCase):
+    """A type change and a virtual-chassis position change of the device in one transaction, in either order.
+
+    The type change renames a nested module from a naming that holds the device's position before the
+    change, also for a rule with the position in arithmetic. Each module is reapplied once and reports once.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.arithmetic_optic_type = cls._module_type("Arithmetic Optic", "{module}")
+        for card_type, prefix in ((cls.first_card_type, "x"), (cls.second_card_type, "y")):
+            InterfaceNameRule.objects.create(
+                module_type=cls.arithmetic_optic_type,
+                parent_module_type=card_type,
+                name_template=prefix + "{{vc_position} * 10 + {slot_num}}/{bay_position}",
+            )
+        cls.other_plain_type = cls._module_type("Other Plain", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.other_plain_type, name_template="ge-{vc_position}/0/{bay_position}"
+        )
+
+    def _change_the_chassis_position(self):
+        self.device.vc_position = 3
+        self.device.save()
+
+    def _retype_with_the_chassis_change(self, module, module_type, chassis_first):
+        """Change the type of *module* and the device's position in one transaction; return the reapply spy."""
+        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+            if chassis_first:
+                self._change_the_chassis_position()
+            self._save_type(module, module_type)
+            if not chassis_first:
+                self._change_the_chassis_position()
+        return reapplies
+
+    def _assert_the_nested_module_is_renamed_once(self, chassis_first):
+        card = self._install(self.first_card_type, self._bay(self.device))
+        optic = self._install(self.arithmetic_optic_type, self._ports(card)[0])
+        other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
+        self.assertEqual(self._names(optic), ["x10/1"])
+
+        reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first)
+
+        self.assertEqual((self._names(optic), self._names(other)), (["y30/1"], ["et-3/0/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
+        self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
+
+    def test_a_type_change_then_a_chassis_position_change_rename_the_nested_module_once(self):
+        self._assert_the_nested_module_is_renamed_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_a_type_change_rename_the_nested_module_once(self):
+        self._assert_the_nested_module_is_renamed_once(chassis_first=True)
+
+    def test_a_nested_module_whose_rule_does_not_change_is_renamed_for_the_chassis_position_change(self):
+        card, second_port, optic = self._card_with_optic()
+        fixed = self._install(self.plain_type, second_port)
+        self.assertEqual((self._names(optic), self._names(fixed)), (["a-0/1"], ["et-1/0/2"]))
+
+        reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first=True)
+
+        self.assertEqual((self._names(optic), self._names(fixed)), (["b-0/1"], ["et-3/0/2"]))
+        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, fixed.pk)))
+        self.assertEqual((_journal(card), _journal(fixed), _journal(self.device)), ([], [], []))
+
+    def _assert_a_collision_is_reported_once(self, chassis_first):
+        module = self._install(self.plain_type, self._bay(self.device))
+        Interface.objects.create(device=self.device, name="ge-3/0/0", type=PLAIN_TYPE)
+
+        reapplies = self._retype_with_the_chassis_change(module, self.other_plain_type, chassis_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
+        (entry,) = _journal(module)
+        self.assertEqual(entry.comments.count(f"`et-1/0/0` to `ge-3/0/0`: {TAKEN}"), 1)
+        self.assertEqual(_journal(self.device), [])
+
+    def test_a_type_change_then_a_chassis_position_change_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_a_type_change_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=True)
 
 
 class TypeChangeFailureTest(TypeChangeTestCase):
