@@ -279,7 +279,7 @@ def _reapply_modules(triggers):
     transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
     the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
     """
-    from .engine import committed_modules, pinned_reapply, selects_another_rule
+    from .engine import committed_modules, pinned_reapply
 
     roots = _module_roots(triggers)
     entries = _earliest_naming(triggers, roots)
@@ -305,7 +305,7 @@ def _reapply_modules(triggers):
             naming_changed = (
                 pk in changed
                 or not changed.isdisjoint(covering)
-                or (bool(covering) and entry is not None and selects_another_rule(entry, module))
+                or (bool(covering) and entry is not None and entry.selects_another_rule(module))
             )
             options = _reapply_options(module, roots.get(pk), entry, naming_changed)
             if options is not None:

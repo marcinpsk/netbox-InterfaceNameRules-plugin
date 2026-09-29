@@ -401,15 +401,17 @@ class ModuleNaming:
         """Return the rule that the module type and the scope of this naming select now, or None."""
         return find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
 
+    def selects_another_rule(self, module) -> bool:
+        """Return whether *module* now selects another rule than this naming; it reads the rule cache.
+
+        A module that ``committed_modules`` returned needs no other query.
+        """
+        return _selected_rule(module, module.module_bay) != self.rule()
+
     def previous_forms(self) -> family_ops.PreviousForms:
         """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
         rule = None if self.raw_only else self.rule()
         return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
-
-
-def selects_another_rule(naming, module) -> bool:
-    """Return whether *module*, which carries ``_NAMING_RELATIONS``, selects another rule than *naming* selects."""
-    return _selected_rule(module, module.module_bay) != naming.rule()
 
 
 def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
