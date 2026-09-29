@@ -132,6 +132,17 @@ Limits:
 - The plugin does not repair names that module moves left wrong before this
   version. Apply Rules cannot repair them either, because it has no state from
   before the move. Rename these interfaces by hand.
+- NetBox 4.7 renames the raw interface names of a moved module for the
+  virtual-chassis position that the new device has at the move. When the same
+  transaction then changes the position of that device, and the interface
+  template name has two `{vc_position}` tokens with nothing between them, such
+  as `xe-{vc_position}{vc_position}/0/{module}`, the plugin cannot recognise
+  the name, because such a template name has no matcher for other positions.
+  The interface keeps its name, and the journal entry of the module lists it.
+  Before this version, the virtual-chassis change renamed such an interface. A
+  web UI or REST API request changes objects of one model only, so only scripts
+  and shell sessions do this. Apply Rules renames the interface for a rule that
+  does not use `{base}`.
 - NetBox before 4.7 saves a move as a change of the module row only. After a
   move to another bay of the same device, the plugin renames the moved module's
   interfaces, and recognises the raw template names from the old bay. The

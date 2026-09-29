@@ -52,6 +52,7 @@ BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
 NETBOX_MOVES_COMPONENTS = importlib.util.find_spec("dcim.models.module_moves") is not None
 REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 REQUIRES_DEVICE_MOVES = "requires a NetBox that moves a module's interfaces to its new device (4.7+)"
+REQUIRES_MOVE_RENAMES = "requires a NetBox that renames a moved module's raw interface names (4.7+)"
 UNCLAIMED = "no single interface template claims"
 FLAT = "a flat breakout family is not renamed after a move, a bay edit or a parent module type change"
 NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
@@ -978,6 +979,12 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             parent_module_type=cls.card_type,
             name_template="et-{vc_position}/{slot}/{bay_position}",
         )
+        cls.adjacent_type = cls._module_type("Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
+        cls.adjacent_rule = InterfaceNameRule.objects.create(
+            module_type=cls.adjacent_type,
+            parent_module_type=cls.card_type,
+            name_template="et-{vc_position}/{slot}/{bay_position}",
+        )
 
     def _move_all(self, targets, device_change, device_first):
         """Install a module of each rule and a plain one in Bay 10, then run *device_change* and move each rule's module.
@@ -1126,6 +1133,25 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_chassis_position_change_then_a_move_into_a_rule_recognise_the_raw_name_before_it(self):
         self._assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(chassis_first=True)
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_name_netbox_gives_at_a_move_with_adjacent_tokens_is_reported_after_a_later_position_change(self):
+        # The limit that docs/configuration.md lists under "Moving a module".
+        module = self._install(self.adjacent_type, self._bay(self.device))
+        _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
+
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, port), self._change_the_chassis_position
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["xe-11/0/1"], 1))
+        (entry,) = _journal(module)
+        self.assertEqual(entry.comments.count(f"`xe-11/0/1`: {UNCLAIMED}"), 1)
+        self.assertEqual(_journal(self.device), [])
+
+        engine.apply_rule_to_existing(self.adjacent_rule)
+
+        self.assertEqual(self._names(module), ["et-3/1/1"])
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
         module = self._install(self.module_types[0], self._bay(self.device))
