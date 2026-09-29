@@ -1240,7 +1240,23 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
-    def test_a_naming_at_install_that_fails_is_reported_on_each_module_and_not_by_the_device(self):
+    def test_an_install_without_templates_then_a_chassis_position_change_rename_its_interface(self):
+        bare_type = self._module_type("Bare")
+        InterfaceNameRule.objects.create(module_type=bare_type, name_template="et-{vc_position}/{bay_position}")
+        installed = []
+
+        def install():
+            module = Module.objects.create(device=self.device, module_bay=self._bay(self.device), module_type=bare_type)
+            Interface.objects.create(device=self.device, module=module, name="0", type=PLAIN_TYPE)
+            installed.append(module)
+
+        reapplies = self._save_in_one_transaction(install, self._change_the_chassis_position)
+
+        (module,) = installed
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def test_a_failed_install_reapply_is_reported_on_each_module_and_not_by_the_device(self):
         with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():
             first = Module.objects.create(
                 device=self.device, module_bay=self._bay(self.device), module_type=self.plain_type
@@ -1297,6 +1313,120 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
 
     def test_a_chassis_position_change_then_an_install_report_a_collision_once(self):
         self._assert_a_collision_is_reported_once(chassis_first=True)
+
+
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+class InstallPositionInvariantTest(ModuleMoveTestCase):
+    """An install whose device changes position and back in the same transaction ends as the install alone.
+
+    The install then recognises its raw names at the position of its install too, which is the position
+    now, so each input of the install claim gives the answer that it gives without the device change.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.card_type = cls._card_type("Card", "1")
+        ModuleBay.objects.create(device=cls.device, name="Bay T", position="{vc_position}")
+        # Label: (module type, bay name, hand-added interface names, the names of the install alone).
+        cls.fixtures = {
+            "no templates": (cls._ruled("Bare", "et-{vc_position}/{bay_position}"), "Bay 0", ("0",), ["et-1/0"]),
+            "a token with a fallback": (
+                cls._ruled("Fallback", "p{base}", "xe-{vc_position:9}/{module}"),
+                "Bay 0",
+                (),
+                ["pxe-1/0"],
+            ),
+            "a bay position with the token": (
+                cls._ruled("Token Bay", "p{base}", "{vc_position}/{module}"),
+                "Bay T",
+                (),
+                ["p1/1"],
+            ),
+            "templated and hand-added": (
+                cls._ruled("Mixed", "et-{vc_position}/{bay_position}", "{module}"),
+                "Bay 0",
+                ("mgmt",),
+                ["et-1/0", "mgmt"],
+            ),
+            "a flat breakout rule": (
+                cls._ruled(
+                    "Flat",
+                    "x-{vc_position}/{bay_position}:{channel}",
+                    "{module}",
+                    breakout_mode=BreakoutModeChoices.FLAT,
+                    channel_count=2,
+                    channel_start=0,
+                ),
+                "Bay 0",
+                (),
+                ["x-1/0:0", "x-1/0:1"],
+            ),
+            "a nested module": (
+                cls._ruled("Nested", "p{base}", "xe-{vc_position}/{module}/{module}"),
+                "Port",
+                (),
+                ["pxe-1/1/1"],
+            ),
+        }
+
+    @classmethod
+    def _ruled(cls, model, name_template, *templates, **rule_fields):
+        module_type = cls._module_type(model, *templates)
+        InterfaceNameRule.objects.create(module_type=module_type, name_template=name_template, **rule_fields)
+        return module_type
+
+    def _install_outcome(self, module_type, bay, hand_added, *device_changes):
+        """Install *module_type* in *bay* with *hand_added* interfaces and *device_changes* in one transaction.
+
+        Return the names and the journal of the module, then delete it so that the bay is free again.
+        """
+        installed = []
+
+        def install():
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
+            for name in hand_added:
+                Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+            installed.append(module)
+
+        self._save_in_one_transaction(install, *device_changes)
+        (module,) = installed
+        outcome = (self._names(module), [entry.comments for entry in _journal(module)])
+        module.delete()
+        return outcome
+
+    def test_an_install_with_a_position_change_undone_ends_as_the_install_alone(self):
+        _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
+        undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
+
+        for label, (module_type, bay_name, hand_added, names) in self.fixtures.items():
+            bay = port if bay_name == "Port" else self._bay(self.device, bay_name)
+            with self.subTest(label):
+                alone = self._install_outcome(module_type, bay, hand_added)
+                self.assertEqual(alone, (names, []))
+                self.assertEqual(self._install_outcome(module_type, bay, hand_added, *undone), alone)
+        self.assertEqual(_journal(self.device), [])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_channelized_install_with_a_position_change_undone_ends_as_the_install_alone(self):
+        module_type = _channelized_module_type(
+            self.manufacturer, f"{self.prefix} Channelized", channels=2, child_channel_ids=(1, 2)
+        )
+        InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="xe-{vc_position}/0/{bay_position}:{channel}",
+            parent_name_template="et-{vc_position}/0/{bay_position}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+        bay = self._bay(self.device)
+        undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
+
+        alone = self._install_outcome(module_type, bay, ())
+
+        self.assertEqual(alone, (["et-1/0/0", "xe-1/0/0:0", "xe-1/0/0:1"], []))
+        self.assertEqual(self._install_outcome(module_type, bay, (), *undone), alone)
 
 
 @skipIf(NETBOX_MOVES_COMPONENTS, "NetBox 4.7 moves a module's components and nested bays with it")

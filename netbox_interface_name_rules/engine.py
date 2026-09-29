@@ -156,7 +156,7 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
 
 
 def module_rule_outcomes(
-    module, module_bay, force_reapply=False, report_only=False, naming=None
+    module, module_bay, force_reapply=False, report_only=False, naming=None, earlier_positions=()
 ) -> Iterator[RenameOutcome]:
     """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
 
@@ -172,6 +172,10 @@ def module_rule_outcomes(
     could be recognised by name only (ADR 0015). When an interface of the module is on another device,
     or the module's bay has a parent bay that does not hold the module that owns the bay, nothing is
     renamed and every interface is reported.
+
+    *earlier_positions* are the virtual-chassis positions at which NetBox also resolved the module's
+    raw template names in the transaction, such as at its install. The claim recognises the raw names
+    at each of them too.
     """
     rule = _selected_rule(module, module_bay)
     previous_forms = None if naming is None else naming.previous_forms()
@@ -189,7 +193,9 @@ def module_rule_outcomes(
         return
     # One pin for the module: the claim and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only, previous_forms)
+        yield from _apply_rule_to_module(
+            rule, module, module_bay, force_reapply, report_only, previous_forms, earlier_positions
+        )
 
 
 def _kept_flat_family(module) -> Iterator[RenameOutcome]:
@@ -249,7 +255,9 @@ def _acted_on_names(rule, plans):
     return tuple(dict.fromkeys(names))
 
 
-def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False, previous_forms=None):
+def _apply_rule_to_module(
+    rule, module, module_bay, force_reapply, report_only=False, previous_forms=None, earlier_positions=()
+):
     """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
 
@@ -265,7 +273,9 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     if _has_stale_parent_bay(module_bay):
         yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
         return
-    bases = family_ops.module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    bases = family_ops.module_raw_bases(
+        module, rule, variables, interfaces, previous_forms, earlier_positions=earlier_positions
+    )
     planned = family_ops.plan_module_families(
         module, rule, variables, interfaces, bases, _run_scope(force_reapply, previous_forms)
     )

@@ -19,8 +19,8 @@ scoped to the old or the new type as a parent module type, because a nested modu
 another rule. The plan recognises the earlier names of each module from the first naming read for it
 in the transaction. A naming takes the virtual-chassis position that its device had when the module's
 interfaces got their names: before the transaction, or at the install. The interfaces of a module
-installed in the transaction carry raw template names only; when its device changed position after
-the install and no trigger read a naming for it, the plan builds one at the position of the install.
+installed in the transaction carry raw template names only; when it reapplies as an install, the
+install also recognises them at the position that its device had at the install.
 A module inside the subtree of another moved, edited or retyped module reports in the journal entry
 of the outermost one. The plan reapplies the modules of its module triggers before the devices, and a
 device reapply leaves out each module that already reapplied.
@@ -223,22 +223,6 @@ def _earliest_naming(module_triggers, roots, device_triggers):
     return entries
 
 
-def _naming_at_install(module, root, device_pairs):
-    """Return the naming of *module*, installed in the transaction, at the position of its install, or None.
-
-    There is one only when a trigger in *device_pairs* changed that position after the install. Every
-    move and every change of what a bay's names are built from reads a naming, so nothing moved a module
-    without one or changed its bay: its raw names are its templates at the committed bay, at that position.
-    """
-    state = _state_when_named(device_pairs, root.start, math.inf)
-    if state is None:
-        return None
-    from .engine import ModuleNaming
-
-    naming = ModuleNaming.of(module).at_chassis_position(chassis_position(state))
-    return dataclasses.replace(naming, raw_only=True)
-
-
 def _state_when_named(pairs, named_at, read_at):
     """Return the device state at place *named_at* when a device trigger before *read_at* changed it, else None.
 
@@ -289,19 +273,19 @@ def _reapply_options(module, root, entry, covering, changed, device_pairs):
 
     *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
     the modules that moved or had their bay values changed. *device_pairs* are the ``(place, trigger)``
-    pairs of the module's device, which give a module installed in the transaction without a naming one
-    at the position of its install.
+    pairs of the module's device. A module installed in the transaction that reapplies as an install
+    also recognises its raw names at the position of its install, when a device trigger changed it.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
-    if entry is None and root is not None and root.installed:
-        entry = _naming_at_install(module, root, device_pairs)
     if entry is not None and _reapply_from_naming(module, entry, covering, changed):
         return {"naming": entry}
     if root is not None and (root.installed or current != root.baseline):
-        return {"force_reapply": current != root.baseline}
+        state = _state_when_named(device_pairs, root.start, math.inf) if root.installed else None
+        earlier_positions = () if state is None else (chassis_position(state),)
+        return {"force_reapply": current != root.baseline, "earlier_positions": earlier_positions}
     return None
 
 
@@ -338,11 +322,11 @@ def _reapply_modules(module_triggers, device_triggers):
     A module reapplies as after a type change when its type changed. It reapplies from its earliest
     naming when it or a module whose naming read it moved or had its bay edited, when a module whose
     naming read it changed type and it now selects another rule, or when it was installed in the
-    transaction and has a naming, read by a trigger or built at the position of its install. It
-    reapplies as an install otherwise. Its outcomes go to the outermost of the moved, edited or retyped
-    modules that read its naming, or to the module itself. *device_triggers* give each naming the
-    position of its device when the module was named. Return the primary key of each module that
-    reapplied, or that failed to.
+    transaction and a naming was read for it. It reapplies as an install otherwise, which also
+    recognises its raw names at the position of its install. Its outcomes go to the outermost of the
+    moved, edited or retyped modules that read its naming, or to the module itself. *device_triggers*
+    give each naming and each install the position of its device when the module was named. Return the
+    primary key of each module that reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
 

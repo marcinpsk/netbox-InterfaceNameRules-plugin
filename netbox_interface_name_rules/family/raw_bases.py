@@ -149,9 +149,10 @@ class RawBases:
     """The one claim over every name form of a module's interfaces under one rule (ADR 0013).
 
     *families* maps each name outside a channel to its channels; *plain* names the flat-family candidates.
+    *earlier_positions* are the virtual-chassis positions at which the templates also gave raw names.
     """
 
-    def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None):
+    def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None, earlier_positions=()):
         self._module = module
         self._rule = rule
         self._variables = variables
@@ -160,6 +161,7 @@ class RawBases:
         self._plain = frozenset(plain)
         self.catalog = catalog
         self.previous_forms = previous_forms
+        self._earlier_positions = tuple(earlier_positions)
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._breaks_out = breaks_out(rule)
         self._claims_flat = previous_forms is None and self._breaks_out
@@ -201,7 +203,7 @@ class RawBases:
         templates = [template for template in self.catalog.get() if template.channel_id is None]
         if not templates and self.previous_forms is None:
             templates = [ResolvedTemplateName(None, _STAND_IN, self._variables["bay_position"], None, None, None, None)]
-        raw_names = {template.resolved for template in templates}
+        raw_names = {name for template in templates for name in self._raw_forms(template)}
         raw_by_claimant = {template.pk: template.resolved for template in templates}
         claims, flat, raw_claimed = [], {}, set()
         for template in templates:
@@ -235,11 +237,14 @@ class RawBases:
             or (previous is not None and self._matches(name, previous))
         )
 
-    @staticmethod
-    def _is_raw_name(name, template, raw_names):
-        """Return whether *name* is *template*'s raw name now, or at a position no other raw name holds."""
+    def _raw_forms(self, template):
+        """Return *template*'s raw name now and at each of the earlier positions."""
+        return {template.resolved, *(template.at_chassis_position(p).resolved for p in self._earlier_positions)}
+
+    def _is_raw_name(self, name, template, raw_names):
+        """Return whether *name* is *template*'s raw name now, earlier, or at a position no other raw name holds."""
         historical = template.historical_pattern
-        return name == template.resolved or (
+        return name in self._raw_forms(template) or (
             historical is not None and name not in raw_names and historical.fullmatch(name) is not None
         )
 
