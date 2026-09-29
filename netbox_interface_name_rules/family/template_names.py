@@ -94,20 +94,26 @@ def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-
 
 
 def _vc_parts(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
-    """Return the ``VcTokenParts`` of *template* resolved against *module*, or None without a token."""
-    fallbacks = []
+    """Return the ``VcTokenParts`` of *template* resolved against *module*, or None when its name has no token.
+
+    NetBox resolves ``{module}`` first, and then every token in the result, also a token that a bay
+    position brought in. The stub hides the template's own tokens from NetBox as markers, and puts them
+    back after the ``{module}`` pass, so the split sees every token that NetBox resolves.
+    """
+    tokens = []
 
     def mark(match):
-        fallbacks.append(match.group(1))
-        return _VC_SENTINEL.format(len(fallbacks) - 1)
+        tokens.append(match.group(0))
+        return _VC_SENTINEL.format(len(tokens) - 1)
 
     marked = token_re.sub(mark, template.name)
-    if not fallbacks:
+    if not tokens:
         return None
     stub = copy.copy(template)
     stub.name = marked
-    parts = _VC_SENTINEL_RE.split(stub.resolve_name(module))
-    return VcTokenParts(tuple(parts[0::2]), tuple(fallbacks))
+    expanded = _VC_SENTINEL_RE.sub(lambda match: tokens[int(match.group(1))], stub.resolve_name(module))
+    parts = token_re.split(expanded)
+    return VcTokenParts(tuple(parts[0::2]), tuple(parts[1::2]))
 
 
 def _historical_pattern(parts):  # pragma: no cover - requires virtual-chassis token support

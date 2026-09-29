@@ -659,21 +659,27 @@ class VcPositionResolutionTest(VcDriftTestCase):
             "et-{vc_position}{vc_position:7}/0/{module}",
             "mgmt{module}",
         )
+        # NetBox resolves {module} first, so this bay brings one more token into each name.
+        ModuleBay.objects.create(device=cls.device, name="Bay T", position="{vc_position}")
 
     def test_a_resolved_template_resolves_at_each_position_as_netbox_does(self):
-        module, _ = self._install_on(self.device, self.module_type, "3")
-        read = resolved_template_names(module)
+        modules = [self._install_on(self.device, self.module_type, bay)[0] for bay in ("3", "T")]
+        read = {module.pk: resolved_template_names(module) for module in modules}
         templates = list(InterfaceTemplate.objects.filter(module_type=self.module_type).order_by("pk"))
-        self.assertEqual([entry.at_chassis_position(1).resolved for entry in read], [entry.resolved for entry in read])
+        for entries in read.values():
+            self.assertEqual(
+                [entry.at_chassis_position(1).resolved for entry in entries], [e.resolved for e in entries]
+            )
 
         for position, change in ((4, lambda: self._renumber(4)), (None, self._leave)):
             change()
-            current = Module.objects.get(pk=module.pk)
-            with self.subTest(position=position):
-                self.assertEqual(
-                    [entry.at_chassis_position(position).resolved for entry in read],
-                    [template.resolve_name(current) for template in templates],
-                )
+            for module in modules:
+                current = Module.objects.get(pk=module.pk)
+                with self.subTest(position=position, bay=current.module_bay.name):
+                    self.assertEqual(
+                        [entry.at_chassis_position(position).resolved for entry in read[module.pk]],
+                        [template.resolve_name(current) for template in templates],
+                    )
 
 
 # ---------------------------------------------------------------------------

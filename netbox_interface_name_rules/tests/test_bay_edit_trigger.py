@@ -90,6 +90,19 @@ class BayEditTest(BayEditTestCase):
         InterfaceNameRule.objects.create(module_type=cls.fixed_type, name_template="ge-{vc_position}/0/{bay_position}")
         ModuleBay.objects.create(device=cls.device, name="Bay 3", position="{module}")
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_raw_name_whose_bay_position_brought_the_chassis_token_is_recognised_after_a_bay_edit(self):
+        token_type = self._module_type("Token Base", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=token_type, name_template="p{base}")
+        bay = ModuleBay.objects.create(device=self.device, name="Bay 9", position="{vc_position}")
+        module = self._install(token_type, bay)
+        self.assertEqual(self._names(module), ["p1/1"])
+
+        self._edit(bay, position="2")
+
+        self.assertEqual(self._names(module), ["p1/2"])
+        self.assertEqual(_journal(module), [])
+
     def test_a_position_edit_renames_the_module_for_the_new_position(self):
         bay = self._bay(self.device)
         module = self._install(self.plain_type, bay)
