@@ -17,16 +17,19 @@ reads before the save what named the interfaces of that module and of every modu
 After the save that naming is gone. A save that changes a module's type reads it too when a rule is
 scoped to the old or the new type as a parent module type, because a nested module can then select
 another rule. The plan recognises the earlier names of each module from the first naming read for it
-in the transaction. A naming read after a trigger of its device takes the virtual-chassis position
-that the device had before its first trigger. The interfaces of a module installed in the transaction
-carry raw template names only. A module inside the subtree of another moved, edited or retyped module
-reports in the journal entry of the outermost one. The plan reapplies the modules of its module
-triggers before the devices, and a device reapply leaves out each module that already reapplied.
+in the transaction. A naming takes the virtual-chassis position that its device had when the module's
+interfaces got their names: before the transaction, or at the install. The interfaces of a module
+installed in the transaction carry raw template names only; when its device changed position after
+the install and no trigger read a naming for it, the plan builds one at the position of the install.
+A module inside the subtree of another moved, edited or retyped module reports in the journal entry
+of the outermost one. The plan reapplies the modules of its module triggers before the devices, and a
+device reapply leaves out each module that already reapplied.
 """
 
 import dataclasses
 import functools
 import logging
+import math
 import weakref
 
 from django.db import transaction
@@ -220,6 +223,27 @@ def _earliest_naming(module_triggers, roots, device_triggers):
     return entries
 
 
+def _namings_at_install(roots, entries, modules, device_triggers):
+    """Return a naming for each module installed in the transaction that has none, when its device changed position since.
+
+    Every move and every change of what a bay's names are built from reads a naming, so nothing moved
+    such a module or changed its bay: its raw names are its templates at the committed bay, resolved at
+    the position that its device had at the install.
+    """
+    from .engine import ModuleNaming
+
+    namings = {}
+    for pk, root in roots.items():
+        module = modules.get(pk)
+        if module is None or not root.installed or pk in entries:
+            continue
+        state = _state_when_named(device_triggers.get(module.device_id, ()), root.start, math.inf)
+        if state is not None:
+            naming = ModuleNaming.of(module).at_chassis_position(chassis_position(state))
+            namings[pk] = dataclasses.replace(naming, raw_only=True)
+    return namings
+
+
 def _state_when_named(pairs, named_at, read_at):
     """Return the device state at place *named_at* when a device trigger before *read_at* changed it, else None.
 
@@ -315,10 +339,11 @@ def _reapply_modules(module_triggers, device_triggers):
     A module reapplies as after a type change when its type changed. It reapplies from its earliest
     naming when it or a module whose naming read it moved or had its bay edited, when a module whose
     naming read it changed type and it now selects another rule, or when it was installed in the
-    transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
-    the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
-    *device_triggers* give each naming the position of its device when the module was named. Return the
-    primary key of each module that reapplied, or that failed to.
+    transaction and has a naming, read by a trigger or built at the position of its install. It
+    reapplies as an install otherwise. Its outcomes go to the outermost of the moved, edited or retyped
+    modules that read its naming, or to the module itself. *device_triggers* give each naming the
+    position of its device when the module was named. Return the primary key of each module that
+    reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
 
@@ -330,14 +355,15 @@ def _reapply_modules(module_triggers, device_triggers):
         # No committed row was read, so no object can carry a journal entry.
         logger.exception("Failed to read modules %s for their rename trigger reapply", sorted(roots))
         return frozenset()
-    present = [pk for pk in roots if pk in modules]
-    changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
-    retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
-    covers = [pk for pk in present if pk in changed or pk in retyped]
-    walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
     attempted_pks = set()
     with pinned_reapply(modules.values()):
+        entries.update(_namings_at_install(roots, entries, modules, device_triggers))
+        present = [pk for pk in roots if pk in modules]
+        changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
+        retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
+        covers = [pk for pk in present if pk in changed or pk in retyped]
+        walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
         for pk in walked:
             module = modules.get(pk)
             if module is None:

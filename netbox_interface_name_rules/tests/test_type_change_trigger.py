@@ -19,6 +19,7 @@ from extras.choices import JournalEntryKindChoices
 from rest_framework import status
 from utilities.testing import APITestCase
 
+from netbox_interface_name_rules.engine import supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.test_bay_edit_trigger import BayEditTestCase, _flat_rule
@@ -36,6 +37,7 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     _reapplied,
 )
 from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
+from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 
 class _CardFixture(_MoveFixture):
@@ -224,6 +226,9 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
         InterfaceNameRule.objects.create(
             module_type=cls.other_plain_type, name_template="ge-{vc_position}/0/{bay_position}"
         )
+        cls.unruled_adjacent_type = cls._module_type("Unruled Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
+        cls.adjacent_type = cls._module_type("Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.adjacent_type, name_template="ge-{vc_position}/{bay_position}")
 
     def _retype_with_the_chassis_change(self, module, module_type, chassis_first):
         """Change the type of *module* and the device's position in one transaction; return the reapply spy."""
@@ -287,6 +292,23 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
 
     def test_leaving_the_chassis_then_a_type_change_rename_nothing_and_report_once(self):
         self._assert_leaving_with_a_type_change_renames_nothing_and_reports_once(leave_first=True)
+
+    def _assert_a_raw_name_with_adjacent_tokens_is_renamed_by_the_forced_reapply(self, chassis_first):
+        module = self._install(self.unruled_adjacent_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["xe-11/0/0"])
+
+        reapplies = self._retype_with_the_chassis_change(module, self.adjacent_type, chassis_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["ge-3/0"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_type_change_then_a_chassis_position_change_rename_a_raw_name_with_adjacent_tokens(self):
+        self._assert_a_raw_name_with_adjacent_tokens_is_renamed_by_the_forced_reapply(chassis_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_chassis_position_change_then_a_type_change_rename_a_raw_name_with_adjacent_tokens(self):
+        self._assert_a_raw_name_with_adjacent_tokens_is_renamed_by_the_forced_reapply(chassis_first=True)
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
         module = self._install(self.plain_type, self._bay(self.device))

@@ -1161,21 +1161,52 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         super().setUpTestData()
         cls.plain_type = cls._module_type(CHASSIS_RULES[0].model, "{module}")
         InterfaceNameRule.objects.create(module_type=cls.plain_type, name_template=CHASSIS_RULES[0].name_template)
+        # Adjacent tokens build no historical matcher, so only the position of the install recognises the raw name.
+        cls.adjacent_type = cls._module_type("Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.adjacent_type, name_template="et-{vc_position}/{bay_position}")
+        cls.card_type = cls._card_type("Card", "1")
 
-    def _install_with_the_chassis_change(self, chassis_first):
-        """Install a module in Bay 0 with a position change in one transaction; return it, the module in Bay 10 and the spy."""
+    def _install_with_the_chassis_change(self, chassis_first, module_type=None, bay=None):
+        """Install a module with a position change in one transaction; return it, the module in Bay 10 and the spy.
+
+        The module is of *module_type*, the plain type by default, in *bay*, Bay 0 by default.
+        """
         other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
         installed = []
 
         def install():
             installed.append(
                 Module.objects.create(
-                    device=self.device, module_bay=self._bay(self.device), module_type=self.plain_type
+                    device=self.device,
+                    module_bay=bay or self._bay(self.device),
+                    module_type=module_type or self.plain_type,
                 )
             )
 
         reapplies = self._save_with_a_device_change(self._change_the_chassis_position, install, chassis_first)
         return installed[0], other, reapplies
+
+    def _assert_an_adjacent_token_install_is_named_once(self, chassis_first, bay, names, cards=()):
+        """Install the adjacent-token type in *bay* with a position change; the device reapplies *cards* too."""
+        module, other, reapplies = self._install_with_the_chassis_change(chassis_first, self.adjacent_type, bay)
+
+        self.assertEqual((self._names(module), self._names(other)), (names, ["et-3/10/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk, *(card.pk for card in cards))))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_then_a_chassis_position_change_recognise_the_raw_name_at_the_position_of_the_install(self):
+        self._assert_an_adjacent_token_install_is_named_once(False, self._bay(self.device), ["et-3/0"])
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_chassis_position_change_then_an_install_name_a_raw_name_with_adjacent_tokens(self):
+        self._assert_an_adjacent_token_install_is_named_once(True, self._bay(self.device), ["et-3/0"])
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_in_a_card_then_a_chassis_position_change_recognise_the_nested_raw_name(self):
+        card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
+
+        self._assert_an_adjacent_token_install_is_named_once(False, port, ["et-3/1"], cards=(card,))
 
     def _assert_an_install_is_named_once(self, chassis_first):
         module, other, reapplies = self._install_with_the_chassis_change(chassis_first)

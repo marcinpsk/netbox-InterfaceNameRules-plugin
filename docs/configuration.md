@@ -164,9 +164,9 @@ The plugin renames each module at most once per transaction, from the state
 before the first change in that transaction. This includes a virtual-chassis
 position change of the module's device in the same transaction: the plugin
 rebuilds the earlier names from the position before that change, and the
-device does not rename the module again. A module installed after that change
-is recognised from the position at its install. Several edits of one bay rename
-once, and an edit that the same transaction undoes renames nothing. When one
+device does not rename the module again. A module installed in the same
+transaction, before or after that change, is recognised from the position at
+its install. Several edits of one bay rename once, and an edit that the same transaction undoes renames nothing. When one
 transaction edits a bay and a bay nested below it, or edits a bay and moves,
 installs or changes the type of a module in it, each module is renamed once. A
 module installed in the same transaction is named as an install names it, also
