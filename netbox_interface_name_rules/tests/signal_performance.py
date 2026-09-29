@@ -17,6 +17,7 @@ import platform
 import re
 import statistics
 import subprocess
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -950,7 +951,7 @@ class SignalPathPerformanceTest(TransactionTestCase):
                 move()
 
             def operation():
-                reapply([ModuleTrigger(module.pk, baseline, naming=naming)])
+                reapply([ModuleTrigger(module.pk, baseline, naming=naming, moved=True)])
 
         def verify():
             names = sorted(Interface.objects.filter(device=device).values_list("name", flat=True))
@@ -1049,6 +1050,22 @@ class SignalPathPerformanceTest(TransactionTestCase):
             prepared.operation()
 
         self.assertIn(False, atomic_states)
+
+    def test_direct_move_reapplies_the_trigger_a_move_save_builds(self):
+        """The direct layer must measure the move naming points that a real move save reapplies."""
+        triggers = {}
+        for direct, owner in ((False, rename_triggers), (True, sys.modules[__name__])):
+            prepared = self._prepare_move(f"PerfMoveTrigger{int(direct)}", "plain_rename", direct)
+            real = owner.reapply
+
+            def record(batch, direct=direct, real=real):
+                triggers[direct] = [trigger.moved for trigger in batch]
+                return real(batch)
+
+            with patch.object(owner, "reapply", record):
+                prepared.operation()
+
+        self.assertEqual(triggers, {False: [True], True: [True]})
 
     def test_direct_module_fixture_includes_the_measured_rule(self):
         """Record fixture counts after direct-callback setup is complete."""
