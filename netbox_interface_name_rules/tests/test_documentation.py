@@ -480,8 +480,8 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             with self.subTest(page=page):
                 text = (_PROJECT_ROOT / page).read_text(encoding="utf-8")
                 self.assertIn(
-                    "after the position of an occupied module bay changes, "
-                    "and after its name changes in a way that a template variable reads",
+                    "after the position of an occupied module bay changes. "
+                    "A bay name change also triggers them when a template variable reads the name",
                     text,
                 )
                 self.assertNotIn("after the position or name of an occupied module bay changes", text)
