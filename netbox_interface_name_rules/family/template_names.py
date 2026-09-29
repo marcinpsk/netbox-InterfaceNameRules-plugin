@@ -13,7 +13,7 @@ import threading
 from dataclasses import dataclass, replace
 from re import Pattern
 
-from dcim.models import InterfaceTemplate, Module
+from dcim.models import InterfaceTemplate, Module, VirtualChassis
 
 from ..rule_selection import compile_stored_pattern
 
@@ -36,30 +36,13 @@ VC_POSITION_DIGITS = r"\d{1,10}"
 
 
 @dataclass(frozen=True, slots=True)
-class VcTokenParts:
-    """A template name resolved around its ``{vc_position}`` tokens.
-
-    ``literals`` hold the text before, between and after the tokens, and ``fallbacks`` hold the
-    explicit fallback of each token, or None.
-    """
-
-    literals: tuple[str, ...]
-    fallbacks: tuple[str | None, ...]
-
-    def resolve(self, vc_position):  # pragma: no cover - requires virtual-chassis token support
-        """Return the name as NetBox resolves it at *vc_position*: else each token's fallback, else 0."""
-        values = [
-            str(vc_position) if vc_position is not None else ("0" if fallback is None else fallback)
-            for fallback in self.fallbacks
-        ]
-        return self.literals[0] + "".join(
-            value + literal for value, literal in zip(values, self.literals[1:], strict=True)
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class ResolvedTemplateName:
-    """One template's current name, its optional historical-name matcher, and its ``VcTokenParts``."""
+    """One template's current name, its optional historical-name matcher, and what NetBox resolved it from.
+
+    ``source`` holds the template and the module that NetBox resolved the name against, when the name
+    reads the virtual-chassis position; it is None otherwise, because the name is then the same at
+    every position.
+    """
 
     pk: int
     template_name: str
@@ -68,13 +51,28 @@ class ResolvedTemplateName:
     parent_id: int | None
     channel_id: int | None
     channels: int | None
-    vc_parts: VcTokenParts | None = None
+    source: tuple | None = None
 
     def at_chassis_position(self, vc_position):
-        """Return this template resolved at *vc_position*, which None puts off a chassis."""
-        if self.vc_parts is None:
+        """Return this template as NetBox resolves it at *vc_position*, which None puts off a chassis."""
+        if self.source is None:
             return self
-        return replace(self, resolved=self.vc_parts.resolve(vc_position))
+        template, module = self.source
+        return replace(self, resolved=template.resolve_name(_module_at_chassis_position(module, vc_position)))
+
+
+def _module_at_chassis_position(module, vc_position):  # pragma: no cover - requires virtual-chassis token support
+    """Return a copy of *module* whose device is a copy at *vc_position*; None puts that device off a chassis.
+
+    NetBox reads only whether the device has a virtual chassis, and its position. The copies share the
+    bay chain that *module* already loaded, change nothing on *module* or its device, and are not saved.
+    """
+    device = copy.copy(module.device)
+    device.virtual_chassis = None if vc_position is None else VirtualChassis()
+    device.vc_position = vc_position
+    stand_in = copy.copy(module)
+    stand_in.device = device
+    return stand_in
 
 
 def vc_position_re():
@@ -93,36 +91,25 @@ def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-
     return f"(?:{VC_POSITION_DIGITS}|{re.escape(fallback)})"
 
 
-def _vc_parts(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
-    """Return the ``VcTokenParts`` of *template* resolved against *module*, or None when its name has no token.
-
-    NetBox resolves ``{module}`` first, and then every token in the result, also a token that a bay
-    position brought in. The stub hides the template's own tokens from NetBox as markers, and puts them
-    back after the ``{module}`` pass, so the split sees every token that NetBox resolves.
-    """
-    tokens = []
+def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
+    """Return a matcher for every historical resolution of *template*."""
+    fallbacks = []
 
     def mark(match):
-        tokens.append(match.group(0))
-        return _VC_SENTINEL.format(len(tokens) - 1)
+        fallbacks.append(match.group(1))
+        return _VC_SENTINEL.format(len(fallbacks) - 1)
 
     marked = token_re.sub(mark, template.name)
-    if not tokens:
+    if not fallbacks:
         return None
     stub = copy.copy(template)
     stub.name = marked
-    expanded = _VC_SENTINEL_RE.sub(lambda match: tokens[int(match.group(1))], stub.resolve_name(module))
-    parts = token_re.split(expanded)
-    return VcTokenParts(tuple(parts[0::2]), tuple(parts[1::2]))
-
-
-def _historical_pattern(parts):  # pragma: no cover - requires virtual-chassis token support
-    """Return a matcher for every resolution of the template name that *parts* describe, or None."""
+    literals = _VC_SENTINEL_RE.split(stub.resolve_name(module))[0::2]
     # Adjacent tokens cannot be told apart, and their alternatives would backtrack without bound.
-    if any(not literal for literal in parts.literals[1:-1]):
+    if any(not literal for literal in literals[1:-1]):
         return None
-    pattern = re.escape(parts.literals[0])
-    for fallback, literal in zip(parts.fallbacks, parts.literals[1:], strict=True):
+    pattern = re.escape(literals[0])
+    for fallback, literal in zip(fallbacks, literals[1:], strict=True):
         pattern += _vc_position_alternatives(fallback) + re.escape(literal)
     return compile_stored_pattern(pattern)
 
@@ -178,16 +165,17 @@ def _interface_templates(module_type_id):
 
 def _resolve_template(template, module, token_re) -> ResolvedTemplateName:
     """Resolve one interface template against *module*."""
-    parts = None if token_re is None else _vc_parts(template, module, token_re)
+    # NetBox resolves the position only in a template name that has the token.
+    reads_position = token_re is not None and token_re.search(template.name) is not None
     return ResolvedTemplateName(
         pk=template.pk,
         template_name=template.name,
         resolved=template.resolve_name(module),
-        historical_pattern=None if parts is None else _historical_pattern(parts),
+        historical_pattern=_historical_pattern(template, module, token_re) if reads_position else None,
         parent_id=getattr(template, "parent_id", None),
         channel_id=getattr(template, "channel_id", None),
         channels=getattr(template, "channels", None),
-        vc_parts=parts,
+        source=(template, module) if reads_position else None,
     )
 
 

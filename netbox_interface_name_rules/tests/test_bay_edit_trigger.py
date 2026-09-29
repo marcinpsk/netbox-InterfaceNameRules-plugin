@@ -103,6 +103,21 @@ class BayEditTest(BayEditTestCase):
         self.assertEqual(self._names(module), ["p1/2"])
         self.assertEqual(_journal(module), [])
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_raw_name_whose_fallback_reads_the_bay_is_recognised_after_a_bay_edit_off_a_chassis(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        fallback_type = self._module_type("Fallback Bay", "xe-{vc_position:{module}}")
+        InterfaceNameRule.objects.create(module_type=fallback_type, name_template="p{base}")
+        bay = ModuleBay.objects.create(device=self.device, name="Bay 8", position="3")
+        module = self._install(fallback_type, bay)
+        self.assertEqual(self._names(module), ["pxe-3"])
+
+        self._edit(bay, position="4")
+
+        self.assertEqual(self._names(module), ["pxe-4"])
+        self.assertEqual(_journal(module), [])
+
     def test_a_position_edit_renames_the_module_for_the_new_position(self):
         bay = self._bay(self.device)
         module = self._install(self.plain_type, bay)

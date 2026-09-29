@@ -1240,6 +1240,26 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_off_a_chassis_then_a_join_recognise_a_raw_name_whose_fallback_reads_the_bay(self):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        fallback_type = self._module_type("Fallback Bay", "xe-{vc_position:{module}}")
+        InterfaceNameRule.objects.create(module_type=fallback_type, name_template="p{base}")
+        installed = []
+
+        def install():
+            installed.append(
+                Module.objects.create(device=self.device, module_bay=self._bay(self.device), module_type=fallback_type)
+            )
+
+        reapplies = self._save_in_one_transaction(install, functools.partial(self._join_the_chassis, chassis))
+
+        (module,) = installed
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["pxe-3"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
     def test_an_install_without_templates_then_a_chassis_position_change_rename_its_interface(self):
         bare_type = self._module_type("Bare")
         InterfaceNameRule.objects.create(module_type=bare_type, name_template="et-{vc_position}/{bay_position}")
@@ -1336,6 +1356,12 @@ class InstallPositionInvariantTest(ModuleMoveTestCase):
                 "Bay 0",
                 (),
                 ["pxe-1/0"],
+            ),
+            "a fallback that reads the bay": (
+                cls._ruled("Fallback Bay", "p{base}", "xe-{vc_position:{module}}"),
+                "Bay 0",
+                (),
+                ["pxe-1"],
             ),
             "a bay position with the token": (
                 cls._ruled("Token Bay", "p{base}", "{vc_position}/{module}"),

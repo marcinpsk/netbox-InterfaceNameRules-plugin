@@ -59,6 +59,7 @@ from netbox_interface_name_rules.engine import (
     supports_vc_position_token,
 )
 from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, plan_installed_families, resolved_template_names
+from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS, pinned_template_cache
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, reapply
@@ -644,7 +645,7 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
 
 @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionResolutionTest(VcDriftTestCase):
-    """A resolved template gives the name NetBox resolves at another chassis position or off a chassis."""
+    """A resolved template gives the name that NetBox resolves at another chassis position or off a chassis."""
 
     @classmethod
     def setUpTestData(cls):
@@ -661,25 +662,44 @@ class VcPositionResolutionTest(VcDriftTestCase):
         )
         # NetBox resolves {module} first, so this bay brings one more token into each name.
         ModuleBay.objects.create(device=cls.device, name="Bay T", position="{vc_position}")
+        cls.card_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="VcRes-Card", part_number="VcRes-Card"
+        )
+        ModuleBayTemplate.objects.create(module_type=cls.card_type, name="LC Bay", position="1")
 
-    def test_a_resolved_template_resolves_at_each_position_as_netbox_does(self):
-        modules = [self._install_on(self.device, self.module_type, bay)[0] for bay in ("3", "T")]
-        read = {module.pk: resolved_template_names(module) for module in modules}
-        templates = list(InterfaceTemplate.objects.filter(module_type=self.module_type).order_by("pk"))
-        for entries in read.values():
-            self.assertEqual(
-                [entry.at_chassis_position(1).resolved for entry in entries], [e.resolved for e in entries]
-            )
+    def test_a_template_at_another_position_reads_nothing_and_leaves_the_module_and_its_device_alone(self):
+        module, _ = self._install_on(self.device, self.module_type, "T")
+        read = Module.objects.select_related(*BAY_CHAIN_RELATIONS).get(pk=module.pk)
+        with pinned_template_cache([read]):
+            entries = resolved_template_names(read)
+        device = read.device
 
-        for position, change in ((4, lambda: self._renumber(4)), (None, self._leave)):
-            change()
-            for module in modules:
-                current = Module.objects.get(pk=module.pk)
-                with self.subTest(position=position, bay=current.module_bay.name):
-                    self.assertEqual(
-                        [entry.at_chassis_position(position).resolved for entry in read[module.pk]],
-                        [template.resolve_name(current) for template in templates],
-                    )
+        with self.assertNumQueries(0):
+            names = {
+                position: [entry.at_chassis_position(position).resolved for entry in entries]
+                for position in (1, 4, None)
+            }
+
+        self.assertEqual(names[1], [entry.resolved for entry in entries])
+        self.assertEqual(names[4], ["xe-4/4", "ge-4/4", "et-44/0/4", "mgmt{vc_position}"])
+        self.assertEqual(names[None], ["xe-0/0", "ge-9/0", "et-07/0/0", "mgmt{vc_position}"])
+        self.assertIs(read.device, device)
+        self.assertEqual((device.vc_position, device.virtual_chassis_id), (1, self.device.virtual_chassis_id))
+
+    def test_a_nested_template_at_another_position_reads_nothing(self):
+        card, _ = self._install_on(self.device, self.card_type, "3")
+        inner_bay = ModuleBay.objects.get(device=self.device, module=card, name="LC Bay")
+        with self.captureOnCommitCallbacks(execute=True):
+            leaf = Module.objects.create(device=self.device, module_bay=inner_bay, module_type=self.module_type)
+        read = Module.objects.select_related(*BAY_CHAIN_RELATIONS).get(pk=leaf.pk)
+        with pinned_template_cache([read]):
+            entries = resolved_template_names(read)
+
+        with self.assertNumQueries(0):
+            names = [entry.at_chassis_position(4).resolved for entry in entries]
+
+        self.assertEqual(names, ["xe-4/1", "ge-4/1", "et-44/0/1", "mgmt1"])
+        self.assertEqual(read.device.vc_position, 1)
 
 
 # ---------------------------------------------------------------------------
