@@ -111,6 +111,22 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self.assertEqual((self._names(optic), self._names(fixed)), (["b-0/1"], ["et-1/0/2", "operator-name"]))
         self.assertEqual((_journal(card), _journal(optic), _journal(fixed)), ([], [], []))
 
+    def test_a_module_two_levels_down_keeps_its_names_and_is_not_reported(self):
+        card, second_port, optic = self._card_with_optic()
+        sub_card = self._install(self._card_type("Sub Card", "3"), second_port)
+        deep_optic_type = self._module_type("Deep Optic", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=deep_optic_type, parent_module_type=sub_card.module_type, name_template="g-{bay_position}"
+        )
+        deep = self._install(deep_optic_type, ModuleBay.objects.get(module=sub_card))
+        Interface.objects.create(device=self.device, module=deep, name="operator-name", type=PLAIN_TYPE)
+        self.assertEqual(self._names(deep), ["g-3", "operator-name"])
+
+        self._change_type(card, self.second_card_type)
+
+        self.assertEqual((self._names(optic), self._names(deep)), (["b-0/1"], ["g-3", "operator-name"]))
+        self.assertEqual((_journal(card), _journal(sub_card), _journal(deep)), ([], [], []))
+
     def test_a_nested_module_left_without_a_rule_keeps_the_names_the_old_rule_gave_and_is_reported(self):
         card, _second_port, optic = self._card_with_optic()
 
