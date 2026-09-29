@@ -8,6 +8,7 @@ the type change reads before the save what named the interfaces of each nested m
 each nested module whose rule changed is renamed from that naming, and reports on the changed module.
 """
 
+import functools
 from unittest import skipUnless
 
 from dcim.models import Interface, Module, ModuleBay, ModuleBayTemplate
@@ -28,14 +29,12 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     NO_RULE,
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
+    TAKEN,
     _journal,
-    _module_reapplies,
     _MoveFixture,
     _reapplied,
 )
 from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
-
-TAKEN = "target name is already in use"
 
 
 class _CardFixture(_MoveFixture):
@@ -225,19 +224,11 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
             module_type=cls.other_plain_type, name_template="ge-{vc_position}/0/{bay_position}"
         )
 
-    def _change_the_chassis_position(self):
-        self.device.vc_position = 3
-        self.device.save()
-
     def _retype_with_the_chassis_change(self, module, module_type, chassis_first):
         """Change the type of *module* and the device's position in one transaction; return the reapply spy."""
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            if chassis_first:
-                self._change_the_chassis_position()
-            self._save_type(module, module_type)
-            if not chassis_first:
-                self._change_the_chassis_position()
-        return reapplies
+        return self._save_with_a_device_change(
+            self._change_the_chassis_position, functools.partial(self._save_type, module, module_type), chassis_first
+        )
 
     def _assert_the_nested_module_is_renamed_once(self, chassis_first):
         card = self._install(self.first_card_type, self._bay(self.device))

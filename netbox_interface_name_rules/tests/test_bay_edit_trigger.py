@@ -8,6 +8,7 @@ recognises the names that state gave and renames them for the edited bay. NetBox
 interface when a bay's position or name changes.
 """
 
+import functools
 import re
 from unittest import skipUnless
 
@@ -24,9 +25,12 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, PlanRunner
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
+    CHASSIS_RULES,
     NETBOX_MOVES_COMPONENTS,
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
+    TAKEN,
+    UNAVAILABLE,
     ModuleMoveTestCase,
     _fail_the_naming_read,
     _journal,
@@ -39,13 +43,6 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
 from netbox_interface_name_rules.tests.test_rename_triggers import _previous_state_read_fails
 
 BAY_STATE_READ = re.compile(r'SELECT "dcim_modulebay"\."position".* FROM "dcim_modulebay"')
-UNAVAILABLE = "{vc_position} is not available on this device"
-# The rule of each optic kind, and the optic's names before and after a bay edit and a chassis change.
-CHASSIS_MIX_RULES = {
-    "plain": ("et-{vc_position}/{slot}/{bay_position}", "et-1/0/1", "et-3/2/1"),
-    "base": ("p{base}-{vc_position}/{slot}", "p1-1/0", "p1-3/2"),
-    "arithmetic": ("x{{vc_position} * 10 + {slot_num}}/{bay_position}", "x10/1", "x32/1"),
-}
 
 
 def _flat_rule(module_type, name_template, **scope):
@@ -221,7 +218,7 @@ class NestedBayEditTest(BayEditTestCase):
 
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
-        self.assertIn("`et-1/0/1` to `et-1/2/1`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `et-1/2/1`: {TAKEN}", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
         self.assertEqual((self._names(blocked), self._names(failed)), (["et-1/0/1"], ["et-1/0/2"]))
         self.assertEqual((_journal(blocked), _journal(failed)), ([], []))
@@ -406,7 +403,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
         (entry,) = _journal(card)
-        self.assertIn("`et-1/0/1` to `et-1/2/3`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `et-1/2/3`: {TAKEN}", entry.comments)
         self.assertEqual(_journal(optic), [])
 
     def test_a_nested_type_change_and_an_outer_edit_reapply_the_nested_module_once_as_a_type_change(self):
@@ -424,7 +421,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
         (entry,) = _journal(card)
-        self.assertIn("`et-1/0/1` to `ge-1/2/1`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `ge-1/2/1`: {TAKEN}", entry.comments)
         self.assertEqual(_journal(optic), [])
 
     def test_an_outer_edit_and_a_move_of_the_nested_module_out_reapply_it_once(self):
@@ -693,40 +690,26 @@ class ChassisPositionMixTest(BayEditTestCase):
         super().setUpTestData()
         cls.card_type = cls._card_type("Card", "1")
         cls.optic_types = {}
-        for kind, (name_template, _, _) in CHASSIS_MIX_RULES.items():
-            cls.optic_types[kind] = cls._module_type(f"{kind.title()} Optic", "{module}")
-            InterfaceNameRule.objects.create(module_type=cls.optic_types[kind], name_template=name_template)
+        for rule in CHASSIS_RULES:
+            cls.optic_types[rule.model] = cls._module_type(f"{rule.model} Optic", "{module}")
+            InterfaceNameRule.objects.create(module_type=cls.optic_types[rule.model], name_template=rule.name_template)
 
-    def _card_with(self, kind):
-        """Install a card in Bay 0 with an optic of rule *kind*, and a plain module in Bay 10; return them and the bay."""
+    def _card_with(self, model):
+        """Install a card in Bay 0 with an optic of the rule *model*, and a plain module in Bay 10; return them and the bay."""
         bay = self._bay(self.device)
         card, port = self._install_card(self.card_type, bay)
-        optic = self._install(self.optic_types[kind], port)
+        optic = self._install(self.optic_types[model], port)
         other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
         return bay, card, optic, other
 
-    def _change_the_chassis_position(self):
-        self.device.vc_position = 3
-        self.device.save()
-
-    def _leave(self):
-        self.device.virtual_chassis = None
-        self.device.vc_position = None
-        self.device.save()
-
     def _edit_with(self, bay, device_change, device_first):
-        """Save *device_change* and an edit of *bay* to position 2 in one transaction; return the reapply spy."""
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            if device_first:
-                device_change()
-            self._save_edit(bay, position="2")
-            if not device_first:
-                device_change()
-        return reapplies
+        """Run *device_change* and an edit of *bay* to position 2 in one transaction; return the reapply spy."""
+        return self._save_with_a_device_change(
+            device_change, functools.partial(self._save_edit, bay, position="2"), device_first
+        )
 
-    def _assert_reapplied_once(self, kind, chassis_first):
-        _, before, after = CHASSIS_MIX_RULES[kind]
-        bay, card, optic, other = self._card_with(kind)
+    def _assert_reapplied_once(self, model, chassis_first, before, after):
+        bay, card, optic, other = self._card_with(model)
         self.assertEqual(self._names(optic), [before])
 
         reapplies = self._edit_with(bay, self._change_the_chassis_position, chassis_first)
@@ -736,32 +719,32 @@ class ChassisPositionMixTest(BayEditTestCase):
         self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
 
     def test_a_bay_edit_then_a_chassis_position_change_reapply_a_plain_rule_once(self):
-        self._assert_reapplied_once("plain", chassis_first=False)
+        self._assert_reapplied_once("Plain", False, "et-1/0/1", "et-3/2/1")
 
     def test_a_chassis_position_change_then_a_bay_edit_reapply_a_plain_rule_once(self):
-        self._assert_reapplied_once("plain", chassis_first=True)
+        self._assert_reapplied_once("Plain", True, "et-1/0/1", "et-3/2/1")
 
     def test_a_bay_edit_then_a_chassis_position_change_reapply_a_base_rule_once(self):
-        self._assert_reapplied_once("base", chassis_first=False)
+        self._assert_reapplied_once("Base", False, "p1-1/0", "p1-3/2")
 
     def test_a_chassis_position_change_then_a_bay_edit_reapply_a_base_rule_once(self):
-        self._assert_reapplied_once("base", chassis_first=True)
+        self._assert_reapplied_once("Base", True, "p1-1/0", "p1-3/2")
 
     def test_a_bay_edit_then_a_chassis_position_change_reapply_a_rule_with_the_position_in_arithmetic_once(self):
-        self._assert_reapplied_once("arithmetic", chassis_first=False)
+        self._assert_reapplied_once("Arithmetic", False, "x10/1", "x32/1")
 
     def test_a_chassis_position_change_then_a_bay_edit_reapply_a_rule_with_the_position_in_arithmetic_once(self):
-        self._assert_reapplied_once("arithmetic", chassis_first=True)
+        self._assert_reapplied_once("Arithmetic", True, "x10/1", "x32/1")
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
-        bay, card, optic, _other = self._card_with("plain")
+        bay, card, optic, _other = self._card_with("Plain")
         Interface.objects.create(device=self.device, name="et-3/2/1", type=PLAIN_TYPE)
 
         reapplies = self._edit_with(bay, self._change_the_chassis_position, chassis_first)
 
         self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["et-1/0/1"], 1))
         (entry,) = _journal(card)
-        self.assertEqual(entry.comments.count("`et-1/0/1` to `et-3/2/1`: target name is already in use"), 1)
+        self.assertEqual(entry.comments.count(f"`et-1/0/1` to `et-3/2/1`: {TAKEN}"), 1)
         self.assertEqual((_journal(optic), _journal(self.device)), ([], []))
 
     def test_a_bay_edit_then_a_chassis_position_change_report_a_collision_once(self):
@@ -771,9 +754,9 @@ class ChassisPositionMixTest(BayEditTestCase):
         self._assert_a_collision_is_reported_once(chassis_first=True)
 
     def _assert_leaving_renames_nothing_and_reports_once(self, leave_first):
-        bay, card, optic, other = self._card_with("arithmetic")
+        bay, card, optic, other = self._card_with("Arithmetic")
 
-        reapplies = self._edit_with(bay, self._leave, leave_first)
+        reapplies = self._edit_with(bay, self._leave_the_chassis, leave_first)
 
         self.assertEqual((self._names(optic), self._names(other)), (["x10/1"], ["et-1/0/10"]))
         self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
@@ -792,17 +775,12 @@ class ChassisPositionMixTest(BayEditTestCase):
     def _assert_joining_renames_once(self, join_first):
         chassis = self.device.virtual_chassis
         with self.captureOnCommitCallbacks(execute=True):
-            self._leave()
-        bay, card, optic, other = self._card_with("arithmetic")
+            self._leave_the_chassis()
+        bay, card, optic, other = self._card_with("Arithmetic")
         self.assertEqual((self._names(optic), self._names(other)), (["1"], ["10"]))
         entries = JournalEntry.objects.count()
 
-        def join():
-            self.device.virtual_chassis = chassis
-            self.device.vc_position = 3
-            self.device.save()
-
-        reapplies = self._edit_with(bay, join, join_first)
+        reapplies = self._edit_with(bay, functools.partial(self._join_the_chassis, chassis), join_first)
 
         self.assertEqual((self._names(optic), self._names(other)), (["x32/1"], ["et-3/0/10"]))
         self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
