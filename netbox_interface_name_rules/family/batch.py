@@ -206,7 +206,7 @@ def plan_module_families(
         )
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames these families and adds none beside them; it reports a claimed one when selected.
-        leftover = _selected(  # pragma: no cover - requires channelization support
+        leftover = _selected(
             [
                 plan_kept_interface(
                     module,
@@ -218,7 +218,7 @@ def plan_module_families(
             ],
             selected_pks,
         )
-        for interface in plain:  # pragma: no cover - see above
+        for interface in plain:
             logger.debug(
                 "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
                 interface.name,
@@ -262,7 +262,7 @@ def _selection_pks(plan):
     if isinstance(plan, InstalledFamilyPlan):
         if plan.parent_pk is None:
             return plan.member_pks
-        return (plan.parent_pk,)  # pragma: no cover - requires channelization support
+        return (plan.parent_pk,)
     if isinstance(plan, FlatCreationPlan):
         return plan.member_pks
     return (plan.base.pk,)

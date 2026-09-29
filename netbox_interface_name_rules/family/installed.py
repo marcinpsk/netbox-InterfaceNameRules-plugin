@@ -35,12 +35,12 @@ def is_plain_interface(interface) -> bool:
     )
 
 
-def is_channelized_parent(interface) -> bool:  # pragma: no cover - requires channelization support
+def is_channelized_parent(interface) -> bool:
     """Return whether *interface* declares a channelized family."""
     return getattr(interface, "channels", None) is not None
 
 
-def _is_channel(interface) -> bool:  # pragma: no cover - requires channelization support
+def _is_channel(interface) -> bool:
     """Return whether *interface* is bound to a parent channel."""
     return getattr(interface, "channel_id", None) is not None
 
@@ -84,7 +84,7 @@ def _claimed_flat_plan(module, rule, variables, family, interfaces):
     return _flat_plan(module, kept, interfaces, FamilyStatus.BLOCKED, reason)
 
 
-def _channelized_plan(device_id, module_id, parent, children, targets):  # pragma: no cover
+def _channelized_plan(device_id, module_id, parent, children, targets):
     """Build one plan for an existing channelized family from the names *targets* intends."""
     members = [
         PlannedMember(
@@ -114,7 +114,7 @@ def _channelized_plan(device_id, module_id, parent, children, targets):  # pragm
     )
 
 
-def _module_family_targets(rule, variables, parent, base_name, children, suffixes):  # pragma: no cover
+def _module_family_targets(rule, variables, parent, base_name, children, suffixes):
     """Return the names *rule* intends for a channelized family a module carries."""
     return channelized_family_targets(
         rule,
@@ -127,7 +127,7 @@ def _module_family_targets(rule, variables, parent, base_name, children, suffixe
     )
 
 
-def _channelized_plans(module, rule, variables, interfaces, bases):  # pragma: no cover
+def _channelized_plans(module, rule, variables, interfaces, bases):
     """Return one plan for every structurally discovered channelized family."""
     parents = [interface for interface in interfaces if is_channelized_parent(interface)]
     if not parents:
