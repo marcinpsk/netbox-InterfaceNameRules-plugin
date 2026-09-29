@@ -217,15 +217,22 @@ def _earliest_naming(module_triggers, roots, device_triggers):
     entries = {}
     for place, trigger in module_triggers:
         for entry in trigger.naming:
-            root = roots.get(entry.module_pk)
-            installed = root is not None and root.installed
-            if entry.module_pk in entries or (installed and place < root.start):
-                continue
-            named_at = root.start if installed else -1  # -1 is before the first trigger of the transaction
-            state = _state_when_named(device_triggers.get(entry.device_pk, ()), named_at, place)
-            positioned = entry if state is None else entry.at_chassis_position(chassis_position(state))
-            entries[entry.module_pk] = dataclasses.replace(positioned, raw_only=True) if installed else positioned
+            if entry.module_pk not in entries:
+                named = _named_entry(entry, place, roots.get(entry.module_pk), device_triggers)
+                if named is not None:
+                    entries[entry.module_pk] = named
     return entries
+
+
+def _named_entry(entry, place, root, device_triggers):
+    """Return *entry*, read at *place*, at the naming point of its module, or None when it read a module deleted since."""
+    installed = root is not None and root.installed
+    if installed and place < root.start:
+        return None
+    named_at = root.start if installed else -1  # -1 is before the first trigger of the transaction
+    state = _state_when_named(device_triggers.get(entry.device_pk, ()), named_at, place)
+    positioned = entry if state is None else entry.at_chassis_position(chassis_position(state))
+    return dataclasses.replace(positioned, raw_only=True) if installed else positioned
 
 
 def _state_when_named(pairs, named_at, read_at):

@@ -118,9 +118,7 @@ def _version_row_signature():
     for column in _VERSION_COLUMNS:
         cast = Cast(F(column), output_field=TextField())
         value = Coalesce(cast, empty, output_field=TextField()) if column.endswith("_id") else cast
-        parts.append(Cast(Length(value), output_field=TextField()))
-        parts.append(colon)
-        parts.append(value)
+        parts.extend((Cast(Length(value), output_field=TextField()), colon, value))
     return Concat(*parts, output_field=TextField())
 
 
