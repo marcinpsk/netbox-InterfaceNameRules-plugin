@@ -143,7 +143,7 @@ class NamingPoint(NamedTuple):
     set when a move gave the names, which NetBox resolves with the resolver of its move planner.
     """
 
-    naming: object
+    naming: "ModuleNaming | None"
     vc_position: int | None
     move: bool
 

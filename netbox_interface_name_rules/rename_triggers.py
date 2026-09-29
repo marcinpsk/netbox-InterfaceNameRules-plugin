@@ -30,6 +30,7 @@ import functools
 import logging
 import math
 import weakref
+from typing import TYPE_CHECKING, NamedTuple
 
 from django.db import transaction
 from netbox.context import current_request
@@ -37,6 +38,9 @@ from netbox.context import current_request
 from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 from .rule_selection import parent_type_scopes_a_rule
+
+if TYPE_CHECKING:
+    from .engine import ModuleNaming
 
 logger = logging.getLogger("netbox_interface_name_rules")
 
@@ -292,7 +296,7 @@ def _naming_points(module, root, reads, device_triggers):
     """Return each point in the transaction at which NetBox gave *module*'s templates raw names.
 
     Its install names them, and on NetBox 4.7 so does each move that carried it. *reads* are the
-    ``(place, naming, moved)`` of each trigger that read the module's naming, in save order. A point
+    ``_NamingRead`` of each trigger that read the module's naming, in save order. A point
     names the bay chain that the next read holds, or the committed one after the last read, at the
     position that the device had at that point. A read before the install of the module was for a
     module deleted since.
@@ -301,13 +305,13 @@ def _naming_points(module, root, reads, device_triggers):
     from .family import supports_module_moves
 
     start = root.start if root is not None and root.installed else None
-    after = [(place, naming, moved) for place, naming, moved in reads if start is None or place > start]
+    after = [read for read in reads if start is None or read.place > start]
     places = [] if start is None else [(start, False)]
     if supports_module_moves():  # pragma: no cover - requires a NetBox that renames moved components
-        places += [(place, True) for place, _, moved in after if moved]
+        places += [(read.place, True) for read in after if read.moved]
     points = []
     for named_at, move in places:
-        chain = next((naming for place, naming, _ in after if place > named_at), None)
+        chain = next((read.naming for read in after if read.place > named_at), None)
         device_pk = module.device_id if chain is None else chain.device_pk
         state = _state_when_named(device_triggers.get(device_pk, ()), named_at, math.inf)
         if state is not None:
@@ -323,24 +327,32 @@ def _may_keep_a_name_of_a_move(reads, device_triggers):  # pragma: no cover - re
 
     NetBox renames a raw name back at a later move only when nothing that the name is built from changed
     since the earlier move: the position of a device that the module was on, and its bay chain, which
-    a read that is not a move shows. *reads* are the module's ``(place, naming, moved)``.
+    a read that is not a move shows. *reads* are the module's ``_NamingRead``.
     """
-    moves = [place for place, _, moved in reads if moved]
+    moves = [read.place for read in reads if read.moved]
     if len(moves) < 2:
         return False
     first, last = moves[0], moves[-1]
-    if any(first < place < last and not moved for place, _, moved in reads):
+    if any(first < read.place < last and not read.moved for read in reads):
         return True
-    devices = {naming.device_pk for _, naming, _ in reads}
+    devices = {read.naming.device_pk for read in reads}
     return any(first < place < last for pk in devices for place, _ in device_triggers.get(pk, ()))
 
 
+class _NamingRead(NamedTuple):
+    """A trigger's read of one module's naming, at the *place* of the trigger in save order."""
+
+    place: int
+    naming: "ModuleNaming"
+    moved: bool
+
+
 def _reads(module_triggers):
-    """Return the ``(place, naming, moved)`` of each trigger that read a module's naming, by module."""
+    """Return the ``_NamingRead`` of each trigger that read a module's naming, by module."""
     reads = {}
     for place, trigger in module_triggers:
         for naming in trigger.naming:
-            reads.setdefault(naming.module_pk, []).append((place, naming, trigger.moved))
+            reads.setdefault(naming.module_pk, []).append(_NamingRead(place, naming, trigger.moved))
     return reads
 
 
