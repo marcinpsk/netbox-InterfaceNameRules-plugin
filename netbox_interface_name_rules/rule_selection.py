@@ -57,6 +57,13 @@ def module_types_matching_pattern(pattern):
     return tuple(model for model in ModuleType.objects.values_list("model", flat=True) if compiled.fullmatch(model))
 
 
+def parent_type_scopes_a_rule(module_type_ids) -> bool:
+    """Return whether an enabled rule is scoped to one of *module_type_ids* as its parent module type."""
+    from .models import InterfaceNameRule
+
+    return InterfaceNameRule.objects.filter(enabled=True, parent_module_type_id__in=module_type_ids).exists()
+
+
 def compile_stored_pattern(pattern):
     """Compile a stored pattern once, or return None when RE2 rejects it."""
     try:

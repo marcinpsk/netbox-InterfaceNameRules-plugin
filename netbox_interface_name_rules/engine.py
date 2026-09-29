@@ -22,8 +22,8 @@ from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 
 logger = logging.getLogger(__name__)
 
-NO_RULE_REASON = "no rule matches the module at its new position"
-FLAT_REASON = "a flat breakout family is not renamed after a move or a bay edit"
+NO_RULE_REASON = "no rule matches the module after the change"
+FLAT_REASON = "a flat breakout family is not renamed after a move, a bay edit or a parent module type change"
 ELSEWHERE_REASON = "the interface is not on the device of its module"
 STALE_BAY_REASON = "the module bay still has the parent bay it had before its module moved"
 
@@ -59,6 +59,13 @@ def _get_parent_module_type(module_bay):
         if hasattr(parent_bay, "installed_module") and parent_bay.installed_module:
             return parent_bay.installed_module.module_type
     return None
+
+
+def _selected_rule(module, module_bay):
+    """Return the rule that *module* in *module_bay* selects now, or None."""
+    device_type = module.device.device_type if module.device else None
+    platform = module.device.platform if module.device else None
+    return find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
 
 def supports_channelization():
@@ -157,18 +164,16 @@ def module_rule_outcomes(
     family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
     device lacks gives facts.
 
-    *naming* is the module's ``ModuleNaming`` read before a move or a bay edit. The rule then renames
-    every name one template claims through its current or previous forms, and reports every other
-    interface. Without a rule now, each interface the previous rule named keeps its name and is
-    reported. When the previous rule is a flat breakout rule, nothing on the module is renamed and
-    every interface is reported: NetBox keeps no link to a family, so it could be recognised by name
-    only (ADR 0015). When an interface of the module is on another device, or the module's bay has a
-    parent bay that does not hold the module that owns the bay, nothing is renamed and every
-    interface is reported.
+    *naming* is the module's ``ModuleNaming`` read before a move, a bay edit or a type change of its
+    parent module. The rule then renames every name one template claims through its current or
+    previous forms, and reports every other interface. Without a rule now, each interface the previous
+    rule named keeps its name and is reported. When the previous rule is a flat breakout rule, nothing
+    on the module is renamed and every interface is reported: NetBox keeps no link to a family, so it
+    could be recognised by name only (ADR 0015). When an interface of the module is on another device,
+    or the module's bay has a parent bay that does not hold the module that owns the bay, nothing is
+    renamed and every interface is reported.
     """
-    device_type = module.device.device_type if module.device else None
-    platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
+    rule = _selected_rule(module, module_bay)
     previous_forms = None if naming is None else naming.previous_forms()
 
     if (
@@ -299,9 +304,7 @@ def predict_rule_output(module, module_bay, raw_names):
     device's virtual-chassis position changed is predicted from itself, not corrected to the name
     the templates resolve to now — this function maps the names it is given.
     """
-    device_type = module.device.device_type if module.device else None
-    platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
+    rule = _selected_rule(module, module_bay)
     if not rule:
         return list(raw_names)
 
@@ -359,7 +362,7 @@ _NAMING_RELATIONS = (
 
 @dataclass(frozen=True, eq=False)
 class ModuleNaming:
-    """What named one module's interfaces at the time it was read: a move or a bay edit reads it before the save.
+    """What named one module's interfaces at the time it was read: a move, a bay edit or a type change reads it.
 
     The module type and the scope select the rule that state gave the module. The template variables
     and the templates as they resolved then rebuild the names that rule gave. ``bay_values`` are the
@@ -394,14 +397,19 @@ class ModuleNaming:
             bay_values=naming.bay_naming_values(module_bay.position, module_bay.name),
         )
 
+    def rule(self):
+        """Return the rule that the module type and the scope of this naming select now, or None."""
+        return find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+
     def previous_forms(self) -> family_ops.PreviousForms:
         """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
-        rule = (
-            None
-            if self.raw_only
-            else find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
-        )
+        rule = None if self.raw_only else self.rule()
         return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
+
+
+def selects_another_rule(naming, module) -> bool:
+    """Return whether *module*, which carries ``_NAMING_RELATIONS``, selects another rule than *naming* selects."""
+    return _selected_rule(module, module.module_bay) != naming.rule()
 
 
 def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
@@ -409,7 +417,8 @@ def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
 
     A move reads this before its save: in the same save NetBox can re-resolve the position and name
     of each bay the module holds, so the nested modules' naming is gone afterwards. A bay edit reads
-    it before its save, because the save changes what the names in the bay are built from.
+    it before its save, because the save changes what the names in the bay are built from. A type
+    change reads it before its save, because the nested modules can then select another rule.
     """
     from dcim.models import Module
 
