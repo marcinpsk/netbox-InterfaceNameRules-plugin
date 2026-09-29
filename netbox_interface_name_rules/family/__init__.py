@@ -6,12 +6,12 @@ from .batch import (
     BatchOutcome,
     ModuleFamilyPlans,
     apply_rule_to_modules,
+    creation_names_in_use,
     execute_family_plan,
     execute_module_families,
     plan_module_families,
 )
-from .capabilities import supports_channelization
-from .claims import TemplateClaim, resolve_template_claims
+from .capabilities import supports_channelization, supports_module_moves
 from .conversion import (
     conversion_offered,
     convert_rule_families,
@@ -40,6 +40,7 @@ from .domain import (
     ProspectiveFamilyPlan,
     ProspectiveFamilyPlanSet,
     ProspectiveMember,
+    RunScope,
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan, execute_installed_plan_set
@@ -49,7 +50,6 @@ from .installed import (
     interfaces_by_module,
     is_channelized_parent,
     module_raw_bases,
-    move_raw_bases,
     plan_device_interface_rename,
     plan_installed_families,
     plan_installed_flat_families,
@@ -72,6 +72,7 @@ from .structural import (
 )
 from .targets import (
     UNCLAIMED_BASE_REASON,
+    builds_flat_family,
     channelized_family_names,
     names_installed_parent,
     one_family_per_name_set,
@@ -105,12 +106,14 @@ __all__ = (
     "ProspectiveFamilyPlanSet",
     "ProspectiveInterface",
     "ProspectiveMember",
+    "RunScope",
     "StructuralFamilyPlan",
-    "TemplateClaim",
     "apply_rule_to_modules",
+    "builds_flat_family",
     "channelized_family_names",
     "conversion_offered",
     "convert_rule_families",
+    "creation_names_in_use",
     "describe_interfaces",
     "describe_module_interfaces",
     "describe_template_interfaces",
@@ -127,7 +130,6 @@ __all__ = (
     "interfaces_by_module",
     "is_channelized_parent",
     "module_raw_bases",
-    "move_raw_bases",
     "names_installed_parent",
     "names_the_previous_rule_gave",
     "one_family_per_name_set",
@@ -142,8 +144,8 @@ __all__ = (
     "plan_prospective_families",
     "plan_structural_family",
     "preview_rule_conversions",
-    "resolve_template_claims",
     "resolved_template_names",
     "supports_channelization",
+    "supports_module_moves",
     "template_channel_suffixes",
 )

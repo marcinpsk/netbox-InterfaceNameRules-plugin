@@ -17,14 +17,18 @@ import csv
 import io
 import json
 import re
-from unittest import skipIf
+from collections import Counter
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest import skipIf, skipUnless
+from unittest.mock import patch
 
 import yaml
-from dcim.models import Interface, InterfaceTemplate, ModuleType
+from dcim.models import Interface, InterfaceTemplate, ModuleType, VirtualChassis
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import IntegrityError, connection
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import MigrationLoader
@@ -42,14 +46,19 @@ from netbox_interface_name_rules.engine import (
     predict_rule_output,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, FamilyStatus
+from netbox_interface_name_rules.family.names import COLLISION_REASON, INTERFACE_NAME_CONSTRAINT
+from netbox_interface_name_rules.family.structural import MODULE_CHANGED_REASON, STALE_REASON
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import referenced_variables
 from netbox_interface_name_rules.rule_selection import _VERSION_COLUMNS
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
     PARENT_TYPE,
     PLUGIN_LOGGER,
+    REQUIRES_CHANNELIZATION,
     ChannelizationTestCase,
     _build_device,
 )
@@ -1013,6 +1022,28 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
             channel_count=4,
             channel_start=0,
         )
+        cls.first_channel_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkFlat-FIRST", part_number="BrkFlat-FIRST"
+        )
+        InterfaceTemplate.objects.create(
+            module_type=cls.first_channel_type, name="Ethernet{module}/1", type=PARENT_TYPE
+        )
+        cls.first_channel_rule = InterfaceNameRule.objects.create(
+            module_type=cls.first_channel_type,
+            name_template="Ethernet{bay_position}/{channel}",
+            breakout_mode=FLAT,
+            channel_count=4,
+            channel_start=1,
+        )
+        cls.second_channel_fails_type = _plain_module_type(manufacturer, "BrkFlat-DIV")
+        # The second channel divides by zero, so the rule can name no family at all.
+        cls.second_channel_fails_rule = InterfaceNameRule.objects.create(
+            module_type=cls.second_channel_fails_type,
+            name_template="x{base}:{12 // ({channel} - 2)}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=1,
+        )
 
     def _assert_flat_family(self, module, bay_position):
         """Assert *module* carries N plain siblings and no channelized structure at all."""
@@ -1038,6 +1069,421 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay), 4)
         self._assert_flat_family(module, "4")
+
+    def test_a_name_that_spells_a_family_the_rule_cannot_name_is_no_claim(self):
+        """``x3:-12`` spells the first channel, but no family exists, so the raw name stays one claim."""
+        module, _ = self._install(self.second_channel_fails_type, "3")
+        Interface.objects.create(device=self.device, module=module, name="x3:-12", type=PARENT_TYPE)
+
+        outcome = apply_rule_to_existing(self.second_channel_fails_rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["3", "x3:-12"])
+        reasons = {member.current_name: member.reason for member in outcome.skipped_members}
+        self.assertTrue(reasons["3"].startswith("failed to evaluate the family names"), reasons)
+        self.assertEqual(reasons["x3:-12"], UNCLAIMED_BASE_REASON)
+
+    def test_a_raw_name_that_is_the_first_name_of_its_family_builds_the_family(self):
+        """The template claims ``Ethernet3/1`` as its raw name and as its family's first name: one claim."""
+        module, _ = self._install(self.first_channel_type, "3")
+        family = [f"Ethernet3/{channel}" for channel in range(1, 5)]
+
+        self.assertEqual(self._names(module), family)
+        self.assertEqual(apply_rule_to_existing(self.first_channel_rule).changed_count, 0)
+        self.assertEqual(self._names(module), family)
+
+
+class FlatBreakoutClaimGateTest(ChannelizationTestCase):
+    """A breakout rule builds a family only on a name that one template alone claims, in Apply Rules too."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "BrkGate", ["5"], virtual_chassis=VirtualChassis.objects.create(name="brkgate-vc"), vc_position=2
+        )
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkGate-QSFP", part_number="BrkGate-QSFP"
+        )
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="z", type=PARENT_TYPE)
+
+    def test_apply_rules_builds_no_family_on_names_the_claim_refuses(self):
+        """``z`` is the raw name and ``x-1:0``, ``x-1:1`` the family the rule gave at position 1: one template claims both."""
+        module, _ = self._install(self.module_type, "5")
+        for name in ("x-1:0", "x-1:1"):
+            Interface.objects.create(device=self.device, module=module, name=name, type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="x-{vc_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        self.assertEqual(find_interfaces_for_rule(rule), ([], 3))
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["x-1:0", "x-1:1", "z"])
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [(name, UNCLAIMED_BASE_REASON) for name in ("x-1:0", "x-1:1", "z")],
+        )
+
+    def test_a_selected_interface_the_claim_refuses_is_reported(self):
+        """Template ``x0:1`` claims its raw name and the family ``xx0:1:0``, so it is refused.
+
+        The family that template ``0`` would build takes the name ``x0:1``. Apply Rules with only
+        ``x0:1`` selected must still report it.
+        """
+        module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer, model="BrkGate-TWO", part_number="BrkGate-TWO"
+        )
+        for name in ("0", "x0:1"):
+            InterfaceTemplate.objects.create(module_type=module_type, name=name, type=PARENT_TYPE)
+        module, _ = self._install(module_type, "5")
+        Interface.objects.create(device=self.device, module=module, name="xx0:1:0", type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="x{base}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+        selected = Interface.objects.get(module=module, name="x0:1")
+
+        preview, _checked = find_interfaces_for_rule(rule)
+        outcome = apply_rule_to_existing(rule, interface_ids=[selected.pk])
+
+        # The family on 0 needs the name x0:1, which is in use, so the apply refuses it and the preview offers nothing.
+        self.assertEqual(preview, [])
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            [(member.current_name, member.reason) for member in outcome.skipped_members],
+            [("x0:1", UNCLAIMED_BASE_REASON)],
+        )
+        self.assertEqual(self._names(module), ["0", "x0:1", "xx0:1:0"])
+
+    def test_a_blocked_family_takes_no_name_from_another_interface(self):
+        """The family on ``0`` is blocked, so ``x0:1`` keeps its own outcome although the family names it."""
+        module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer, model="BrkGate-CH", part_number="BrkGate-CH"
+        )
+        InterfaceTemplate.objects.create(module_type=module_type, name="0", type=PARENT_TYPE)
+        module, _ = self._install(module_type, "5")
+        Interface.objects.create(device=self.device, module=module, name="x0:1", type=PARENT_TYPE)
+        rule = InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="x{base}:{channel}",
+            parent_name_template="p{base}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        outcome = apply_rule_to_existing(
+            rule, interface_ids=Interface.objects.filter(module=module).values_list("pk", flat=True)
+        )
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), ["0", "x0:1"])
+        reasons = {member.current_name: member.reason for family in outcome.families for member in family.members}
+        self.assertEqual(sorted(reasons), ["0", "x0:1"])
+        self.assertEqual(reasons["x0:1"], UNCLAIMED_BASE_REASON)
+
+    def test_prediction_keeps_the_names_the_claim_refuses(self):
+        module, bay = self._install(self.module_type, "5")
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="x-{vc_position}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+        self.assertEqual(predict_rule_output(module, bay, ["z"]), ["x-2:0", "x-2:1"])
+        self.assertEqual(predict_rule_output(module, bay, ["z", "x-1:0"]), ["z", "x-1:0"])
+
+
+@contextmanager
+def _before_the_first_row_lock(action):
+    """Run *action* once, just before the executor locks its first row, as a concurrent writer would."""
+    pending = [action]
+
+    def wrapper(execute, sql, params, many, context):
+        if pending and "FOR UPDATE" in sql:
+            pending.pop()()
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(wrapper):
+        yield
+
+
+class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
+    """Each selected interface is in exactly one member outcome, and no interface in two, whatever happens."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("BrkExec", ["5"])
+        cls.module_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkExec-ZERO", part_number="BrkExec-ZERO"
+        )
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="0", type=PARENT_TYPE)
+        cls.pair_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="BrkExec-PAIR", part_number="BrkExec-PAIR"
+        )
+        for name in ("0", "x0:1"):
+            InterfaceTemplate.objects.create(module_type=cls.pair_type, name=name, type=PARENT_TYPE)
+
+    def _module_with(self, *names, module_type=None):
+        """Install the module and add the interfaces *names* beside the ones its templates give."""
+        module, _ = self._install(module_type or self.module_type, "5", run_rules=False)
+        for name in names:
+            Interface.objects.create(device=self.device, module=module, name=name, type=PARENT_TYPE)
+        return module
+
+    def _half_built_family(self, *names):
+        """Return a module whose template ``0`` claims the flat family that *names* begin, with its raw name gone."""
+        module = self._module_with(*names[1:])
+        rename_out_of_band(Interface.objects.get(module=module, name="0"), names[0])
+        return module
+
+    def _rule(self, name_template, channel_count=2, module_type=None, **fields):
+        return InterfaceNameRule.objects.create(
+            module_type=module_type or self.module_type,
+            name_template=name_template,
+            breakout_mode=fields.pop("breakout_mode", FLAT),
+            channel_count=channel_count,
+            channel_start=0,
+            **fields,
+        )
+
+    def _outcome_for_every_interface(self, rule, module):
+        """Apply *rule* with every interface of *module* selected; each is in one member outcome, none in two."""
+        selected = dict(Interface.objects.filter(module=module).values_list("name", "pk"))
+        outcome = apply_rule_to_existing(rule, interface_ids=selected.values())
+        counts = Counter(member.interface_pk for family in outcome.families for member in family.members)
+        self.assertEqual({name: counts[pk] for name, pk in selected.items()}, dict.fromkeys(selected, 1))
+        self.assertEqual([pk for pk, count in counts.items() if count > 1], [])
+        return outcome
+
+    def _apply_to_every_interface(self, rule, module):
+        """Return the status and reason of each member outcome, by the name the interface had."""
+        return {
+            member.current_name: (member.status, member.reason)
+            for family in self._outcome_for_every_interface(rule, module).families
+            for member in family.members
+        }
+
+    def test_a_row_named_like_a_family_member_keeps_its_own_outcome(self):
+        """The sibling has a name the family would take, but no template claims it: the family is refused."""
+        sibling = "x" * 63 + "9"
+        module = self._module_with(sibling)
+        rule = self._rule("x" * 63 + "{10 - {channel}}")
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: {sibling}"))
+        self.assertEqual(members[sibling], (FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON))
+        self.assertEqual(self._names(module), ["0", sibling])
+
+    def test_a_family_netbox_rejects_reports_its_planned_member(self):
+        """The third name has 65 characters, so NetBox rejects the family its first two rows rebuild."""
+        prefix = "x" * 60 + "0:"
+        module = self._half_built_family(prefix + "0", prefix + "50")
+        rule = self._rule("x" * 60 + "{base}:{{channel} * {channel} * {channel} * 50}", channel_count=3)
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members[prefix + "0"][0], FamilyStatus.BLOCKED)
+        self.assertEqual(members[prefix + "50"], members[prefix + "0"])
+        self.assertEqual(self._names(module), [prefix + "0", prefix + "50"])
+
+    def test_a_first_name_in_use_refuses_the_family(self):
+        module = self._module_with("x0:1")
+        Interface.objects.create(device=self.device, name="x0:0", type=PARENT_TYPE)
+
+        members = self._apply_to_every_interface(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:0"))
+        self.assertEqual(members["x0:1"], (FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON))
+        self.assertEqual(self._names(module), ["0", "x0:1"])
+
+    def test_a_raw_name_another_family_would_take_builds_its_own_family(self):
+        """Template ``0``'s family names ``x0:1``, the raw name of the other template, so it is refused."""
+        module = self._module_with(module_type=self.pair_type)
+        rule = self._rule("x{base}:{channel}", module_type=self.pair_type)
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:1"))
+        self.assertEqual(members["x0:1"][0], FamilyStatus.CHANGED)
+        self.assertEqual(self._names(module), ["0", "xx0:1:0", "xx0:1:1"])
+
+    def test_a_name_collision_race_reports_the_planned_member(self):
+        module = self._half_built_family("x0:0", "x0:1")
+        rule = self._rule("x{base}:{channel}", channel_count=3)
+        real_save = Interface.save
+
+        def losing_save(interface, *args, **kwargs):
+            if interface.name == "x0:2":
+                cause = Exception("duplicate key value violates unique constraint")
+                cause.diag = SimpleNamespace(constraint_name=INTERFACE_NAME_CONSTRAINT)
+                raise IntegrityError("duplicate key value violates unique constraint") from cause
+            return real_save(interface, *args, **kwargs)
+
+        with patch.object(Interface, "save", losing_save):
+            members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["x0:0"], (FamilyStatus.BLOCKED, COLLISION_REASON))
+        self.assertEqual(members["x0:1"], members["x0:0"])
+        self.assertEqual(self._names(module), ["x0:0", "x0:1"])
+
+    def test_a_base_renamed_to_a_family_name_after_planning_is_reported_once(self):
+        module = self._module_with()
+        base = Interface.objects.get(module=module, name="0")
+
+        with _before_the_first_row_lock(lambda: rename_out_of_band(base, "x0:1")):
+            members = self._apply_to_every_interface(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual(members, {"0": (FamilyStatus.STALE, STALE_REASON)})
+        self.assertEqual(self._names(module), ["x0:1"])
+
+    def test_both_rows_renamed_after_planning_are_each_reported(self):
+        module = self._module_with("x0:1")
+        rows = {row.name: row for row in Interface.objects.filter(module=module)}
+
+        def rename_both():
+            rename_out_of_band(rows["0"], "a")
+            rename_out_of_band(rows["x0:1"], "b")
+
+        with _before_the_first_row_lock(rename_both):
+            members = self._apply_to_every_interface(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual(members["0"], (FamilyStatus.STALE, STALE_REASON))
+        self.assertEqual(members["x0:1"], (FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON))
+        self.assertEqual(self._names(module), ["a", "b"])
+
+    def test_a_planned_member_renamed_after_planning_refuses_the_family(self):
+        module = self._half_built_family("x0:0", "x0:1")
+        member = Interface.objects.get(module=module, name="x0:1")
+
+        with _before_the_first_row_lock(lambda: rename_out_of_band(member, "moved")):
+            members = self._apply_to_every_interface(self._rule("x{base}:{channel}", channel_count=3), module)
+
+        self.assertEqual(members["x0:0"], (FamilyStatus.STALE, STALE_REASON))
+        self.assertEqual(members["x0:1"], members["x0:0"])
+        self.assertEqual(self._names(module), ["moved", "x0:0"])
+
+    def test_a_base_and_its_planned_member_renamed_after_planning_are_each_reported_once(self):
+        """The member takes the name the base had, so only the primary keys tell the two rows apart."""
+        module = self._half_built_family("x0:0", "x0:1")
+        rows = {row.name: row for row in Interface.objects.filter(module=module)}
+
+        def swap_names():
+            rename_out_of_band(rows["x0:0"], "a")
+            rename_out_of_band(rows["x0:1"], "x0:0")
+
+        with _before_the_first_row_lock(swap_names):
+            members = self._apply_to_every_interface(self._rule("x{base}:{channel}", channel_count=3), module)
+
+        self.assertEqual(members, dict.fromkeys(("x0:0", "x0:1"), (FamilyStatus.STALE, STALE_REASON)))
+        self.assertEqual(self._names(module), ["a", "x0:0"])
+
+    def test_a_half_built_family_is_completed_through_its_planned_member(self):
+        module = self._half_built_family("x0:0", "x0:1")
+
+        members = self._apply_to_every_interface(self._rule("x{base}:{channel}", channel_count=3), module)
+
+        self.assertEqual(members["x0:0"], (FamilyStatus.UNCHANGED, ""))
+        self.assertEqual(members["x0:1"], (FamilyStatus.UNCHANGED, ""))
+        self.assertEqual(self._names(module), ["x0:0", "x0:1", "x0:2"])
+
+    def test_selecting_a_planned_member_alone_completes_its_family(self):
+        module = self._half_built_family("x0:0", "x0:1")
+        member = Interface.objects.get(module=module, name="x0:1")
+        rule = self._rule("x{base}:{channel}", channel_count=3)
+
+        outcome = apply_rule_to_existing(rule, interface_ids=[member.pk])
+
+        self.assertEqual(
+            [(member.current_name, member.status) for family in outcome.families for member in family.members],
+            [("x0:0", FamilyStatus.UNCHANGED), ("x0:1", FamilyStatus.UNCHANGED), ("x0:2", FamilyStatus.CHANGED)],
+        )
+        self.assertEqual(self._names(module), ["x0:0", "x0:1", "x0:2"])
+
+    def _preview_then_apply(self, rule, module):
+        """Return what the preview offers and what the apply changed, each as base name to family names.
+
+        The preview counts every interface of the module, also one whose family it does not offer.
+        """
+        preview, checked = find_interfaces_for_rule(rule)
+        self.assertEqual(checked, Interface.objects.filter(module=module).count())
+        outcome = self._outcome_for_every_interface(rule, module)
+        offered = {entry["current_name"]: entry["new_names"] for entry in preview}
+        changed = {
+            family.members[0].current_name: [member.target_name for member in family.members]
+            for family in outcome.changed_families
+        }
+        return offered, changed
+
+    def test_the_preview_offers_no_family_whose_raw_name_another_family_would_take(self):
+        module = self._module_with(module_type=self.pair_type)
+        rule = self._rule("x{base}:{channel}", module_type=self.pair_type)
+
+        offered, changed = self._preview_then_apply(rule, module)
+
+        self.assertEqual(offered, {"x0:1": ["xx0:1:0", "xx0:1:1"]})
+        self.assertEqual(changed, offered)
+
+    def test_the_preview_offers_no_family_beside_a_row_with_its_channel_name(self):
+        module = self._module_with("x0:1")
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(self._names(module), ["0", "x0:1"])
+
+    def test_the_preview_offers_no_family_whose_sibling_name_is_in_use_on_the_device(self):
+        module = self._module_with()
+        Interface.objects.create(device=self.device, name="x0:1", type=PARENT_TYPE)
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}"), module)
+
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(self._names(module), ["0"])
+
+    def test_the_preview_offers_a_half_built_family_that_the_apply_completes(self):
+        module = self._half_built_family("x0:0", "x0:1")
+
+        offered, changed = self._preview_then_apply(self._rule("x{base}:{channel}", channel_count=3), module)
+
+        self.assertEqual(offered, {"x0:0": ["x0:0", "x0:1", "x0:2"]})
+        self.assertEqual(changed, offered)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_channel_name_in_use_reports_the_base(self):
+        module = self._module_with()
+        Interface.objects.create(device=self.device, name="x0:1", type=PARENT_TYPE)
+        rule = self._rule("x{base}:{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}")
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:1"))
+        self.assertEqual(self._names(module), ["0"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_flat_expansion_found_at_execution_reports_the_base(self):
+        module = self._module_with()
+        rule = self._rule("x{base}:{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}")
+
+        def add_a_sibling():
+            Interface.objects.create(device=self.device, module=module, name="late", type=PARENT_TYPE)
+
+        with _before_the_first_row_lock(add_a_sibling):
+            members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["0"], (FamilyStatus.STALE, MODULE_CHANGED_REASON))
+        self.assertEqual(self._names(module), ["0", "late"])
 
 
 @skipIf(supports_channelization(), "requires a NetBox that cannot model channelized interfaces (4.6 and older)")

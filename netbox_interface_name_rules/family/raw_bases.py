@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Recover the raw template name a module rule reads as ``{base}``.
+"""Claim each live interface name for the one interface template it stands for.
 
-NetBox keeps no link from an interface to the template that created it, so a rule that reads
-``{base}`` claims each live name for the template whose raw name it is, or whose raw name the rule
-renames to it. A name that no single template claims has no base, and nothing renames it.
+NetBox keeps no link from an interface to the template that created it, so every path claims each
+live name for the templates whose forms spell it, in one pass over every form of every template. A
+name that no single template claims has no base, and nothing renames it.
 """
 
 import logging
@@ -13,14 +13,15 @@ from typing import NamedTuple
 
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
-from .targets import used_parent_template
-from .template_names import VC_POSITION_DIGITS
+from .targets import breaks_out, flat_family_names, used_parent_template
+from .template_names import VC_POSITION_DIGITS, ResolvedTemplateName
 
 logger = logging.getLogger(__name__)
 
 # PostgreSQL text cannot hold NUL, so no stored name, template or value can spell these markers.
-BASE_MARKER = "\x00base\x00"
-_MARKERS = {"base": BASE_MARKER, "vc_position": "\x00vc_position\x00"}
+_MARKERS = {"base": "\x00base\x00", "vc_position": "\x00vc_position\x00"}
+# A module type without interface templates claims as one template whose raw name is the bay position.
+_STAND_IN = "{bay_position}"
 
 
 def rule_reads_base(rule) -> bool:
@@ -45,15 +46,13 @@ def _marked_evaluation(template, variables, raw):
     """Return the template evaluated with markers for ``{base}`` and ``{vc_position}``, or None.
 
     Arithmetic cannot take a marker, so a variable used in arithmetic gets its real value instead.
+    The position marker stands for any position, also on a device that has no position now.
     """
-    vc_values = (_MARKERS["vc_position"], variables["vc_position"]) if "vc_position" in variables else (None,)
+    vc_values = (_MARKERS["vc_position"], *((variables["vc_position"],) if "vc_position" in variables else ()))
     for vc_position in vc_values:
         for base in (_MARKERS["base"], raw):
-            marked_variables = {**variables, "base": base}
-            if vc_position is not None:
-                marked_variables["vc_position"] = vc_position
             try:
-                return evaluate_name_template(template, marked_variables)
+                return evaluate_name_template(template, {**variables, "base": base, "vc_position": vc_position})
             except (TypeError, ValueError):
                 continue
     return None
@@ -116,92 +115,172 @@ def _template_forms(rule, variables, raw, historical):
     return TemplateForms(raw, renamed, channels)
 
 
-class RawBases:
-    """The raw template name each live interface name stands for under one module rule.
+class FlatFamily(NamedTuple):
+    """A flat breakout family that one template claims.
 
-    *families* maps each of the module's interface names outside any channel to its channels, as
-    ``(name, channel_id)`` pairs. A rule that does not read ``{base}`` takes every name as its own
-    base, so its claims are never computed. So does a module type without interface templates: it
-    has no raw names to recover. *catalog* is shared with the family planners, so the module's
-    templates load once.
-
-    *previous_forms* holds what named each template before a move. Its forms are claim evidence too,
-    and with it every rule computes its claims, so a name that no single template claims has no base,
-    also on a module type without templates.
+    *base_name* is the template's raw name now, and *names* are the names the family's rows carry,
+    in channel order.
     """
 
-    def __init__(self, module, rule, variables, families, catalog, previous_forms=None):
+    base_name: str
+    names: tuple[str, ...]
+
+
+class NameClaim(NamedTuple):
+    """Whether a template claims one name, one template alone does, and one does as a raw name now or earlier."""
+
+    claimed: bool
+    accepted: bool
+    raw: bool
+
+
+_UNCLAIMED = NameClaim(claimed=False, accepted=False, raw=False)
+
+
+class _Resolution(NamedTuple):
+    """What one claim pass decided: the raw base of each name one template alone claims, families and claims."""
+
+    bases: dict
+    families: tuple[FlatFamily, ...]
+    claims: dict
+
+
+class RawBases:
+    """The one claim over every name form of a module's interfaces under one rule (ADR 0013).
+
+    *families* maps each name outside a channel to its channels; *plain* names the flat-family candidates.
+    *earlier_raw_names* maps a template's primary key to the raw names it also gave earlier.
+    """
+
+    def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None, earlier_raw_names=None):
         self._module = module
         self._rule = rule
         self._variables = variables
         self._families = dict(families)
         self._names = tuple(self._families)
+        self._plain = frozenset(plain)
         self.catalog = catalog
         self.previous_forms = previous_forms
+        self._earlier_raw_names = earlier_raw_names or {}
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
-        self._claimed = False
-        self._by_name = None
-        self._ambiguous = frozenset()
+        self._breaks_out = breaks_out(rule)
+        self._claims_flat = previous_forms is None and self._breaks_out
+        self._resolution = None
 
     def base_for(self, name):
+        """Return ``{base}`` for *name*: its own name for a rule that needs no claim, else ``builds_on``."""
+        return self.builds_on(name) if self._reads_base else name
+
+    def builds_on(self, name):
         """Return the raw template name *name* stands for, or None when no single template claims it."""
-        if not self._reads_base:
-            return name
-        self._load()
-        if self._by_name is None:
-            return name
-        return self._by_name.get(name)
+        return self._resolved().bases.get(name)
 
     def is_ambiguous(self, name):
-        """Return whether more than one template claims *name*, or its template claims another name too."""
-        if not self._reads_base:
+        """Return whether a rule that reads the claim finds *name* claimed, but not by one template alone."""
+        if not (self._reads_base or self._breaks_out):
             return False
-        self._load()
-        return name in self._ambiguous
+        claim = self.claim(name)
+        return claim.claimed and not claim.accepted
 
-    def _load(self):
-        """Compute the claims on first use."""
-        if not self._claimed:
-            self._by_name, self._ambiguous = self._claim()
-            self._claimed = True
+    def claim(self, name):
+        """Return how the claim treats *name*."""
+        return self._resolved().claims.get(name, _UNCLAIMED)
+
+    def flat_families(self):
+        """Return every flat family that one template alone claims."""
+        if not self._claims_flat:
+            return ()
+        return self._resolved().families
+
+    def _resolved(self):
+        """Resolve the claim on first use."""
+        if self._resolution is None:
+            self._resolution = self._claim()
+        return self._resolution
 
     def _claim(self):
-        """Return ``(raw name by claimed name, ambiguous names)``.
-
-        Without templates the first is None, and a name is its own base, except after a move.
-        A template claims its raw name, its historical raw forms and the names the rule gives it. A
-        raw name beats another template's historical form, as in the drift guard, but never a
-        renamed form: that overlap is ambiguous, so neither template claims the name. A parent name
-        without ``{base}`` fits every template, so a template claims it only through a channel the
-        rule gave that template's base. A form from the previous state beats nothing.
-        """
-        claimants = [
-            (template.pk, template.template_name, template.resolved, template.historical_pattern)
-            for template in self.catalog.get()
-            if template.channel_id is None
-        ]
-        if not claimants:
-            return (None if self.previous_forms is None else {}), frozenset()
-        raw_names = {raw for _claimant_id, _template_name, raw, _historical in claimants}
-        claims = []
-        raw_by_claimant = {}
-        for claimant_id, template_name, raw, historical in claimants:
-            current = _template_forms(self._rule, self._variables, raw, historical)
-            previous = self._previous_template_forms(claimant_id)
-            labels = tuple(
-                name
-                for name in self._names
-                if self._matches(name, current)
-                or (historical is not None and name not in raw_names and historical.fullmatch(name))
-                or (previous is not None and self._matches(name, previous))
+        """Resolve every form of every template in one pass, in the order ADR 0013 lists."""
+        templates = [template for template in self.catalog.get() if template.channel_id is None]
+        if not templates and self.previous_forms is None:
+            templates = [ResolvedTemplateName(None, _STAND_IN, self._variables["bay_position"], None, None, None, None)]
+        forms = {template.pk: self._raw_forms(template) for template in templates}
+        raw_names = set().union(*forms.values())
+        raw_by_claimant = {template.pk: template.resolved for template in templates}
+        claims, flat, raw_claimed = [], {}, set()
+        for template in templates:
+            single = self._single_names(template, raw_names, forms[template.pk])
+            raw_claimed.update(
+                name for name in single if self._is_raw_name(name, template, raw_names, forms[template.pk])
             )
-            claims.append(TemplateClaim(claimant_id, template_name, labels))
-            raw_by_claimant[claimant_id] = raw
-        accepted, messages = resolve_template_claims(claims, module=self._module, label_kind="raw base")
+            families = self._flat_families(template)
+            flat.update(((template.pk, unit), family) for unit, family in families.items())
+            claims.append(
+                TemplateClaim(template.pk, template.template_name, [(name,) for name in single] + [*families])
+            )
+        accepted, messages = resolve_template_claims(claims, module=self._module)
         for message in messages:
             logger.warning("%s", message)
-        by_name = {label: raw_by_claimant[claimant_id] for claimant_id, label in accepted}
-        return by_name, frozenset(label for claim in claims for label in claim.labels) - by_name.keys()
+        bases = {name: raw_by_claimant[claimant_id] for claimant_id, unit in accepted for name in unit}
+        claimed = dict.fromkeys(name for claim in claims for unit in claim.units for name in unit)
+        return _Resolution(
+            bases=bases,
+            families=tuple(flat[pair] for pair in accepted if pair in flat),
+            claims={name: NameClaim(True, name in bases, name in raw_claimed) for name in claimed},
+        )
+
+    def _single_names(self, template, raw_names, raw_forms):
+        """Return each name that one of *template*'s forms spells, other than a flat family."""
+        current = _template_forms(self._rule, self._variables, template.resolved, template.historical_pattern)
+        previous = self._previous_template_forms(template.pk)
+        return tuple(
+            name
+            for name in self._names
+            if self._matches(name, current)
+            or self._is_raw_name(name, template, raw_names, raw_forms)
+            or (previous is not None and self._matches(name, previous))
+        )
+
+    def _raw_forms(self, template):
+        """Return *template*'s raw name now and the raw names it gave earlier."""
+        return {template.resolved, *self._earlier_raw_names.get(template.pk, ())}
+
+    @staticmethod
+    def _is_raw_name(name, template, raw_names, raw_forms):
+        """Return whether *name* is one of *template*'s *raw_forms*, or its raw name at a position no other raw name holds."""
+        historical = template.historical_pattern
+        return name in raw_forms or (
+            historical is not None and name not in raw_names and historical.fullmatch(name) is not None
+        )
+
+    def _flat_families(self, template):
+        """Return, by the plain interfaces the module carries, each flat family whose first one it carries."""
+        if not self._claims_flat:
+            return {}
+        rule = self._rule
+        first = _renamed_pattern(
+            rule.name_template,
+            {**self._variables, "channel": str(rule.channel_start)},
+            template.resolved,
+            template.historical_pattern,
+        )
+        if first is None:
+            return {}
+        families = {}
+        for name in self._names:
+            match = None if name not in self._plain else first.fullmatch(name)
+            family = None if match is None else self._flat_family(match.groupdict(), template.resolved)
+            if family is not None:
+                families[tuple(member for member in family.names if member in self._plain)] = family
+        return families
+
+    def _flat_family(self, groups, raw):
+        """Return the flat family whose first name matched with *groups*, or None when the rule cannot name it."""
+        variables = self._variables if "vc" not in groups else {**self._variables, "vc_position": groups["vc"]}
+        try:
+            names = flat_family_names(self._rule, variables, groups.get("base", raw))
+        except (TypeError, ValueError):
+            return None
+        return FlatFamily(raw, names) if len(set(names)) == len(names) else None
 
     def _previous_template_forms(self, claimant_id):
         """Return the forms the template had in the previous state, or None without a previous state."""
@@ -244,3 +323,5 @@ class GivenRawNames:
     def base_for(self, name):
         """Return *name*, or None when the claim over the given names finds it ambiguous."""
         return None if self._bases.is_ambiguous(name) else name
+
+    builds_on = base_for

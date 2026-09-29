@@ -33,12 +33,6 @@
       1
     ]
   ],
-  "family/structural.py": [
-    [
-      "# A flat family is N sibling interfaces on one module: the base takes the first name and the rest\n# are new rows.  Unlike a channelized family there is no parent to cascade from, so a sibling whose\n# name is taken is skipped on its own while the family keeps the names it could take.",
-      1
-    ]
-  ],
   "forms.py": [
     [
       "# Blank first choice: a bulk edit posts every rendered field, so without a \"no change\" option a\n# select rewrites the column on every selected rule.",

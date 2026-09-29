@@ -328,13 +328,18 @@ class BaseVariableDocumentationTest(unittest.TestCase):
                 "a `{base}` inside one when its template name uses the `{vc_position}` token."
             ),
             "An interface that no template claims, or that more than one template claims, keeps its name.",
+            "So does an interface whose template also claims another interface or flat family.",
+            (
+                "The plugin checks all these names in one claim, and an install, a virtual-chassis change, "
+                "Apply Rules and a move all use the same claim."
+            ),
             (
                 "A raw name wins over another template's earlier virtual-chassis form, but not over the name the "
                 "rule gives another template"
             ),
             (
-                "A module type without interface templates has no raw names, so there `{base}` is the "
-                "interface's current name."
+                "A module type without interface templates has no raw names, so it claims as one template "
+                "whose raw name is the bay position. There `{base}` is the bay position"
             ),
             "In a device interface rule, `{base}` is the interface's current name.",
         ):

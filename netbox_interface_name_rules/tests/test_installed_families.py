@@ -454,15 +454,16 @@ class InstalledFlatFamilyPlanningTest(TestCase):
         self.assertTrue(any("FOR UPDATE" in query["sql"] for query in queries.captured_queries))
 
     @skipUnless(supports_vc_position_token(), "requires NetBox virtual-chassis position templates")
-    def test_forced_reapplication_preserves_a_wrapped_historical_family(self):
+    def test_forced_reapplication_renames_a_wrapped_historical_family(self):
+        """The claim finds the family by the names the rule gives, as Apply Rules does."""
         module, _rule = self._historical_family_state()
 
         renamed = apply_interface_name_rules(module, module.module_bay, force_reapply=True)
 
-        self.assertEqual(renamed, 0)
+        self.assertEqual(renamed, 2)
         self.assertEqual(
             sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["brk-xe-1/0/7:0", "brk-xe-1/0/7:1"],
+            ["brk-xe-2/0/7:0", "brk-xe-2/0/7:1"],
         )
 
     @skipUnless(
@@ -521,11 +522,18 @@ class InstalledFlatFamilyPlanningTest(TestCase):
             build_variables(module.module_bay, device=module.device),
         )
 
-        self.assertEqual(len(plan_set.plans), 1)
+        incomplete, complete = plan_set.plans
         self.assertEqual(
-            [member.snapshot.name for member in plan_set.plans[0].members],
-            ["brk-xe-1/0/7-b:0", "brk-xe-1/0/7-b:1"],
+            [(member.snapshot.name, member.target_name) for member in incomplete.members],
+            [("brk-xe-1/0/7-a:0", "brk-xe-1/0/7-a:0")],
         )
+        self.assertEqual(incomplete.precondition_status, FamilyStatus.BLOCKED)
+        self.assertEqual(incomplete.precondition_reason, "the flat family is missing 1 of its 2 interfaces")
+        self.assertEqual(
+            [(member.snapshot.name, member.target_name) for member in complete.members],
+            [("brk-xe-1/0/7-b:0", "brk-xe-2/0/7-b:0"), ("brk-xe-1/0/7-b:1", "brk-xe-2/0/7-b:1")],
+        )
+        self.assertIsNone(complete.precondition_status)
 
     @skipUnless(supports_vc_position_token(), "requires NetBox virtual-chassis position templates")
     def test_blocked_member_does_not_stop_an_unrelated_flat_family(self):

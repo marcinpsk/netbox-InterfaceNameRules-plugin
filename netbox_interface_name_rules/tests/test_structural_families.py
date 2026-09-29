@@ -24,6 +24,7 @@ from netbox_interface_name_rules.family import (
     FamilyStatus,
     FamilyTopology,
     execute_structural_family,
+    has_flat_expansion,
     plan_structural_family,
     structural,
 )
@@ -66,7 +67,8 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
+        variables = build_variables(bay, device=self.device)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, has_flat_expansion(module))
         return module, bay, plan
 
 
@@ -319,7 +321,7 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         _module, _bay, plan = self._plan()
 
         with CaptureQueriesContext(connection) as queries:
-            taken = structural._first_taken_name(plan)
+            taken = structural._first_taken_name(plan, (plan.base.pk,))
 
         self.assertIsNone(taken)
         self.assertEqual(len(plan.target_names), 5)
@@ -330,13 +332,13 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
 
-        self.assertEqual(structural._first_taken_name(plan), "xe-0/0/3:1")
+        self.assertEqual(structural._first_taken_name(plan, (plan.base.pk,)), "xe-0/0/3:1")
 
     def test_the_base_row_never_counts_as_a_collision(self):
         _module, _bay, plan = self._plan()
         rename_out_of_band(Interface.objects.get(pk=plan.base.pk), plan.target_names[0])
 
-        self.assertIsNone(structural._first_taken_name(plan))
+        self.assertIsNone(structural._first_taken_name(plan, (plan.base.pk,)))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

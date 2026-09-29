@@ -4,34 +4,85 @@ status: accepted
 
 # Centralize template claim ambiguity
 
-The engine and installed-family discovery each implemented the same two-sided uniqueness rule.
-Exhaustive checks over 4096 relations established their equivalence.
-The family package owns this rule through immutable `TemplateClaim` values and
-`resolve_template_claims`, exported at the package boundary.
+NetBox keeps no link from an interface to the template that created it, so the plugin decides by a
+name claim which template an interface stands for. One claim pass decides it for a module on every
+path: an install, a forced reapply after a virtual-chassis or type change, Apply Rules and its
+preview, conversion, and the reapply after a move or a bay edit (ADR 0015). The family package owns
+the pass (`RawBases`) and its primitive (`TemplateClaim`, `resolve_template_claims`). No stage
+accepts or discards a claim before the pass, and every path reads the same result.
 
-The primitive accepts the complete relation for one selection scope.
-Callers must retain claims from templates that claim multiple labels.
-Repeated edges count once, and duplicate claimant IDs are invalid.
-A template with multiple labels or a label with multiple templates disqualifies
-every involved claim. Accepted pairs retain input claimant order.
-The primitive returns accepted pairs and rendered collision messages.
-It uses only the standard library and does not discover candidates.
+The pass collects every form of every template as evidence, in this one order:
 
-The engine retains regex matching, comparison forms, exact-name precedence,
-forced-base ordering and the preference for channel `:0`.
-Its admission guard stays at the same point in `_collect_unrenamed`, before
-interfaces that intend one family collapse, as required by ADR 0011.
-A reapply after a move or a bay edit skips that guard: the raw-base claim then runs for every rule,
-with the previous state's forms added, and decides alone (ADR 0015).
+1. the template's raw name now;
+2. a raw name at an earlier virtual-chassis position that is no template's raw name now, so a raw
+   name beats another template's earlier virtual-chassis form;
+3. a name the rule gives the template. `{base}` stands for the raw name now or at any virtual-chassis
+   position, and `{vc_position}` stands for any position. A parent name without `{base}` counts only
+   through a channel that the rule gave the template's base;
+4. a flat family: the plain interfaces that the rule's channel names spell from one of those bases,
+   when the module carries the first one. A flat breakout rule gives it. A channelized rule gave it
+   while the rule was flat;
+5. after a move or a bay edit, the raw name and the names the previous rule gave, from the previous
+   state. A move recognises no flat family (ADR 0015), so its pass has no flat family forms.
 
-Message construction belongs to the primitive so callers cannot drift in wording.
-The primitive does not log. Callers emit its messages through their own logger,
-which preserves the engine warning source and keeps the decision free of side effects.
+A module type without interface templates claims as one template whose raw name is the bay position,
+and its claim is read like any template's. So there `{base}` is the bay position, and a rule that reads
+`{base}` or a breakout rule acts only on the interfaces this template claims. After a move it claims
+nothing (ADR 0015).
 
-The engine and installed-family discovery both use the primitive.
-Installed-family discovery passes the complete historical base relation and emits
-collision messages through its own logger with the label kind `family base`.
-Current resolved bases remain unconditional and precede accepted historical bases.
-Historical base extraction and duplicate handling remain unchanged.
-The `_singly_claimed` rule counts member primary keys across complete family
-candidates and remains separate.
+The primitive takes the complete relation. A claim is a set of units: one interface name, or the
+names of one flat family. A template claims one unit when exactly one of its units holds every name
+it claims. A template that claims more, or a name that more than one template claims, disqualifies
+every claim involved. Repeated units count once, duplicate claimant IDs are invalid, and accepted
+pairs keep claimant order. The primitive renders the collision messages and does not log, so the
+decision has no side effects; the pass logs each message once through its own logger. The primitive
+uses only the standard library and does not discover candidates.
+
+The paths read the result as follows:
+
+- A rule that reads `{base}` gets the raw name of the accepted claim. A name that no single template
+  claims has no base, so the rule does not rename it. After a move every rule reads the claim this
+  way. Otherwise a rule that does not read `{base}` takes each name as its own base.
+- The engine chooses the scope of an automatic run, and the family package applies it with the
+  claim. An install touches an interface that a template claims as its raw name, now or at an
+  earlier position. A forced reapply and Apply Rules touch every interface. In scope, a rule without
+  channels that does not read `{base}` needs no template, so it renames every interface. A rule that
+  reads `{base}` keeps an interface that no single template claims and reports it as unclaimed. The
+  scope applies before two interfaces that intend one family collapse into one (ADR 0011).
+- A breakout rule builds a family only on an interface that one template alone claims. This holds on
+  every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
+  does not read `{base}`, and on a module type without templates. Every other interface keeps its
+  name and is reported as unclaimed. No family takes an interface by its name. A flat family keeps
+  only the other interfaces of the flat family unit that the claim gave its template, and its plan
+  holds them by primary key. Another interface that has one of the family's names is a collision:
+  the family is refused, and that interface has its own plan. So when two interfaces would build one
+  family, the first plan builds it and the other is refused, because its names are in use. At
+  execution the executor locks the base and the interfaces the family keeps, and refuses the family
+  when one of them changed (ADR 0002). It builds the whole family or nothing (ADR 0001), and a refusal
+  reports each planned interface once with the same reason. In Apply Rules a selection of any
+  interface that a flat family keeps reaches that family. So every interface in scope is built, kept
+  by its family or reported, once. A subinterface that no template claims is no candidate of its
+  own, so a breakout rule neither touches nor reports it. Prediction refuses a given name that the
+  claim finds ambiguous, and predicts every other given name from itself.
+- A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
+  reports a family that lost a member, unless the rule gives the family those names already: the
+  family's first interface then builds it again. A channelized rule renames no flat family, and
+  conversion converts only a flat family that one template alone claims.
+
+Installed-family discovery and the engine's admission guard used to resolve the historical
+`{vc_position}` claims in stages of their own, before the raw-name guard admitted the remaining
+interfaces. After a renumber, the stages could each accept one of two candidates of one template,
+such as a family named at the old position and an interface at the new raw name, where one pass
+refuses both and reports them. Keeping the stages and aligning their filters was rejected, because
+each stage decides without the evidence the others hold. Dropping a historical base that some
+template resolves to now was also rejected: that filter ran before the claim, and a name the rule
+gives two templates belongs to neither.
+
+A flat family used to take each module interface that had one of its channel names, and to skip a
+sibling whose name another interface held while it created the rest. A match by name put one
+interface in two plans, or in none: a raw name that another template's family would take, or an
+interface renamed after planning to one of the family's names, was reported twice or not at all. A
+flat family now keeps interfaces by primary key, and only those that the claim gave it. This changes
+what an operator sees. A sibling name in use now refuses the whole flat family, where the family used
+to be built without that sibling. When a port still has its raw name, an interface that has one of
+its family's names is now reported on its own, and the family is not built.

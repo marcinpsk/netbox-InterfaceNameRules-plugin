@@ -27,7 +27,9 @@ from utilities.testing import APITestCase
 from netbox_interface_name_rules import engine, rename_triggers
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.rename_outcomes import OutcomeKind
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -45,6 +47,7 @@ from netbox_interface_name_rules.tests.test_channelization import (
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
+VIRTUAL_TYPE = "virtual"
 MODULE_STATE_READ = re.compile(
     r'SELECT "dcim_module"\."module_type_id"(?: AS "module_type_id")?, '
     r'"dcim_module"\."module_bay_id"(?: AS "module_bay_id")?, '
@@ -670,6 +673,49 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("no single interface template claims", entry.comments)
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
+    def _type_change_to_breakout(self, bay_name, name_template):
+        """Install type A in *bay_name*, add a plain interface and a subinterface, then change to a breakout type."""
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(device=self.device, module_bay=self._bay(bay_name), module_type=self.type_a)
+        (renamed,) = Interface.objects.filter(module=module)
+        Interface.objects.create(device=self.device, module=module, name="mgmt-extra", type=PLAIN_TYPE)
+        Interface.objects.create(
+            device=self.device, module=module, name=f"{renamed.name}.100", type=VIRTUAL_TYPE, parent=renamed
+        )
+        breakout_type, _ = self._module_type_with_rule(
+            f"RenTrig Breakout {bay_name}",
+            ("port{module}",),
+            name_template,
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        names = self._names(module)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._change_type(module, breakout_type)
+
+        self.assertEqual(self._names(module), names)
+        return module, renamed.name
+
+    def _assert_reports_each_unclaimed_top_level_interface(self, module, renamed):
+        (entry,) = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
+        for name in (renamed, "mgmt-extra"):
+            with self.subTest(name=name):
+                self.assertIn(f"`{name}`: {UNCLAIMED_BASE_REASON}", entry.comments)
+        # A subinterface is no candidate of its own, so a breakout rule neither builds on it nor reports it.
+        self.assertNotIn(f"{renamed}.100", entry.comments)
+
+    def test_a_type_change_to_a_breakout_rule_that_reads_base_reports_each_unclaimed_interface(self):
+        module, renamed = self._type_change_to_breakout("Bay 0", "xe-{base}:{channel}")
+
+        self._assert_reports_each_unclaimed_top_level_interface(module, renamed)
+
+    def test_a_type_change_to_a_breakout_rule_without_base_reports_each_unclaimed_interface(self):
+        module, renamed = self._type_change_to_breakout("Bay 1", "xe-0/0/{bay_position}:{channel}")
+
+        self._assert_reports_each_unclaimed_top_level_interface(module, renamed)
+
     def test_a_template_variable_the_device_lacks_is_reported(self):
         standalone = self._standalone_device()
 
@@ -781,6 +827,75 @@ class RenameJournalTest(RenameTriggerTestCase):
         self.assertIn("`et-1/0/0`", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
         self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
+
+    def test_a_breakout_rule_the_device_cannot_evaluate_reports_the_raw_interface(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Flat",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=flat_type,
+            )
+
+        (entry,) = _journal(module)
+        self.assertIn("`0`: {vc_position} is not available", entry.comments)
+        self.assertEqual(self._names(module), ["0"])
+
+    def test_a_breakout_rule_the_device_cannot_evaluate_does_not_report_an_interface_out_of_scope(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Scope",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=2,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(
+                device=standalone,
+                module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+                module_type=flat_type,
+            )
+            # No template claims "0:5", so the install scope leaves it out of every plan.
+            Interface.objects.create(device=standalone, module=module, name="0:5", type=PLAIN_TYPE)
+
+        (entry,) = _journal(module)
+        self.assertIn("`0`: {vc_position} is not available", entry.comments)
+        self.assertNotIn("0:5", entry.comments)
+        self.assertEqual(self._names(module), ["0", "0:5"])
+
+    def test_a_breakout_rule_the_device_cannot_evaluate_reports_each_row_a_half_built_family_keeps(self):
+        flat_type, _ = self._module_type_with_rule(
+            "RenTrig Solo Half",
+            ("{module}",),
+            "et-{vc_position}/{bay_position}:{channel}",
+            channel_count=3,
+            breakout_mode=BreakoutModeChoices.FLAT,
+        )
+        standalone = self._standalone_device()
+        module = Module.objects.create(
+            device=standalone,
+            module_bay=ModuleBay.objects.get(device=standalone, name="Bay 0"),
+            module_type=flat_type,
+        )
+        rename_out_of_band(Interface.objects.get(module=module, name="0"), "et-1/0:0")
+        Interface.objects.create(device=standalone, module=module, name="et-1/0:1", type=PLAIN_TYPE)
+
+        outcomes = list(engine.device_module_rule_outcomes(standalone, report_only=True))
+
+        self.assertEqual(
+            [(outcome.kind, outcome.interface_name) for outcome in outcomes],
+            [(OutcomeKind.UNRESOLVED_VARIABLE, "et-1/0:0"), (OutcomeKind.UNRESOLVED_VARIABLE, "et-1/0:1")],
+        )
 
     def test_leaving_the_virtual_chassis_reports_every_member_of_a_flat_family(self):
         flat_type, _ = self._module_type_with_rule(

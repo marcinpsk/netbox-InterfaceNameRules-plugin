@@ -18,18 +18,31 @@ from .domain import (
     FlatCreationPlan,
     InstalledFamilyPlan,
     MemberOutcome,
+    RunScope,
     StructuralFamilyPlan,
 )
 from .execution import execute_installed_plan
 from .installed import (
+    half_built_members,
     interfaces_by_module,
     module_raw_bases,
     plan_installed_families_from,
     plan_interface_rename,
     plan_kept_interface,
 )
-from .structural import execute_flat_family, execute_structural_family, plan_flat_family, plan_structural_family
-from .targets import builds_channelized_family, intended_family_names, one_family_per_name_set
+from .names import first_taken_name, name_owners
+from .structural import (
+    carries_flat_expansion,
+    execute_flat_family,
+    execute_structural_family,
+    plan_flat_family,
+    plan_structural_family,
+)
+from .targets import (
+    UNCLAIMED_BASE_REASON,
+    breaks_out,
+    builds_channelized_family,
+)
 from .template_names import pinned_template_cache
 
 logger = logging.getLogger(__name__)
@@ -115,43 +128,54 @@ def _is_top_level(interface) -> bool:
     return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
 
 
-def _creation_plan(module, rule, variables, base, base_name):
+def _creation_plan(module, rule, variables, base, base_name, flat_expansion, members):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
-        return plan_structural_family(module, rule, variables, base, base_name)
-    return plan_flat_family(module, rule, variables, base, base_name)
+        return plan_structural_family(module, rule, variables, base, base_name, flat_expansion)
+    return plan_flat_family(module, rule, variables, base, base_name, members)
 
 
-def _creation_plans(module, rule, variables, plain, bases):
-    """Return one creation plan per family, so two bases of one family never build it twice."""
-    candidates = []
-    for base in plain:
-        base_name = bases.base_for(base.name)
-        target_names = (
-            (base.name,) if base_name is None else intended_family_names(rule, variables, base.name, base_name)
+def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members):
+    """Return a plan for each selected interface; a row that a half-built family keeps is in that family's plan."""
+    plans = [
+        _creation_plan(
+            module, rule, variables, base, bases.builds_on(base.name), flat_expansion, members.get(base.name, ())
         )
-        candidates.append((base, base_name, target_names))
-    kept = one_family_per_name_set([(base.name, target_names) for base, _base_name, target_names in candidates])
-    return [_creation_plan(module, rule, variables, *candidates[index][:2]) for index in kept]
+        for base in plain
+    ]
+    plans = [plan for plan in plans if _reaches(plan, selected_pks)]
+    kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
+    return [plan for plan in plans if plan.base.pk not in kept]
+
+
+def _is_candidate(interface, rule, bases, previous_forms):
+    """Return whether a leftover *interface* is a candidate of its own; a subinterface is not always one."""
+    if _is_top_level(interface):
+        return True
+    # After a move, or under a breakout rule unless a template claims it, a subinterface belongs to its parent.
+    return previous_forms is None and not (breaks_out(rule) and not bases.claim(interface.name).claimed)
+
+
+def _in_scope_installed(plans, bases, scope):
+    """Return the installed families *scope* reaches: a channelized one always, a flat one on install by a raw name."""
+    if scope == RunScope.FORCED:
+        return plans
+    return tuple(
+        plan
+        for plan in plans
+        if plan.topology == FamilyTopology.CHANNELIZED
+        or any(bases.claim(member.snapshot.name).raw for member in plan.members)
+    )
 
 
 def plan_module_families(
-    module, rule, variables, interfaces, admit_leftover=None, previous_forms=None
+    module, rule, variables, interfaces, bases, scope=None, selected_pks=None
 ) -> ModuleFamilyPlans:
-    """Return one executable plan for every family *rule* intends on *module*.
+    """Return one plan for every family *rule* intends on *module* that *selected_pks* reaches.
 
-    Every interface belongs to at most one plan: an installed family claims its members first, and
-    what is left over is planned as the family the rule would build on it.
-
-    *admit_leftover* filters the interfaces no installed family claimed.  It runs before two of
-    them that intend one family are collapsed into it, so a caller that must not touch one of the
-    two cannot have it survive the collapse as the row the family is built on.
-
-    *previous_forms* holds what named the module's templates before a move. The plans then rename
-    only what a template claims, and no installed flat family. While any top-level interface is
-    unclaimed, they rename nothing on the module and report every interface.
+    A *scope* limits an automatic run before interfaces that intend one family collapse (ADR 0013).
     """
-    bases = module_raw_bases(module, rule, variables, interfaces, previous_forms)
+    previous_forms = bases.previous_forms
     if previous_forms is not None and any(
         _is_top_level(interface) and bases.base_for(interface.name) is None for interface in interfaces
     ):
@@ -172,15 +196,23 @@ def plan_module_families(
         for interface in interfaces
         if interface.pk not in claimed
         and not _is_channel(interface)
-        and (previous_forms is None or _is_top_level(interface))
+        and _is_candidate(interface, rule, bases, previous_forms)
+        and (scope != RunScope.INSTALL or bases.claim(interface.name).raw)
     ]
-    if admit_leftover is not None:
-        plain = list(admit_leftover(plain))
-    if rule.channel_count <= 0:
-        leftover = tuple(plan_interface_rename(module, rule, variables, interface, bases) for interface in plain)
+    if not breaks_out(rule):
+        leftover = _selected(
+            [plan_interface_rename(module, rule, variables, interface, bases) for interface in plain], selected_pks
+        )
     elif any(plan.topology == FamilyTopology.CHANNELIZED for plan in installed.plans):
         # A breakout rule renames the families the module already models; it never adds one beside them.
-        leftover = ()  # pragma: no cover - requires channelization support
+        leftover = _selected(  # pragma: no cover - requires channelization support
+            [
+                plan_kept_interface(module, interface, UNCLAIMED_BASE_REASON)
+                for interface in plain
+                if bases.builds_on(interface.name) is None
+            ],
+            selected_pks,
+        )
         for interface in plain:  # pragma: no cover - see above
             logger.debug(
                 "Interface %r is not channelized; skipping it while rule '%s' breaks out this module's families.",
@@ -188,8 +220,32 @@ def plan_module_families(
                 rule,
             )
     else:
-        leftover = tuple(_creation_plans(module, rule, variables, plain, bases))
-    return ModuleFamilyPlans(installed=installed.plans, leftover=leftover)
+        flat_expansion = builds_channelized_family(rule) and carries_flat_expansion(interfaces, bases.catalog.get())
+        members = half_built_members(rule, interfaces, bases)
+        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members)
+    installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
+    return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
+
+
+def creation_names_in_use(module, rule, interfaces, bases, plans) -> dict[str, str]:
+    """Return, by base name, the first name in use on the device outside the rows each creation in *plans* keeps.
+
+    *plans* are prospective plans. Each creation is checked as its executor checks it at execution,
+    so a preview offers no family that the apply refuses because one of its names is in use.
+    """
+    creations = [plan for plan in plans if plan.base_name is not None and plan.precondition_status is None]
+    if not breaks_out(rule) or not creations:
+        return {}
+    pks = {interface.name: interface.pk for interface in interfaces}
+    members = half_built_members(rule, interfaces, bases)
+    owners = name_owners(module.device_id, {name for plan in creations for name in plan.target_names})
+    in_use = {}
+    for plan in creations:
+        own_pks = {pks[plan.base_name], *(member.pk for member in members.get(plan.base_name, ()))}
+        taken = first_taken_name(plan.target_names, owners, own_pks)
+        if taken is not None:
+            in_use[plan.base_name] = taken
+    return in_use
 
 
 def _selection_pks(plan):
@@ -202,14 +258,19 @@ def _selection_pks(plan):
         if plan.parent_pk is None:
             return plan.member_pks
         return (plan.parent_pk,)  # pragma: no cover - requires channelization support
+    if isinstance(plan, FlatCreationPlan):
+        return plan.member_pks
     return (plan.base.pk,)
+
+
+def _reaches(plan, selected_pks):
+    """Return whether the operator's interface selection reaches *plan*; no selection reaches every plan."""
+    return selected_pks is None or bool(selected_pks.intersection(_selection_pks(plan)))
 
 
 def _selected(plans, selected_pks):
     """Return the plans the operator's interface selection reaches."""
-    if selected_pks is None:
-        return plans
-    return [plan for plan in plans if selected_pks.intersection(_selection_pks(plan))]
+    return [plan for plan in plans if _reaches(plan, selected_pks)]
 
 
 def execute_module_families(plans):
@@ -221,7 +282,8 @@ def execute_module_families(plans):
 def _apply_module(rule, module, interfaces, selected_pks):
     """Plan and execute every selected family on one module."""
     variables = build_variables(module.module_bay, device=module.device)
-    plans = _selected(plan_module_families(module, rule, variables, interfaces).plans, selected_pks)
+    bases = module_raw_bases(module, rule, variables, interfaces)
+    plans = plan_module_families(module, rule, variables, interfaces, bases, selected_pks=selected_pks).plans
     return list(execute_module_families(plans))
 
 

@@ -28,7 +28,12 @@ from netbox_interface_name_rules.engine import (
     predict_rule_output,
     supports_channelization,
 )
-from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
+from netbox_interface_name_rules.family import (
+    UNCLAIMED_BASE_REASON,
+    FamilyStatus,
+    execute_installed_plan,
+    plan_installed_families,
+)
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.test_breakout_mode import (
@@ -432,13 +437,21 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_force_apply_builds_no_family_beside_the_flat_one(self):
-        """A parent built on one sibling would strand the other three — the hybrid the docs rule out."""
+        """A parent built on one sibling would strand the other three: the hybrid the docs rule out.
+
+        The rule's names no longer spell the flat family, so no template claims its interfaces: each
+        keeps its name and is reported.
+        """
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
 
         self.assertEqual(changed, 0)
         self._assert_untouched()
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""
@@ -447,8 +460,15 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
         self.assertEqual(changed.changed_count, 0)
         self._assert_untouched()
-        self.assertTrue(changed.skipped_members, "the skipped module was not reported to the Apply view")
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in changed.skipped_members),
+            [(name, UNCLAIMED_BASE_REASON) for name in self.FLAT_NAMES],
+        )
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_preview_offers_no_family_it_would_not_build(self):
         """The Apply page must not promise a family the apply path refuses to create."""

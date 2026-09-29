@@ -23,6 +23,7 @@ from dcim.models import (
 )
 from django.test import TestCase
 
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import (
     _matching_moduletype_pks,
     apply_interface_name_rules,
@@ -31,8 +32,9 @@ from netbox_interface_name_rules.engine import (
     evaluate_name_template,
     find_interfaces_for_rule,
     has_applicable_interfaces,
+    predict_rule_output,
 )
-from netbox_interface_name_rules.family import FamilyStatus
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, FamilyStatus
 from netbox_interface_name_rules.family.names import INTERFACE_NAME_CONSTRAINT
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import _extract_trailing_digits
@@ -427,8 +429,8 @@ class ChannelFamilyBaseTest(EngineAdvancedFixtures):
             channel_start=0,
         )
 
-    def test_a_half_built_family_is_completed_through_its_own_first_member(self):
-        """The interface already named channel 0 owns the family; the raw port is left where it is."""
+    def test_a_half_built_family_beside_its_raw_port_is_refused(self):
+        """The module type claims the raw port and the family's first member: two candidates, so neither builds."""
         rule = self._breakout_rule()
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         Interface.objects.create(device=self.device, module=module, name="xe-0/0/0:0", type="10gbase-x-sfpp")
@@ -436,10 +438,13 @@ class ChannelFamilyBaseTest(EngineAdvancedFixtures):
 
         outcome = apply_rule_to_existing(rule)
 
-        self.assertEqual(outcome.changed_count, 3)
+        self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(
-            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["0", "xe-0/0/0:0", "xe-0/0/0:1", "xe-0/0/0:2", "xe-0/0/0:3"],
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0", "xe-0/0/0:0"]
+        )
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [("0", UNCLAIMED_BASE_REASON), ("xe-0/0/0:0", UNCLAIMED_BASE_REASON)],
         )
 
     def test_with_no_member_named_yet_the_first_port_builds_the_family(self):
@@ -812,8 +817,8 @@ class BreakoutTemplateValueErrorTest(TestCase):
         )
         InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
-        Interface.objects.create(device=self.device, module=module, name="Eth1", type="100gbase-x-qsfp28")
+        # Without templates, the module type claims the interface named as its bay position.
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         outcome = apply_rule_to_existing(rule)
 
@@ -822,10 +827,7 @@ class BreakoutTemplateValueErrorTest(TestCase):
             {member.status for member in outcome.skipped_members},
             {FamilyStatus.FAILED},
         )
-        self.assertEqual(
-            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
-            ["Eth0", "Eth1"],
-        )
+        self.assertEqual(sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0"])
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +1030,8 @@ class PreviewTemplateErrorTest(TestCase):
         )
         InterfaceNameRule.objects.bulk_create([rule])
         module = Module.objects.create(device=self.device, module_bay=self.bay, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="Eth0", type="100gbase-x-qsfp28")
+        # Without templates, the module type claims the interface named as its bay position.
+        Interface.objects.create(device=self.device, module=module, name="0", type="100gbase-x-qsfp28")
 
         results, total = find_interfaces_for_rule(rule)
 
@@ -1100,7 +1103,8 @@ class PreviewLimitTest(TestCase):
         for position in ("0", "1"):
             bay = ModuleBay.objects.get(device=self.device, name=f"CLBay {position}")
             module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
-            Interface.objects.create(device=self.device, module=module, name=f"Eth{position}", type="100gbase-x-qsfp28")
+            # Without templates, the module type claims the interface named as its bay position.
+            Interface.objects.create(device=self.device, module=module, name=position, type="100gbase-x-qsfp28")
 
         results, total = find_interfaces_for_rule(rule, limit=1)
 
@@ -1560,23 +1564,6 @@ class BreakoutTransactionRollbackTest(EngineAdvancedFixtures):
         self.assertEqual(iface_names, ["0"])
 
 
-# ---------------------------------------------------------------------------
-# engine.py — _get_raw_interface_names with no templates
-# ---------------------------------------------------------------------------
-
-
-class GetRawInterfaceNamesNoTemplatesTest(EngineAdvancedFixtures):
-    """Test _get_raw_interface_names when module_type has no InterfaceTemplate entries."""
-
-    def test_no_templates_returns_empty_set(self):
-        """_get_raw_interface_names returns empty set when module_type has no templates."""
-        from netbox_interface_name_rules.engine import _get_raw_interface_names
-
-        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        result = _get_raw_interface_names(module)
-        self.assertEqual(result, set())
-
-
 class PredictRuleOutputTest(EngineAdvancedFixtures):
     """Tests for predict_rule_output — pure name prediction without DB mutations."""
 
@@ -1655,6 +1642,50 @@ class PredictRuleOutputTest(EngineAdvancedFixtures):
         module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
         result = predict_rule_output(module, self.bay0, ["fallback-me"])
         self.assertEqual(result, ["fallback-me"])
+
+
+class TemplateLessStandInTest(EngineAdvancedFixtures):
+    """A module type without interface templates claims as one template whose raw name is the bay position."""
+
+    def _flat_rule(self, name_template):
+        return InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template=name_template,
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def test_a_forced_reapply_rebuilds_a_family_from_the_bay_position(self):
+        """``x0:0`` is the first name of the family the rule gives the bay position ``0``."""
+        self._flat_rule("x{base}:{channel}")
+        module = Module.objects.create(device=self.vc_device, module_bay=self.vc_bay, module_type=self.module_type)
+        Interface.objects.create(device=self.vc_device, module=module, name="x0:0", type="10gbase-x-sfpp")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.vc_device.vc_position = 2
+            self.vc_device.save()
+
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)), ["x0:0", "x0:1"]
+        )
+
+    def test_prediction_and_apply_agree_on_names_the_claim_refuses(self):
+        """``0`` is the raw name and ``0:0`` the first name of its family: two candidates of the stand-in."""
+        rule = self._flat_rule("{base}:{channel}")
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
+        for name in ("0", "0:0"):
+            Interface.objects.create(device=self.device, module=module, name=name, type="10gbase-x-sfpp")
+
+        predicted = predict_rule_output(module, self.bay0, ["0", "0:0"])
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(predicted, ["0", "0:0"])
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [("0", UNCLAIMED_BASE_REASON), ("0:0", UNCLAIMED_BASE_REASON)],
+        )
 
 
 class PredictRuleOutputPlainTemplateTest(EngineAdvancedFixtures):
@@ -1736,8 +1767,8 @@ class NameCollisionTest(EngineAdvancedFixtures):
         iface.refresh_from_db()
         self.assertEqual(iface.name, "0")
 
-    def test_breakout_collision_skips_only_that_channel(self):
-        """A breakout channel whose name is taken elsewhere on the device is skipped; the rest are created."""
+    def test_a_breakout_channel_name_in_use_refuses_the_whole_family(self):
+        """A flat family is built whole or not at all, so a channel name taken elsewhere refuses it (ADR 0001)."""
         # Rule looked up internally by apply_interface_name_rules via module_type.
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
@@ -1752,10 +1783,8 @@ class NameCollisionTest(EngineAdvancedFixtures):
 
         renamed = apply_interface_name_rules(module, self.bay0)
 
-        # base→:0, plus :1 and :3 created; :2 skipped (collision)
-        self.assertEqual(renamed, 3)
-        module_names = sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
-        self.assertEqual(module_names, ["Hu0/0/0/0:0", "Hu0/0/0/0:1", "Hu0/0/0/0:3"])
+        self.assertEqual(renamed, 0)
+        self.assertEqual(list(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0"])
         # The pre-existing device-level interface is untouched.
         self.assertTrue(Interface.objects.filter(device=self.device, module=None, name="Hu0/0/0/0:2").exists())
 
@@ -1769,13 +1798,14 @@ class NameCollisionTest(EngineAdvancedFixtures):
         """
         from django.db import IntegrityError
 
-        InterfaceNameRule.objects.create(
-            module_type=self.module_type,
-            name_template="et-{base}",
+        # Two templates claim the two interfaces, so the rule gives each its own {base}.
+        module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer, model="ADV-RACE", part_number="ADV-RACE"
         )
-        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=self.module_type)
-        Interface.objects.create(device=self.device, module=module, name="a", type="10gbase-x-sfpp")
-        Interface.objects.create(device=self.device, module=module, name="b", type="10gbase-x-sfpp")
+        for name in ("a", "b"):
+            InterfaceTemplate.objects.create(module_type=module_type, name=name, type="10gbase-x-sfpp")
+        InterfaceNameRule.objects.create(module_type=module_type, name_template="et-{base}")
+        module = Module.objects.create(device=self.device, module_bay=self.bay0, module_type=module_type)
 
         real_save = Interface.save
         calls = {"n": 0}
@@ -1789,7 +1819,6 @@ class NameCollisionTest(EngineAdvancedFixtures):
             return real_save(self_iface, *args, **kwargs)
 
         with patch.object(Interface, "save", flaky_save):
-            # force_reapply so both interfaces are in scope regardless of raw names.
             renamed = apply_interface_name_rules(module, self.bay0, force_reapply=True)
 
         # Batch continued past the racing interface: exactly one renamed, one rolled back.

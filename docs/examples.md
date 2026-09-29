@@ -122,7 +122,7 @@ A breakout rule produces one of two topologies, chosen by `breakout_mode`:
 
 | Mode | Result |
 |---|---|
-| `flat` (default) | The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces. |
+| `flat` (default) | The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces. When one of the family's names is in use on the device, no interface is renamed or created. |
 | `channelized` | The base interface becomes the physical parent (`channels` set, keeping its pk, type, module link and cable) and one channel subinterface is created per channel (`type: channel`, bound to the parent by `channel_id`). |
 
 `parent_name_template` names that parent. It takes the same variables as
@@ -215,9 +215,12 @@ unsupported family outcome and changes no row.
 ### Partial breakout repair
 
 If a device was provisioned partially (e.g. only 2 of 4 channels were created
-manually), run **Apply Rules → Preview & Apply** for the matching rule. The
-engine detects the missing channels and creates only those — existing
-interfaces are left unchanged.
+manually), run **Apply Rules → Preview & Apply** for the matching rule. When
+the interfaces carry the family's channel names and the first channel is one of
+them, the engine creates only the missing channels and leaves the existing
+interfaces unchanged. When the port still has its raw name, an interface with
+one of the family's channel names is not part of the family. The family is then
+not built, and the plugin reports the port and that interface.
 
 ### Build Rule — SONiC QSFP-DD 4×100G breakout
 

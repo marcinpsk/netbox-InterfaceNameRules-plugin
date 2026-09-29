@@ -61,9 +61,19 @@ def template_channel_suffixes(templates):  # pragma: no cover - requires channel
     return suffixes
 
 
+def breaks_out(rule) -> bool:
+    """Return whether *rule* builds an interface family, flat or channelized."""
+    return rule.channel_count > 0
+
+
 def builds_channelized_family(rule) -> bool:
     """Return whether *rule* builds a channelized family instead of flat sibling interfaces."""
     return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
+
+
+def builds_flat_family(rule) -> bool:
+    """Return whether *rule* builds a flat breakout family of sibling interfaces."""
+    return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
 
 
 def names_installed_parent(rule) -> bool:
