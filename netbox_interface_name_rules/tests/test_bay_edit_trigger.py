@@ -8,6 +8,7 @@ recognises the names that state gave and renames them for the edited bay. NetBox
 interface when a bay's position or name changes.
 """
 
+import functools
 import re
 from unittest import skipUnless
 
@@ -15,26 +16,33 @@ from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay, ModuleB
 from django.db import DataError, connection, transaction
 from django.urls import reverse
 from extras.choices import JournalEntryKindChoices
+from extras.models import JournalEntry
 from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.engine import supports_vc_position_token
+from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, PlanRunner
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_module_move_trigger import (
-    NETBOX_MOVES_COMPONENTS,
+    CHASSIS_RULES,
     PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
+    TAKEN,
+    UNAVAILABLE,
     ModuleMoveTestCase,
     _fail_the_naming_read,
     _journal,
     _module_reapplies,
     _MoveFixture,
     _naming_reads,
+    _reapplied,
     _reject_interface_updates,
 )
 from netbox_interface_name_rules.tests.test_rename_triggers import _previous_state_read_fails
+from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 BAY_STATE_READ = re.compile(r'SELECT "dcim_modulebay"\."position".* FROM "dcim_modulebay"')
 
@@ -81,6 +89,34 @@ class BayEditTest(BayEditTestCase):
         cls.fixed_type = cls._module_type("Fixed", "port")
         InterfaceNameRule.objects.create(module_type=cls.fixed_type, name_template="ge-{vc_position}/0/{bay_position}")
         ModuleBay.objects.create(device=cls.device, name="Bay 3", position="{module}")
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_raw_name_whose_bay_position_brought_the_chassis_token_is_recognised_after_a_bay_edit(self):
+        token_type = self._module_type("Token Base", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=token_type, name_template="p{base}")
+        bay = ModuleBay.objects.create(device=self.device, name="Bay 9", position="{vc_position}")
+        module = self._install(token_type, bay)
+        self.assertEqual(self._names(module), ["p1/1"])
+
+        self._edit(bay, position="2")
+
+        self.assertEqual(self._names(module), ["p1/2"])
+        self.assertEqual(_journal(module), [])
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_raw_name_whose_fallback_reads_the_bay_is_recognised_after_a_bay_edit_off_a_chassis(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        fallback_type = self._module_type("Fallback Bay", "xe-{vc_position:{module}}")
+        InterfaceNameRule.objects.create(module_type=fallback_type, name_template="p{base}")
+        bay = ModuleBay.objects.create(device=self.device, name="Bay 8", position="3")
+        module = self._install(fallback_type, bay)
+        self.assertEqual(self._names(module), ["pxe-3"])
+
+        self._edit(bay, position="4")
+
+        self.assertEqual(self._names(module), ["pxe-4"])
+        self.assertEqual(_journal(module), [])
 
     def test_a_position_edit_renames_the_module_for_the_new_position(self):
         bay = self._bay(self.device)
@@ -212,7 +248,7 @@ class NestedBayEditTest(BayEditTestCase):
 
         (entry,) = _journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
-        self.assertIn("`et-1/0/1` to `et-1/2/1`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `et-1/2/1`: {TAKEN}", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
         self.assertEqual((self._names(blocked), self._names(failed)), (["et-1/0/1"], ["et-1/0/2"]))
         self.assertEqual((_journal(blocked), _journal(failed)), ([], []))
@@ -345,7 +381,7 @@ class NestedBayEditTest(BayEditTestCase):
         self.assertEqual(self._names(optic), ["et-1/2/1"])
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_the_bay_post_saves_netbox_sends_in_a_move_are_not_bay_triggers(self):
         card, port = self._install_card(self._card_type("Token Card", "{module}"), self._bay(self.device))
         optic = self._install(self.optic_type, port)
@@ -397,7 +433,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
         (entry,) = _journal(card)
-        self.assertIn("`et-1/0/1` to `et-1/2/3`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `et-1/2/3`: {TAKEN}", entry.comments)
         self.assertEqual(_journal(optic), [])
 
     def test_a_nested_type_change_and_an_outer_edit_reapply_the_nested_module_once_as_a_type_change(self):
@@ -415,7 +451,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/0/1"], 2))
         (entry,) = _journal(card)
-        self.assertIn("`et-1/0/1` to `ge-1/2/1`: target name is already in use", entry.comments)
+        self.assertIn(f"`et-1/0/1` to `ge-1/2/1`: {TAKEN}", entry.comments)
         self.assertEqual(_journal(optic), [])
 
     def test_an_outer_edit_and_a_move_of_the_nested_module_out_reapply_it_once(self):
@@ -427,7 +463,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
 
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/1/1"], 2))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_an_outer_move_and_a_nested_bay_edit_reapply_each_module_once(self):
         _bay, card, port, optic = self._card_with_optic()
 
@@ -439,7 +475,7 @@ class SubtreeTriggerMixTest(BayEditTestCase):
         self.assertEqual((self._names(optic), reapplies.call_count), (["et-1/2/3"], 2))
         self.assertEqual((_journal(card), _journal(optic)), ([], []))
 
-    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_SUBTREE_MOVES)
+    @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_a_nested_bay_edit_and_an_outer_move_reapply_each_module_once(self):
         _bay, card, port, optic = self._card_with_optic()
 
@@ -672,74 +708,226 @@ class BayEditTransactionTest(BayEditTestCase):
 
 
 class ChassisPositionMixTest(BayEditTestCase):
-    """A bay edit and a virtual-chassis position change of the device in one transaction, in either order.
+    """A bay edit and a virtual-chassis change of the device in one transaction, in either order.
 
-    The module reapply and the device reapply both reach the nested module, and its names come out
-    right for the new bay position and the new chassis position.
+    The module reapply renames the modules of the edited bay once, from a naming that holds the
+    device's virtual-chassis position before the change, and reports them on the module in the bay.
+    The device reapply renames the other modules of the device and reports them on the device.
     """
 
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
         cls.card_type = cls._card_type("Card", "1")
-        cls.optic_type = cls._module_type("Optic", "{module}")
-        InterfaceNameRule.objects.create(
-            module_type=cls.optic_type, name_template="et-{vc_position}/{slot}/{bay_position}"
-        )
-        cls.arithmetic_optic_type = cls._module_type("Arithmetic Optic", "{module}")
-        InterfaceNameRule.objects.create(
-            module_type=cls.arithmetic_optic_type, name_template="x{{vc_position} * 10 + {slot_num}}/{bay_position}"
-        )
+        cls.optic_types = {}
+        for rule in CHASSIS_RULES:
+            cls.optic_types[rule.model] = cls._module_type(f"{rule.model} Optic", "{module}")
+            InterfaceNameRule.objects.create(module_type=cls.optic_types[rule.model], name_template=rule.name_template)
+        cls.token_type = cls._module_type("Token", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.token_type, name_template="et-{vc_position}/{bay_position}")
+        cls.token_base_type = cls._module_type("Token Base", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.token_base_type, name_template="p{base}")
 
-    def _card_with(self, optic_type):
-        """Install a card in Bay 0 with an optic of *optic_type*, and a plain module in Bay 10; return them."""
+    def _card_with(self, model):
+        """Install a card in Bay 0 with an optic of the rule *model*, and a plain module in Bay 10; return them and the bay."""
         bay = self._bay(self.device)
-        _card, port = self._install_card(self.card_type, bay)
-        optic = self._install(optic_type, port)
+        card, port = self._install_card(self.card_type, bay)
+        optic = self._install(self.optic_types[model], port)
         other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
-        return bay, optic, other
+        return bay, card, optic, other
 
-    def _change_the_chassis_position(self):
-        self.device.vc_position = 3
-        self.device.save()
+    def _edit_with(self, bay, device_change, device_first):
+        """Run *device_change* and an edit of *bay* to position 2 in one transaction; return the reapply spy."""
+        return self._save_with_a_device_change(
+            device_change, functools.partial(self._save_edit, bay, position="2"), device_first
+        )
 
-    def test_a_bay_edit_then_a_chassis_position_change_rename_for_both(self):
-        bay, optic, other = self._card_with(self.optic_type)
+    def _assert_reapplied_once(self, model, chassis_first, before, after):
+        bay, card, optic, other = self._card_with(model)
+        self.assertEqual(self._names(optic), [before])
 
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            self._save_edit(bay, position="2")
-            self._change_the_chassis_position()
+        reapplies = self._edit_with(bay, self._change_the_chassis_position, chassis_first)
 
-        self.assertEqual((self._names(optic), self._names(other)), (["et-3/2/1"], ["et-3/0/10"]))
+        self.assertEqual((self._names(optic), self._names(other)), ([after], ["et-3/0/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
+        self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
 
-    def test_a_chassis_position_change_then_a_bay_edit_rename_for_both(self):
-        bay, optic, other = self._card_with(self.optic_type)
+    def test_a_bay_edit_then_a_chassis_position_change_reapply_a_plain_rule_once(self):
+        self._assert_reapplied_once("Plain", False, "et-1/0/1", "et-3/2/1")
 
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            self._change_the_chassis_position()
-            self._save_edit(bay, position="2")
+    def test_a_chassis_position_change_then_a_bay_edit_reapply_a_plain_rule_once(self):
+        self._assert_reapplied_once("Plain", True, "et-1/0/1", "et-3/2/1")
 
-        self.assertEqual((self._names(optic), self._names(other)), (["et-3/2/1"], ["et-3/0/10"]))
+    def test_a_bay_edit_then_a_chassis_position_change_reapply_a_base_rule_once(self):
+        self._assert_reapplied_once("Base", False, "p1-1/0", "p1-3/2")
 
-    def test_a_bay_edit_then_a_chassis_position_change_rename_a_rule_with_the_position_in_arithmetic(self):
-        bay, optic, _other = self._card_with(self.arithmetic_optic_type)
-        self.assertEqual(self._names(optic), ["x10/1"])
+    def test_a_chassis_position_change_then_a_bay_edit_reapply_a_base_rule_once(self):
+        self._assert_reapplied_once("Base", True, "p1-1/0", "p1-3/2")
 
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            self._save_edit(bay, position="2")
-            self._change_the_chassis_position()
+    def test_a_bay_edit_then_a_chassis_position_change_reapply_a_rule_with_the_position_in_arithmetic_once(self):
+        self._assert_reapplied_once("Arithmetic", False, "x10/1", "x32/1")
 
-        self.assertEqual(self._names(optic), ["x32/1"])
+    def test_a_chassis_position_change_then_a_bay_edit_reapply_a_rule_with_the_position_in_arithmetic_once(self):
+        self._assert_reapplied_once("Arithmetic", True, "x10/1", "x32/1")
 
-    def test_a_chassis_position_change_then_a_bay_edit_rename_a_rule_with_the_position_in_arithmetic(self):
-        bay, optic, _other = self._card_with(self.arithmetic_optic_type)
-        self.assertEqual(self._names(optic), ["x10/1"])
+    def _assert_a_collision_is_reported_once(self, chassis_first):
+        bay, card, optic, _other = self._card_with("Plain")
+        Interface.objects.create(device=self.device, name="et-3/2/1", type=PLAIN_TYPE)
 
-        with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            self._change_the_chassis_position()
-            self._save_edit(bay, position="2")
+        reapplies = self._edit_with(bay, self._change_the_chassis_position, chassis_first)
 
-        self.assertEqual(self._names(optic), ["x32/1"])
+        self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["et-1/0/1"], 1))
+        (entry,) = _journal(card)
+        self.assertEqual(entry.comments.count(f"`et-1/0/1` to `et-3/2/1`: {TAKEN}"), 1)
+        self.assertEqual((_journal(optic), _journal(self.device)), ([], []))
+
+    def test_a_bay_edit_then_a_chassis_position_change_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=False)
+
+    def test_a_chassis_position_change_then_a_bay_edit_report_a_collision_once(self):
+        self._assert_a_collision_is_reported_once(chassis_first=True)
+
+    def _assert_leaving_renames_nothing_and_reports_once(self, leave_first):
+        bay, card, optic, other = self._card_with("Arithmetic")
+
+        reapplies = self._edit_with(bay, self._leave_the_chassis, leave_first)
+
+        self.assertEqual((self._names(optic), self._names(other)), (["x10/1"], ["et-1/0/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
+        (card_entry,) = _journal(card)
+        (device_entry,) = _journal(self.device)
+        self.assertEqual(card_entry.comments.count(f"`x10/1`: {UNAVAILABLE}"), 1)
+        self.assertIn(f"`et-1/0/10`: {UNAVAILABLE}", device_entry.comments)
+        self.assertNotIn("x10/1", device_entry.comments)
+
+    def test_a_bay_edit_then_leaving_the_chassis_rename_nothing_and_report_once(self):
+        self._assert_leaving_renames_nothing_and_reports_once(leave_first=False)
+
+    def test_leaving_the_chassis_then_a_bay_edit_rename_nothing_and_report_once(self):
+        self._assert_leaving_renames_nothing_and_reports_once(leave_first=True)
+
+    def _assert_joining_renames_once(self, join_first):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        bay, card, optic, other = self._card_with("Arithmetic")
+        self.assertEqual((self._names(optic), self._names(other)), (["1"], ["10"]))
+        entries = JournalEntry.objects.count()
+
+        reapplies = self._edit_with(bay, functools.partial(self._join_the_chassis, chassis), join_first)
+
+        self.assertEqual((self._names(optic), self._names(other)), (["x32/1"], ["et-3/0/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
+        self.assertEqual(JournalEntry.objects.count(), entries)
+
+    def test_a_bay_edit_then_joining_a_chassis_rename_each_module_once(self):
+        self._assert_joining_renames_once(join_first=False)
+
+    def test_joining_a_chassis_then_a_bay_edit_rename_each_module_once(self):
+        self._assert_joining_renames_once(join_first=True)
+
+    def _install_and_edit(self, module_type):
+        """Return a save that installs *module_type* in Bay 0, a save that edits Bay 0 to position 2, and the modules installed."""
+        bay = self._bay(self.device)
+        installed = []
+
+        def install():
+            installed.append(Module.objects.create(device=self.device, module_bay=bay, module_type=module_type))
+
+        return install, functools.partial(self._save_edit, bay, position="2"), installed
+
+    def _install_and_edit_a_token_module(self, device_change, device_first):
+        """Install a module whose template name reads the position in Bay 0, then run *device_change* and a bay edit.
+
+        The three saves share one transaction. Return the module and the spy of the module reapplies.
+        """
+        install, edit, installed = self._install_and_edit(self.token_type)
+        reapplies = self._save_with_a_device_change(device_change, edit, device_first, before=(install,))
+        return installed[0], reapplies
+
+    def _install_after_a_device_change(self, device_change, module_type):
+        """Run *device_change*, install *module_type* in Bay 0 and edit the bay in one transaction; return the module and spy."""
+        install, edit, installed = self._install_and_edit(module_type)
+        reapplies = self._save_in_one_transaction(device_change, install, edit)
+        return installed[0], reapplies
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_chassis_position_change_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        module, reapplies = self._install_after_a_device_change(self._change_the_chassis_position, self.token_type)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_between_two_chassis_position_changes_is_recognised_at_the_position_of_the_install(self):
+        install, edit, installed = self._install_and_edit(self.token_type)
+
+        reapplies = self._save_in_one_transaction(
+            self._change_the_chassis_position,
+            install,
+            functools.partial(self._change_the_chassis_position, 5),
+            edit,
+        )
+
+        (module,) = installed
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-5/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_joining_a_chassis_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+
+        module, reapplies = self._install_after_a_device_change(
+            functools.partial(self._join_the_chassis, chassis), self.token_type
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_leaving_a_chassis_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        module, reapplies = self._install_after_a_device_change(self._leave_the_chassis, self.token_base_type)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p0/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def _assert_an_installed_raw_name_is_renamed_once(self, chassis_first):
+        module, reapplies = self._install_and_edit_a_token_module(self._change_the_chassis_position, chassis_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_a_bay_edit_and_a_chassis_position_change_rename_a_raw_name_that_reads_the_position(self):
+        self._assert_an_installed_raw_name_is_renamed_once(chassis_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_a_chassis_position_change_and_a_bay_edit_recognise_the_raw_name_before_the_change(self):
+        self._assert_an_installed_raw_name_is_renamed_once(chassis_first=True)
+
+    def _assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(self, join_first):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        bay = self._bay(self.device)
+        module = self._install(self.token_type, bay)
+        self.assertEqual(self._names(module), ["0/0"])
+        entries = JournalEntry.objects.count()
+
+        reapplies = self._edit_with(bay, functools.partial(self._join_the_chassis, chassis), join_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual(JournalEntry.objects.count(), entries)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_bay_edit_then_joining_a_chassis_rename_a_raw_name_that_reads_the_position(self):
+        self._assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(join_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_joining_a_chassis_then_a_bay_edit_recognise_the_raw_name_off_the_chassis(self):
+        self._assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(join_first=True)
 
 
 class BayEditPreviousStateTest(BayEditTestCase):
