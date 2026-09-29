@@ -469,6 +469,18 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("interface name", help_text)
         self.assertIn("Applies to Device Interfaces", help_text)
 
+    def test_feature_lists_qualify_the_bay_name_trigger(self):
+        """A bay name edit renames only when a template variable reads the name (docs/configuration.md)."""
+        for page in ("README.md", "docs/index.md"):
+            with self.subTest(page=page):
+                text = (_PROJECT_ROOT / page).read_text(encoding="utf-8")
+                self.assertIn(
+                    "after the position of an occupied module bay changes, "
+                    "and after its name changes in a way that a template variable reads",
+                    text,
+                )
+                self.assertNotIn("after the position or name of an occupied module bay changes", text)
+
     def test_readme_badge_matches_the_supported_netbox_floor(self):
         readme = (_PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
