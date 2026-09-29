@@ -1192,6 +1192,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         # Adjacent tokens build no historical matcher, so only the position of the install recognises the raw name.
         cls.adjacent_type = cls._module_type("Adjacent", "xe-{vc_position}{vc_position}/0/{module}")
         InterfaceNameRule.objects.create(module_type=cls.adjacent_type, name_template="et-{vc_position}/{bay_position}")
+        cls.marker_type = cls._module_type("Marker", "xe-InrVcPositionSentinel1End-{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.marker_type, name_template="et-{vc_position}/{bay_position}")
         cls.card_type = cls._card_type("Card", "1")
 
     def _install_with_the_chassis_change(self, chassis_first, module_type=None, bay=None):
@@ -1229,6 +1231,14 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_chassis_position_change_then_an_install_name_a_raw_name_with_adjacent_tokens(self):
         self._assert_an_adjacent_token_install_is_named_once(True, self._bay(self.device), ["et-3/0"])
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_then_a_chassis_position_change_recognise_a_raw_name_that_spells_a_marker(self):
+        module, other, reapplies = self._install_with_the_chassis_change(False, self.marker_type)
+
+        self.assertEqual((self._names(module), self._names(other)), (["et-3/0"], ["et-3/10/10"]))
+        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
     def test_a_naming_at_install_that_fails_is_reported_on_each_module_and_not_by_the_device(self):
         with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():

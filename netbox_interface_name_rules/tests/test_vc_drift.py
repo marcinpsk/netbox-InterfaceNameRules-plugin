@@ -606,8 +606,8 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
         )
         cls.adjacent_type = _token_module_type(manufacturer, "VcAdj-QSFP", "xe-{vc_position}{vc_position}/0/{module}")
         cls.separated_type = _token_module_type(manufacturer, "VcAdj-SFP", "xe-{vc_position}/{vc_position}/{module}")
-        # A template name may legally spell the marker the matcher builder inserts for itself.
-        cls.sentinel_type = _token_module_type(
+        # Text that looks like a marker stays literal: the markers of the matcher builder hold NUL.
+        cls.marker_text_type = _token_module_type(
             manufacturer, "VcAdj-QSFP28", "xe-InrVcPositionSentinel1End-{vc_position}/{module}"
         )
 
@@ -632,11 +632,13 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
         self.assertIsNone(patterns[0].fullmatch("xe-12345678901/0/4"))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    def test_a_sentinel_shaped_literal_builds_no_matcher_instead_of_raising(self):
-        module, bay = self._install_on(self.device, self.sentinel_type, "3")
+    def test_text_that_looks_like_a_marker_builds_a_matcher_like_any_other_literal(self):
+        module, bay = self._install_on(self.device, self.marker_text_type, "3")
 
         self.assertEqual(self._names(module), ["xe-InrVcPositionSentinel1End-1/3"])
-        self.assertEqual(_raw_name_patterns(module), [])
+        (pattern,) = _raw_name_patterns(module)
+        self.assertTrue(pattern.fullmatch("xe-InrVcPositionSentinel1End-1/3"))
+        self.assertTrue(pattern.fullmatch("xe-InrVcPositionSentinel1End-4/3"))
         self.assertEqual(apply_interface_name_rules(module, bay), 0)
 
 

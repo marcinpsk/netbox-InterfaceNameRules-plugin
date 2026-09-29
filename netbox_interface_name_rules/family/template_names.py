@@ -28,8 +28,9 @@ BAY_CHAIN_RELATIONS = (
     "module_bay__module__module_bay__module",
 )
 
-_VC_SENTINEL = "InrVcPositionSentinel{}End"
-_VC_SENTINEL_RE = re.compile(r"InrVcPositionSentinel(\d+)End")
+# PostgreSQL text cannot hold NUL, so no stored template name or bay position can spell this marker.
+_VC_SENTINEL = "\x00{}\x00"
+_VC_SENTINEL_RE = re.compile(r"\x00(\d+)\x00")
 # NetBox stores vc_position in a PositiveIntegerField, so ten digits cover every valid value.
 VC_POSITION_DIGITS = r"\d{1,10}"
 
@@ -106,9 +107,6 @@ def _vc_parts(template, module, token_re):  # pragma: no cover - requires virtua
     stub = copy.copy(template)
     stub.name = marked
     parts = _VC_SENTINEL_RE.split(stub.resolve_name(module))
-    # A sentinel-shaped literal in the template name would shift these indexes; refuse to guess.
-    if parts[1::2] != [str(index) for index in range(len(fallbacks))]:
-        return None
     return VcTokenParts(tuple(parts[0::2]), tuple(fallbacks))
 
 
