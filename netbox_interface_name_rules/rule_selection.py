@@ -57,11 +57,22 @@ def module_types_matching_pattern(pattern):
     return tuple(model for model in ModuleType.objects.values_list("model", flat=True) if compiled.fullmatch(model))
 
 
-def parent_type_scopes_a_rule(module_type_ids) -> bool:
-    """Return whether an enabled rule is scoped to one of *module_type_ids* as its parent module type."""
+def _enabled_module_rules():
+    """Return the queryset of the enabled rules that module selection can pick.
+
+    Device-interface rows reuse module_type_pattern as an interface-name filter, so they are never module rules.
+    """
     from .models import InterfaceNameRule
 
-    return InterfaceNameRule.objects.filter(enabled=True, parent_module_type_id__in=module_type_ids).exists()
+    return InterfaceNameRule.objects.filter(enabled=True, applies_to_device_interfaces=False)
+
+
+def parent_type_scopes_a_rule(module_type_ids) -> bool:
+    """Return whether an enabled module rule has one of *module_type_ids* as its parent module type.
+
+    One EXISTS query: the rule cache would load every rule during the save when it is not current.
+    """
+    return _enabled_module_rules().filter(parent_module_type_id__in=module_type_ids).exists()
 
 
 def compile_stored_pattern(pattern):
@@ -149,18 +160,10 @@ def _get_enabled_rules():
         # Return the thread's snapshot. Another thread can replace the shared cache.
         return _pin.exact, _pin.regex, _pin.memo
 
-    from .models import InterfaceNameRule
-
     cache = _RULE_CACHE
     version = _enabled_rules_version()
     if cache["version"] != version:
-        # Device-interface rows reuse module_type_pattern as an interface-name filter, so they are
-        # never module rules and never enter module selection.
-        rules = list(
-            InterfaceNameRule.objects.filter(enabled=True, applies_to_device_interfaces=False).order_by(
-                "module_type__model", "pk"
-            )
-        )
+        rules = list(_enabled_module_rules().order_by("module_type__model", "pk"))
         exact = tuple(rule for rule in rules if not rule.module_type_is_regex)
         regex_rules = sorted(
             (rule for rule in rules if rule.module_type_is_regex),
