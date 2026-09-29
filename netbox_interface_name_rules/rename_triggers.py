@@ -159,15 +159,16 @@ def reapply(triggers):
     attempted. The place of a trigger is its index in *triggers*.
     """
     module_triggers = []
-    first_device_triggers = {}
+    device_triggers = {}
     for place, trigger in enumerate(triggers):
         if isinstance(trigger, DeviceTrigger):
-            first_device_triggers.setdefault(trigger.pk, (place, trigger))
+            device_triggers.setdefault(trigger.pk, []).append((place, trigger))
         else:
             module_triggers.append((place, trigger))
-    attempted_pks = _reapply_modules(module_triggers, first_device_triggers) if module_triggers else frozenset()
-    for _, trigger in first_device_triggers.values():
-        _reapply_device(trigger, attempted_pks)
+    attempted_pks = _reapply_modules(module_triggers, device_triggers) if module_triggers else frozenset()
+    for pairs in device_triggers.values():
+        _, first = pairs[0]
+        _reapply_device(first, attempted_pks)
 
 
 @dataclasses.dataclass
@@ -197,13 +198,13 @@ def _module_roots(module_triggers):
     return roots
 
 
-def _earliest_naming(module_triggers, roots, first_device_triggers):
+def _earliest_naming(module_triggers, roots, device_triggers):
     """Return the first ``ModuleNaming`` that the ``(place, trigger)`` *module_triggers* read for each module.
 
     The entry of a module installed in the transaction is ``raw_only``, and an entry read before that
-    install was for a module deleted since. An entry read after the first trigger of its device, in
-    *first_device_triggers*, takes the virtual-chassis position of the device before that trigger,
-    because nothing renamed the interfaces in between.
+    install was for a module deleted since. An entry takes the virtual-chassis position that its device
+    had when the module's interfaces got their names: before the transaction, or at the install of a
+    module installed in it. *device_triggers* hold the ``(place, trigger)`` pairs of each device.
     """
     entries = {}
     for place, trigger in module_triggers:
@@ -212,12 +213,20 @@ def _earliest_naming(module_triggers, roots, first_device_triggers):
             installed = root is not None and root.installed
             if entry.module_pk in entries or (installed and place < root.start):
                 continue
-            device_place, device_trigger = first_device_triggers.get(entry.device_pk, (None, None))
-            positioned = entry
-            if device_trigger is not None and device_place < place:
-                positioned = entry.at_chassis_position(chassis_position(device_trigger.baseline))
+            named_at = root.start if installed else -1  # -1 is before the first trigger of the transaction
+            state = _state_when_named(device_triggers.get(entry.device_pk, ()), named_at, place)
+            positioned = entry if state is None else entry.at_chassis_position(chassis_position(state))
             entries[entry.module_pk] = dataclasses.replace(positioned, raw_only=True) if installed else positioned
     return entries
+
+
+def _state_when_named(pairs, named_at, read_at):
+    """Return the device state at place *named_at* when a device trigger before *read_at* changed it, else None.
+
+    *pairs* are the ``(place, trigger)`` pairs of the device, in save order. Nothing renamed the
+    interfaces between *named_at* and *read_at*, so their names still come from that state.
+    """
+    return next((trigger.baseline for place, trigger in pairs if named_at < place < read_at), None)
 
 
 def _moved_or_bay_changed(root, entry, module):
@@ -300,7 +309,7 @@ def _reapply_module(module, decide, outcomes):
     return True
 
 
-def _reapply_modules(module_triggers, first_device_triggers):
+def _reapply_modules(module_triggers, device_triggers):
     """Reapply each module that the ``(place, trigger)`` *module_triggers* reach once, and report each owner once.
 
     A module reapplies as after a type change when its type changed. It reapplies from its earliest
@@ -308,13 +317,13 @@ def _reapply_modules(module_triggers, first_device_triggers):
     naming read it changed type and it now selects another rule, or when it was installed in the
     transaction and a naming was read for it. It reapplies as an install otherwise. Its outcomes go to
     the outermost of the moved, edited or retyped modules that read its naming, or to the module itself.
-    *first_device_triggers* give each naming the position of its device before that device's first
-    trigger. Return the primary key of each module that reapplied, or that failed to.
+    *device_triggers* give each naming the position of its device when the module was named. Return the
+    primary key of each module that reapplied, or that failed to.
     """
     from .engine import committed_modules, pinned_reapply
 
     roots = _module_roots(module_triggers)
-    entries = _earliest_naming(module_triggers, roots, first_device_triggers)
+    entries = _earliest_naming(module_triggers, roots, device_triggers)
     try:
         modules = committed_modules({*roots, *entries})
     except Exception:

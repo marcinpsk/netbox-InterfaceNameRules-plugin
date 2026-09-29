@@ -220,8 +220,8 @@ class ModuleMoveTestCase(_MoveFixture, TestCase):
         card = self._install(card_type, bay)
         return card, ModuleBay.objects.get(module=card)
 
-    def _change_the_chassis_position(self):
-        self.device.vc_position = 3
+    def _change_the_chassis_position(self, position=3):
+        self.device.vc_position = position
         self.device.save()
 
     def _leave_the_chassis(self):
@@ -1026,6 +1026,24 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
     def test_a_chassis_position_change_then_moves_out_of_the_device_recognise_the_names_before_it(self):
         self._assert_moved_with_a_position_change(self._peer_bays(), True, [["et-2/0/0"], ["p1-2/1"], ["x22/2"]])
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_DEVICE_MOVES)
+    def test_a_chassis_position_change_then_moves_into_the_device_recognise_the_names_of_the_old_device(self):
+        modules = [
+            self._install(module_type, self._bay(self.peer, f"Bay {index}"))
+            for index, module_type in enumerate(self.module_types)
+        ]
+        self.assertEqual([self._names(module) for module in modules], [["et-2/0/0"], ["p1-2/1"], ["x22/2"]])
+
+        def move_all():
+            for module, target in zip(modules, self._device_bays(), strict=True):
+                self._save_move(module, target)
+
+        reapplies = self._save_in_one_transaction(self._change_the_chassis_position, move_all)
+
+        self.assertEqual([self._names(module) for module in modules], [["et-3/5/5"], ["p6-3/6"], ["x37/7"]])
+        self.assertEqual(_reapplied(reapplies), sorted(module.pk for module in modules))
+        self.assertEqual([_journal(module) for module in (*modules, self.device)], [[], [], [], []])
 
     def _assert_moved_out_with_a_leave(self, leave_first):
         moved, other = self._move_all(self._peer_bays(), self._leave_the_chassis, leave_first)

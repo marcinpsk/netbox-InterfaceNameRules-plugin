@@ -697,6 +697,8 @@ class ChassisPositionMixTest(BayEditTestCase):
             InterfaceNameRule.objects.create(module_type=cls.optic_types[rule.model], name_template=rule.name_template)
         cls.token_type = cls._module_type("Token", "{vc_position}/{module}")
         InterfaceNameRule.objects.create(module_type=cls.token_type, name_template="et-{vc_position}/{bay_position}")
+        cls.token_base_type = cls._module_type("Token Base", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.token_base_type, name_template="p{base}")
 
     def _card_with(self, model):
         """Install a card in Bay 0 with an optic of the rule *model*, and a plain module in Bay 10; return them and the bay."""
@@ -796,20 +798,72 @@ class ChassisPositionMixTest(BayEditTestCase):
     def test_joining_a_chassis_then_a_bay_edit_rename_each_module_once(self):
         self._assert_joining_renames_once(join_first=True)
 
+    def _install_and_edit(self, module_type):
+        """Return a save that installs *module_type* in Bay 0, a save that edits Bay 0 to position 2, and the modules installed."""
+        bay = self._bay(self.device)
+        installed = []
+
+        def install():
+            installed.append(Module.objects.create(device=self.device, module_bay=bay, module_type=module_type))
+
+        return install, functools.partial(self._save_edit, bay, position="2"), installed
+
     def _install_and_edit_a_token_module(self, device_change, device_first):
         """Install a module whose template name reads the position in Bay 0, then run *device_change* and a bay edit.
 
         The three saves share one transaction. Return the module and the spy of the module reapplies.
         """
-        bay = self._bay(self.device)
-        installed = []
-
-        def install():
-            installed.append(Module.objects.create(device=self.device, module_bay=bay, module_type=self.token_type))
-
-        edit = functools.partial(self._save_edit, bay, position="2")
+        install, edit, installed = self._install_and_edit(self.token_type)
         reapplies = self._save_with_a_device_change(device_change, edit, device_first, before=(install,))
         return installed[0], reapplies
+
+    def _install_after_a_device_change(self, device_change, module_type):
+        """Run *device_change*, install *module_type* in Bay 0 and edit the bay in one transaction; return the module and spy."""
+        install, edit, installed = self._install_and_edit(module_type)
+        reapplies = self._save_in_one_transaction(device_change, install, edit)
+        return installed[0], reapplies
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_chassis_position_change_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        module, reapplies = self._install_after_a_device_change(self._change_the_chassis_position, self.token_type)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_between_two_chassis_position_changes_is_recognised_at_the_position_of_the_install(self):
+        install, edit, installed = self._install_and_edit(self.token_type)
+
+        reapplies = self._save_in_one_transaction(
+            self._change_the_chassis_position,
+            install,
+            functools.partial(self._change_the_chassis_position, 5),
+            edit,
+        )
+
+        (module,) = installed
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-5/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_joining_a_chassis_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+
+        module, reapplies = self._install_after_a_device_change(
+            functools.partial(self._join_the_chassis, chassis), self.token_type
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_leaving_a_chassis_an_install_and_a_bay_edit_recognise_the_raw_name_of_the_install(self):
+        module, reapplies = self._install_after_a_device_change(self._leave_the_chassis, self.token_base_type)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p0/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
 
     def _assert_an_installed_raw_name_is_renamed_once(self, chassis_first):
         module, reapplies = self._install_and_edit_a_token_module(self._change_the_chassis_position, chassis_first)
