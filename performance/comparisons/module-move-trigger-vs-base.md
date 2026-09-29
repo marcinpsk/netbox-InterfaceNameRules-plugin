@@ -191,4 +191,6 @@ Each run started under a 1-minute load below 2.00 and finished below 4.00, so ma
 
 ## Statement-count regressions
 
-None. No scenario issues more statements than the baseline.
+None among the scenarios that both runs measured.
+
+Not assessed, because only one run measured them: `move.complete_model_save.no_matching_rule`, `move.direct_callback.no_matching_rule`, `move.complete_model_save.plain_rename`, `move.direct_callback.plain_rename`, `move.complete_model_save.nested_4`, `move.direct_callback.nested_4`.

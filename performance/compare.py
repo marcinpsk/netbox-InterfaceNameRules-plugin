@@ -301,8 +301,21 @@ def main(argv):
         "## Statement-count regressions",
         "",
     ]
+    unassessed = [
+        name
+        for name in _scenario_names(before_scenarios, after_scenarios)
+        if name not in before_scenarios or name not in after_scenarios
+    ]
     if regressions:
         report.extend(f"- `{name}` {label}: {_format(old)} to {_format(new)}" for name, label, old, new in regressions)
+    elif unassessed:
+        report.append("None among the scenarios that both runs measured.")
+    else:
+        report.append("None. No scenario issues more statements than the baseline.")
+    if unassessed:
+        names = ", ".join(f"`{name}`" for name in unassessed)
+        report += ["", f"Not assessed, because only one run measured them: {names}."]
+    if regressions:
         report += [
             "",
             "### Where those statements come from",
@@ -317,8 +330,6 @@ def main(argv):
         ]
         for name, _label, _old, _new in regressions:
             report.extend(_attribution(name, before_scenarios[name], after_scenarios[name]))
-    else:
-        report.append("None. No scenario issues more statements than the baseline.")
     report.append("")
     destination.write_text("\n".join(report))
     print(f"wrote {destination} ({len(regressions)} statement-count regressions)")

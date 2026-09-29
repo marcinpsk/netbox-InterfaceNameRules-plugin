@@ -528,6 +528,40 @@ class DatabaseTableTest(unittest.TestCase):
         self.assertEqual(regressions, [(before_scenario["name"], "SQL calls", 31, 32)])
 
 
+class RegressionVerdictTest(unittest.TestCase):
+    """The regression verdict covers only the scenarios that both runs measured."""
+
+    def _verdict(self, before, after):
+        with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+            root = Path(directory)
+            before_path, after_path, destination = root / "before.json", root / "after.json", root / "report.md"
+            before_path.write_text(json.dumps(before), encoding="utf-8")
+            after_path.write_text(json.dumps(after), encoding="utf-8")
+            compare.main(["compare.py", str(before_path), str(after_path), str(destination)])
+            return destination.read_text(encoding="utf-8").split("## Statement-count regressions", 1)[1].strip()
+
+    def test_a_scenario_without_a_baseline_is_named_as_not_assessed(self):
+        after = _timed_artifact(_MACHINE_TIME)
+        added = {**after["scenarios"][0], "name": "move.direct_callback.plain_rename"}
+        after["scenarios"].append(added)
+
+        self.assertEqual(
+            self._verdict(_timed_artifact(_MACHINE_TIME), after).splitlines(),
+            [
+                "None among the scenarios that both runs measured.",
+                "",
+                "Not assessed, because only one run measured them: `move.direct_callback.plain_rename`.",
+            ],
+        )
+
+    def test_scenarios_that_both_runs_measured_keep_the_plain_verdict(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+
+        self.assertEqual(
+            self._verdict(artifact, artifact), "None. No scenario issues more statements than the baseline."
+        )
+
+
 class StatementAttributionTest(unittest.TestCase):
     """Statement attribution distinguishes tables from transaction control."""
 
