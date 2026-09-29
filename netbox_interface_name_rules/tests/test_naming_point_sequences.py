@@ -39,25 +39,59 @@ SHAPES = {
     "no templates": None,
 }
 RULES = {"plain": "et-{vc_position}/{bay_position}", "base": "p{base}"}
-OPERATIONS = ("move", "other device", "chassis", "bay edit")
+OPERATIONS = ("move", "other device", "chassis", "bay edit", "move back", "move to the original bay")
+MOVES = ("move", "other device", "move back", "move to the original bay")
 LINE = re.compile(r"^- `([^`]*)`", re.MULTILINE)
 FIRST_OPERATIONS = ("install", *OPERATIONS)
+ORIGIN = (0, 0)
+
+
+def _locations(sequence):
+    """Return the ``(device, slot)`` of the modules after each operation of *sequence*, or None when one is not valid.
+
+    A move goes to a new slot, "move back" returns to the location before the last move, and "move to
+    the original bay" is valid only where it differs from "move back".
+    """
+    location, history, fresh, locations = ORIGIN, [], 0, []
+    for operation in sequence:
+        if operation in ("move", "other device"):
+            fresh += 1
+            history.append(location)
+            location = (location[0] if operation == "move" else 1 - location[0], fresh)
+        elif operation == "move back":
+            if not history:
+                return None
+            location = history.pop()
+        elif operation == "move to the original bay":
+            if location == ORIGIN or (history and history[-1] == ORIGIN):
+                return None
+            history.append(location)
+            location = ORIGIN
+        locations.append(location)
+    return locations
 
 
 def _sequences(prefix):
-    """Return every sequence of one operation for an empty *prefix*, else *prefix* and each longer by one."""
+    """Return every valid sequence of one operation for an empty *prefix*, else *prefix* and each longer by one."""
     if not prefix:
         sequences = [(first,) for first in FIRST_OPERATIONS]
     else:
         sequences = [prefix, *((*prefix, last) for last in OPERATIONS)]
     if not NETBOX_MOVES_COMPONENTS:
         sequences = [sequence for sequence in sequences if "other device" not in sequence]
-    return sequences
+    return [sequence for sequence in sequences if _locations(sequence) is not None]
+
+
+def _untouched(sequence):
+    """Return whether *sequence* leaves a module installed before it where it was, with nothing it reads changed."""
+    return (
+        sequence[0] != "install" and not {"chassis", "bay edit"} & set(sequence) and _locations(sequence)[-1] == ORIGIN
+    )
 
 
 def _expected_report(shape, sequence):
     """Return why the design reports this case instead of renaming it, or None when it renames it."""
-    if shape == "no templates" and any(op in ("move", "other device", "bay edit") for op in sequence):
+    if shape == "no templates" and {*MOVES, "bay edit"} & set(sequence) and not _untouched(sequence):
         return "a module type without templates claims nothing after a move or a bay edit (ADR 0015)"
     return None
 
@@ -110,8 +144,9 @@ class _SequenceChecks:
     def _check(self, sequence):
         devices = [Device.objects.get(pk=self.device.pk), Device.objects.get(pk=self.peer.pk)]
         installs = sequence[0] == "install"
-        state = {"device": 0, "slot": 0}
+        locations = iter(_locations(sequence))
         modules = [Module.objects.get(pk=subject[5]) for subject in self.subjects]
+        before = [Interface.objects.filter(module=module).values_list("name", flat=True).get() for module in modules]
         if installs:
             # The install takes the slot of the module installed before, whose name a second one would repeat.
             for module in modules:
@@ -121,23 +156,30 @@ class _SequenceChecks:
         marker = JournalEntry.objects.order_by("-pk").values_list("pk", flat=True).first() or 0
 
         def install():
+            advance()
             for shape, _rule, module_type, _rule_row, numbers, _pk in self.subjects:
                 modules.append(self._create_subject(shape, module_type, devices[0], numbers[0]))
 
-        def move(other_device=False):
-            state["slot"] += 1
-            if other_device:
-                state["device"] = 1 - state["device"]
+        current = {"location": ORIGIN}
+
+        def advance():
+            current["location"] = next(locations)
+
+        def move():
+            advance()
+            device, slot = current["location"]
             for module, subject in zip(modules, self.subjects, strict=True):
-                number = subject[4][state["slot"]]
-                self._save_move(module, ModuleBay.objects.get(device=devices[state["device"]], name=f"Slot {number}"))
+                bay = ModuleBay.objects.get(device=devices[device], name=f"Slot {subject[4][slot]}")
+                self._save_move(module, bay)
 
         def change_the_chassis_position():
-            device = devices[state["device"]]
+            advance()
+            device = devices[current["location"][0]]
             device.vc_position += 2
             device.save()
 
         def edit_the_bays():
+            advance()
             for module in modules:
                 bay = ModuleBay.objects.get(pk=module.module_bay_id)
                 bay.position = str(500 + int(bay.name.rsplit(" ", 1)[1]))
@@ -145,10 +187,9 @@ class _SequenceChecks:
 
         saves = {
             "install": install,
-            "move": move,
-            "other device": lambda: move(other_device=True),
             "chassis": change_the_chassis_position,
             "bay edit": edit_the_bays,
+            **dict.fromkeys(MOVES, move),
         }
         with _module_reapplies() as spy:
             self._save_in_one_transaction(*(saves[op] for op in sequence))
@@ -158,11 +199,13 @@ class _SequenceChecks:
         lines = collections.Counter(
             name for entry in JournalEntry.objects.filter(pk__gt=marker) for name in LINE.findall(entry.comments)
         )
-        for module, (shape, rule, module_type, _rule_row, _numbers, _pk) in zip(modules, self.subjects, strict=True):
+        for index, (module, subject) in enumerate(zip(modules, self.subjects, strict=True)):
+            shape, rule, module_type = subject[:3]
             (name,) = Interface.objects.filter(module=module).values_list("name", flat=True)
             expected = self._expected_name(module.pk, module_type, rule)
             with self.subTest(shape=shape, rule=rule):
-                if name == expected:
+                # A module that the sequence leaves untouched keeps the name it had, which no rule gave yet.
+                if name == expected or (_untouched(sequence) and name == before[index]):
                     self.assertEqual(lines[name], 0)
                     continue
                 self.assertEqual(lines[name], 1, f"{name!r} is neither {expected!r} nor reported once")
@@ -196,5 +239,6 @@ def _sequence_test(prefix):
 
 
 for _test in map(_sequence_test, [(), *itertools.product(FIRST_OPERATIONS, OPERATIONS)]):
-    globals()[_test.__name__] = _test
+    if _sequences(_test.PREFIX):
+        globals()[_test.__name__] = _test
 del _test
