@@ -276,36 +276,42 @@ def _reapply_options(module, root, entry, covering, changed, device_pairs, moved
 
     *covering* are the moved, edited or retyped modules whose naming read the module, and *changed* are
     the modules that moved or had their bay values changed. *device_pairs* are the ``(place, trigger)``
-    pairs of the module's device, and *moved_at* is the place of the last move that renamed the
-    module's raw names, or None; see ``_earlier_positions``.
+    pairs of the module's device, and *moved_at* is the place of the last move that carried the
+    module, or None; see ``_naming_point``.
     """
     current = _state_of(ModuleState, module)
     if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
-    earlier_positions = _earlier_positions(root, entry, device_pairs, moved_at)
+    naming_point = _naming_point(root, entry, device_pairs, moved_at)
     if entry is not None and _reapply_from_naming(module, entry, covering, changed):
-        return {"naming": entry, "earlier_positions": earlier_positions}
+        return {"naming": entry, "naming_point": naming_point}
     if root is not None and (root.installed or current != root.baseline):
-        return {"force_reapply": current != root.baseline, "earlier_positions": earlier_positions}
+        return {"force_reapply": current != root.baseline, "naming_point": naming_point}
     return None
 
 
-def _earlier_positions(root, entry, device_pairs, moved_at):
-    """Return the chassis positions at which NetBox gave the module's current templates their raw names.
+def _naming_point(root, entry, device_pairs, moved_at):
+    """Return where NetBox last gave the module's current templates raw names, or None.
 
-    There is one only when a device trigger in *device_pairs* changed the position since. NetBox 4.7
-    names a moved module's raw names for the new bay, at the position its device has at the move
-    *moved_at*. A module installed in the transaction without a naming has the raw names of its install.
+    That is the later of its last move, *moved_at*, on NetBox 4.7, which names them for the new bay,
+    and its install when no trigger read a naming for it. A move before the install of the same key
+    moved a module deleted since. There is a point only when a device trigger in *device_pairs*
+    changed the position after it.
     """
-    if moved_at is not None:
-        named_at = moved_at
-    elif root is not None and root.installed and entry is None:
-        named_at = root.start
+    installed_at = root.start if root is not None and root.installed else None
+    if moved_at is not None and (installed_at is None or moved_at > installed_at):
+        named_at, move = moved_at, True
+    elif installed_at is not None and entry is None:
+        named_at, move = installed_at, False
     else:
-        return ()
+        return None
     state = _state_when_named(device_pairs, named_at, math.inf)
-    return () if state is None else (chassis_position(state),)
+    if state is None:
+        return None
+    from .family import NamingPoint
+
+    return NamingPoint(chassis_position(state), move)
 
 
 @functools.cache

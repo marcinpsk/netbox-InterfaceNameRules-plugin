@@ -149,10 +149,10 @@ class RawBases:
     """The one claim over every name form of a module's interfaces under one rule (ADR 0013).
 
     *families* maps each name outside a channel to its channels; *plain* names the flat-family candidates.
-    *earlier_positions* are the virtual-chassis positions at which the templates also gave raw names.
+    *naming_point* is a ``NamingPoint`` at which the templates also gave raw names, or None.
     """
 
-    def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None, earlier_positions=()):
+    def __init__(self, module, rule, variables, families, plain, catalog, previous_forms=None, naming_point=None):
         self._module = module
         self._rule = rule
         self._variables = variables
@@ -161,7 +161,7 @@ class RawBases:
         self._plain = frozenset(plain)
         self.catalog = catalog
         self.previous_forms = previous_forms
-        self._earlier_positions = tuple(earlier_positions)
+        self._naming_point = naming_point
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._breaks_out = breaks_out(rule)
         self._claims_flat = previous_forms is None and self._breaks_out
@@ -241,8 +241,11 @@ class RawBases:
         )
 
     def _raw_forms(self, template):
-        """Return *template*'s raw name now and at each of the earlier positions."""
-        return {template.resolved, *(template.at_chassis_position(p).resolved for p in self._earlier_positions)}
+        """Return *template*'s raw name now and at the naming point."""
+        point = self._naming_point
+        if point is None:
+            return {template.resolved}
+        return {template.resolved, template.at_chassis_position(point.vc_position, move=point.move).resolved}
 
     @staticmethod
     def _is_raw_name(name, template, raw_names, raw_forms):

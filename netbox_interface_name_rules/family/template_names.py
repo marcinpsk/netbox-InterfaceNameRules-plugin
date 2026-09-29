@@ -12,6 +12,7 @@ import re
 import threading
 from dataclasses import dataclass, replace
 from re import Pattern
+from typing import NamedTuple
 
 from dcim.models import InterfaceTemplate, Module, VirtualChassis
 
@@ -35,13 +36,19 @@ _VC_SENTINEL_RE = re.compile(r"\x00(\d+)\x00")
 VC_POSITION_DIGITS = r"\d{1,10}"
 
 
+class NamingPoint(NamedTuple):
+    """The chassis position at which NetBox gave a module's current templates raw names, and whether a move did."""
+
+    vc_position: int | None
+    move: bool
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedTemplateName:
     """One template's current name, its optional historical-name matcher, and what NetBox resolved it from.
 
-    ``source`` holds the template and the module that NetBox resolved the name against, when the name
-    reads the virtual-chassis position; it is None otherwise, because the name is then the same at
-    every position.
+    ``source`` holds the template and the module that NetBox resolved the name against. It is None
+    on a NetBox without the ``{vc_position}`` token, because the name is then the same at every position.
     """
 
     pk: int
@@ -53,12 +60,30 @@ class ResolvedTemplateName:
     channels: int | None
     source: tuple | None = None
 
-    def at_chassis_position(self, vc_position):
-        """Return this template as NetBox resolves it at *vc_position*, which None puts off a chassis."""
+    def at_chassis_position(self, vc_position, *, move=False):
+        """Return this template as NetBox names it at *vc_position*, which None puts off a chassis.
+
+        NetBox names an installed component with ``resolve_name``, and a moved one with the resolver of
+        its move planner; *move* selects that one.
+        """
         if self.source is None:
             return self
         template, module = self.source
-        return replace(self, resolved=template.resolve_name(_module_at_chassis_position(module, vc_position)))
+        stand_in = _module_at_chassis_position(module, vc_position)
+        return replace(self, resolved=_move_name(template, stand_in) if move else template.resolve_name(stand_in))
+
+
+def _move_name(template, module):  # pragma: no cover - requires a NetBox that renames moved components
+    """Return the name that NetBox's move planner gives *template* on *module* in its bay.
+
+    Unlike ``resolve_name``, the planner resolves ``{vc_position}`` also when only a bay position brings
+    the token in. Positions that do not fit the template raise here as they do in ``resolve_name``.
+    """
+    from dcim.models.module_moves import ModuleMovePlan
+    from dcim.utils import get_module_bay_positions
+
+    positions = get_module_bay_positions(module.module_bay)
+    return ModuleMovePlan._resolve(template, template.name, positions, module.device)
 
 
 def _module_at_chassis_position(module, vc_position):  # pragma: no cover - requires virtual-chassis token support
@@ -165,17 +190,15 @@ def _interface_templates(module_type_id):
 
 def _resolve_template(template, module, token_re) -> ResolvedTemplateName:
     """Resolve one interface template against *module*."""
-    # NetBox resolves the position only in a template name that has the token.
-    reads_position = token_re is not None and token_re.search(template.name) is not None
     return ResolvedTemplateName(
         pk=template.pk,
         template_name=template.name,
         resolved=template.resolve_name(module),
-        historical_pattern=_historical_pattern(template, module, token_re) if reads_position else None,
+        historical_pattern=None if token_re is None else _historical_pattern(template, module, token_re),
         parent_id=getattr(template, "parent_id", None),
         channel_id=getattr(template, "channel_id", None),
         channels=getattr(template, "channels", None),
-        source=(template, module) if reads_position else None,
+        source=None if token_re is None else (template, module),
     )
 
 

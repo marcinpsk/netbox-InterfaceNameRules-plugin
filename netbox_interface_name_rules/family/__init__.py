@@ -78,7 +78,7 @@ from .targets import (
     one_family_per_name_set,
     template_channel_suffixes,
 )
-from .template_names import pinned_template_cache, resolved_template_names
+from .template_names import NamingPoint, pinned_template_cache, resolved_template_names
 
 __all__ = (
     "UNCLAIMED_BASE_REASON",
@@ -98,6 +98,7 @@ __all__ = (
     "MemberOutcome",
     "MemberRole",
     "ModuleFamilyPlans",
+    "NamingPoint",
     "PlannedChannel",
     "PlannedMember",
     "PlannedName",

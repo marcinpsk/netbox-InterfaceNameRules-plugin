@@ -46,7 +46,7 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import REQUIRES_CHANNELIZATION, _channelized_module_type
-from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
+from netbox_interface_name_rules.tests.test_rename_triggers import _give_the_next_module_id, _reject_reads_of
 from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -1000,6 +1000,10 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             platform=cls.other_platform,
             name_template="et-{vc_position}/{slot}/{bay_position}",
         )
+        cls.bay_token_type = cls._module_type("Bay Token", "{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.bay_token_type, platform=cls.other_platform, name_template="et-{vc_position}/{bay_position}"
+        )
 
     def _move_all(self, targets, device_change, device_first):
         """Install a module of each rule and a plain one in Bay 10, then run *device_change* and move each rule's module.
@@ -1195,6 +1199,21 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         self.assertEqual((_journal(card), _journal(optic), _journal(self.peer)), ([], [], []))
 
     @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_move_into_a_bay_whose_position_is_the_token_then_its_position_change_recognise_the_name(self):
+        module = self._install(self.bay_token_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["0"])
+        bay = ModuleBay.objects.create(device=self.peer, name="Bay 7", position="{vc_position}")
+
+        def renumber_the_peer():
+            self.peer.vc_position = 4
+            self.peer.save()
+
+        reapplies = self._save_in_one_transaction(functools.partial(self._save_move, module, bay), renumber_the_peer)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-4/7"], 1))
+        self.assertEqual((_journal(module), _journal(self.peer)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
     def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):
         _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
         undone = (self._change_the_chassis_position, functools.partial(self._change_the_chassis_position, 1))
@@ -1328,6 +1347,36 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         (module,) = installed
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(NETBOX_MOVES_COMPONENTS, REQUIRES_MOVE_RENAMES)
+    def test_a_replacement_under_the_key_of_a_moved_module_is_recognised_at_the_position_of_its_install(self):
+        module = self._install(self.adjacent_type, self._bay(self.device))
+        keys, installed = [], []
+
+        def move_and_delete():
+            self._save_move(module, self._bay(self.device, "Bay 1"))
+            keys.append(module.pk)
+            module.delete()
+
+        def install_a_replacement():
+            _give_the_next_module_id(keys[0])
+            installed.append(
+                Module.objects.create(
+                    device=self.device, module_bay=self._bay(self.device), module_type=self.adjacent_type
+                )
+            )
+
+        reapplies = self._save_in_one_transaction(
+            move_and_delete,
+            self._change_the_chassis_position,
+            install_a_replacement,
+            functools.partial(self._change_the_chassis_position, 5),
+        )
+
+        (replacement,) = installed
+        self.assertEqual(replacement.pk, keys[0])
+        self.assertEqual((self._names(replacement), _reapplied(reapplies)), (["et-5/0"], [replacement.pk]))
+        self.assertEqual((_journal(replacement), _journal(self.device)), ([], []))
 
     def test_a_failed_install_reapply_is_reported_on_each_module_and_not_by_the_device(self):
         with self.captureOnCommitCallbacks() as callbacks, transaction.atomic():

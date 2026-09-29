@@ -244,13 +244,13 @@ def plan_device_interface_rename(device, rule, variables, interface, children=()
 
 
 def module_raw_bases(
-    module, rule, variables, interfaces, previous_forms=None, catalog=None, earlier_positions=()
+    module, rule, variables, interfaces, previous_forms=None, catalog=None, naming_point=None
 ) -> RawBases:
     """Return the claim over the names of *module*'s interfaces outside a channel.
 
-    *previous_forms* holds what named the templates before a move, and *earlier_positions* are the
-    virtual-chassis positions at which the templates also gave raw names; see ``RawBases``. *catalog*
-    has ``get()`` for the resolved templates, and reads the module's templates when it is not given.
+    *previous_forms* holds what named the templates before a move, and *naming_point* is where the
+    templates also gave raw names; see ``RawBases``. *catalog* has ``get()`` for the resolved
+    templates, and reads the module's templates when it is not given.
     """
     families = {
         interface.name: tuple((child.name, child.channel_id) for child in children)
@@ -258,7 +258,7 @@ def module_raw_bases(
     }
     plain = [interface.name for interface in interfaces if is_plain_interface(interface)]
     catalog = TemplateNames(module) if catalog is None else catalog
-    return RawBases(module, rule, variables, families, plain, catalog, previous_forms, earlier_positions)
+    return RawBases(module, rule, variables, families, plain, catalog, previous_forms, naming_point)
 
 
 def given_raw_names(module, rule, variables, names) -> GivenRawNames:
