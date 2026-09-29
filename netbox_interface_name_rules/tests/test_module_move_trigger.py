@@ -234,18 +234,16 @@ class ModuleMoveTestCase(_MoveFixture, TestCase):
         self.device.vc_position = 3
         self.device.save()
 
-    def _save_with_a_device_change(self, device_change, save, device_first):
-        """Run *device_change* and *save* in one transaction, *device_change* first when *device_first*.
-
-        Return the spy of the module reapplies.
-        """
+    def _save_in_one_transaction(self, *saves):
+        """Run each of *saves* in order in one transaction; return the spy of the module reapplies."""
         with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            if device_first:
-                device_change()
-            save()
-            if not device_first:
-                device_change()
+            for save in saves:
+                save()
         return reapplies
+
+    def _save_with_a_device_change(self, device_change, save, device_first):
+        """Run *device_change* and *save* in one transaction, *device_change* first when *device_first*."""
+        return self._save_in_one_transaction(*((device_change, save) if device_first else (save, device_change)))
 
 
 class ModuleMoveTest(ModuleMoveTestCase):
@@ -970,6 +968,13 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             cls.module_types.append(module_type)
         for position in ("5", "6", "7"):
             ModuleBay.objects.create(device=cls.device, name=f"Bay {position}", position=position)
+        cls.card_type = cls._card_type("Card", "1")
+        cls.token_type = cls._module_type("Token", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(
+            module_type=cls.token_type,
+            parent_module_type=cls.card_type,
+            name_template="et-{vc_position}/{slot}/{bay_position}",
+        )
 
     def _move_all(self, targets, device_change, device_first):
         """Install a module of each rule and a plain one in Bay 10, then run *device_change* and move each rule's module.
@@ -1037,13 +1042,34 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
     def test_a_move_the_transaction_undoes_leaves_the_module_to_the_chassis_position_change(self):
         module = self._install(self.module_types[0], self._bay(self.device))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            self._save_move(module, self._bay(self.device, "Bay 5"))
-            self._change_the_chassis_position()
-            self._save_move(module, self._bay(self.device))
+        reapplies = self._save_in_one_transaction(
+            functools.partial(self._save_move, module, self._bay(self.device, "Bay 5")),
+            self._change_the_chassis_position,
+            functools.partial(self._save_move, module, self._bay(self.device)),
+        )
 
         self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
         self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    def _assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(self, chassis_first):
+        module = self._install(self.token_type, self._bay(self.device))
+        self.assertEqual(self._names(module), ["1/0"])
+        _card, port = self._install_card(self.card_type, self._bay(self.device, "Bay 1"))
+
+        reapplies = self._save_with_a_device_change(
+            self._change_the_chassis_position, functools.partial(self._save_move, module, port), chassis_first
+        )
+
+        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_move_into_a_rule_then_a_chassis_position_change_rename_a_raw_name_that_reads_the_position(self):
+        self._assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(chassis_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_chassis_position_change_then_a_move_into_a_rule_recognise_the_raw_name_before_it(self):
+        self._assert_a_raw_name_is_renamed_once_after_a_move_into_a_rule(chassis_first=True)
 
     def _assert_a_collision_is_reported_once(self, chassis_first):
         module = self._install(self.module_types[0], self._bay(self.device))

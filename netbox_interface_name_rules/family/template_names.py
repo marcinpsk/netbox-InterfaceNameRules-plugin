@@ -10,7 +10,7 @@ import contextlib
 import copy
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from re import Pattern
 
 from dcim.models import InterfaceTemplate, Module
@@ -35,8 +35,30 @@ VC_POSITION_DIGITS = r"\d{1,10}"
 
 
 @dataclass(frozen=True, slots=True)
+class VcTokenParts:
+    """A template name resolved around its ``{vc_position}`` tokens.
+
+    ``literals`` hold the text before, between and after the tokens, and ``fallbacks`` hold the
+    explicit fallback of each token, or None.
+    """
+
+    literals: tuple[str, ...]
+    fallbacks: tuple[str | None, ...]
+
+    def resolve(self, vc_position):  # pragma: no cover - requires virtual-chassis token support
+        """Return the name as NetBox resolves it at *vc_position*: else each token's fallback, else 0."""
+        values = [
+            str(vc_position) if vc_position is not None else ("0" if fallback is None else fallback)
+            for fallback in self.fallbacks
+        ]
+        return self.literals[0] + "".join(
+            value + literal for value, literal in zip(values, self.literals[1:], strict=True)
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedTemplateName:
-    """One template's current name and optional historical-name matcher."""
+    """One template's current name, its optional historical-name matcher, and its ``VcTokenParts``."""
 
     pk: int
     template_name: str
@@ -45,6 +67,13 @@ class ResolvedTemplateName:
     parent_id: int | None
     channel_id: int | None
     channels: int | None
+    vc_parts: VcTokenParts | None = None
+
+    def at_chassis_position(self, vc_position):
+        """Return this template resolved at *vc_position*, which None puts off a chassis."""
+        if self.vc_parts is None:
+            return self
+        return replace(self, resolved=self.vc_parts.resolve(vc_position))
 
 
 def vc_position_re():
@@ -63,8 +92,8 @@ def _vc_position_alternatives(fallback):  # pragma: no cover - requires virtual-
     return f"(?:{VC_POSITION_DIGITS}|{re.escape(fallback)})"
 
 
-def _historical_pattern(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
-    """Return a matcher for every historical resolution of *template*."""
+def _vc_parts(template, module, token_re):  # pragma: no cover - requires virtual-chassis token support
+    """Return the ``VcTokenParts`` of *template* resolved against *module*, or None without a token."""
     fallbacks = []
 
     def mark(match):
@@ -76,18 +105,21 @@ def _historical_pattern(template, module, token_re):  # pragma: no cover - requi
         return None
     stub = copy.copy(template)
     stub.name = marked
-    parts = _VC_SENTINEL_RE.split(re.escape(stub.resolve_name(module)))
-    literals = parts[0::2]
-    indexes = parts[1::2]
+    parts = _VC_SENTINEL_RE.split(stub.resolve_name(module))
     # A sentinel-shaped literal in the template name would shift these indexes; refuse to guess.
-    if indexes != [str(index) for index in range(len(fallbacks))]:
+    if parts[1::2] != [str(index) for index in range(len(fallbacks))]:
         return None
+    return VcTokenParts(tuple(parts[0::2]), tuple(fallbacks))
+
+
+def _historical_pattern(parts):  # pragma: no cover - requires virtual-chassis token support
+    """Return a matcher for every resolution of the template name that *parts* describe, or None."""
     # Adjacent tokens cannot be told apart, and their alternatives would backtrack without bound.
-    if any(not literal for literal in literals[1:-1]):
+    if any(not literal for literal in parts.literals[1:-1]):
         return None
-    pattern = literals[0]
-    for index, literal in zip(indexes, literals[1:], strict=True):
-        pattern += _vc_position_alternatives(fallbacks[int(index)]) + literal
+    pattern = re.escape(parts.literals[0])
+    for fallback, literal in zip(parts.fallbacks, parts.literals[1:], strict=True):
+        pattern += _vc_position_alternatives(fallback) + re.escape(literal)
     return compile_stored_pattern(pattern)
 
 
@@ -140,21 +172,25 @@ def _interface_templates(module_type_id):
     return templates[module_type_id]
 
 
+def _resolve_template(template, module, token_re) -> ResolvedTemplateName:
+    """Resolve one interface template against *module*."""
+    parts = None if token_re is None else _vc_parts(template, module, token_re)
+    return ResolvedTemplateName(
+        pk=template.pk,
+        template_name=template.name,
+        resolved=template.resolve_name(module),
+        historical_pattern=None if parts is None else _historical_pattern(parts),
+        parent_id=getattr(template, "parent_id", None),
+        channel_id=getattr(template, "channel_id", None),
+        channels=getattr(template, "channels", None),
+        vc_parts=parts,
+    )
+
+
 def resolve_templates(templates, module) -> tuple[ResolvedTemplateName, ...]:
     """Resolve already-loaded interface templates against *module*."""
     token_re = vc_position_re()
-    return tuple(
-        ResolvedTemplateName(
-            pk=template.pk,
-            template_name=template.name,
-            resolved=template.resolve_name(module),
-            historical_pattern=None if token_re is None else _historical_pattern(template, module, token_re),
-            parent_id=getattr(template, "parent_id", None),
-            channel_id=getattr(template, "channel_id", None),
-            channels=getattr(template, "channels", None),
-        )
-        for template in templates
-    )
+    return tuple(_resolve_template(template, module, token_re) for template in templates)
 
 
 def resolved_template_names(module) -> tuple[ResolvedTemplateName, ...]:

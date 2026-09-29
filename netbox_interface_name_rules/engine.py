@@ -369,8 +369,9 @@ class ModuleNaming:
 
     The module type and the scope select the rule that state gave the module. The template variables
     and the templates as they resolved then rebuild the names that rule gave. The variables come from
-    ``bay_chain`` and ``vc_position``, the virtual-chassis position of the device then. ``device_pk``
-    is that device. ``bay_values`` are the ``naming.bay_naming_values`` of the module's bay then.
+    ``bay_chain`` and ``vc_position``, the virtual-chassis position of the device then, and
+    ``previous_forms`` resolves the raw template names at ``vc_position`` too. ``device_pk`` is that
+    device. ``bay_values`` are the ``naming.bay_naming_values`` of the module's bay then.
     ``raw_only`` is set when no rule has named the module's interfaces yet, because the module was
     installed in the same transaction: they carry raw template names only.
     """
@@ -428,7 +429,8 @@ class ModuleNaming:
     def previous_forms(self) -> family_ops.PreviousForms:
         """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
         rule = None if self.raw_only else self.rule()
-        return family_ops.PreviousForms(rule, self.variables, {template.pk: template for template in self.templates})
+        templates = {template.pk: template.at_chassis_position(self.vc_position) for template in self.templates}
+        return family_ops.PreviousForms(rule, self.variables, templates)
 
 
 def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:

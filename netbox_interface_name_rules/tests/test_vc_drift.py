@@ -640,6 +640,40 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
         self.assertEqual(apply_interface_name_rules(module, bay), 0)
 
 
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+class VcPositionResolutionTest(VcDriftTestCase):
+    """A resolved template gives the name NetBox resolves at another chassis position or off a chassis."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "VcRes", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vcres-vc"), vc_position=1
+        )
+        cls.module_type = _token_module_type(
+            manufacturer,
+            "VcRes-QSFP",
+            "xe-{vc_position}/{module}",
+            "ge-{vc_position:9}/{module}",
+            "et-{vc_position}{vc_position:7}/0/{module}",
+            "mgmt{module}",
+        )
+
+    def test_a_resolved_template_resolves_at_each_position_as_netbox_does(self):
+        module, _ = self._install_on(self.device, self.module_type, "3")
+        read = resolved_template_names(module)
+        templates = list(InterfaceTemplate.objects.filter(module_type=self.module_type).order_by("pk"))
+        self.assertEqual([entry.at_chassis_position(1).resolved for entry in read], [entry.resolved for entry in read])
+
+        for position, change in ((4, lambda: self._renumber(4)), (None, self._leave)):
+            change()
+            current = Module.objects.get(pk=module.pk)
+            with self.subTest(position=position):
+                self.assertEqual(
+                    [entry.at_chassis_position(position).resolved for entry in read],
+                    [template.resolve_name(current) for template in templates],
+                )
+
+
 # ---------------------------------------------------------------------------
 # Controls: no token, and no token support
 # ---------------------------------------------------------------------------

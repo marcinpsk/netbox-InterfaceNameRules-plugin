@@ -21,6 +21,7 @@ from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.engine import supports_vc_position_token
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, PlanRunner
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
@@ -41,6 +42,7 @@ from netbox_interface_name_rules.tests.test_module_move_trigger import (
     _reject_interface_updates,
 )
 from netbox_interface_name_rules.tests.test_rename_triggers import _previous_state_read_fails
+from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 BAY_STATE_READ = re.compile(r'SELECT "dcim_modulebay"\."position".* FROM "dcim_modulebay"')
 
@@ -693,6 +695,8 @@ class ChassisPositionMixTest(BayEditTestCase):
         for rule in CHASSIS_RULES:
             cls.optic_types[rule.model] = cls._module_type(f"{rule.model} Optic", "{module}")
             InterfaceNameRule.objects.create(module_type=cls.optic_types[rule.model], name_template=rule.name_template)
+        cls.token_type = cls._module_type("Token", "{vc_position}/{module}")
+        InterfaceNameRule.objects.create(module_type=cls.token_type, name_template="et-{vc_position}/{bay_position}")
 
     def _card_with(self, model):
         """Install a card in Bay 0 with an optic of the rule *model*, and a plain module in Bay 10; return them and the bay."""
@@ -791,6 +795,59 @@ class ChassisPositionMixTest(BayEditTestCase):
 
     def test_joining_a_chassis_then_a_bay_edit_rename_each_module_once(self):
         self._assert_joining_renames_once(join_first=True)
+
+    def _install_and_edit_a_token_module(self, device_change, device_first):
+        """Install a module whose template name reads the position in Bay 0, then run *device_change* and a bay edit.
+
+        The three saves share one transaction. Return the module and the spy of the module reapplies.
+        """
+        bay = self._bay(self.device)
+        installed = []
+
+        def install():
+            installed.append(Module.objects.create(device=self.device, module_bay=bay, module_type=self.token_type))
+
+        edit = functools.partial(self._save_edit, bay, position="2")
+        reapplies = self._save_in_one_transaction(
+            install, *((device_change, edit) if device_first else (edit, device_change))
+        )
+        return installed[0], reapplies
+
+    def _assert_an_installed_raw_name_is_renamed_once(self, chassis_first):
+        module, reapplies = self._install_and_edit_a_token_module(self._change_the_chassis_position, chassis_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_a_bay_edit_and_a_chassis_position_change_rename_a_raw_name_that_reads_the_position(self):
+        self._assert_an_installed_raw_name_is_renamed_once(chassis_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_an_install_a_chassis_position_change_and_a_bay_edit_recognise_the_raw_name_before_the_change(self):
+        self._assert_an_installed_raw_name_is_renamed_once(chassis_first=True)
+
+    def _assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(self, join_first):
+        chassis = self.device.virtual_chassis
+        with self.captureOnCommitCallbacks(execute=True):
+            self._leave_the_chassis()
+        bay = self._bay(self.device)
+        module = self._install(self.token_type, bay)
+        self.assertEqual(self._names(module), ["0/0"])
+        entries = JournalEntry.objects.count()
+
+        reapplies = self._edit_with(bay, functools.partial(self._join_the_chassis, chassis), join_first)
+
+        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual(JournalEntry.objects.count(), entries)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_a_bay_edit_then_joining_a_chassis_rename_a_raw_name_that_reads_the_position(self):
+        self._assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(join_first=False)
+
+    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+    def test_joining_a_chassis_then_a_bay_edit_recognise_the_raw_name_off_the_chassis(self):
+        self._assert_a_raw_name_off_the_chassis_is_renamed_after_a_join(join_first=True)
 
 
 class BayEditPreviousStateTest(BayEditTestCase):
