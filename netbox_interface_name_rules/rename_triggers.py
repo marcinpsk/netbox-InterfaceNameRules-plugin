@@ -48,6 +48,10 @@ class ModuleState:
         """Return the bay and the device that hold the module."""
         return self.module_bay_id, self.device_id
 
+    def retyped_from(self, earlier):
+        """Return whether the module type differs from the module type of the *earlier* state."""
+        return self.module_type_id != earlier.module_type_id
+
 
 @dataclasses.dataclass(frozen=True)
 class DeviceState:
@@ -237,7 +241,7 @@ def _reapply_options(module, root, entry, naming_changed):
     another rule than its naming.
     """
     current = _state_of(ModuleState, module)
-    if root is not None and current.module_type_id != root.baseline.module_type_id:
+    if root is not None and current.retyped_from(root.baseline):
         # The module's earlier names came from another module type, so it reapplies as a type change.
         return {"force_reapply": True}
     if entry is not None and (naming_changed or entry.raw_only):
@@ -287,7 +291,7 @@ def _reapply_modules(triggers):
         return
     present = [pk for pk in roots if pk in modules]
     changed = {pk for pk in present if _moved_or_bay_changed(roots[pk], entries.get(pk), modules[pk])}
-    retyped = {pk for pk in present if modules[pk].module_type_id != roots[pk].baseline.module_type_id}
+    retyped = {pk for pk in present if _state_of(ModuleState, modules[pk]).retyped_from(roots[pk].baseline)}
     covers = [pk for pk in present if pk in changed or pk in retyped]
     walked = dict.fromkeys(pk for pk in roots for pk in (pk, *(roots[pk].members if pk in covers else ())))
     outcomes_by_owner = {}
@@ -446,8 +450,7 @@ def _needs_subtree_naming(state, current):
     """
     if current.placement() != state.placement():
         return True
-    type_ids = {state.module_type_id, current.module_type_id}
-    return len(type_ids) > 1 and parent_type_scopes_a_rule(type_ids)
+    return current.retyped_from(state) and parent_type_scopes_a_rule((state.module_type_id, current.module_type_id))
 
 
 def _read_module(module):
