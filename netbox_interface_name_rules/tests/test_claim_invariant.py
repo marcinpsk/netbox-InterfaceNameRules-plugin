@@ -23,18 +23,23 @@ raw name, and a forced reapply and Apply Rules touch every name. A rule that rea
 name that no single template claims, and a breakout rule builds only on a name that one template alone
 claims. A rule without channels that does not read ``{base}`` needs no template, so it renames every
 name it touches (ADR 0013).
+
+The generator also places every breakout-rule layout beside an installed channelized family that no
+template claims. The rule then adds no family: it keeps each name that no single template claims, and
+it keeps a name that one template alone claims only when Apply Rules selects that name.
 """
 
 import itertools
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
 from netbox_interface_name_rules import family
 from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.family.template_names import ResolvedTemplateName
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_bay_chain_variables
@@ -50,8 +55,11 @@ CHANNELIZED_RULES = {"channelized": "{base}", "channelized without base": "{bay_
 FLAT_NAME = re.compile(rf"{FLAT_PREFIX}(?P<base>.+):0")
 UNCLAIMED = "kept as unclaimed"
 MISSING = ("blocked", "the flat family is missing 1 of its 2 interfaces")
+CLAIMED_BESIDE_CHANNELIZED = ("blocked", CHANNELIZED_MODULE_REASON)
+CHANNELIZED_FAMILY = ("chan", "chan:0", "chan:1")
 LAYOUT_COUNT = 7884
 FLAT_LAYOUT_COUNT = 2862
+CHANNELIZED_LAYOUT_COUNT = 5724
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,7 @@ class _Layout:
     previous_key: str | None
     templates: tuple
     present: tuple
+    channelized: tuple = ()
 
 
 def _templates(kinds):
@@ -166,6 +175,12 @@ def _flat_layouts(rules=FLAT_RULES):
             for name in (base, *_flat_targets(rule_key, base))
         )
         yield from _with_present(rule_key, None, templates, pool)
+
+
+def _channelized_layouts():
+    """Yield every breakout-rule layout again, beside an installed channelized family that no template claims."""
+    for layout in (*_flat_layouts(CHANNELIZED_RULES), *_flat_layouts()):
+        yield replace(layout, channelized=CHANNELIZED_FAMILY)
 
 
 def _with_present(rule_key, previous_key, templates, pool):
@@ -268,11 +283,24 @@ def _rule(rule_key):
     return InterfaceNameRule(name_template="".join(RULES[rule_key]))
 
 
+def _row(pk, name, parent_id=None, channel_id=None, channels=None):
+    return SimpleNamespace(
+        pk=pk, name=name, device_id=1, module_id=1, parent_id=parent_id, channel_id=channel_id, channels=channels
+    )
+
+
 def _interfaces(layout):
-    return [
-        SimpleNamespace(pk=pk, name=name, device_id=1, module_id=1, parent_id=None, channel_id=None, channels=None)
-        for pk, name in enumerate(layout.present, start=1)
-    ]
+    """Return a row for each present name, then the parent and the channels of the installed channelized family."""
+    rows = [_row(pk, name) for pk, name in enumerate(layout.present, start=1)]
+    if layout.channelized:
+        parent, *channels = layout.channelized
+        parent_pk = len(rows) + 1
+        rows.append(_row(parent_pk, parent, channels=len(channels)))
+        rows.extend(
+            _row(parent_pk + channel_id, name, parent_id=parent_pk, channel_id=channel_id)
+            for channel_id, name in enumerate(channels, start=1)
+        )
+    return rows
 
 
 def _claim(layout, rule, interfaces, moved):
@@ -404,31 +432,101 @@ def _plan_counts(plans):
     return counts
 
 
+def _flat_units(layout, bases):
+    """Return the rows of each flat family a flat rule plans whole, so that a selection of one row reaches them all."""
+    if layout.rule_key not in FLAT_RULES:
+        return []
+    units = [(flat, tuple(name for name in flat.names if name in layout.present)) for flat in bases.flat_families()]
+    # Beside a channelized family no family is built, so the rows of a family the rule builds again are leftovers.
+    return [
+        unit
+        for flat, unit in units
+        if not layout.channelized
+        or len(unit) == len(flat.names)
+        or flat.names != _flat_targets(layout.rule_key, flat.base_name)
+    ]
+
+
+def _runs(layout, interfaces, bases):
+    """Return each run with the interfaces it plans; a selection of one row of a flat family reaches the family."""
+    present = set(layout.present)
+    reach = {name: set(unit) for unit in _flat_units(layout, bases) for name in unit}
+    return [
+        ("install", family.RunScope.INSTALL, None, {name for name in present if bases.claim(name).raw}, {}),
+        ("forced reapply", family.RunScope.FORCED, None, present, {}),
+        ("Apply Rules", None, None, present, {}),
+        *(
+            (f"Apply Rules on {row.name}", None, frozenset({row.pk}), reach.get(row.name, {row.name}), {})
+            for row in interfaces
+        ),
+    ]
+
+
+def _runs_beside_channelized(layout, interfaces, bases):
+    """Return each run with the interfaces it plans, and each leftover it keeps with the reason it gives.
+
+    Each family is planned whole, a channel only through its parent. A leftover that no template alone
+    claims is kept as unclaimed; one that a template alone claims is kept only when Apply Rules selects it.
+    """
+    parent, *channels = layout.channelized
+    units = _flat_units(layout, bases)
+    rows = {name for unit in units for name in unit}
+    leftover = set(layout.present) - rows
+    unclaimed = {name for name in leftover if bases.builds_on(name) is None}
+    raw_unclaimed = {name for name in unclaimed if bases.claim(name).raw}
+    raw_rows = {name for unit in units if any(bases.claim(row).raw for row in unit) for name in unit}
+    whole = {*layout.channelized, *rows, *unclaimed}
+    reach = {
+        parent: set(layout.channelized),
+        **{name: set() for name in channels},
+        **{name: set(unit) for unit in units for name in unit},
+        **{name: {name} for name in leftover},
+    }
+
+    def kept(names):
+        return {name: UNCLAIMED if name in unclaimed else CLAIMED_BESIDE_CHANNELIZED for name in names}
+
+    return [
+        (
+            "install",
+            family.RunScope.INSTALL,
+            None,
+            {*layout.channelized, *raw_rows, *raw_unclaimed},
+            kept(raw_unclaimed),
+        ),
+        ("forced reapply", family.RunScope.FORCED, None, whole, kept(unclaimed)),
+        ("Apply Rules", None, None, whole, kept(unclaimed)),
+        *(
+            (f"Apply Rules on {row.name}", None, frozenset({row.pk}), reach[row.name], kept(reach[row.name] & leftover))
+            for row in interfaces
+        ),
+    ]
+
+
 def _unplanned(layout):
-    """Return, per run, each interface in scope that no plan holds, and each interface two plans hold.
+    """Return, per run, each interface planned out of scope, not planned in scope, or planned twice, and the reasons.
 
     The runs are an install, a forced reapply, Apply Rules on the whole module, and Apply Rules on each
-    interface alone.
+    interface alone. A leftover kept for another reason is also returned; the reasons are those the runs
+    kept a leftover for.
     """
     rule = _rule(layout.rule_key)
     variables = _variables(NEW_VC, NEW_BAY)
     interfaces = _interfaces(layout)
     bases = _claim(layout, rule, interfaces, moved=False)
-    present = set(layout.present)
-    runs = [
-        ("install", family.RunScope.INSTALL, None, {name for name in present if bases.claim(name).raw}),
-        ("forced reapply", family.RunScope.FORCED, None, present),
-        ("Apply Rules", None, None, present),
-        *((f"Apply Rules on {row.name}", None, frozenset({row.pk}), {row.name}) for row in interfaces),
-    ]
-    wrong = {}
-    for label, scope, selected, in_scope in runs:
+    names = {row.name for row in interfaces}
+    runs = (_runs_beside_channelized if layout.channelized else _runs)(layout, interfaces, bases)
+    wrong, reasons = {}, set()
+    for label, scope, selected, in_scope, leftover in runs:
         plans = family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope, selected).plans
         counts = _plan_counts(plans)
-        bad = {name: counts[name] for name in present if counts[name] > 1 or (name in in_scope and not counts[name])}
+        view = _plan_view(plans) if leftover else {}
+        bad = {name: counts[name] for name in names if counts[name] > 1 or (name in in_scope) != bool(counts[name])}
+        bad.update({name: view[name] for name, reason in leftover.items() if counts[name] and view[name] != reason})
+        reasons.update(view[name] for name in leftover if counts[name])
         if bad:
             wrong[label] = bad
-    return wrong
+    return wrong, reasons
 
 
 def _rebuilds(layout):
@@ -503,15 +601,31 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
     def test_every_interface_in_scope_is_in_exactly_one_plan(self):
-        """Each run plans every interface it may touch once: built, kept by its family, or kept and reported."""
+        """Each run plans each interface it may touch once, and no other: built, kept by its family, or kept and reported."""
         layouts = [
             *(layout for layout in _layouts() if layout.previous_key == layout.rule_key),
             *_flat_layouts(),
             *_flat_layouts(CHANNELIZED_RULES),
         ]
-        failures = [(layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout))]
+        failures = [(layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout)[0])]
 
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+
+    def test_every_leftover_beside_a_channelized_family_is_planned_only_in_its_scope(self):
+        """A breakout rule keeps a leftover a template alone claims only when Apply Rules selects it (ADR 0013)."""
+        layouts = list(_channelized_layouts())
+        failures = []
+        kept = Counter()
+        for layout in layouts:
+            wrong, reasons = _unplanned(layout)
+            kept.update(reasons)
+            if wrong:
+                failures.append((layout.rule_key, layout.present, wrong))
+
+        self.assertEqual(len(layouts), CHANNELIZED_LAYOUT_COUNT)
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+        self.assertGreater(kept[UNCLAIMED], 0)
+        self.assertGreater(kept[CLAIMED_BESIDE_CHANNELIZED], 0)
 
     def test_every_path_plans_what_the_flat_claim_accepts(self):
         layouts = list(_flat_layouts())
