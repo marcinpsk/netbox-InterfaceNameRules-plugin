@@ -736,6 +736,12 @@ class ChassisPositionMixTest(BayEditTestCase):
         other = self._install(self.plain_type, self._bay(self.device, "Bay 10"))
         return bay, card, optic, other
 
+    @staticmethod
+    def _raw_name(optic):
+        """Return the name NetBox gives the optic's template now: before 4.7 one ``{module}`` takes the outer bay's position."""
+        optic = Module.objects.get(pk=optic.pk)
+        return InterfaceTemplate.objects.get(module_type=optic.module_type).resolve_name(optic)
+
     def _edit_with(self, bay, device_change, device_first):
         """Run *device_change* and an edit of *bay* to position 2 in one transaction; return the reapply spy."""
         return self._save_with_a_device_change(
@@ -744,11 +750,13 @@ class ChassisPositionMixTest(BayEditTestCase):
 
     def _assert_reapplied_once(self, model, chassis_first, before, after):
         bay, card, optic, other = self._card_with(model)
-        self.assertEqual(self._names(optic), [before])
+        self.assertEqual(self._names(optic), [before.format(raw=self._raw_name(optic))])
 
         reapplies = self._edit_with(bay, self._change_the_chassis_position, chassis_first)
 
-        self.assertEqual((self._names(optic), self._names(other)), ([after], ["et-3/0/10"]))
+        self.assertEqual(
+            (self._names(optic), self._names(other)), ([after.format(raw=self._raw_name(optic))], ["et-3/0/10"])
+        )
         self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
         self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
 
@@ -759,10 +767,10 @@ class ChassisPositionMixTest(BayEditTestCase):
         self._assert_reapplied_once("Plain", True, "et-1/0/1", "et-3/2/1")
 
     def test_a_bay_edit_then_a_chassis_position_change_reapply_a_base_rule_once(self):
-        self._assert_reapplied_once("Base", False, "p1-1/0", "p1-3/2")
+        self._assert_reapplied_once("Base", False, "p{raw}-1/0", "p{raw}-3/2")
 
     def test_a_chassis_position_change_then_a_bay_edit_reapply_a_base_rule_once(self):
-        self._assert_reapplied_once("Base", True, "p1-1/0", "p1-3/2")
+        self._assert_reapplied_once("Base", True, "p{raw}-1/0", "p{raw}-3/2")
 
     def test_a_bay_edit_then_a_chassis_position_change_reapply_a_rule_with_the_position_in_arithmetic_once(self):
         self._assert_reapplied_once("Arithmetic", False, "x10/1", "x32/1")
@@ -811,7 +819,7 @@ class ChassisPositionMixTest(BayEditTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self._leave_the_chassis()
         bay, card, optic, other = self._card_with("Arithmetic")
-        self.assertEqual((self._names(optic), self._names(other)), (["1"], ["10"]))
+        self.assertEqual((self._names(optic), self._names(other)), ([self._raw_name(optic)], ["10"]))
         entries = JournalEntry.objects.count()
 
         reapplies = self._edit_with(bay, functools.partial(self._join_the_chassis, chassis), join_first)
