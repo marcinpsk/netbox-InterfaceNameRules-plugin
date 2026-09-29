@@ -10,7 +10,7 @@ import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from django.core.exceptions import ValidationError
 
@@ -365,13 +365,14 @@ class ModuleNaming:
     """What named one module's interfaces at the time it was read: a move, a bay edit or a type change reads it.
 
     The module type and the scope select the rule that state gave the module. The template variables
-    and the templates as they resolved then rebuild the names that rule gave. ``bay_values`` are the
-    ``naming.bay_naming_values`` of the module's bay then. ``raw_only`` is set when no rule has named
-    the module's interfaces yet, because the module was installed in the same transaction: they carry
-    raw template names only.
+    and the templates as they resolved then rebuild the names that rule gave. ``device_pk`` is the
+    device the module was on then. ``bay_values`` are the ``naming.bay_naming_values`` of the module's
+    bay then. ``raw_only`` is set when no rule has named the module's interfaces yet, because the
+    module was installed in the same transaction: they carry raw template names only.
     """
 
     module_pk: int
+    device_pk: int
     module_type: object
     parent_module_type: object | None
     device_type: object | None
@@ -388,6 +389,7 @@ class ModuleNaming:
         module_bay = module.module_bay
         return cls(
             module_pk=module.pk,
+            device_pk=device.pk,
             module_type=module.module_type,
             parent_module_type=_get_parent_module_type(module_bay),
             device_type=device.device_type,
@@ -396,6 +398,10 @@ class ModuleNaming:
             templates=family_ops.resolved_template_names(module),
             bay_values=naming.bay_naming_values(module_bay.position, module_bay.name),
         )
+
+    def at_chassis_position(self, vc_position):
+        """Return this naming with *vc_position* in its variables; None leaves ``{vc_position}`` out."""
+        return replace(self, variables=naming.with_chassis_position(self.variables, vc_position))
 
     def rule(self):
         """Return the rule that the module type and the scope of this naming select now, or None."""

@@ -17,9 +17,10 @@ reads before the save what named the interfaces of that module and of every modu
 After the save that naming is gone. A save that changes a module's type reads it too when a rule is
 scoped to the old or the new type as a parent module type, because a nested module can then select
 another rule. The plan recognises the earlier names of each module from the first naming read for it
-in the transaction. The interfaces of a module installed in the transaction carry raw template names
-only. A module inside the subtree of another moved, edited or retyped module reports in the journal
-entry of the outermost one.
+in the transaction. A naming read after a trigger of its device takes the virtual-chassis position
+that the device had before its first trigger. The interfaces of a module installed in the transaction
+carry raw template names only. A module inside the subtree of another moved, edited or retyped module
+reports in the journal entry of the outermost one.
 """
 
 import dataclasses
@@ -30,7 +31,7 @@ import weakref
 from django.db import transaction
 from netbox.context import current_request
 
-from .naming import bay_naming_values
+from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 from .rule_selection import parent_type_scopes_a_rule
 
@@ -163,7 +164,8 @@ def reapply(triggers):
         if kind is DeviceTrigger:
             _reapply_device(unit)
         else:
-            _reapply_modules(unit)
+            # The module reapply reads the place of each device trigger too.
+            _reapply_modules(triggers)
 
 
 @dataclasses.dataclass
@@ -182,9 +184,11 @@ class _ModuleRoot:
 
 
 def _module_roots(triggers):
-    """Return the ``_ModuleRoot`` of each module that *triggers* name, in the order of its first trigger."""
+    """Return the ``_ModuleRoot`` of each module that the module *triggers* name, in the order of its first trigger."""
     roots = {}
     for index, trigger in enumerate(triggers):
+        if not isinstance(trigger, ModuleTrigger):
+            continue
         root = roots.get(trigger.pk)
         if root is None or trigger.installed:
             # An install starts over: an earlier trigger with this key was for a module deleted since.
@@ -194,19 +198,27 @@ def _module_roots(triggers):
 
 
 def _earliest_naming(triggers, roots):
-    """Return the first ``ModuleNaming`` that *triggers* read for each module.
+    """Return the first ``ModuleNaming`` that the module *triggers* read for each module.
 
     The entry of a module installed in the transaction is ``raw_only``, and an entry read before that
-    install was for a module deleted since.
+    install was for a module deleted since. An entry read after a trigger of its device holds the
+    virtual-chassis position of the device before its first trigger, because nothing renamed the
+    interfaces in between.
     """
+    devices = {}
     entries = {}
     for index, trigger in enumerate(triggers):
+        if isinstance(trigger, DeviceTrigger):
+            devices.setdefault(trigger.pk, trigger.baseline)
+            continue
         for entry in trigger.naming:
             root = roots.get(entry.module_pk)
             installed = root is not None and root.installed
             if entry.module_pk in entries or (installed and index < root.start):
                 continue
-            entries[entry.module_pk] = dataclasses.replace(entry, raw_only=True) if installed else entry
+            earlier = devices.get(entry.device_pk)
+            positioned = entry if earlier is None else entry.at_chassis_position(chassis_position(earlier))
+            entries[entry.module_pk] = dataclasses.replace(positioned, raw_only=True) if installed else positioned
     return entries
 
 

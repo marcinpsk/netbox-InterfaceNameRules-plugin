@@ -137,6 +137,17 @@ def chassis_position(device):
     return device.vc_position
 
 
+def with_chassis_position(variables, vc_position):
+    """Return the module-bay chain *variables* at *vc_position*; None leaves ``{vc_position}`` out."""
+    return build_bay_chain_variables(
+        variables["slot"],
+        variables["bay_position"],
+        variables["parent_bay_position"],
+        vc_position=vc_position,
+        bay_position_num=variables["bay_position_num"],
+    )
+
+
 def build_variables(module_bay, device=None):
     """Build template variables from a module bay and optional device.
 
