@@ -6,7 +6,7 @@ import logging
 
 from dcim.models import Interface
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import DatabaseError, IntegrityError
 
 from ..transactions import atomic_with_events, on_commit
 
@@ -38,8 +38,28 @@ def is_name_collision(error: IntegrityError) -> bool:
     return getattr(diagnostics, "constraint_name", None) == INTERFACE_NAME_CONSTRAINT
 
 
+class ChannelReconciliationError(RuntimeError):
+    """The names that NetBox's parent cascade gave the channels this plugin kept could not be restored."""
+
+
 def restore_deferred_channel_names(reconciliations):
-    """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
+    """Restore plugin-owned names that NetBox's parent cascade changed after commit.
+
+    A database failure rolls the whole restore back and raises ``ChannelReconciliationError``, which
+    names each channel and the name it kept, so that an operator can rename it back.
+    """
+    try:
+        _restore_channel_names(reconciliations)
+    except DatabaseError as error:
+        kept = ", ".join(f"`{cascade_name}` to `{final_name}`" for _pk, final_name, cascade_name in reconciliations)
+        raise ChannelReconciliationError(
+            f"NetBox's parent cascade renamed channels that kept their names, and restoring those names failed "
+            f"with {type(error).__name__}. Rename each channel back: {kept}"
+        ) from error
+
+
+def _restore_channel_names(reconciliations):
+    """Restore each kept name in one block, and leave a channel that changed since the cascade alone."""
     child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
     with atomic_with_events():
         children = (

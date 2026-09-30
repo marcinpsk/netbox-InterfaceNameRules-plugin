@@ -41,6 +41,13 @@ except (ValueError, TypeError):
     APPLY_BATCH_LIMIT = 50
 
 
+def _failure_text(error):
+    """Return what the operator reads about *error*: each channel to rename back, or else the error type."""
+    from .family import ChannelReconciliationError
+
+    return str(error) if isinstance(error, ChannelReconciliationError) else type(error).__name__
+
+
 @dataclasses.dataclass
 class RulePreview:
     """Lightweight stand-in for InterfaceNameRule used in the test/preview view."""
@@ -618,7 +625,7 @@ class RuleApplyDetailView(generic.ObjectView):
                 outcome = convert_flat_families(rule, convert_ids)
         except Exception as e:
             logger.exception("Failed to convert families for rule %s", rule)
-            messages.error(request, f"Failed to convert families: {type(e).__name__}")
+            messages.error(request, f"Failed to convert families: {_failure_text(e)}")
             return
         converted = len(outcome.changed_families)
         messages.success(request, f"Converted {converted} interface family(ies) to the channelized topology.")
@@ -661,7 +668,7 @@ class RuleApplyDetailView(generic.ObjectView):
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s", rule)
-                messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
+                messages.error(request, f"Failed to apply rule {rule}: {_failure_text(e)}")
 
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)
 

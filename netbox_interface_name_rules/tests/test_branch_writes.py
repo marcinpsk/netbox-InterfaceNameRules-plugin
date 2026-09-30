@@ -395,7 +395,7 @@ class CollisionInABranchTest(_KeptChannelCase):
 class ReconciliationLockTimeoutTest(_KeptChannelCase):
     PREFIX = "BrReconcile"
 
-    def test_a_reconciliation_lock_timeout_keeps_the_change_diff_rows(self):
+    def test_a_reconciliation_lock_timeout_keeps_the_change_diff_rows_and_names_each_kept_channel(self):
         """A second session locks the kept channel after NetBox's cascade renamed it, before the reconciliation."""
         channel = Interface.objects.get(module=self.modules["1"], channel_id=2)
 
@@ -411,7 +411,9 @@ class ReconciliationLockTimeoutTest(_KeptChannelCase):
                 )
 
         [(level, text)] = messages_of(response)
-        self.assertEqual((level, text), ("danger", f"Failed to apply rule {self.rule}: OperationalError"))
+        self.assertEqual(level, "danger")
+        self.assertTrue(text.startswith(f"Failed to apply rule {self.rule}: "), text)
+        self.assertIn("Rename each channel back: `et-0/0/1:2` to `1:2`", text)
         self.assertEqual(self.names("1"), self.cascaded("1"))
         with self.in_branch():
             renamed = set(

@@ -216,7 +216,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         self.assertNotIn("dcim_device", locking[0].split("FOR UPDATE")[1])
         self.assertIn('ORDER BY "dcim_interface"."id" ASC', locking[0])
 
-    def test_an_unrelated_integrity_failure_propagates(self):
+    def test_an_unrelated_integrity_failure_names_the_channel_and_its_kept_name(self):
         interface = self._interface("cascade-name")
 
         def reject_interface_update(execute, sql, params, many, context):
@@ -225,10 +225,14 @@ class DeferredChannelNameReconciliationTest(TestCase):
             return execute(sql, params, many, context)
 
         with connection.execute_wrapper(reject_interface_update):
-            with self.assertRaisesMessage(IntegrityError, "injected deferred database failure"):
+            with self.assertRaisesMessage(
+                family_names.ChannelReconciliationError, "`cascade-name` to `final-name`"
+            ) as raised:
                 family_names.restore_deferred_channel_names(
                     ((interface.pk, "final-name", "cascade-name"),),
                 )
+
+        self.assertEqual(str(raised.exception.__cause__), "injected deferred database failure")
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

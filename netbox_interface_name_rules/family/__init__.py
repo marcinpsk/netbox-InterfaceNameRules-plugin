@@ -55,6 +55,7 @@ from .installed import (
     plan_installed_flat_families,
     plan_interface_rename,
 )
+from .names import ChannelReconciliationError
 from .previous import PreviousForms, names_the_previous_rule_gave
 from .prospective import (
     ProspectiveInterface,
@@ -83,6 +84,7 @@ from .template_names import pinned_template_cache, resolved_template_names
 __all__ = (
     "UNCLAIMED_BASE_REASON",
     "BatchOutcome",
+    "ChannelReconciliationError",
     "ConversionCandidate",
     "ConversionMember",
     "ConversionPlan",
