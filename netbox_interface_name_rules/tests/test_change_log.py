@@ -33,6 +33,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_manufacturer,
     make_module_bay_templates,
     make_module_type,
+    make_unrunnable_rule,
 )
 
 User = get_user_model()
@@ -271,11 +272,7 @@ class JobRequestContextTest(TestCase):
     def setUpTestData(cls):
         module_type = make_module_type(make_manufacturer("ChgLogCtx"), "ChgLogCtx")
         cls.rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="et-0/0/{bay_position}")
-        cls.broken_rule = InterfaceNameRule.objects.create(
-            module_type_is_regex=True, module_type_pattern="ChgLogCtx.*", name_template="et-0/0/{bay_position}"
-        )
-        # Only a queryset update stores a pattern that RE2 cannot compile, and the batch raises on it.
-        InterfaceNameRule.objects.filter(pk=cls.broken_rule.pk).update(module_type_pattern="(")
+        cls.broken_rule = make_unrunnable_rule("ChgLogCtx")
 
     def _handle(self, rule):
         job = make_job("ChgLogCtx")

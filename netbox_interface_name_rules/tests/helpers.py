@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Builders for the DCIM objects the tests need.
+"""Builders for the objects the tests need, and a runner for the background jobs.
 
 Every builder takes a *prefix* and derives names and slugs from it. Test classes share one database
 per worker, so a class that names its objects after itself cannot collide with another class, and a
 failure still names the class it came from.
 """
 
+import contextlib
 import uuid
 from dataclasses import dataclass
 
@@ -21,6 +22,8 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
+
+from netbox_interface_name_rules.models import InterfaceNameRule
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:
@@ -100,3 +103,21 @@ def make_job(prefix: str, user=None) -> Job:
     """Return a job row that *user*, or a new user named after *prefix*, enqueued as the Apply page does."""
     user = user or get_user_model().objects.create_user(username=slug_for(prefix, "operator"))
     return Job.objects.create(name=f"{prefix} job", job_id=uuid.uuid4(), user=user)
+
+
+def make_unrunnable_rule(prefix: str) -> InterfaceNameRule:
+    """Return a regex rule whose stored pattern RE2 cannot compile, so a batch over it raises ValueError."""
+    rule = InterfaceNameRule.objects.create(
+        module_type_is_regex=True, module_type_pattern=f"{prefix}.*", name_template="et-0/0/{bay_position}"
+    )
+    # Only a queryset update stores a pattern that validation refuses.
+    InterfaceNameRule.objects.filter(pk=rule.pk).update(module_type_pattern="(")
+    return rule
+
+
+def run_job_logged(test_case, runner, raises=None, **kwargs):
+    """Run *runner* with *kwargs*, assert that it raises *raises* when given, and return the records it logs."""
+    with test_case.assertLogs(f"netbox.jobs.{type(runner).__name__}", level="INFO") as logs:
+        with test_case.assertRaises(raises) if raises else contextlib.nullcontext():
+            runner.run(**kwargs)
+    return logs.records
