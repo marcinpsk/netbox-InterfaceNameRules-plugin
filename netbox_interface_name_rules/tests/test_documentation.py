@@ -328,13 +328,18 @@ class BaseVariableDocumentationTest(unittest.TestCase):
                 "a `{base}` inside one when its template name uses the `{vc_position}` token."
             ),
             "An interface that no template claims, or that more than one template claims, keeps its name.",
+            "So does an interface whose template also claims another interface or flat family.",
+            (
+                "The plugin checks all these names in one claim, and an install, a virtual-chassis change, "
+                "Apply Rules and a move all use the same claim."
+            ),
             (
                 "A raw name wins over another template's earlier virtual-chassis form, but not over the name the "
                 "rule gives another template"
             ),
             (
-                "A module type without interface templates has no raw names, so there `{base}` is the "
-                "interface's current name."
+                "A module type without interface templates has no raw names, so it claims as one template "
+                "whose raw name is the bay position. There `{base}` is the bay position"
             ),
             "In a device interface rule, `{base}` is the interface's current name.",
         ):
@@ -418,6 +423,15 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_states_whom_the_change_log_of_a_job_names(self):
+        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+
+        self.assertIn(
+            "**Run as Background Job** and **Convert as Background Job** record each change as the user who "
+            "started the job. The request ID of these records is the job ID,",
+            guide,
+        )
+
     def test_transaction_adr_states_unrelated_failure_behavior(self):
         adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text(
             encoding="utf-8"
@@ -427,6 +441,16 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             "An unrelated integrity or infrastructure failure rolls back its own family and propagates to the operation boundary.",
             adr,
         )
+
+    def test_branching_record_separates_its_executed_checks_from_unrun_claims(self):
+        record = (_PROJECT_ROOT / "docs" / "design" / "netbox-branching.md").read_text(encoding="utf-8")
+        evidence = " ".join(record.split("\n## Evidence\n", 1)[1].split("\n## ", 1)[0].split())
+        rounds = record.split("\n## Rounds\n", 1)[1]
+        executed = re.findall(r"(?<!Not )\bexecuted\b", rounds, flags=re.IGNORECASE)
+
+        self.assertIn("no claim below is from a run with netbox-branching until the CI leg exists.", evidence)
+        self.assertIn("The reviewers executed three narrower checks without netbox-branching:", evidence)
+        self.assertEqual(len(executed), 3)
 
     def test_glossary_separates_an_unclaimed_outcome_from_a_rule_that_does_not_match(self):
         glossary = (_PROJECT_ROOT / "CONTEXT.md").read_text(encoding="utf-8")
@@ -468,6 +492,18 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
         self.assertIn("module type model name", help_text)
         self.assertIn("interface name", help_text)
         self.assertIn("Applies to Device Interfaces", help_text)
+
+    def test_feature_lists_qualify_the_bay_name_trigger(self):
+        """A bay name edit renames only when a template variable reads the name (docs/configuration.md)."""
+        for page in ("README.md", "docs/index.md"):
+            with self.subTest(page=page):
+                text = (_PROJECT_ROOT / page).read_text(encoding="utf-8")
+                self.assertIn(
+                    "after the position of an occupied module bay changes. "
+                    "A bay name change also triggers them when a template variable reads the name",
+                    text,
+                )
+                self.assertNotIn("after the position or name of an occupied module bay changes", text)
 
     def test_readme_badge_matches_the_supported_netbox_floor(self):
         readme = (_PROJECT_ROOT / "README.md").read_text(encoding="utf-8")

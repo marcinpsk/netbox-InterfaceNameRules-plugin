@@ -19,6 +19,8 @@ import uuid
 from unittest import skipIf, skipUnless
 from unittest.mock import patch
 
+from core.choices import ObjectChangeActionChoices
+from core.events import OBJECT_CREATED, OBJECT_UPDATED
 from core.models import Job, ObjectChange, ObjectType
 from dcim.choices import InterfaceModeChoices
 from dcim.models import Cable, Interface, Module
@@ -43,6 +45,12 @@ from netbox_interface_name_rules.family import FamilyStatus, execute_conversion,
 from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
+from netbox_interface_name_rules.tests.helpers import (
+    empty_the_webhook_queue,
+    make_interface_webhook_rule,
+    make_job,
+    queued_webhooks,
+)
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_breakout_mode import (
     CHANNELIZED,
@@ -1201,6 +1209,19 @@ class ConversionChangelogTest(ConversionTestCase):
         self.assertTrue(self._changes_for(self.channel).exists())
         self.assertTrue(self._changes_for(self._parent(self.module)).exists())
 
+    def test_the_parent_is_recorded_with_its_name_before_and_after(self):
+        """The change log shows which row became the parent, and what it was called before."""
+        change = self._changes_for(self._parent(self.module)).get(action=ObjectChangeActionChoices.ACTION_UPDATE)
+
+        self.assertEqual((change.prechange_data["name"], change.postchange_data["name"]), ("xe-0/0/3:0", "et-0/0/3"))
+
+    def test_the_carried_address_is_recorded_with_its_interface_before_and_after(self):
+        """An operator auditing the address has to see the interface it moved from."""
+        change = self._changes_for(self.address).get(action=ObjectChangeActionChoices.ACTION_UPDATE)
+
+        before, after = change.prechange_data["assigned_object_id"], change.postchange_data["assigned_object_id"]
+        self.assertEqual((before, after), (self.base.pk, self.channel.pk))
+
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ConversionJobTest(ConversionTestCase):
@@ -1211,6 +1232,7 @@ class ConversionJobTest(ConversionTestCase):
         manufacturer, cls.device = _build_device("ConvJob", ["3", "4"])
         cls.module_type = _plain_module_type(manufacturer, "ConvJob-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
+        cls.operator = User.objects.create_user(username="convjob-operator")
 
     def setUp(self):
         """Install two flat families and switch the rule to the channelized topology."""
@@ -1222,7 +1244,7 @@ class ConversionJobTest(ConversionTestCase):
         """Run the conversion job against a real Job row, the way the worker does."""
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
-        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4())
+        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4(), user=self.operator)
         ConvertFlatFamiliesJob(job).run(rule_id=self.rule.pk, **kwargs)
         return job
 
@@ -1232,6 +1254,18 @@ class ConversionJobTest(ConversionTestCase):
 
         self.assertEqual(self._names(self.module), self._channelized_names("3"))
         self.assertEqual(self._names(self.other_module), self._channelized_names("4"))
+
+    def test_the_job_records_the_parent_as_its_user_with_the_name_before_and_after(self):
+        """A background conversion is as auditable as one confirmed on the page."""
+        job = self._run_job()
+
+        change = ObjectChange.objects.get(
+            changed_object_type=ObjectType.objects.get_for_model(Interface),
+            changed_object_id=self._parent(self.module).pk,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+        )
+        self.assertEqual((change.prechange_data["name"], change.postchange_data["name"]), ("xe-0/0/3:0", "et-0/0/3"))
+        self.assertEqual((change.user, change.request_id), (self.operator, job.job_id))
 
     def test_the_job_leaves_a_blocked_family_flat(self):
         """A batch is still per family: one refusal converts the others and reports the one it skipped."""
@@ -1247,13 +1281,79 @@ class ConversionJobTest(ConversionTestCase):
         """A rule deleted between enqueue and execution must not fail the worker's job."""
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
-        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4())
+        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4(), user=self.operator)
         rule_id = self.rule.pk
         self.rule.delete()
 
         ConvertFlatFamiliesJob(job).run(rule_id=rule_id)
 
         self._assert_still_flat(self.module, "3")
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ConversionEventTest(ConversionTestCase):
+    """A family that NetBox refuses after the plugin wrote part of it sends no event; the family beside it does."""
+
+    CONVERTED = (
+        (OBJECT_CREATED, "xe-0/0/4:0"),
+        (OBJECT_UPDATED, "et-0/0/4"),
+        (OBJECT_UPDATED, "xe-0/0/4:1"),
+        (OBJECT_UPDATED, "xe-0/0/4:2"),
+        (OBJECT_UPDATED, "xe-0/0/4:3"),
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ConvEvent", ["3", "4"])
+        cls.module_type = _plain_module_type(manufacturer, "ConvEvent-QSFP")
+        cls.rule = cls._flat_rule(cls.module_type)
+        cls.event_rule = make_interface_webhook_rule("ConvEvent")
+        cls.operator = User.objects.create_user(username="convevent-operator", is_superuser=True)
+
+    def setUp(self):
+        """Install two families; NetBox refuses a channel with channels of its own, after the parent is written."""
+        self.module, self.bay = self._install(self.module_type, "3")
+        self.other_module, self.other_bay = self._install(self.module_type, "4")
+        self._switch_to_channelized()
+        sibling = self._iface("xe-0/0/3:1")
+        sibling.channels = 2
+        sibling.save()
+        empty_the_webhook_queue(self)
+
+    def _assert_only_the_converted_family_sent_events(self):
+        self.assertEqual(self._names(self.module), self._flat_names("3"))
+        self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
+        self.assertEqual(self._names(self.other_module), self._channelized_names("4"))
+        self.assertEqual(queued_webhooks(self.event_rule), list(self.CONVERTED))
+
+    def test_the_job_queues_the_events_of_the_converted_family_only(self):
+        from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
+
+        # django-rq enqueues a webhook when the transaction commits.
+        with self.captureOnCommitCallbacks(execute=True):
+            ConvertFlatFamiliesJob.handle(make_job("ConvEvent", self.operator), rule_id=self.rule.pk)
+
+        self._assert_only_the_converted_family_sent_events()
+
+    def test_the_preview_of_the_apply_page_queues_no_event(self):
+        """The page converts each family to show its verdict, then rolls the conversion back."""
+        self.client.force_login(self.operator)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(self.client.get(url).status_code, 200)
+
+        self.assertEqual(queued_webhooks(self.event_rule), [])
+
+    def test_the_apply_page_queues_the_events_of_the_converted_family_only(self):
+        self.client.force_login(self.operator)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
+        bases = [self._iface("xe-0/0/3:0").pk, self._iface("xe-0/0/4:0").pk]
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(url, {"action": "convert", "convert_ids": [str(pk) for pk in bases]})
+
+        self._assert_only_the_converted_family_sent_events()
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

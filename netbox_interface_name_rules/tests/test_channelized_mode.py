@@ -16,7 +16,7 @@ instantiation and validation produce.  Mode-independent behaviour lives in test_
 from typing import ClassVar
 from unittest import skipUnless
 
-from dcim.models import Interface
+from dcim.models import Interface, InterfaceTemplate
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 
@@ -28,7 +28,13 @@ from netbox_interface_name_rules.engine import (
     predict_rule_output,
     supports_channelization,
 )
-from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan, plan_installed_families
+from netbox_interface_name_rules.family import (
+    UNCLAIMED_BASE_REASON,
+    FamilyStatus,
+    execute_installed_plan,
+    plan_installed_families,
+)
+from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
 from netbox_interface_name_rules.tests.test_breakout_mode import (
@@ -432,13 +438,21 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
         self.assertFalse(Interface.objects.filter(module=self.module, channel_id__isnull=False).exists())
 
     def test_force_apply_builds_no_family_beside_the_flat_one(self):
-        """A parent built on one sibling would strand the other three — the hybrid the docs rule out."""
+        """A parent built on one sibling would strand the other three: the hybrid the docs rule out.
+
+        The rule's names no longer spell the flat family, so no template claims its interfaces: each
+        keeps its name and is reported.
+        """
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
             changed = apply_interface_name_rules(self.module, self.bay, force_reapply=True)
 
         self.assertEqual(changed, 0)
         self._assert_untouched()
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_bulk_apply_path_refuses_it_too(self):
         """Both entry points share the refusal, so neither can convert a family behind the other's back."""
@@ -447,8 +461,15 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
         self.assertEqual(changed.changed_count, 0)
         self._assert_untouched()
-        self.assertTrue(changed.skipped_members, "the skipped module was not reported to the Apply view")
-        self.assertTrue(any(str(self.module) in line for line in logs.output), logs.output)
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in changed.skipped_members),
+            [(name, UNCLAIMED_BASE_REASON) for name in self.FLAT_NAMES],
+        )
+        for name in self.FLAT_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    any(repr(name) in line and UNCLAIMED_BASE_REASON in line for line in logs.output), logs.output
+                )
 
     def test_the_preview_offers_no_family_it_would_not_build(self):
         """The Apply page must not promise a family the apply path refuses to create."""
@@ -542,6 +563,39 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
 
         self.assertEqual(self._names(module), ["4", "xe-0/0/4:0", "xe-0/0/4:1", "xe-0/0/4:2", "xe-0/0/4:3"])
         self.assertEqual(self._parent(module).channels, 4)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeClaimedPlainInterfaceTest(ChannelizationTestCase):
+    """A plain interface beside an installed channelized family keeps its name and is reported (ADR 0013)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device("ChanPlain", ["3"])
+        cls.module_type = _channelized_module_type(manufacturer, "ChanPlain-QSFP")
+        InterfaceTemplate.objects.create(module_type=cls.module_type, name="mgmt{module}", type=PLAIN_TYPE)
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def test_applying_only_the_claimed_plain_interface_reports_it(self):
+        module, _ = self._install(self.module_type, "3", run_rules=False)
+        plain = Interface.objects.get(module=module, name="mgmt3")
+        names = self._names(module)
+
+        outcome = apply_rule_to_existing(self.rule, interface_ids=[plain.pk])
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            [(member.current_name, member.reason) for member in outcome.skipped_members],
+            [("mgmt3", CHANNELIZED_MODULE_REASON)],
+        )
+        self.assertEqual(self._names(module), names)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

@@ -7,8 +7,9 @@ import logging
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import Interface, InterfaceTemplate
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
+from ..transactions import atomic_with_events
 from .capabilities import supports_channelization
 from .domain import (
     FamilyOutcome,
@@ -20,7 +21,13 @@ from .domain import (
     PlannedChannel,
     StructuralFamilyPlan,
 )
-from .names import COLLISION_REASON, is_name_collision, name_is_taken, reconcile_after_parent_cascade
+from .names import (
+    COLLISION_REASON,
+    first_taken_name,
+    is_name_collision,
+    name_owners,
+    reconcile_after_parent_cascade,
+)
 from .targets import UNCLAIMED_BASE_REASON, channelized_family_names, flat_family_names
 
 logger = logging.getLogger(__name__)
@@ -49,6 +56,11 @@ def has_flat_expansion(module) -> bool:  # pragma: no cover - requires channeliz
     return _flat_expansion(module.module_type_id, module.pk)
 
 
+def carries_flat_expansion(interfaces, templates) -> bool:
+    """Return whether *interfaces* hold more rows outside a channel than *templates* has, as ``has_flat_expansion``."""
+    return sum(1 for interface in interfaces if getattr(interface, "channel_id", None) is None) > len(templates)
+
+
 def _plan(module, base, parent_target_name, channels, status=None, reason=""):
     """Build one immutable structural plan for *base*."""
     return StructuralFamilyPlan(
@@ -65,7 +77,7 @@ def _plan(module, base, parent_target_name, channels, status=None, reason=""):
     )
 
 
-def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cover - channelization only
+def _modelled_plan(module, rule, variables, base, base_name, flat_expansion):  # pragma: no cover - channelization only
     """Return the plan for a NetBox release that can hold the family."""
     if base_name is None:
         return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
@@ -74,21 +86,22 @@ def _modelled_plan(module, rule, variables, base, base_name):  # pragma: no cove
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
-    if has_flat_expansion(module):
+    if flat_expansion:
         # Converting one sibling into a parent would strand the others beside the new family.
         reason = f"module {module} already carries a flat breakout family"
         return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, reason)
     return _plan(module, base, parent_target_name, channels)
 
 
-def plan_structural_family(module, rule, variables, base, base_name) -> StructuralFamilyPlan:
+def plan_structural_family(module, rule, variables, base, base_name, flat_expansion) -> StructuralFamilyPlan:
     """Return the plan for the channelized family *rule* builds on plain interface *base*.
 
-    *base_name* is the value of ``{base}``, or None when no template claims *base*.
+    *base_name* is the value of ``{base}``, or None when no template claims *base*. *flat_expansion* is
+    whether the module carries a flat breakout family, as ``carries_flat_expansion`` decides.
     """
     if not supports_channelization():
         return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
-    return _modelled_plan(module, rule, variables, base, base_name)  # pragma: no cover - see above
+    return _modelled_plan(module, rule, variables, base, base_name, flat_expansion)  # pragma: no cover - see above
 
 
 def _outcome(plan, status, members, reason=""):
@@ -125,17 +138,12 @@ def _locked_base(plan):
     )
 
 
-def _first_taken_name(plan):  # pragma: no cover - requires channelization support
-    """Return the first planned name another interface on the device already owns, or None.
+def _first_taken_name(plan, own_pks):
+    """Return the first planned name an interface outside *own_pks* already owns on the device, or None.
 
-    One query, because the caller holds the base row lock while this runs.
+    One query, because the caller holds the plan's row locks while this runs.
     """
-    taken = set(
-        Interface.objects.filter(device_id=plan.device_id, name__in=plan.target_names)
-        .exclude(pk=plan.base.pk)
-        .values_list("name", flat=True)
-    )
-    return next((name for name in plan.target_names if name in taken), None)
+    return first_taken_name(plan.target_names, name_owners(plan.device_id, plan.target_names), own_pks)
 
 
 def _create_channels(plan, parent):  # pragma: no cover - requires channelization support
@@ -167,6 +175,7 @@ def _create_channels(plan, parent):  # pragma: no cover - requires channelizatio
 def _create_family(plan, base):  # pragma: no cover - requires channelization support
     """Rewrite *base* into the family parent, create its channels, and return every member outcome."""
     parent_status = FamilyStatus.CHANGED if plan.parent_target_name != base.name else FamilyStatus.UNCHANGED
+    base.snapshot()
     base.channels = plan.channel_count
     base.name = plan.parent_target_name
     base.full_clean()
@@ -192,14 +201,14 @@ def _create_family(plan, base):  # pragma: no cover - requires channelization su
 def _install_family(plan):  # pragma: no cover - requires channelization support
     """Create the whole family in one transaction, or write nothing at all."""
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             base = _locked_base(plan)
             if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON, plan.parent_target_name)
             # A sibling added since planning would be stranded beside the family this plan builds.
             if _flat_expansion(plan.module_type_id, plan.module_id):
                 return _refused(plan, FamilyStatus.STALE, MODULE_CHANGED_REASON, plan.parent_target_name)
-            taken = _first_taken_name(plan)
+            taken = _first_taken_name(plan, (plan.base.pk,))
             if taken is not None:
                 return _refused(plan, FamilyStatus.BLOCKED, f"{COLLISION_REASON}: {taken}", taken)
             members = _create_family(plan, base)
@@ -228,13 +237,11 @@ def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
 # ---------------------------------------------------------------------------
 # Flat breakout families
 # ---------------------------------------------------------------------------
-# A flat family is N sibling interfaces on one module: the base takes the first name and the rest
-# are new rows.  Unlike a channelized family there is no parent to cascade from, so a sibling whose
-# name is taken is skipped on its own while the family keeps the names it could take.
+# A flat family is N sibling interfaces on one module, built whole or not at all (ADR 0001).
 
 
-def _flat_creation_plan(module, base, target_names, status=None, reason=""):
-    """Build one immutable flat-creation plan for *base*."""
+def _flat_creation_plan(module, base, target_names, status=None, reason="", members=()):
+    """Build one immutable flat-creation plan for *base*, with the rows *members* it keeps."""
     return FlatCreationPlan(
         family_id=f"flat:{base.pk}",
         device_id=module.device_id,
@@ -243,13 +250,15 @@ def _flat_creation_plan(module, base, target_names, status=None, reason=""):
         target_names=target_names,
         precondition_status=status,
         precondition_reason=reason,
+        members=tuple(InterfaceSnapshot.from_interface(member) for member in members),
     )
 
 
-def plan_flat_family(module, rule, variables, base, base_name) -> FlatCreationPlan:
+def plan_flat_family(module, rule, variables, base, base_name, members=()) -> FlatCreationPlan:
     """Return the plan for the flat breakout family *rule* builds on plain interface *base*.
 
-    *base_name* is the value of ``{base}``, or None when no template claims *base*.
+    *base_name* is the value of ``{base}``, or None when no template claims *base*. *members* are
+    the rows of a half-built family that the claim gave the same template; the family keeps them.
     """
     if base_name is None:
         return _flat_creation_plan(module, base, (base.name,), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
@@ -261,7 +270,9 @@ def plan_flat_family(module, rule, variables, base, base_name) -> FlatCreationPl
     if not target_names:
         reason = "flat family requires at least one target name"
         return _flat_creation_plan(module, base, (base.name,), FamilyStatus.FAILED, reason)
-    return _flat_creation_plan(module, base, target_names)
+    if any(member.name not in target_names[1:] for member in members):
+        raise ValueError(f"a row the flat family on {base.name!r} keeps must carry one of its sibling names")
+    return _flat_creation_plan(module, base, target_names, members=members)
 
 
 def _flat_outcome(plan, status, members, reason=""):
@@ -276,105 +287,74 @@ def _flat_outcome(plan, status, members, reason=""):
 
 
 def _flat_refused(plan, status, reason):
-    """Log why the family was not built and return an outcome that touched no row."""
+    """Log why the family was not built and return an outcome for every planned row, which it left as it was."""
     logger.warning("Cannot build a flat family on interface %r: %s.", plan.base.name, reason)
-    member = MemberOutcome(
-        interface_pk=plan.base.pk,
-        current_name=plan.base.name,
-        target_name=plan.target_names[0],
-        status=status,
-        reason=reason,
+    members = (
+        MemberOutcome(plan.base.pk, plan.base.name, plan.target_names[0], status, reason),
+        *(MemberOutcome(member.pk, member.name, member.name, status, reason) for member in plan.members),
     )
-    return _flat_outcome(plan, status, (member,), reason)
+    return _flat_outcome(plan, status, members, reason)
 
 
-def _rename_flat_base(plan, base):
-    """Give the base the family's first name, or report why it keeps the one it has."""
-    target_name = plan.target_names[0]
-    if target_name == base.name:
-        return MemberOutcome(base.pk, base.name, target_name, FamilyStatus.UNCHANGED)
-    if name_is_taken(plan.device_id, target_name, exclude_pk=base.pk):
-        logger.warning(
-            "Interface name %r already exists on device %s; skipping rename of %r to %r.",
-            target_name,
-            plan.device_id,
-            base.name,
-            target_name,
-        )
-        return MemberOutcome(base.pk, base.name, target_name, FamilyStatus.BLOCKED, COLLISION_REASON)
-    previous_name = base.name
-    base.name = target_name
-    base.full_clean()
-    base.save()
-    return MemberOutcome(base.pk, previous_name, target_name, FamilyStatus.CHANGED)
-
-
-def _module_rows(plan):
-    """Return the family names this module already carries, so a re-apply creates nothing twice."""
-    return dict(
-        Interface.objects.filter(module_id=plan.module_id, name__in=plan.target_names).values_list("name", "pk")
+def _locked_flat_rows(plan):
+    """Lock the base and every planned member in primary-key order, and return the live rows by primary key."""
+    return (
+        Interface.objects.select_for_update(of=("self",))
+        .select_related("device", "module")
+        .filter(pk__in=plan.member_pks)
+        .order_by("pk")
+        .in_bulk()
     )
 
 
-def _create_sibling(plan, base, name):
-    """Create one sibling interface beside *base*, or report the name it could not take."""
-    if name_is_taken(plan.device_id, name, exclude_pk=base.pk):
-        logger.warning(
-            "Interface name %r already exists on device %s; skipping the sibling of %r.",
-            name,
-            plan.device_id,
-            base.name,
-        )
-        return MemberOutcome(plan.base.pk, plan.base.name, name, FamilyStatus.BLOCKED, COLLISION_REASON)
-    row = Interface(
-        device=base.device,
-        module=base.module,
-        name=name,
-        type=base.type,
-        enabled=base.enabled,
-    )
-    row.full_clean()
-    row.save()
-    return MemberOutcome(row.pk, name, name, FamilyStatus.CHANGED)
+def _is_flat_stale(plan, rows):
+    """Return whether the base or a planned member is gone or changed since planning."""
+    planned = {plan.base.pk: plan.base, **{member.pk: member for member in plan.members}}
+    return planned != {pk: InterfaceSnapshot.from_interface(row) for pk, row in rows.items()}
 
 
 def _build_flat_family(plan, base):
-    """Name the base and create every sibling the module still lacks."""
-    members = [_rename_flat_base(plan, base)]
-    installed = _module_rows(plan)
+    """Name the base, keep each planned member, and create every other sibling."""
+    target_name = plan.target_names[0]
+    status = FamilyStatus.UNCHANGED
+    if target_name != base.name:
+        base.snapshot()
+        base.name = target_name
+        base.full_clean()
+        base.save()
+        status = FamilyStatus.CHANGED
+    outcomes = [MemberOutcome(base.pk, plan.base.name, target_name, status)]
+    kept = {member.name: member for member in plan.members}
     for name in plan.target_names[1:]:
-        if name in installed:
-            members.append(MemberOutcome(installed[name], name, name, FamilyStatus.UNCHANGED))
+        if name in kept:
+            outcomes.append(MemberOutcome(kept[name].pk, name, name, FamilyStatus.UNCHANGED))
             continue
-        members.append(_create_sibling(plan, base, name))
-    return tuple(members)
+        row = Interface(device=base.device, module=base.module, name=name, type=base.type, enabled=base.enabled)
+        row.full_clean()
+        row.save()
+        outcomes.append(MemberOutcome(row.pk, name, name, FamilyStatus.CHANGED))
+    return tuple(outcomes)
 
 
 def _install_flat_family(plan):
     """Build the whole family in one transaction, or write nothing at all."""
     try:
-        with transaction.atomic():
-            base = _locked_base(plan)
-            if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
+        with atomic_with_events():
+            rows = _locked_flat_rows(plan)
+            if _is_flat_stale(plan, rows):
                 return _flat_refused(plan, FamilyStatus.STALE, STALE_REASON)
-            members = _build_flat_family(plan, base)
+            taken = _first_taken_name(plan, plan.member_pks)
+            if taken is not None:
+                return _flat_refused(plan, FamilyStatus.BLOCKED, f"{COLLISION_REASON}: {taken}")
+            members = _build_flat_family(plan, rows[plan.base.pk])
     except ValidationError as error:
         return _flat_refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
     except IntegrityError as error:
         if not is_name_collision(error):
             raise
         return _flat_refused(plan, FamilyStatus.BLOCKED, COLLISION_REASON)
-    return _flat_outcome(plan, _flat_status(members), members)
-
-
-def _flat_status(members):
-    """Summarize member outcomes without hiding partial success."""
-    statuses = {member.status for member in members}
-    if FamilyStatus.CHANGED in statuses:
-        return FamilyStatus.CHANGED
-    if FamilyStatus.BLOCKED in statuses:
-        return FamilyStatus.BLOCKED
-    return FamilyStatus.UNCHANGED
+    changed = any(member.status == FamilyStatus.CHANGED for member in members)
+    return _flat_outcome(plan, FamilyStatus.CHANGED if changed else FamilyStatus.UNCHANGED, members)
 
 
 def execute_flat_family(plan: FlatCreationPlan) -> FamilyOutcome:

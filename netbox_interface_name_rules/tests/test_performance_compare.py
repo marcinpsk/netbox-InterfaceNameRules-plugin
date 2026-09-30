@@ -105,6 +105,12 @@ class PerformancePackageTest(unittest.TestCase):
 
         self.assertNotIn("never goes to disk", readme)
 
+    def test_readme_measurement_command_keeps_the_test_database(self):
+        readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
+        command = readme.split("python manage.py test", 1)[1].split("```", 1)[0]
+
+        self.assertIn("--keepdb", command)
+
     def test_readme_does_not_infer_planner_cost_from_statement_counts(self):
         readme = (_PROJECT_ROOT / "performance" / "README.md").read_text(encoding="utf-8")
 
@@ -167,7 +173,7 @@ class PerformancePackageTest(unittest.TestCase):
         samples = [float(value) for value in re.findall(r"\d+\.\d+", load_row)]
 
         self.assertEqual(len(samples), 4)
-        quiet = max(samples) < compare._COMPARABLE_ONE_MINUTE_LOAD
+        quiet = compare._is_comparable_load(*samples[:2]) and compare._is_comparable_load(*samples[2:])
         expected = compare._MACHINE_TIME_COMPARABLE_NOTE if quiet else compare._MACHINE_TIME_UNPROVEN_NOTE
 
         self.assertIn(expected, machine_time)
@@ -522,6 +528,40 @@ class DatabaseTableTest(unittest.TestCase):
         self.assertEqual(regressions, [(before_scenario["name"], "SQL calls", 31, 32)])
 
 
+class RegressionVerdictTest(unittest.TestCase):
+    """The regression verdict covers only the scenarios that both runs measured."""
+
+    def _verdict(self, before, after):
+        with TemporaryDirectory(dir=_PROJECT_ROOT) as directory:
+            root = Path(directory)
+            before_path, after_path, destination = root / "before.json", root / "after.json", root / "report.md"
+            before_path.write_text(json.dumps(before), encoding="utf-8")
+            after_path.write_text(json.dumps(after), encoding="utf-8")
+            compare.main(["compare.py", str(before_path), str(after_path), str(destination)])
+            return destination.read_text(encoding="utf-8").split("## Statement-count regressions", 1)[1].strip()
+
+    def test_a_scenario_without_a_baseline_is_named_as_not_assessed(self):
+        after = _timed_artifact(_MACHINE_TIME)
+        added = {**after["scenarios"][0], "name": "move.direct_callback.plain_rename"}
+        after["scenarios"].append(added)
+
+        self.assertEqual(
+            self._verdict(_timed_artifact(_MACHINE_TIME), after).splitlines(),
+            [
+                "None among the scenarios that both runs measured.",
+                "",
+                "Not assessed, because only one run measured them: `move.direct_callback.plain_rename`.",
+            ],
+        )
+
+    def test_scenarios_that_both_runs_measured_keep_the_plain_verdict(self):
+        artifact = _timed_artifact(_MACHINE_TIME)
+
+        self.assertEqual(
+            self._verdict(artifact, artifact), "None. No scenario issues more statements than the baseline."
+        )
+
+
 class StatementAttributionTest(unittest.TestCase):
     """Statement attribution distinguishes tables from transaction control."""
 
@@ -596,7 +636,7 @@ class MachineTimeNoteTest(unittest.TestCase):
         return compare._machine_time_note(_artifact(settings, before_load), _artifact(settings, after_load))
 
     def test_a_load_that_displays_as_the_ceiling_withholds_the_claim(self):
-        """1.999 prints as 2.00, so the note must not claim every load stayed below 2.00."""
+        """1.999 prints as 2.00, so the note must not claim the run started below 2.00."""
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
         boundary = {"started": {"one_minute": 1.999}, "finished": {"one_minute": 0.9}}
 
@@ -610,7 +650,7 @@ class MachineTimeNoteTest(unittest.TestCase):
         note = self._note(before, after)
 
         self.assertEqual(note, compare._MACHINE_TIME_COMPARABLE_NOTE)
-        self.assertIn("1-minute load stayed below 2.00", _unwrapped(note))
+        self.assertIn("1-minute load below 2.00 and finished below 4.00", _unwrapped(note))
 
     def test_one_busy_sample_withholds_the_claim(self):
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
@@ -619,9 +659,22 @@ class MachineTimeNoteTest(unittest.TestCase):
         self.assertEqual(self._note(quiet, busy), compare._MACHINE_TIME_UNPROVEN_NOTE)
         self.assertEqual(self._note(busy, quiet), compare._MACHINE_TIME_UNPROVEN_NOTE)
 
-    def test_the_ceiling_itself_is_too_busy(self):
+    def test_the_start_ceiling_itself_is_too_busy(self):
         quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
-        at_ceiling = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 2.0}}
+        at_ceiling = {"started": {"one_minute": 2.0}, "finished": {"one_minute": 0.9}}
+
+        self.assertEqual(self._note(quiet, at_ceiling), compare._MACHINE_TIME_UNPROVEN_NOTE)
+
+    def test_a_run_may_finish_above_the_start_ceiling_that_its_own_work_adds(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        own_work = {"started": {"one_minute": 1.34}, "finished": {"one_minute": 3.99}}
+
+        self.assertEqual(self._note(quiet, own_work), compare._MACHINE_TIME_COMPARABLE_NOTE)
+        self.assertEqual(self._note(own_work, quiet), compare._MACHINE_TIME_COMPARABLE_NOTE)
+
+    def test_the_finish_ceiling_itself_is_too_busy(self):
+        quiet = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 0.9}}
+        at_ceiling = {"started": {"one_minute": 0.5}, "finished": {"one_minute": 4.0}}
 
         self.assertEqual(self._note(quiet, at_ceiling), compare._MACHINE_TIME_UNPROVEN_NOTE)
 

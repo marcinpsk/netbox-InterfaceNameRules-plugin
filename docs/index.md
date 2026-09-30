@@ -15,14 +15,14 @@ automatically apply renaming rules based on configurable templates.
 
 ## Features
 
-- **Signal-driven** — rules fire automatically on module install
-- **Template variables** — `{slot}`, `{bay_position}`, `{bay_position_num}`, `{channel}`, etc.
-- **Arithmetic expressions** — `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
-- **Breakout support** — create multiple channel interfaces from a single port
-- **Bounded regex pattern matching** — match module types with RE2 patterns (e.g., `QSFP-DD-400G-.*`) to cover entire product families with a single rule; exact FK match takes priority over regex
-- **Scoping** — rules can target specific device types, parent module types, platforms, or be universal
+- **Signal-driven**: rules fire automatically on module install, after a module moves, and after the position of an occupied module bay changes. A bay name change also triggers them when a template variable reads the name
+- **Template variables**: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{channel}`, etc.
+- **Arithmetic expressions**: `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
+- **Breakout support**: create multiple channel interfaces from a single port
+- **Bounded regex pattern matching**: match module types with RE2 patterns (e.g., `QSFP-DD-400G-.*`) to cover entire product families with a single rule; exact FK match takes priority over regex
+- **Scoping**: rules can target specific device types, parent module types, platforms, or be universal
 - **Build Rule tester**: preview module and device-interface names before saving. Module rules also preview matching installed interfaces.
-- **Apply Rules** — batch rename existing interfaces with live preview and background job support
+- **Apply Rules**: batch rename existing interfaces with live preview and background job support
 
 ## Supported Scenarios
 

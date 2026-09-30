@@ -61,9 +61,19 @@ def template_channel_suffixes(templates):  # pragma: no cover - requires channel
     return suffixes
 
 
+def breaks_out(rule) -> bool:
+    """Return whether *rule* builds an interface family, flat or channelized."""
+    return rule.channel_count > 0
+
+
 def builds_channelized_family(rule) -> bool:
     """Return whether *rule* builds a channelized family instead of flat sibling interfaces."""
     return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
+
+
+def builds_flat_family(rule) -> bool:
+    """Return whether *rule* builds a flat breakout family of sibling interfaces."""
+    return rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.FLAT
 
 
 def names_installed_parent(rule) -> bool:
@@ -132,10 +142,12 @@ def channelized_family_names(rule, current_name, base_name, variables):  # pragm
 def intended_family_names(rule, variables, current_name, base_name):
     """Return every name *rule* intends for the family it builds on *current_name*, with *base_name* as ``{base}``.
 
-    A base whose names cannot be evaluated is its own family: it names nothing else, so nothing
-    else can be grouped with it.
+    A rule without channels intends one name. A base whose names cannot be evaluated is its own
+    family: it names nothing else, so nothing else can be grouped with it.
     """
     try:
+        if rule.channel_count <= 0:
+            return (evaluate_name_template(rule.name_template, {**variables, "base": base_name}),)
         if builds_channelized_family(rule):
             parent_name, channels = channelized_family_names(rule, current_name, base_name, variables)
             return (parent_name, *(name for _channel_id, name in channels))

@@ -24,6 +24,13 @@ class FamilyStatus(StrEnum):
     FAILED = "failed"
 
 
+class RunScope(StrEnum):
+    """The interfaces an automatic run may touch: an install those with a raw name, a forced reapply all."""
+
+    INSTALL = "install"
+    FORCED = "forced"
+
+
 class MemberRole(StrEnum):
     """A member's role in its installed family."""
 
@@ -86,11 +93,6 @@ class InstalledFamilyPlan:
         """Return member primary keys in plan order."""
         return tuple(member.snapshot.pk for member in self.members)
 
-    @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the planned members that already have live interface rows."""
-        return self.members
-
 
 @dataclass(frozen=True, slots=True)
 class InstalledFamilyPlanSet:
@@ -138,15 +140,14 @@ class StructuralFamilyPlan:
         """Return the parent name and every channel name in creation order."""
         return (self.parent_target_name, *(channel.name for channel in self.channels))
 
-    @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the base row this plan rewrites."""
-        return (PlannedMember(self.base, self.parent_target_name, MemberRole.PARENT),)
-
 
 @dataclass(frozen=True, slots=True)
 class FlatCreationPlan:
-    """An executable plan that expands one plain interface into a flat breakout family."""
+    """An executable plan that expands one plain interface into a flat breakout family.
+
+    *members* are the rows of a half-built family that the claim gave the base's template, which
+    the family keeps under the names they carry.
+    """
 
     family_id: str
     device_id: int
@@ -155,6 +156,7 @@ class FlatCreationPlan:
     target_names: tuple[str, ...]
     precondition_status: FamilyStatus | None = None
     precondition_reason: str = ""
+    members: tuple[InterfaceSnapshot, ...] = ()
 
     @property
     def topology(self) -> FamilyTopology:
@@ -162,9 +164,9 @@ class FlatCreationPlan:
         return FamilyTopology.FLAT
 
     @property
-    def live_members(self) -> tuple[PlannedMember, ...]:
-        """Return the base row this plan rewrites."""
-        return (PlannedMember(self.base, self.target_names[0], MemberRole.FLAT_MEMBER),)
+    def member_pks(self) -> tuple[int, ...]:
+        """Return the base and every planned member, by primary key."""
+        return (self.base.pk, *(member.pk for member in self.members))
 
 
 @dataclass(frozen=True, slots=True)

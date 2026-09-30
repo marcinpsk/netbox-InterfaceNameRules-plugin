@@ -55,6 +55,11 @@ jobs:
           [tool.semantic_release]
           bogus = true
           EOF
+          cat > "$fixtures/branch-bogus.toml" <<'EOF'
+          [tool.semantic_release.branches.main]
+          match = "main"
+          bogus = true
+          EOF
           cat > "$fixtures/tool-not-table.toml" <<'EOF'
           tool = "oops"
           EOF
@@ -83,6 +88,11 @@ jobs:
             echo "FAIL: accepted an unknown release key" >&2
             exit 1
           fi
+          if python .github/scripts/check_release_config.py "$fixtures/branch-bogus.toml" > "$fixtures/output" 2>&1; then
+            echo "FAIL: accepted an unknown key in a release branch" >&2
+            exit 1
+          fi
+          grep -F 'tool.semantic_release.branches.main.bogus' "$fixtures/output"
 
       - name: Run devcontainer script tests
         run: |

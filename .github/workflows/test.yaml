@@ -39,6 +39,10 @@ jobs:
             coverage: true
           - python-version: "3.14"
             netbox-version: "v4.7.0"
+          # The same release with netbox-branching, so the branch tests run against a real provisioned branch.
+          - python-version: "3.14"
+            netbox-version: "v4.7.0"
+            netbox-branching: "1.2.1"
           # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
           # for reasons that are not ours, so this must not gate a PR.
           - python-version: "3.13"
@@ -123,6 +127,22 @@ jobs:
           PLUGINS = ['netbox_interface_name_rules']
           EOF
 
+      # netbox-branching refuses to start without DynamicSchemaDict and its router, and it must be the last plugin.
+      - name: Install and configure netbox-branching
+        if: matrix.netbox-branching
+        working-directory: netbox
+        env:
+          NETBOX_BRANCHING_VERSION: ${{ matrix.netbox-branching }}
+        run: |
+          uv pip install --system --only-binary=:all: "netboxlabs-netbox-branching==${NETBOX_BRANCHING_VERSION}"
+          cat >> netbox/netbox/configuration.py << 'EOF'
+          from netbox_branching.utilities import DynamicSchemaDict
+          DATABASES = DynamicSchemaDict({'default': DATABASE})
+          del DATABASE
+          DATABASE_ROUTERS = ['netbox_branching.database.BranchAwareRouter']
+          PLUGINS.append('netbox_branching')
+          EOF
+
       - name: Run tests
         working-directory: netbox-InterfaceNameRules-plugin
         env:
@@ -134,12 +154,16 @@ jobs:
           # Turns the channelization tests' skipUnless guard into an assertion on the leg that must
           # have the feature, so a broken probe cannot silently skip the whole file.
           EXPECT_NETBOX_CHANNELIZATION: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
+          # The same guard for the module move tests, which need the move planner of NetBox 4.7.
+          EXPECT_NETBOX_MODULE_MOVES: ${{ (matrix.netbox-version == 'feature' || matrix.netbox-version == 'v4.7.0') && '1' || '' }}
+          # The same guard for the branch tests, on the leg that installs netbox-branching.
+          EXPECT_NETBOX_BRANCHING: ${{ matrix.netbox-branching && '1' || '' }}
           # A query count belongs to one NetBox release, and the baseline file holds one value per
           # key. The top supported version is the only leg that asserts it. Every other cell records
           # its count in this disposable checkout, so it reports plugin compatibility failures
           # instead of baseline drift. Bumping the top version means editing the matrix above, this
-          # condition, and tests/query_counts.json together.
-          UPDATE_QUERY_COUNTS: ${{ matrix.netbox-version != 'v4.7.0' && '1' || '' }}
+          # condition, and tests/query_counts.json together. The branch leg records too: netbox-branching adds queries.
+          UPDATE_QUERY_COUNTS: ${{ (matrix.netbox-version != 'v4.7.0' || matrix.netbox-branching) && '1' || '' }}
           # `addopts` turns coverage on for every invocation, but only one cell reports it.
           COVERAGE_OPTION: ${{ !matrix.coverage && '--no-cov' || '' }}
         run: |

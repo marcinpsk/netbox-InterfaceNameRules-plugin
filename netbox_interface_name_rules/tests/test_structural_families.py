@@ -10,7 +10,7 @@ the active NetBox release can hold it.
 
 from unittest import skipIf, skipUnless
 
-from dcim.models import DeviceType, Interface, Manufacturer
+from dcim.models import DeviceType, Interface, InterfaceTemplate, Manufacturer
 from django.db import IntegrityError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -66,7 +66,10 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
+        variables = build_variables(bay, device=self.device)
+        templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
+        flat_expansion = structural.carries_flat_expansion(Interface.objects.filter(module=module), templates)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, flat_expansion)
         return module, bay, plan
 
 
@@ -319,7 +322,7 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         _module, _bay, plan = self._plan()
 
         with CaptureQueriesContext(connection) as queries:
-            taken = structural._first_taken_name(plan)
+            taken = structural._first_taken_name(plan, (plan.base.pk,))
 
         self.assertIsNone(taken)
         self.assertEqual(len(plan.target_names), 5)
@@ -330,13 +333,13 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
         Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
 
-        self.assertEqual(structural._first_taken_name(plan), "xe-0/0/3:1")
+        self.assertEqual(structural._first_taken_name(plan, (plan.base.pk,)), "xe-0/0/3:1")
 
     def test_the_base_row_never_counts_as_a_collision(self):
         _module, _bay, plan = self._plan()
         rename_out_of_band(Interface.objects.get(pk=plan.base.pk), plan.target_names[0])
 
-        self.assertIsNone(structural._first_taken_name(plan))
+        self.assertIsNone(structural._first_taken_name(plan, (plan.base.pk,)))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

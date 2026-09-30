@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Build name-template variables from NetBox rows."""
 
+from typing import NamedTuple
+
 from .name_template import (
     TEMPLATE_VARIABLES,
     NamingContext,
@@ -46,19 +48,36 @@ def numeric_suffix(value) -> str:
     return str(int(digits)) if digits else "0"
 
 
+def _variable_position(position, name):
+    """Return the bay position that template variables read from a bay with *position* and *name*.
+
+    A template expression such as ``{module}`` resolves from trailing digits in the bay name.
+    """
+    bay_position = position or "0"
+    if bay_position.startswith("{"):
+        return _extract_trailing_digits(name) or "0"
+    return bay_position
+
+
 def _resolve_bay_position(module_bay):
     """Return the raw and numeric positions for *module_bay*.
 
-    A template expression such as ``{module}`` resolves from trailing digits in
-    the bay name. The numeric position comes from ``numeric_suffix``, the one
-    function every numeric variable is derived through, so a zero-padded
-    position such as ``"02"`` reaches arithmetic as ``"2"``.
+    The raw position comes from ``_variable_position``. The numeric position comes from
+    ``numeric_suffix``, the one function every numeric variable is derived through, so a
+    zero-padded position such as ``"02"`` reaches arithmetic as ``"2"``.
     """
-    bay_position = module_bay.position or "0"
-    if bay_position.startswith("{"):
-        digits = _extract_trailing_digits(module_bay.name)
-        bay_position = digits or "0"
+    bay_position = _variable_position(module_bay.position, module_bay.name)
     return bay_position, numeric_suffix(bay_position)
+
+
+def bay_naming_values(position, name) -> tuple[str, str]:
+    """Return what the names in a bay with *position* and *name* are built from.
+
+    The first value is the stored position. NetBox's raw template names read it, and so do the
+    variables of nested modules. The second value is the position that the variables of the module
+    in the bay read. A bay name edit that changes neither value changes no name.
+    """
+    return position, _variable_position(position, name)
 
 
 def _resolve_slot(module_bay, bay_position, parent_bay_position):
@@ -109,6 +128,46 @@ def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_positi
     return _filter_variables(NamingContext.MODULE_MEMBER, TemplateVariableSource.MODULE_BAY_CHAIN, values, vc_position)
 
 
+def chassis_position(device):
+    """Return the virtual-chassis position that the template variables of *device* read, or None.
+
+    Only a virtual-chassis member that has a position has one; position zero is a valid position.
+    """
+    if device is None or device.virtual_chassis_id is None:
+        return None
+    return device.vc_position
+
+
+class BayChain(NamedTuple):
+    """The positions of a module's bay chain that its template variables read."""
+
+    slot: str
+    bay_position: str
+    parent_bay_position: str
+    bay_position_num: str
+
+
+def bay_chain(module_bay) -> BayChain:
+    """Return the ``BayChain`` of the module in *module_bay*."""
+    bay_position, bay_position_num = _resolve_bay_position(module_bay)
+    parent_bay_position = "0"
+    if module_bay.parent:
+        parent_bay_position = module_bay.parent.position or "0"
+    slot = _resolve_slot(module_bay, bay_position, parent_bay_position)
+    return BayChain(slot, bay_position, parent_bay_position, bay_position_num)
+
+
+def bay_chain_variables(chain, vc_position):
+    """Return the template variables of the bay *chain* at *vc_position*; None leaves ``{vc_position}`` out."""
+    return build_bay_chain_variables(
+        chain.slot,
+        chain.bay_position,
+        chain.parent_bay_position,
+        vc_position=vc_position,
+        bay_position_num=chain.bay_position_num,
+    )
+
+
 def build_variables(module_bay, device=None):
     """Build template variables from a module bay and optional device.
 
@@ -123,28 +182,7 @@ def build_variables(module_bay, device=None):
     evaluation because the variable is intentionally absent. Position zero is
     retained because it is a valid virtual-chassis position.
     """
-    bay_position, bay_position_num = _resolve_bay_position(module_bay)
-
-    parent_bay_position = "0"
-    if module_bay.parent:
-        parent_bay_position = module_bay.parent.position or "0"
-
-    slot = _resolve_slot(module_bay, bay_position, parent_bay_position)
-
-    vc_position = None
-    if (
-        device is not None
-        and getattr(device, "virtual_chassis_id", None) is not None
-        and device.vc_position is not None
-    ):
-        vc_position = device.vc_position
-    return build_bay_chain_variables(
-        slot,
-        bay_position,
-        parent_bay_position,
-        vc_position=vc_position,
-        bay_position_num=bay_position_num,
-    )
+    return bay_chain_variables(bay_chain(module_bay), chassis_position(device))
 
 
 def build_device_interface_variables(interface_name, vc_position):

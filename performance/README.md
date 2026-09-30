@@ -45,6 +45,7 @@ python manage.py test \
   netbox_interface_name_rules.tests.signal_performance \
   --settings=isolated_test_settings \
   --verbosity=2 \
+  --keepdb \
   --noinput
 ```
 
@@ -79,9 +80,14 @@ Two measurement conditions apply to both sides of every comparison:
 `performance/compare.py BEFORE.json AFTER.json OUT.md` writes a readable comparison of database
 work and machine time, and breaks down by statement source any scenario whose statement count rose.
 
-The report calls machine time comparable only when every recorded 1-minute load average, at the
-start and the end of both runs, stayed below 2.00. A busier run, or one that recorded no load, keeps
-the values as diagnostic observations. The rule reads the 1-minute average alone, so it does not see
+The report calls machine time comparable only when both runs started under a 1-minute load average
+below 2.00 and finished below 4.00. The run's own work raises the load it finishes under, and the
+reference host has 32 cores. A busier run, or one that recorded no load, keeps the values as
+diagnostic observations.
+
+Create the test database before the measured run, and wait for the load to fall before starting it.
+Migrations raise the load well above 2.00, so a run that creates its database starts too busy. Pass
+`--keepdb` to both the creating run and the measured run. The rule reads the 1-minute average alone, so it does not see
 background work that had already ended when a run started.
 
 Set `INTERFACE_FAMILY_PERFORMANCE_KIND` to name what a run measured, such as `family_package` for

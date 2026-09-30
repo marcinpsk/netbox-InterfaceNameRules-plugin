@@ -498,10 +498,10 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
             channel_start=0,
         )
         module, _ = self._install_on(self.device, drift_type, "3")
-        self._renumber(2)
         rule.breakout_mode = CHANNELIZED
         rule.parent_name_template = "et-0/0/{bay_position}"
         rule.save()
+        self._renumber(2)
 
         candidates = find_convertible_families(rule).candidates
 

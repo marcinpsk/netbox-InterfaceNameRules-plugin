@@ -11,10 +11,12 @@ import functools
 import pathlib
 import tempfile
 import tomllib
-from importlib.util import resolve_name
+from collections import Counter
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
+
+from netbox_interface_name_rules.tests.import_records import import_records, import_statements
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 PLUGIN_PACKAGE = PACKAGE.name
@@ -29,8 +31,39 @@ PRIVATE_PLUGIN_ATTRIBUTE_PERMITS = frozenset()
 EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
 SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
+_MIGRATION_BULK_WRITE = "a data migration runs outside a request on a historical model, so NetBox logs no change there"
+_MIGRATION_0015 = "migrations/0015_align_rule_constraints_with_clean.py"
+# Each bulk write of a change-logged row that production code keeps, by module and call source, with its reason.
+BULK_WRITE_PERMITS = {
+    (_MIGRATION_0015, "device_rules.filter(module_type_is_regex=True).update(module_type_is_regex=False)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (_MIGRATION_0015, "device_rules.filter(breakout_mode=CHANNELIZED).update(breakout_mode=FLAT)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (_MIGRATION_0015, "rules.filter(breakout_mode=CHANNELIZED, channel_count=0).update(breakout_mode=FLAT)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (
+        _MIGRATION_0015,
+        "rules.exclude(breakout_mode=CHANNELIZED).exclude(parent_name_template='').update(parent_name_template='')",
+    ): _MIGRATION_BULK_WRITE,
+    (
+        "migrations/0016_restrict_breakout_mode_values.py",
+        "rules.exclude(breakout_mode__in=(FLAT, CHANNELIZED)).update(breakout_mode=FLAT)",
+    ): _MIGRATION_BULK_WRITE,
+    (
+        "migrations/0018_refuse_device_rule_parent_module_type.py",
+        "rules.update(parent_module_type=None)",
+    ): _MIGRATION_BULK_WRITE,
+}
+BULK_WRITE_METHODS = frozenset({"bulk_create", "bulk_update"})
+# The one module that opens atomic blocks: each block there keeps its NetBox events only when it commits.
+TRANSACTIONS_MODULE = PACKAGE / "transactions.py"
+TRANSACTION_BLOCK_NAMES = frozenset({"atomic", "savepoint", "savepoint_commit", "savepoint_rollback"})
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
+BRANCHING_MODULE = PACKAGE / "branching.py"
 
 
 def _family_submodules() -> set[str]:
@@ -42,22 +75,14 @@ def _family_submodules() -> set[str]:
 def _family_submodule_imports(path: pathlib.Path) -> set[str]:
     """Return the family submodules *path* imports directly, by either spelling."""
     submodules = _family_submodules()
-    tree = ast.parse(path.read_text(encoding="utf-8"))
     found = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            # `import netbox_interface_name_rules.family.batch` binds the same internal layout.
-            for alias in node.names:
-                imported = alias.name.removeprefix("netbox_interface_name_rules.")
-                if imported.startswith(f"{FAMILY_PACKAGE}."):
-                    found.add(imported.split(".", 1)[1])
-            continue
-        if not isinstance(node, ast.ImportFrom) or node.module is None:
-            continue
-        module = node.module.removeprefix("netbox_interface_name_rules.")
-        if module == FAMILY_PACKAGE:
+    # The relative level is ignored, so `from .family import batch` counts as well.
+    for record in import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8")))):
+        module = record.module.removeprefix("netbox_interface_name_rules.")
+        if module == FAMILY_PACKAGE and record.name is not None:
             # A submodule imported as a name reaches past the seam just as a dotted path does.
-            found.update(alias.name for alias in node.names if alias.name in submodules)
+            if record.name in submodules:
+                found.add(record.name)
         elif module.startswith(f"{FAMILY_PACKAGE}."):
             found.add(module.split(".", 1)[1])
     return found
@@ -82,31 +107,23 @@ def _private_plugin_imports(path: pathlib.Path, module_name: str | None = None) 
     package = module_name.rpartition(".")[0] or module_name
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
+    for record in import_records(ast.walk(tree)):
+        if record.name is None:
             continue
-        if node.level:
-            imported_module = resolve_name("." * node.level + (node.module or ""), package)
-        else:
-            imported_module = node.module or ""
+        imported_module = record.absolute(package)
         if imported_module == module_name or not imported_module.startswith(PLUGIN_PACKAGE):
             continue
-        for alias in node.names:
-            if alias.name.startswith("_"):
-                found.add(f"{imported_module}.{alias.name}")
+        if record.name.startswith("_"):
+            found.add(f"{imported_module}.{record.name}")
     return found
 
 
 def _expression_parse_calls(path: pathlib.Path) -> list[int]:
     """Return lines that parse an abstract syntax tree in expression mode."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    ast_aliases = {"ast"}
-    parse_aliases = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            ast_aliases.update(alias.asname for alias in node.names if alias.name == "ast" and alias.asname)
-        elif isinstance(node, ast.ImportFrom) and node.module == "ast":
-            parse_aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "parse")
+    records = import_records(ast.walk(tree))
+    ast_aliases = {"ast"} | {r.asname for r in records if r.name is None and r.module == "ast" and r.asname}
+    parse_aliases = {r.bound for r in records if r.name == "parse" and r.module == "ast"}
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -130,13 +147,8 @@ def _expression_parse_calls(path: pathlib.Path) -> list[int]:
 
 def _ast_imports(path: pathlib.Path) -> list[int]:
     """Return lines that import the abstract syntax tree module."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if (isinstance(node, ast.Import) and any(alias.name == "ast" for alias in node.names))
-        or (isinstance(node, ast.ImportFrom) and node.module == "ast")
-    ]
+    records = import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
+    return [statement.lineno for statement in import_statements(r for r in records if r.module == "ast")]
 
 
 _IDENTIFIER_APPROXIMATIONS = ("[A-Za-z_]", "[a-zA-Z_]", "[_A-Za-z]", "[_a-zA-Z]", r"[^\W\d]")
@@ -152,6 +164,53 @@ def _identifier_approximations(path: pathlib.Path) -> list[int]:
         and isinstance(node.value, str)
         and any(shape in node.value for shape in _IDENTIFIER_APPROXIMATIONS)
     ]
+
+
+def _bulk_writes(path: pathlib.Path) -> list[str]:
+    """Return the source of each call that writes rows past ``Model.save()``: bulk_create, bulk_update or update.
+
+    ``QuerySet.update()`` takes keyword arguments only, and ``dict.update()`` and ``set.update()`` take
+    a positional one, so an ``update()`` call without a positional argument counts as a bulk write.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and (node.func.attr in BULK_WRITE_METHODS or (node.func.attr == "update" and not node.args))
+    ]
+
+
+def _transaction_blocks(path: pathlib.Path) -> list[str]:
+    """Return the source of each use of Django's atomic block or savepoint API, as an attribute or an import."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports = {r.statement for r in import_records(ast.walk(tree)) if r.name in TRANSACTION_BLOCK_NAMES}
+    return [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr in TRANSACTION_BLOCK_NAMES) or node in imports
+    ]
+
+
+def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
+    """Return the source of each import statement that names netbox_branching or one of its submodules."""
+    records = import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
+    return [
+        ast.unparse(statement)
+        for statement in import_statements(
+            r
+            for r in records
+            if not r.level and (r.module == "netbox_branching" or r.module.startswith("netbox_branching."))
+        )
+    ]
+
+
+def _production_bulk_writes() -> Counter:
+    """Count each bulk write of the production modules by ``(module, call source)``."""
+    return Counter(
+        (str(path.relative_to(PACKAGE)), call) for path in _production_modules() for call in _bulk_writes(path)
+    )
 
 
 def _test_modules() -> list[pathlib.Path]:
@@ -176,24 +235,19 @@ def _reverse_class_bindings(class_index):
         imports[path] = {}
         module_imports[path] = {}
         package = _module_name(path).rpartition(".")[0] if path.is_relative_to(PACKAGE.parent) else path.parent.name
-        for node in tree.body:
-            if isinstance(node, ast.ImportFrom):
-                module = resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
-                for alias in node.names:
-                    target = modules.get(module)
-                    if target is None and node.level:
-                        target = modules.get((module or "").rpartition(".")[2])
-                    if target is not None:
-                        imports[path][alias.asname or alias.name] = (target, alias.name)
-                    elif node.level and node.module is None:
-                        target = modules.get(alias.name)
-                        if target is not None:
-                            module_imports[path][alias.asname or alias.name] = target
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    target = modules.get(alias.name)
-                    if target is not None:
-                        module_imports[path][alias.asname or alias.name.split(".", 1)[0]] = target
+        for record in import_records(tree.body):
+            if record.name is None:
+                if (target := modules.get(record.module)) is not None:
+                    module_imports[path][record.bound] = target
+                continue
+            module = record.absolute(package)
+            target = modules.get(module)
+            if target is None and record.level:
+                target = modules.get(module.rpartition(".")[2])
+            if target is not None:
+                imports[path][record.bound] = (target, record.name)
+            elif record.level and not record.module and (target := modules.get(record.name)) is not None:
+                module_imports[path][record.bound] = target
     return classes, imports, module_imports
 
 
@@ -322,23 +376,14 @@ def _module_alias_targets(tree: ast.AST, package: str) -> dict[str, set[str]]:
     so a later one cannot exempt an access made through an earlier one.
     """
     aliases: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            base = "." * node.level + (node.module or "")
-            module = resolve_name(base, package) if node.level else (node.module or "")
-            if not module.startswith(PLUGIN_PACKAGE):
-                continue
-            for alias in node.names:
-                if not alias.name.startswith("_"):
-                    aliases.setdefault(alias.asname or alias.name, set()).update(
-                        _walk_module_chain({module}, [alias.name])
-                    )
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if not alias.name.startswith(PLUGIN_PACKAGE):
-                    continue
-                bound = alias.asname or alias.name.split(".")[0]
-                aliases.setdefault(bound, set()).add(alias.name if alias.asname else bound)
+    for record in import_records(ast.walk(tree)):
+        if record.name is None:
+            if record.module.startswith(PLUGIN_PACKAGE):
+                aliases.setdefault(record.bound, set()).add(record.module if record.asname else record.bound)
+            continue
+        module = record.absolute(package)
+        if module.startswith(PLUGIN_PACKAGE) and not record.name.startswith("_"):
+            aliases.setdefault(record.bound, set()).update(_walk_module_chain({module}, [record.name]))
     _propagate_copied_references(tree, aliases)
     return aliases
 
@@ -408,24 +453,17 @@ def _module_import_aliases(
     package = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0] or module_name
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     pairs = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            base = "." * node.level + (node.module or "")
-            imported = resolve_name(base, package) if node.level else (node.module or "")
-            if not imported.startswith(PLUGIN_PACKAGE):
-                continue
-            for alias in node.names:
-                bound = alias.asname or alias.name
-                if (module_name, bound) in seen:
-                    continue
-                for target in _walk_module_chain({imported}, [alias.name], seen | {(module_name, bound)}):
-                    pairs.add((bound, target))
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                bound = alias.asname or alias.name.split(".")[0]
-                target = alias.name if alias.asname else alias.name.split(".")[0]
-                if target in _plugin_modules():
-                    pairs.add((bound, target))
+    for record in import_records(ast.walk(tree)):
+        if record.name is None:
+            target = record.module if record.asname else record.bound
+            if target in _plugin_modules():
+                pairs.add((record.bound, target))
+            continue
+        imported = record.absolute(package)
+        if not imported.startswith(PLUGIN_PACKAGE) or (module_name, record.bound) in seen:
+            continue
+        for target in _walk_module_chain({imported}, [record.name], seen | {(module_name, record.bound)}):
+            pairs.add((record.bound, target))
     return frozenset(pairs)
 
 
@@ -624,6 +662,137 @@ class PluginModuleBoundaryTest(SimpleTestCase):
             path.write_text("import re\nNAME = re.compile(r'[A-Za-z_]\\w*')\n", encoding="utf-8")
 
             self.assertEqual(_identifier_approximations(path), [2])
+
+
+class ChangeLoggedBulkWriteTest(SimpleTestCase):
+    """Production code writes change-logged rows through ``Model.save()``, which NetBox logs.
+
+    A bulk write sends no ``pre_save`` or ``post_save``, so NetBox records no change for the rows it
+    writes, and the snapshot guard cannot see them either.
+    """
+
+    def test_production_code_writes_no_rows_in_bulk(self):
+        """A second copy of a permitted call is refused too: each permit covers one call."""
+        self.assertEqual(_production_bulk_writes() - Counter(BULK_WRITE_PERMITS.keys()), Counter())
+
+    def test_every_permitted_bulk_write_still_exists(self):
+        self.assertEqual(Counter(BULK_WRITE_PERMITS.keys()) - _production_bulk_writes(), Counter())
+
+    def test_the_detector_catches_each_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "Interface.objects.filter(pk=1).update(name='x')\n"
+                "Interface.objects.bulk_create(rows)\n"
+                "queryset.bulk_update(rows, ['name'])\n"
+                "queryset.update(**fields)\n",
+                encoding="utf-8",
+            )
+
+            self.assertCountEqual(
+                _bulk_writes(path),
+                [
+                    "Interface.objects.filter(pk=1).update(name='x')",
+                    "Interface.objects.bulk_create(rows)",
+                    "queryset.bulk_update(rows, ['name'])",
+                    "queryset.update(**fields)",
+                ],
+            )
+
+    def test_a_dict_or_set_update_is_not_a_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("names.update(other)\nseen.update({1: 2}, extra=3)\n", encoding="utf-8")
+
+            self.assertEqual(_bulk_writes(path), [])
+
+
+class TransactionBlockTest(SimpleTestCase):
+    """Production code opens an atomic block only through ``transactions.atomic_with_events()``.
+
+    A bare block that rolls back while the work around it continues leaves its NetBox events in the
+    request's queue, and NetBox then sends them for changes that the database never kept.
+    """
+
+    def test_only_the_transactions_module_opens_an_atomic_block(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), block)
+            for path in _production_modules()
+            if path != TRANSACTIONS_MODULE
+            for block in _transaction_blocks(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_the_transactions_module_opens_one_atomic_block(self):
+        self.assertEqual(_transaction_blocks(TRANSACTIONS_MODULE), ["transaction.atomic"])
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "with transaction.atomic():\n    pass\n": ["transaction.atomic"],
+            "@transaction.atomic\ndef write():\n    pass\n": ["transaction.atomic"],
+            "from django.db.transaction import atomic\n": ["from django.db.transaction import atomic"],
+            "from django.db import transaction as tx\ntx.atomic(using='default')\n": ["tx.atomic"],
+            "sid = transaction.savepoint()\n": ["transaction.savepoint"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_transaction_blocks(path), expected)
+
+    def test_the_helper_and_the_other_transaction_calls_are_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "with atomic_with_events():\n    transaction.set_rollback(True)\ntransaction.on_commit(f)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_transaction_blocks(path), [])
+
+
+class NetboxBranchingImportTest(SimpleTestCase):
+    """Only ``branching.py`` imports netbox-branching, so every other module runs without it installed."""
+
+    def test_only_the_branching_module_imports_netbox_branching(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), statement)
+            for path in _production_modules()
+            if path != BRANCHING_MODULE
+            for statement in _netbox_branching_imports(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "import netbox_branching\n": ["import netbox_branching"],
+            "import os, netbox_branching.utilities as utilities\n": [
+                "import os, netbox_branching.utilities as utilities"
+            ],
+            "from netbox_branching import AppConfig\n": ["from netbox_branching import AppConfig"],
+            "def f():\n    from netbox_branching.models import Branch\n": [
+                "from netbox_branching.models import Branch"
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_netbox_branching_imports(path), expected)
+
+    def test_a_similar_name_a_relative_import_and_the_app_label_are_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "import netbox_branching_extra\nfrom .netbox_branching import x\napps.is_installed('netbox_branching')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_netbox_branching_imports(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

@@ -6,19 +6,29 @@ This module is imported lazily by rename_triggers.py so that model imports happe
 after Django is fully initialised.
 """
 
+import contextlib
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError
 
 from . import family as family_ops
 from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
+from .transactions import atomic_with_events
 
 logger = logging.getLogger(__name__)
+
+NO_RULE_REASON = "no rule matches the module after the change"
+FLAT_REASON = "a flat breakout family is not renamed after a move, a bay edit or a parent module type change"
+ELSEWHERE_REASON = "the interface is not on the device of its module"
+STALE_BAY_REASON = "the module bay still has the parent bay it had before its module moved"
 
 
 def pinned_rule_cache():
@@ -54,6 +64,13 @@ def _get_parent_module_type(module_bay):
     return None
 
 
+def _selected_rule(module, module_bay):
+    """Return the rule that *module* in *module_bay* selects now, or None."""
+    device_type = module.device.device_type if module.device else None
+    platform = module.device.platform if module.device else None
+    return find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
+
+
 def supports_channelization():
     """Delegate the channelization capability check while preserving the engine entry point."""
     return family_ops.supports_channelization()
@@ -73,98 +90,6 @@ def supports_vc_position_token():
     return _vc_position_re() is not None
 
 
-def _unambiguous_claims(candidates, matchers, module):  # pragma: no cover - requires vc_position token support
-    """Build drift claims and delegate admission to the family package."""
-    claims = tuple(
-        family_ops.TemplateClaim(
-            index,
-            matcher.template_name,
-            tuple(label for label, forms in candidates if any(matcher.pattern.fullmatch(form) for form in forms)),
-        )
-        for index, matcher in enumerate(matchers)
-    )
-    accepted, messages = family_ops.resolve_template_claims(claims, module=module, label_kind="interface name")
-    for message in messages:
-        logger.warning("%s", message)
-    return [label for _, label in accepted]
-
-
-def _drifted_candidates(interfaces, matchers, module):  # pragma: no cover - requires vc_position token support
-    """Return the interfaces a single drifted ``{vc_position}`` template unambiguously claims.
-
-    *interfaces* and *matchers* are what the exact pass left unclaimed.
-    """
-    by_name = {iface.name: iface for iface in interfaces}
-    claimed = _unambiguous_claims([(iface.name, (iface.name,)) for iface in interfaces], matchers, module)
-    return [by_name[label] for label in claimed]
-
-
-def _family_base(interface):
-    """Return the base name of the flat or channelized family *interface* belongs to."""
-    # A channelized parent is its own base: its channels are separate rows, so the name needs no
-    # ":"-splitting to find them.
-    return interface.name if family_ops.is_channelized_parent(interface) else interface.name.rsplit(":", 1)[0]
-
-
-def _forced_channel_bases(interfaces, raw_names, matchers, module):
-    """Return one interface per base a forced breakout rule should process, preferring the ":0" one.
-
-    A base is claimed exactly when either comparison form — the full base or its last path segment,
-    the latter covering already-renamed bases — is a raw name now; otherwise a token template's
-    matcher may claim it, under the same one-to-one policy ``_drifted_candidates`` applies.  Two
-    bases with distinct rule outputs never collide downstream, so an ambiguous claim has to be
-    stopped here or it is not stopped at all.
-    """
-    seen_bases: dict = {}
-    forms_by_base: dict = {}
-    for i in interfaces:
-        base = _family_base(i)
-        forms = (base, base.rsplit("/", 1)[-1])
-        if not any(form in raw_names for form in forms) and not any(
-            matcher.pattern.fullmatch(form) for matcher in matchers for form in forms
-        ):
-            continue
-        forms_by_base[base] = forms
-        if base not in seen_bases or i.name.endswith(":0"):
-            seen_bases[base] = i
-
-    exact_forms = {form for forms in forms_by_base.values() for form in forms if form in raw_names}
-    drifted = {base: forms for base, forms in forms_by_base.items() if not exact_forms & set(forms)}
-    if not drifted:
-        return list(seen_bases.values())
-    kept = set(  # pragma: no cover - requires vc_position token support
-        _unambiguous_claims(drifted.items(), [m for m in matchers if m.resolved not in exact_forms], module)
-    )
-    return [i for base, i in seen_bases.items() if base not in drifted or base in kept]  # pragma: no cover - see above
-
-
-def _collect_unrenamed(interfaces, rule, raw_names, force_reapply, matchers=(), module=None):
-    """Return the subset of *interfaces* that should be processed by the rule.
-
-    Normal (non-force) mode: only interfaces whose current name is still in the
-    raw template names (idempotency guard), plus the ones a *matchers* entry
-    claims as its own drifted name (see ``_drifted_candidates``).
-
-    force_reapply, non-channel: all interfaces (e.g. vc_position changed).
-
-    force_reapply, channel rule: one interface per base name (see
-    ``_forced_channel_bases``).
-    """
-    if not force_reapply:
-        exact = [i for i in interfaces if i.name in raw_names]
-        if not matchers:
-            return exact
-        claimed = {i.name for i in exact}  # pragma: no cover - requires vc_position token support
-        return exact + _drifted_candidates(  # pragma: no cover - see above
-            [i for i in interfaces if i.name not in claimed],
-            [m for m in matchers if m.resolved not in claimed],
-            module,
-        )
-    if rule.channel_count == 0:
-        return interfaces
-    return _forced_channel_bases(interfaces, raw_names, matchers, module)
-
-
 def _touches_a_family(plan) -> bool:
     """Return whether *plan* acts on a family rather than one standalone interface."""
     if isinstance(plan, family_ops.InstalledFamilyPlan):
@@ -172,22 +97,11 @@ def _touches_a_family(plan) -> bool:
     return True
 
 
-def _admitted_installed(plans, rule, raw_names, force_reapply, matchers, module):
-    """Return the installed families this install path should execute.
-
-    A channelized family is always executed: its parent decides the family's names, and the raw-name
-    guard describes flat rows.  A flat family is executed while the guard still claims a member of it.
-    """
-    flat = [plan for plan in plans if plan.topology == family_ops.FamilyTopology.FLAT]
-    snapshots = [member.snapshot for plan in flat for member in plan.members]
-    selected = {
-        interface.pk for interface in _collect_unrenamed(snapshots, rule, raw_names, force_reapply, matchers, module)
-    }
-    return [
-        plan
-        for plan in plans
-        if plan.topology == family_ops.FamilyTopology.CHANNELIZED or selected.intersection(plan.member_pks)
-    ]
+def _run_scope(force_reapply, previous_forms):
+    """Return the scope of an automatic run; after a move the claim decides alone, without one."""
+    if previous_forms is not None:
+        return None
+    return family_ops.RunScope.FORCED if force_reapply else family_ops.RunScope.INSTALL
 
 
 _MEMBER_OUTCOME_KINDS = {
@@ -223,6 +137,29 @@ def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
     return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
 
 
+class NamingPoint(NamedTuple):
+    """A point in the transaction at which NetBox gave a module's templates raw names.
+
+    ``naming`` is the ``ModuleNaming`` that holds the bay chain of the module then, or None for the
+    committed module; ``vc_position`` is its device's virtual-chassis position then, and ``move`` is
+    set when a move gave the names, which NetBox resolves with the resolver of its move planner.
+    """
+
+    naming: "ModuleNaming | None"
+    vc_position: int | None
+    move: bool
+
+
+def _raw_names_at(module, naming_points):
+    """Return, by template, the raw names that NetBox gave *module*'s templates at *naming_points*."""
+    names = defaultdict(set)
+    for point in naming_points:
+        templates = family_ops.resolved_template_names(module) if point.naming is None else point.naming.templates
+        for template in templates:
+            names[template.pk].add(template.at_chassis_position(point.vc_position, move=point.move).resolved)
+    return names
+
+
 def apply_interface_name_rules(module, module_bay, force_reapply=False):
     """Apply InterfaceNameRule rename after module installation.
 
@@ -244,22 +181,74 @@ def apply_interface_name_rules(module, module_bay, force_reapply=False):
     return renamed_count(module_rule_outcomes(module, module_bay, force_reapply))
 
 
-def module_rule_outcomes(module, module_bay, force_reapply=False, report_only=False) -> Iterator[RenameOutcome]:
+def module_rule_outcomes(
+    module, module_bay, force_reapply=False, report_only=False, naming=None, naming_points=()
+) -> Iterator[RenameOutcome]:
     """Apply the module's rule as ``apply_interface_name_rules`` does, and yield its outcome facts.
 
     Each family's facts are yielded before the next family runs, so a caller keeps them when a later
     family fails. With *report_only*, nothing is renamed: only a rule that needs a variable the
     device lacks gives facts.
-    """
-    device_type = module.device.device_type if module.device else None
-    platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
 
-    if not rule:
+    *naming* is the module's ``ModuleNaming`` read before a move, a bay edit or a type change of its
+    parent module. The rule then renames every name one template claims through its current or
+    previous forms, and reports every other interface. Without a rule now, each interface the previous
+    rule named keeps its name and is reported. When the previous rule is a flat breakout rule, nothing
+    on the module is renamed and every interface is reported: NetBox keeps no link to a family, so it
+    could be recognised by name only (ADR 0015). When an interface of the module is on another device,
+    or the module's bay has a parent bay that does not hold the module that owns the bay, nothing is
+    renamed and every interface is reported.
+
+    *naming_points* are the ``NamingPoint`` values at which NetBox gave the module's templates raw
+    names in the transaction. The claim recognises the names of each point too.
+    """
+    rule = _selected_rule(module, module_bay)
+    previous_forms = None if naming is None else naming.previous_forms()
+
+    if (
+        previous_forms is not None
+        and previous_forms.rule is not None
+        and family_ops.builds_flat_family(previous_forms.rule)
+    ):
+        yield from _kept_flat_family(module)
         return
-    # One pin for the module: the raw-name matchers and the family planner resolve its templates once.
+    if not rule:
+        if previous_forms is not None and previous_forms.rule is not None:
+            yield from _left_without_a_rule(module, previous_forms)
+        return
+    # One pin for the module: the claim and the family planner resolve its templates once.
     with family_ops.pinned_template_cache():
-        yield from _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only)
+        yield from _apply_rule_to_module(
+            rule, module, module_bay, force_reapply, report_only, previous_forms, naming_points
+        )
+
+
+def _kept_flat_family(module) -> Iterator[RenameOutcome]:
+    """Yield a blocked fact for every interface of *module*, which a flat breakout rule before the save leaves alone."""
+    from dcim.models import Interface
+
+    for name in Interface.objects.filter(module_id=module.pk).order_by("pk").values_list("name", flat=True):
+        yield RenameOutcome(OutcomeKind.BLOCKED, name, FLAT_REASON)
+
+
+def _left_without_a_rule(module, previous_forms) -> Iterator[RenameOutcome]:
+    """Yield a blocked fact for each interface the previous rule named, now that no rule matches the module."""
+    from dcim.models import Interface
+
+    interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
+    for name in family_ops.names_the_previous_rule_gave(previous_forms, interfaces):
+        yield RenameOutcome(OutcomeKind.BLOCKED, name, NO_RULE_REASON)
+
+
+def _has_stale_parent_bay(module_bay) -> bool:
+    """Return whether *module_bay* belongs to a module but its parent bay does not hold that module.
+
+    NetBox sets a bay's parent to the bay of the module that owns it; rule selection read both already.
+    """
+    if module_bay.module_id is None:
+        return False
+    installed = getattr(module_bay.parent, "installed_module", None)
+    return installed is None or installed.pk != module_bay.module_id
 
 
 def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
@@ -273,7 +262,7 @@ def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
     )
 
 
-def _acted_on_names(rule, plans, interfaces):
+def _acted_on_names(rule, plans):
     """Return the name of every interface the admitted *plans* act on, in plan order."""
     names = []
     for plan in plans:
@@ -285,13 +274,15 @@ def _acted_on_names(rule, plans, interfaces):
                 if not (keeps_parent and member.role == family_ops.MemberRole.PARENT)
             )
             continue
-        # A creation plan stands for its base's whole flat family; the guard kept one row of it.
-        base = _family_base(plan.base)
-        names.extend(i.name for i in interfaces if getattr(i, "channel_id", None) is None and _family_base(i) == base)
+        names.append(plan.base.name)
+        if isinstance(plan, family_ops.FlatCreationPlan):
+            names.extend(member.name for member in plan.members)
     return tuple(dict.fromkeys(names))
 
 
-def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=False):
+def _apply_rule_to_module(
+    rule, module, module_bay, force_reapply, report_only=False, previous_forms=None, naming_points=()
+):
     """Plan and execute every family *rule* intends on *module*; see ``module_rule_outcomes``."""
     from dcim.models import Interface
 
@@ -299,24 +290,25 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
     missing = _unavailable_rule_variables(rule, variables)
     if report_only and not missing:
         return
-    raw = _raw_name_matchers(module)
-    raw_names = raw.names or {variables["bay_position"]}
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
-    planned = family_ops.plan_module_families(
-        module,
-        rule,
-        variables,
-        interfaces,
-        # The guard runs while it can still see every claimed row, before two of them that intend
-        # one family are collapsed into it.
-        admit_leftover=lambda plain: _collect_unrenamed(plain, rule, raw_names, force_reapply, raw.matchers, module),
+    # NetBox before 4.7 moves only the module row: its interfaces and nested bays keep the old placement.
+    if any(interface.device_id != module.device_id for interface in interfaces):
+        yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, ELSEWHERE_REASON) for i in interfaces)
+        return
+    if _has_stale_parent_bay(module_bay):
+        yield from (RenameOutcome(OutcomeKind.BLOCKED, i.name, STALE_BAY_REASON) for i in interfaces)
+        return
+    bases = family_ops.module_raw_bases(
+        module, rule, variables, interfaces, previous_forms, earlier_raw_names=_raw_names_at(module, naming_points)
     )
-    installed = _admitted_installed(planned.installed, rule, raw_names, force_reapply, raw.matchers, module)
-    leftover = planned.leftover
+    planned = family_ops.plan_module_families(
+        module, rule, variables, interfaces, bases, _run_scope(force_reapply, previous_forms)
+    )
+    installed, leftover = planned.installed, planned.leftover
     plans = [*installed, *leftover]
 
     if missing:
-        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans, interfaces))
+        yield from _unresolved_outcomes(missing, _acted_on_names(rule, plans))
         return
 
     any_outcome = False
@@ -326,7 +318,7 @@ def _apply_rule_to_module(rule, module, module_bay, force_reapply, report_only=F
             yield outcome
     families_seen = bool(installed) or any(_touches_a_family(plan) for plan in leftover)
 
-    if not force_reapply and leftover and not any_outcome and not families_seen:
+    if not force_reapply and previous_forms is None and leftover and not any_outcome and not families_seen:
         # Nothing renamed, skipped or built as a family: NetBox may already give these names.
         _flag_rule_potentially_deprecated(rule)
 
@@ -347,9 +339,7 @@ def predict_rule_output(module, module_bay, raw_names):
     device's virtual-chassis position changed is predicted from itself, not corrected to the name
     the templates resolve to now — this function maps the names it is given.
     """
-    device_type = module.device.device_type if module.device else None
-    platform = module.device.platform if module.device else None
-    rule = find_matching_rule(module.module_type, _get_parent_module_type(module_bay), device_type, platform)
+    rule = _selected_rule(module, module_bay)
     if not rule:
         return list(raw_names)
 
@@ -375,16 +365,21 @@ def reapply_module_rules(device):
     return renamed_count(device_module_rule_outcomes(device))
 
 
-def device_module_rule_outcomes(device, report_only=False) -> Iterator[RenameOutcome]:
+def device_module_rule_outcomes(
+    device, report_only=False, excluded_pks=(), naming_points=()
+) -> Iterator[RenameOutcome]:
     """Reapply the rules of every module on *device* as ``reapply_module_rules`` does, and yield the outcome facts.
 
     Each module's facts are yielded before the next module runs, so a caller keeps them when a later
-    module fails. *report_only* is passed to ``module_rule_outcomes``.
+    module fails. *report_only* is passed to ``module_rule_outcomes``. The modules whose primary keys
+    are in *excluded_pks* are left out. *naming_points* are passed to ``module_rule_outcomes``.
     """
     from dcim.models import Module
 
     modules = list(
-        Module.objects.filter(device=device).select_related(
+        Module.objects.filter(device=device)
+        .exclude(pk__in=excluded_pks)
+        .select_related(
             "module_type",
             "device__device_type",
             "device__platform",
@@ -393,7 +388,130 @@ def device_module_rule_outcomes(device, report_only=False) -> Iterator[RenameOut
     )
     with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
         for module in modules:
-            yield from module_rule_outcomes(module, module.module_bay, force_reapply=True, report_only=report_only)
+            yield from module_rule_outcomes(
+                module,
+                module.module_bay,
+                force_reapply=True,
+                report_only=report_only,
+                naming_points=naming_points,
+            )
+
+
+_NAMING_RELATIONS = (
+    "module_type",
+    "device__device_type",
+    "device__platform",
+    "module_bay__parent__installed_module__module_type",
+    *family_template_names.BAY_CHAIN_RELATIONS,
+)
+
+
+@dataclass(frozen=True, eq=False)
+class ModuleNaming:
+    """What named one module's interfaces at the time it was read: a move, a bay edit or a type change reads it.
+
+    The module type and the scope select the rule that state gave the module. The template variables
+    and the templates as they resolved then rebuild the names that rule gave. The variables come from
+    ``bay_chain`` and ``vc_position``, the virtual-chassis position of the device then, and
+    ``previous_forms`` resolves the raw template names at ``vc_position`` too. ``device_pk`` is that
+    device. ``bay_values`` are the ``naming.bay_naming_values`` of the module's bay then.
+    ``raw_only`` is set when no rule has named the module's interfaces yet, because the module was
+    installed in the same transaction: they carry raw template names only.
+    """
+
+    module_pk: int
+    device_pk: int
+    module_type: object
+    parent_module_type: object | None
+    device_type: object | None
+    platform: object | None
+    bay_chain: naming.BayChain
+    vc_position: int | None
+    templates: tuple
+    bay_values: tuple
+    raw_only: bool = False
+
+    @classmethod
+    def of(cls, module):
+        """Return the naming of *module*, which carries ``_NAMING_RELATIONS``, as it is now."""
+        device = module.device
+        module_bay = module.module_bay
+        return cls(
+            module_pk=module.pk,
+            device_pk=device.pk,
+            module_type=module.module_type,
+            parent_module_type=_get_parent_module_type(module_bay),
+            device_type=device.device_type,
+            platform=device.platform,
+            bay_chain=naming.bay_chain(module_bay),
+            vc_position=naming.chassis_position(device),
+            templates=family_ops.resolved_template_names(module),
+            bay_values=naming.bay_naming_values(module_bay.position, module_bay.name),
+        )
+
+    @property
+    def variables(self):
+        """Return the template variables of this naming."""
+        return naming.bay_chain_variables(self.bay_chain, self.vc_position)
+
+    def at_chassis_position(self, vc_position):
+        """Return this naming at the virtual-chassis position *vc_position*; None means off a chassis."""
+        return replace(self, vc_position=vc_position)
+
+    def rule(self):
+        """Return the rule that the module type and the scope of this naming select now, or None."""
+        return find_matching_rule(self.module_type, self.parent_module_type, self.device_type, self.platform)
+
+    def selects_another_rule(self, module) -> bool:
+        """Return whether *module* now selects another rule than this naming; it reads the rule cache.
+
+        A module that ``committed_modules`` returned needs no other query.
+        """
+        return _selected_rule(module, module.module_bay) != self.rule()
+
+    def previous_forms(self) -> family_ops.PreviousForms:
+        """Return what rebuilds the names this naming gave, under the rule it selects now; no rule when ``raw_only``."""
+        rule = None if self.raw_only else self.rule()
+        templates = {template.pk: template.at_chassis_position(self.vc_position) for template in self.templates}
+        return family_ops.PreviousForms(rule, self.variables, templates)
+
+
+def read_subtree_naming(module_pk) -> tuple[ModuleNaming, ...]:
+    """Return the naming of the module and of every module nested in it, the module itself first.
+
+    A move reads this before its save: in the same save NetBox can re-resolve the position and name
+    of each bay the module holds, so the nested modules' naming is gone afterwards. A bay edit reads
+    it before its save, because the save changes what the names in the bay are built from. A type
+    change reads it before its save, because the nested modules can then select another rule.
+    """
+    from dcim.models import Module
+
+    modules = []
+    level = list(Module.objects.filter(pk=module_pk).select_related(*_NAMING_RELATIONS))
+    while level:
+        modules.extend(level)
+        level = list(
+            Module.objects.filter(module_bay__module__in=level)
+            .exclude(pk__in=[module.pk for module in modules])
+            .select_related(*_NAMING_RELATIONS)
+            .order_by("pk")
+        )
+    with family_ops.pinned_template_cache(modules):
+        return tuple(ModuleNaming.of(module) for module in modules)
+
+
+def committed_modules(module_pks) -> dict:
+    """Return the committed modules that *module_pks* name, by primary key, with every relation a reapply reads."""
+    from dcim.models import Module
+
+    return Module.objects.select_related(*_NAMING_RELATIONS).in_bulk(module_pks)
+
+
+@contextlib.contextmanager
+def pinned_reapply(modules):
+    """Share one enabled-rule snapshot, and the resolved templates of *modules*, across one reapply."""
+    with pinned_rule_cache(), family_ops.pinned_template_cache(modules):
+        yield
 
 
 def _device_interface_rules(device):
@@ -501,7 +619,7 @@ def device_interface_rule_outcomes(device, report_only=False) -> Iterator[Rename
     """
     from dcim.models import Interface
 
-    vc_position = device.vc_position if device.virtual_chassis_id is not None else None
+    vc_position = naming.chassis_position(device)
     rules = _device_interface_rules(device)
     if not rules:
         return
@@ -522,21 +640,6 @@ def device_interface_rule_outcomes(device, report_only=False) -> Iterator[Rename
             yield from outcomes
 
 
-def _raw_name_matchers(module):
-    """Delegate current and historical raw name resolution."""
-    return family_template_names.raw_name_matchers(module)
-
-
-def _get_raw_interface_names(module):
-    """Return the original interface names NetBox assigned from templates."""
-    return _raw_name_matchers(module).names
-
-
-def _raw_name_patterns(module):
-    """Delegate historical raw-name pattern construction."""
-    return family_template_names.raw_name_patterns(module)
-
-
 def _flag_rule_potentially_deprecated(rule):
     """Tag a rule as 'potentially-deprecated' when its rename is a no-op.
 
@@ -546,23 +649,32 @@ def _flag_rule_potentially_deprecated(rule):
     improved template resolution), or only needed for a subset of module types.
 
     Adds a NetBox Tag 'potentially-deprecated' so the rule is visually flagged
-    in the UI for operator review.  Failures are logged but never re-raised so
-    the install path is not disrupted.
+    in the UI for operator review.  A database failure is logged but never
+    re-raised so the install path is not disrupted.
     """
-    try:
-        from extras.models import Tag
+    from extras.models import Tag
 
-        tag, _ = Tag.objects.get_or_create(
-            slug="potentially-deprecated",
-            defaults={"name": "potentially-deprecated", "color": "ffc107"},
-        )
-        rule.tags.add(tag)
-        logger.info(
-            "Rule '%s' flagged as potentially-deprecated: NetBox already generates the correct interface names.",
-            rule,
-        )
-    except Exception:
+    from .models import InterfaceNameRule
+
+    try:
+        with atomic_with_events():
+            # The caller read the rule before the reapply, so the stored row can be newer.
+            stored = InterfaceNameRule.objects.select_for_update().filter(pk=rule.pk).order_by("pk").first()
+            if stored is None:
+                return
+            tag, _ = Tag.objects.get_or_create(
+                slug="potentially-deprecated",
+                defaults={"name": "potentially-deprecated", "color": "ffc107"},
+            )
+            stored.snapshot()
+            stored.tags.add(tag)
+    except DatabaseError:
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
+        return
+    logger.info(
+        "Rule '%s' flagged as potentially-deprecated: NetBox already generates the correct interface names.",
+        stored,
+    )
 
 
 def _matching_moduletype_pks(module_type_pattern):
@@ -739,9 +851,13 @@ def _process_module(rule, module, ifaces, variables, limit, results, module_qs, 
     rows_by_name = {iface.name: iface for iface in ifaces}
     existing_names = frozenset(rows_by_name)
     entries = [_installed_flat_entry(module, plan, rows_by_pk[plan.member_pks[0]]) for plan in installed]
+    offered = _preview_plans(rule, plan_set)
+    # The apply refuses a family whose names are in use, so the preview offers no change there.
+    in_use = family_ops.creation_names_in_use(module, rule, ifaces, bases, offered)
     entries.extend(
         _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
-        for plan in _preview_plans(rule, plan_set)
+        for plan in offered
+        if plan.base_name not in in_use
     )
     for entry in entries:
         if entry is None:

@@ -34,11 +34,14 @@ _COMPARISON_INTRO = (
     "is only evidence when both runs were taken on the same otherwise-idle hardware."
 )
 
-_COMPARABLE_ONE_MINUTE_LOAD = 2.0
+# A run starts on an idle host; its own work may raise the load it finishes under (32-core host).
+_START_LOAD_CEILING = 2.0
+_FINISH_LOAD_CEILING = 4.0
 
 _MACHINE_TIME_COMPARABLE_NOTE = (
-    f"Every recorded 1-minute load stayed below {_COMPARABLE_ONE_MINUTE_LOAD:.2f} on both sides, so "
-    "machine-time deltas are comparable observations. Statement counts remain the deterministic evidence."
+    f"Each run started under a 1-minute load below {_START_LOAD_CEILING:.2f} and finished below "
+    f"{_FINISH_LOAD_CEILING:.2f}, so machine-time deltas are comparable observations. Statement counts "
+    "remain the deterministic evidence."
 )
 
 _MACHINE_TIME_UNPROVEN_NOTE = (
@@ -199,7 +202,7 @@ def _one_minute_loads(artifact):
     """Return the 1-minute run-queue samples a run recorded, or None when it recorded none.
 
     Samples come back at the precision the report prints, so the note can never claim a load the
-    table displays as the ceiling stayed below it.
+    table displays as a ceiling stayed below it.
     """
     load = artifact["environment"].get("host_load")
     if not load:
@@ -217,15 +220,16 @@ def _load_span(artifact):
 
 def _machine_time_note(before, after):
     """Return the machine-time note the recorded 1-minute load supports."""
-    samples = []
     for artifact in (before, after):
         recorded = _one_minute_loads(artifact)
-        if recorded is None:
+        if recorded is None or not _is_comparable_load(*recorded):
             return _MACHINE_TIME_UNPROVEN_NOTE
-        samples.extend(recorded)
-    if max(samples) >= _COMPARABLE_ONE_MINUTE_LOAD:
-        return _MACHINE_TIME_UNPROVEN_NOTE
     return _MACHINE_TIME_COMPARABLE_NOTE
+
+
+def _is_comparable_load(started, finished):
+    """Return whether a run started and finished under loads that keep its machine time comparable."""
+    return started < _START_LOAD_CEILING and finished < _FINISH_LOAD_CEILING
 
 
 def _comparison_intro(before, after):
@@ -297,8 +301,21 @@ def main(argv):
         "## Statement-count regressions",
         "",
     ]
+    unassessed = [
+        name
+        for name in _scenario_names(before_scenarios, after_scenarios)
+        if name not in before_scenarios or name not in after_scenarios
+    ]
     if regressions:
         report.extend(f"- `{name}` {label}: {_format(old)} to {_format(new)}" for name, label, old, new in regressions)
+    elif unassessed:
+        report.append("None among the scenarios that both runs measured.")
+    else:
+        report.append("None. No scenario issues more statements than the baseline.")
+    if unassessed:
+        names = ", ".join(f"`{name}`" for name in unassessed)
+        report += ["", f"Not assessed, because only one run measured them: {names}."]
+    if regressions:
         report += [
             "",
             "### Where those statements come from",
@@ -313,8 +330,6 @@ def main(argv):
         ]
         for name, _label, _old, _new in regressions:
             report.extend(_attribution(name, before_scenarios[name], after_scenarios[name]))
-    else:
-        report.append("None. No scenario issues more statements than the baseline.")
     report.append("")
     destination.write_text("\n".join(report))
     print(f"wrote {destination} ({len(regressions)} statement-count regressions)")

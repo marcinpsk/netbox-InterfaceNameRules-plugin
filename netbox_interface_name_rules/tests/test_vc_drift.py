@@ -19,12 +19,13 @@ A fixture whose interface names come out of the token needs a release that resol
 such class is gated on ``supports_vc_position_token()``; the two control classes are not, and their
 assertions are written to hold on a release that never resolves the token as well.
 
-Two engine names are pinned here as the fix's public surface:
+Two names are pinned here as the fix's public surface:
 
 * ``engine.supports_vc_position_token()`` — the feature check, probed lazily from
   ``dcim.constants.VC_POSITION_RE`` the way ``supports_channelization()`` probes the Interface model.
-* ``engine._raw_name_patterns(module)`` — the structural matchers, one per interface template whose
-  name carries the token, empty for every other template and on every release without the constant.
+* the ``historical_pattern`` of each ``family.resolved_template_names(module)`` entry: the structural
+  matchers, one per interface template whose name carries the token, None for every other template
+  and on every release without the constant.
 
 Everything else is pinned through behaviour.
 """
@@ -43,6 +44,8 @@ from dcim.models import (
     ModuleType,
     VirtualChassis,
 )
+from django.contrib.contenttypes.models import ContentType
+from extras.models import JournalEntry
 
 from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -50,14 +53,16 @@ from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
     find_convertible_families,
+    find_interfaces_for_rule,
     predict_rule_output,
     supports_channelization,
     supports_vc_position_token,
 )
-from netbox_interface_name_rules.family import plan_installed_families
+from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, plan_installed_families, resolved_template_names
+from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS, pinned_template_cache
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
-from netbox_interface_name_rules.rename_triggers import ModuleReapply
+from netbox_interface_name_rules.rename_triggers import ModuleTrigger, reapply
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
     CHANNEL_TYPE,
@@ -71,6 +76,7 @@ from netbox_interface_name_rules.tests.test_channelization import (
 
 FLAT = BreakoutModeChoices.FLAT
 CHANNELIZED = BreakoutModeChoices.CHANNELIZED
+CLAIM_LOGGER = "netbox_interface_name_rules.family.raw_bases"
 
 # Every fixture spelling a name NetBox resolved from the token needs the release that resolves it:
 # on 4.5 and older the token stays literal in the interface name and the drift cannot even occur.
@@ -86,8 +92,12 @@ def _token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TY
 
 
 def _raw_name_patterns(module):
-    """Return the engine's structural raw-name matchers for *module* (see the module docstring)."""
-    return list(engine._raw_name_patterns(module))
+    """Return the structural raw-name matchers of *module*'s templates (see the module docstring)."""
+    return [
+        template.historical_pattern
+        for template in resolved_template_names(module)
+        if template.historical_pattern is not None
+    ]
 
 
 class _ConstantsWithoutVcToken(types.ModuleType):
@@ -180,7 +190,7 @@ class VcPositionJoinDriftTest(VcDriftTestCase):
         self._join(VirtualChassis.objects.create(name="vcjoin-vc2"), 2)
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
 
-        ModuleReapply.after_install(module)()
+        reapply([ModuleTrigger.after_install(module)])
 
         self.assertEqual(self._names(module), ["et-0/0/4"])
 
@@ -234,14 +244,13 @@ class VcPositionRenumberDriftTest(VcDriftTestCase):
 
 @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
 class VcPositionForceBaseMatchingTest(VcDriftTestCase):
-    """Force-mode channel bases are compared in two forms; drift-awareness applies to both, and no more."""
+    """A forced reapply finds a breakout family by the names the rule gives it at any position."""
 
     @classmethod
     def setUpTestData(cls):
         manufacturer, cls.device = _build_device(
             "VcForm", ["5", "7"], virtual_chassis=VirtualChassis.objects.create(name="vcform-vc"), vc_position=1
         )
-        # The raw name has no '/', so an already-renamed base only matches on its last path segment.
         cls.module_type = _token_module_type(manufacturer, "VcForm-QSFP", "{vc_position}-{module}")
 
     def _breakout_rule(self, name_template):
@@ -249,8 +258,7 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
             module_type=self.module_type, name_template=name_template, channel_count=1, channel_start=0
         )
 
-    def test_an_already_renamed_base_matches_on_its_last_path_segment(self):
-        """``xe-.../{raw}`` keeps the raw name as the last segment — the second form the force path compares."""
+    def test_a_family_whose_name_ends_in_the_raw_name_is_renamed(self):
         self._breakout_rule("et-0/0/{vc_position}-{bay_position}:{channel}")
         module, _ = self._install_on(self.device, self.module_type, "5")
         self.assertEqual(self._names(module), ["et-0/0/1-5:0"])
@@ -259,15 +267,15 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
 
         self.assertEqual(self._names(module), ["et-0/0/2-5:0"])
 
-    def test_a_rule_output_that_buries_the_raw_name_stays_out_of_reach(self):
-        """The honest boundary: neither comparison form ever saw such a name, and none is invented."""
+    def test_a_family_whose_name_buries_the_raw_name_is_renamed_too(self):
+        """The rule gives this name at position 1, so the claim finds it wherever the raw name sits."""
         self._breakout_rule("et-0/0/{vc_position}-{bay_position}-x:{channel}")
         module, _ = self._install_on(self.device, self.module_type, "7")
         self.assertEqual(self._names(module), ["et-0/0/1-7-x:0"])
 
         self._renumber(2)
 
-        self.assertEqual(self._names(module), ["et-0/0/1-7-x:0"])
+        self.assertEqual(self._names(module), ["et-0/0/2-7-x:0"])
 
 
 # ---------------------------------------------------------------------------
@@ -359,24 +367,26 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         for candidate in ("xe-0/0/3", "xe-1/0/3"):
             self.assertIn(candidate, output)
 
-    def test_drift_warning_uses_the_engine_logger(self):
+    def test_the_claim_warns_once_and_names_the_template_and_both_candidates(self):
         module, bay = self._install_on(self.device, self.decoy_type, "3")
         rename_out_of_band(Interface.objects.get(module=module, name="mgmt-3"), "xe-0/0/3")
         self._renumber(2)
         InterfaceNameRule.objects.create(module_type=self.decoy_type, name_template="et-{base}")
 
-        with self.assertLogs(engine.logger, level="WARNING") as logs:
+        with self.assertLogs(CLAIM_LOGGER, level="WARNING") as logs:
             renamed = apply_interface_name_rules(module, bay)
 
         self.assertEqual(renamed, 0)
         self.assertEqual(self._names(module), ["xe-0/0/3", "xe-1/0/3"])
-        self.assertEqual(len(logs.records), 1)
-        self.assertEqual(logs.records[0].name, engine.__name__)
         self.assertEqual(
-            logs.records[0].getMessage(),
-            f"Interface template 'xe-{{vc_position:0}}/0/{{module}}' of {module} could name any of "
-            "['xe-0/0/3', 'xe-1/0/3'] since this device's virtual-chassis position changed; "
-            "skipping them all rather than renaming a guess.",
+            [record.getMessage() for record in logs.records],
+            [
+                (
+                    f"Interface template 'xe-{{vc_position:0}}/0/{{module}}' of {module} could name any of "
+                    "['xe-0/0/3', 'xe-1/0/3'] as its raw name or its renamed form; "
+                    "skipping them all rather than renaming a guess."
+                )
+            ],
         )
 
     def test_a_forced_re_apply_does_not_break_out_an_ambiguous_pair(self):
@@ -439,6 +449,35 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["xe-1/0/4", "xe-1/1/4"])
         self.assertIn("xe-1/0/4", "\n".join(logs.output))
 
+    def test_a_rule_without_base_renames_a_refused_raw_name_on_install_as_apply_rules_does(self):
+        """A rule that does not read ``{base}`` needs no template, so the claim refuses nothing it would use."""
+        modules = []
+        for position in ("3", "4"):
+            module, _ = self._install_on(self.device, self.decoy_type, position)
+            rename_out_of_band(Interface.objects.get(module=module, name=f"mgmt-{position}"), f"xe-0/0/{position}")
+            modules.append(module)
+        self._renumber(2)
+        rule = InterfaceNameRule.objects.create(module_type=self.decoy_type, name_template="et-0/0/{bay_position}")
+        installed, applied = modules
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            reapply([ModuleTrigger.after_install(installed)])
+            outcome = apply_rule_to_existing(
+                rule, interface_ids=Interface.objects.filter(module=applied).values_list("pk", flat=True)
+            )
+
+        (entry,) = JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(installed), assigned_object_id=installed.pk
+        )
+        self.assertIn("to `et-0/0/3`: target name is already in use", entry.comments)
+        self.assertEqual(outcome.changed_count, 1)
+        self.assertEqual([member.reason for member in outcome.skipped_members], ["target name is already in use"])
+        for module, position in ((installed, "3"), (applied, "4")):
+            with self.subTest(position=position):
+                names = self._names(module)
+                self.assertIn(f"et-0/0/{position}", names)
+                self.assertEqual(len(names), 2)
+
     def test_two_token_templates_that_do_not_overlap_both_rename(self):
         """The guard is scoped to real ambiguity: distinct claims still each match their own interface.
 
@@ -452,6 +491,105 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
 
         self.assertEqual(apply_interface_name_rules(module, bay), 2)
         self.assertEqual(self._names(module), ["et-xe-1/6/4", "et-xe-6/0/4"])
+
+
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+class VcPositionOneClaimPassTest(VcDriftTestCase):
+    """One claim over every form refuses a template that claims its raw name and its earlier family.
+
+    The flat rule ``{base}:{channel}`` named the family ``1/0:0``, ``1/0:1`` at position 1. After a renumber
+    to 3, a plain interface carries the template's new raw name ``3/0``. The template claims both, so every
+    path keeps all three names and reports them.
+    """
+
+    CANDIDATES = ("1/0:0", "1/0:1", "3/0")
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "VcPass", ["0"], virtual_chassis=VirtualChassis.objects.create(name="vcpass-vc"), vc_position=1
+        )
+        cls.module_type = _token_module_type(manufacturer, "VcPass-QSFP", "{vc_position}/{module}")
+
+    def _flat_rule(self):
+        return InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="{base}:{channel}",
+            breakout_mode=FLAT,
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def _add_plain_interface(self, module, name):
+        Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+
+    def _candidates_without_a_rule(self):
+        """Leave the family named at position 1 and the raw name of position 3, with no rule yet."""
+        module, bay = self._install_on(self.device, self.module_type, "0")
+        rename_out_of_band(Interface.objects.get(module=module, name="1/0"), "1/0:0")
+        self._add_plain_interface(module, "1/0:1")
+        self._renumber(3)
+        self._add_plain_interface(module, "3/0")
+        return module, bay
+
+    def _assert_the_claim_names_every_candidate(self, logs, module):
+        output = "\n".join(logs.output)
+        self.assertIn("{vc_position}/{module}", output)
+        self.assertIn(str(module), output)
+        for candidate in self.CANDIDATES:
+            self.assertIn(candidate, output)
+
+    def _assert_every_candidate_is_reported(self, target):
+        (entry,) = JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(target), assigned_object_id=target.pk
+        )
+        for candidate in self.CANDIDATES:
+            self.assertIn(f"`{candidate}`: {UNCLAIMED_BASE_REASON}", entry.comments)
+
+    def test_the_virtual_chassis_reapply_keeps_both_candidates_and_reports_them(self):
+        self._flat_rule()
+        module, _ = self._install_on(self.device, self.module_type, "0")
+        self.assertEqual(self._names(module), ["1/0:0", "1/0:1"])
+        self._add_plain_interface(module, "3/0")
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            self._renumber(3)
+
+        self.assertEqual(self._names(module), list(self.CANDIDATES))
+        self._assert_the_claim_names_every_candidate(logs, module)
+        self._assert_every_candidate_is_reported(self.device)
+
+    def test_an_install_reapply_keeps_both_candidates_and_reports_the_raw_name(self):
+        module, _ = self._candidates_without_a_rule()
+        self._flat_rule()
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            reapply([ModuleTrigger.after_install(module)])
+
+        self.assertEqual(self._names(module), list(self.CANDIDATES))
+        self._assert_the_claim_names_every_candidate(logs, module)
+        (entry,) = JournalEntry.objects.filter(
+            assigned_object_type=ContentType.objects.get_for_model(module), assigned_object_id=module.pk
+        )
+        # An install touches only interfaces that still carry a raw name.
+        self.assertIn(f"`3/0`: {UNCLAIMED_BASE_REASON}", entry.comments)
+        self.assertNotIn("1/0:", entry.comments)
+
+    def test_apply_rules_keeps_both_candidates_and_reports_them(self):
+        module, _ = self._candidates_without_a_rule()
+        rule = self._flat_rule()
+
+        self.assertEqual(find_interfaces_for_rule(rule), ([], 3))
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(self._names(module), list(self.CANDIDATES))
+        self._assert_the_claim_names_every_candidate(logs, module)
+        self.assertEqual(
+            sorted((member.current_name, member.reason) for member in outcome.skipped_members),
+            [(candidate, UNCLAIMED_BASE_REASON) for candidate in self.CANDIDATES],
+        )
 
 
 class VcPositionAdjacentTokenTest(VcDriftTestCase):
@@ -469,10 +607,6 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
         )
         cls.adjacent_type = _token_module_type(manufacturer, "VcAdj-QSFP", "xe-{vc_position}{vc_position}/0/{module}")
         cls.separated_type = _token_module_type(manufacturer, "VcAdj-SFP", "xe-{vc_position}/{vc_position}/{module}")
-        # A template name may legally spell the marker the matcher builder inserts for itself.
-        cls.sentinel_type = _token_module_type(
-            manufacturer, "VcAdj-QSFP28", "xe-InrVcPositionSentinel1End-{vc_position}/{module}"
-        )
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_adjacent_tokens_build_no_matcher_at_all(self):
@@ -494,13 +628,64 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
         self.assertTrue(patterns[0].fullmatch("xe-2147483647/0/4"))  # the largest position NetBox stores
         self.assertIsNone(patterns[0].fullmatch("xe-12345678901/0/4"))
 
-    @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
-    def test_a_sentinel_shaped_literal_builds_no_matcher_instead_of_raising(self):
-        module, bay = self._install_on(self.device, self.sentinel_type, "3")
 
-        self.assertEqual(self._names(module), ["xe-InrVcPositionSentinel1End-1/3"])
-        self.assertEqual(_raw_name_patterns(module), [])
-        self.assertEqual(apply_interface_name_rules(module, bay), 0)
+@skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
+class VcPositionResolutionTest(VcDriftTestCase):
+    """A resolved template gives the name that NetBox resolves at another chassis position or off a chassis."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = _build_device(
+            "VcRes", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vcres-vc"), vc_position=1
+        )
+        cls.module_type = _token_module_type(
+            manufacturer,
+            "VcRes-QSFP",
+            "xe-{vc_position}/{module}",
+            "ge-{vc_position:9}/{module}",
+            "et-{vc_position}{vc_position:7}/0/{module}",
+            "mgmt{module}",
+        )
+        # NetBox resolves {module} first, so this bay brings one more token into each name.
+        ModuleBay.objects.create(device=cls.device, name="Bay T", position="{vc_position}")
+        cls.card_type = ModuleType.objects.create(
+            manufacturer=manufacturer, model="VcRes-Card", part_number="VcRes-Card"
+        )
+        ModuleBayTemplate.objects.create(module_type=cls.card_type, name="LC Bay", position="1")
+
+    def test_a_template_at_another_position_reads_nothing_and_leaves_the_module_and_its_device_alone(self):
+        module, _ = self._install_on(self.device, self.module_type, "T")
+        read = Module.objects.select_related(*BAY_CHAIN_RELATIONS).get(pk=module.pk)
+        with pinned_template_cache([read]):
+            entries = resolved_template_names(read)
+        device = read.device
+
+        with self.assertNumQueries(0):
+            names = {
+                position: [entry.at_chassis_position(position).resolved for entry in entries]
+                for position in (1, 4, None)
+            }
+
+        self.assertEqual(names[1], [entry.resolved for entry in entries])
+        self.assertEqual(names[4], ["xe-4/4", "ge-4/4", "et-44/0/4", "mgmt{vc_position}"])
+        self.assertEqual(names[None], ["xe-0/0", "ge-9/0", "et-07/0/0", "mgmt{vc_position}"])
+        self.assertIs(read.device, device)
+        self.assertEqual((device.vc_position, device.virtual_chassis_id), (1, self.device.virtual_chassis_id))
+
+    def test_a_nested_template_at_another_position_reads_nothing(self):
+        card, _ = self._install_on(self.device, self.card_type, "3")
+        inner_bay = ModuleBay.objects.get(device=self.device, module=card, name="LC Bay")
+        with self.captureOnCommitCallbacks(execute=True):
+            leaf = Module.objects.create(device=self.device, module_bay=inner_bay, module_type=self.module_type)
+        read = Module.objects.select_related(*BAY_CHAIN_RELATIONS).get(pk=leaf.pk)
+        with pinned_template_cache([read]):
+            entries = resolved_template_names(read)
+
+        with self.assertNumQueries(0):
+            names = [entry.at_chassis_position(4).resolved for entry in entries]
+
+        self.assertEqual(names, ["xe-4/1", "ge-4/1", "et-44/0/1", "mgmt1"])
+        self.assertEqual(read.device.vc_position, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -760,9 +945,9 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         rule = self._flat_rule(self.wrap_type, "brk-{base}:{channel}")
         module, _ = self._install_on(self.device, self.wrap_type, "3")
         self.assertEqual(self._names(module), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
+        self._switch_to_channelized(rule)
         self._renumber(2)
         self.assertEqual(self._names(module), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
-        self._switch_to_channelized(rule)
 
         candidates = find_convertible_families(rule).candidates
 
@@ -776,8 +961,8 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         rule = self._flat_rule(self.twice_type, "brk-{base}-{base}:{channel}")
         module, _ = self._install_on(self.device, self.twice_type, "4")
         self.assertEqual(self._names(module), [f"brk-xe-1/0/4-xe-1/0/4:{channel}" for channel in range(4)])
-        self._renumber(2)
         self._switch_to_channelized(rule)
+        self._renumber(2)
 
         candidates = find_convertible_families(rule).candidates
 
@@ -816,14 +1001,14 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self._join(VirtualChassis.objects.create(name="vcconv-vc2"), 5, device=standalone)
         self._switch_to_channelized(rule)
 
-        with self.assertLogs("netbox_interface_name_rules.family.installed", level="WARNING") as logs:
+        with self.assertLogs(CLAIM_LOGGER, level="WARNING") as logs:
             self.assertEqual(find_convertible_families(rule).candidates, ())
 
-        warnings = " ".join(logs.output)
-        self.assertIn("Family base", warnings)
-        self.assertIn("xe-{vc_position:0}/0/{module}", warnings)
-        self.assertIn("xe-{vc_position:9}/0/{module}", warnings)
-        self.assertIn(str(module), warnings)
+        self.assertIn(
+            f"Interface 'brk-xe-0/0/6:0' on {module} could be the raw or renamed name of any of the templates "
+            "['xe-{vc_position:0}/0/{module}', 'xe-{vc_position:9}/0/{module}']",
+            " ".join(logs.output),
+        )
 
     def test_an_unrelated_family_survives_overlapping_historical_claims(self):
         """A multi-base claim rejects its shared base but leaves an unrelated family available."""
@@ -841,10 +1026,10 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
                 Interface.objects.get(module=module, name=f"brk-xe-1/1/3:{channel}"),
                 f"brk-xe-2/0/3:{channel}",
             )
-        self._renumber(5)
         self._switch_to_channelized(rule)
+        self._renumber(5)
 
-        with self.assertLogs("netbox_interface_name_rules.family.installed", level="WARNING") as logs:
+        with self.assertLogs(CLAIM_LOGGER, level="WARNING") as logs:
             candidates = find_convertible_families(rule).candidates
 
         self.assertEqual(len(candidates), 1)
@@ -852,13 +1037,13 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self.assertEqual(list(candidates[0].current_names), [f"brk-et-1/0/3:{channel}" for channel in range(4)])
         self.assertEqual(candidates[0].new_names[0], "et-0/0/3")
         self.assertIn(
-            f"Family base 'xe-1/0/3' on {module} could be the drifted name of any of the templates "
+            f"Interface 'brk-xe-1/0/3:0' on {module} could be the raw or renamed name of any of the templates "
             "['xe-1/{vc_position}/{module}', 'xe-{vc_position}/0/{module}']",
             " ".join(logs.output),
         )
 
-    def test_current_base_precedes_an_earlier_templates_historical_base(self):
-        """An exact current base owns its rows before an earlier template's historical match."""
+    def test_a_family_a_current_and_a_historical_base_both_spell_is_not_offered(self):
+        """The rule gives the family to one template now and to the other at position 1: neither converts it."""
         module_type = _token_module_type(
             self.manufacturer,
             "VcConv-CURRENT-FIRST",
@@ -871,12 +1056,14 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         Interface.objects.filter(module=module, name__contains="xe-2/0/3").delete()
         self._switch_to_channelized(rule, parent_name_template="parent-{base}")
 
-        candidates = find_convertible_families(rule).candidates
+        with self.assertLogs(CLAIM_LOGGER, level="WARNING") as logs:
+            self.assertEqual(find_convertible_families(rule).candidates, ())
 
-        self.assertEqual(len(candidates), 1)
-        self.assertTrue(candidates[0].convertible, candidates[0].reason)
-        self.assertEqual(list(candidates[0].current_names), [f"brk-xe-1/0/3:{channel}" for channel in range(4)])
-        self.assertEqual(candidates[0].new_names[0], "parent-xe-1/0/3")
+        self.assertIn(
+            f"Interface 'brk-xe-1/0/3:0' on {module} could be the raw or renamed name of any of the templates "
+            "['xe-1/0/{module}', 'xe-{vc_position:0}/0/{module}']",
+            " ".join(logs.output),
+        )
 
     def test_a_rule_without_a_base_is_identified_after_a_renumber(self):
         """Drift-immune by construction — asserted, not assumed, so the fix cannot regress it."""
@@ -892,8 +1079,8 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         self.assertTrue(candidates[0].convertible, candidates[0].reason)
         self.assertEqual(candidates[0].new_names[0], "pe-0/0/7")
 
-    def test_a_current_base_is_still_planned_when_an_earlier_template_claims_it_historically(self):
-        """A historical claim on another template's current base must not cancel both families."""
+    def test_a_family_a_current_and_a_historical_base_both_spell_is_not_planned(self):
+        """One claim over every form: a name the rule gives two templates is neither template's."""
         module_type = _token_module_type(
             self.manufacturer,
             "VcConv-CURRENT-OVERLAP",
@@ -907,10 +1094,7 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
         Interface.objects.filter(module=module, name__contains="xe-2/0/3").delete()
         variables = build_variables(module.module_bay, device=module.device)
 
-        plans = plan_installed_families(module, rule, variables).plans
+        with self.assertLogs(CLAIM_LOGGER, level="WARNING"):
+            plans = plan_installed_families(module, rule, variables).plans
 
-        self.assertEqual(len(plans), 1)
-        self.assertEqual(
-            sorted(member.snapshot.name for member in plans[0].members),
-            [f"brk-xe-1/0/3:{channel}" for channel in range(4)],
-        )
+        self.assertEqual(plans, ())
