@@ -2,8 +2,10 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Resolve current and historical NetBox interface-template names.
 
-The refetch and template queries here use the default manager, and the block cache is keyed by
-primary key alone. Both hold because NetBox configures one database alias and no router.
+The refetch and template queries here use the default manager, so NetBox's router sends them to the
+active netbox-branching branch, or to main. The block cache is keyed by primary key alone. That holds
+because every read of one block goes to one alias: netbox-branching activates one branch for a whole
+request or job, and the plugin does not change the active branch inside a block.
 """
 
 import contextlib
