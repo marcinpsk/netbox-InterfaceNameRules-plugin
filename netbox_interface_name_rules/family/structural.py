@@ -174,6 +174,7 @@ def _create_channels(plan, parent):  # pragma: no cover - requires channelizatio
 def _create_family(plan, base):  # pragma: no cover - requires channelization support
     """Rewrite *base* into the family parent, create its channels, and return every member outcome."""
     parent_status = FamilyStatus.CHANGED if plan.parent_target_name != base.name else FamilyStatus.UNCHANGED
+    base.snapshot()
     base.channels = plan.channel_count
     base.name = plan.parent_target_name
     base.full_clean()
@@ -316,6 +317,7 @@ def _build_flat_family(plan, base):
     target_name = plan.target_names[0]
     status = FamilyStatus.UNCHANGED
     if target_name != base.name:
+        base.snapshot()
         base.name = target_name
         base.full_clean()
         base.save()

@@ -56,6 +56,7 @@ def restore_deferred_channel_names(reconciliations):
                 )
                 continue
             previous_name = child.name
+            child.snapshot()
             try:
                 with transaction.atomic():
                     child.name = final_name

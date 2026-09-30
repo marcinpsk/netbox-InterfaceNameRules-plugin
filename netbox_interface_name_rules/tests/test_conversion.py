@@ -19,6 +19,7 @@ import uuid
 from unittest import skipIf, skipUnless
 from unittest.mock import patch
 
+from core.choices import ObjectChangeActionChoices
 from core.models import Job, ObjectChange, ObjectType
 from dcim.choices import InterfaceModeChoices
 from dcim.models import Cable, Interface, Module
@@ -1200,6 +1201,19 @@ class ConversionChangelogTest(ConversionTestCase):
         """The carried rows are held to the standard the family write already meets."""
         self.assertTrue(self._changes_for(self.channel).exists())
         self.assertTrue(self._changes_for(self._parent(self.module)).exists())
+
+    def test_the_parent_is_recorded_with_its_name_before_and_after(self):
+        """The change log shows which row became the parent, and what it was called before."""
+        change = self._changes_for(self._parent(self.module)).get(action=ObjectChangeActionChoices.ACTION_UPDATE)
+
+        self.assertEqual((change.prechange_data["name"], change.postchange_data["name"]), ("xe-0/0/3:0", "et-0/0/3"))
+
+    def test_the_carried_address_is_recorded_with_its_interface_before_and_after(self):
+        """An operator auditing the address has to see the interface it moved from."""
+        change = self._changes_for(self.address).get(action=ObjectChangeActionChoices.ACTION_UPDATE)
+
+        before, after = change.prechange_data["assigned_object_id"], change.postchange_data["assigned_object_id"]
+        self.assertEqual((before, after), (self.base.pk, self.channel.pk))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

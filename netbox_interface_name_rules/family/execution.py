@@ -83,6 +83,7 @@ def _rename_member(member, interface):
         return _blocked_member(member, COLLISION_REASON)
 
     previous_name = interface.name
+    interface.snapshot()
     try:
         with transaction.atomic():
             interface.name = target_name

@@ -669,6 +669,7 @@ class RuleToggleView(generic.ObjectView):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"error": "Permission denied"}, status=403)
             raise PermissionDenied
+        rule.snapshot()
         rule.enabled = not rule.enabled
         rule.save(update_fields=["enabled"])
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":

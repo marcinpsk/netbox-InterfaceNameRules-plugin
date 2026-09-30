@@ -657,6 +657,7 @@ def _flag_rule_potentially_deprecated(rule):
             slug="potentially-deprecated",
             defaults={"name": "potentially-deprecated", "color": "ffc107"},
         )
+        rule.snapshot()
         rule.tags.add(tag)
         logger.info(
             "Rule '%s' flagged as potentially-deprecated: NetBox already generates the correct interface names.",

@@ -252,11 +252,13 @@ def _carry_assignments(base, channel):  # pragma: no cover - requires channeliza
     """
     addresses = base.ip_addresses.select_for_update().order_by("pk")
     for address in addresses:
+        address.snapshot()
         address.assigned_object = channel
         address.full_clean()
         address.save()
     assignments = base.fhrp_group_assignments.select_for_update().order_by("pk")
     for assignment in assignments:
+        assignment.snapshot()
         assignment.interface = channel
         assignment.full_clean()
         assignment.save()
@@ -269,6 +271,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     it, so addresses, VLANs, MTU, description and tags move; custom fields can mean either thing
     and are copied.  The physical row keeps its pk, cable, type, module link and mark_connected.
     """
+    base.snapshot()
     carried = {
         "description": base.description,
         "mtu": base.mtu,
@@ -289,6 +292,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     base.vrf = None
     _validate_or_block(base, "parent")
     base.save()  # BaseInterface.save() drops the tagged VLANs of a row that no longer tags
+    base.snapshot()
     base.tags.clear()
 
     channel = Interface(
@@ -321,6 +325,7 @@ def _rewrite(plan, live):  # pragma: no cover - requires channelization support
     ]
     for member in plan.siblings:
         sibling = live[member.snapshot.pk]
+        sibling.snapshot()
         sibling.type = InterfaceTypeChoices.TYPE_CHANNEL
         sibling.parent = base
         sibling.channel_id = member.channel_id
