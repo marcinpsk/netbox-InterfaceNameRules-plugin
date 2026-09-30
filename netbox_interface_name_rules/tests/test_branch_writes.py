@@ -299,12 +299,12 @@ class ForegroundConvertInABranchTest(_ConversionCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
-class _KeptChannelCase(_BranchWriteCase):
-    """Channelized families that NetBox named ``<position>`` and ``<position>:<channel>``, and a channelized rule.
+class _ChannelCase(_BranchWriteCase):
+    """Empty module bays, a channelized module type, and an interface on the target of channel 2 at each position.
 
-    An interface outside each module takes the target of channel 2, so the rule keeps that channel at
-    its old name while it renames the parent. NetBox's cascade then renames the kept channel after the
-    parent, and the plugin's reconciliation gives it back the name it kept.
+    NetBox names a family ``<position>`` and ``<position>:<channel>``. The rule that ``add_rule`` creates
+    keeps channel 2 at its old name while it renames the parent. NetBox's cascade then renames the kept
+    channel after the parent, and the plugin's reconciliation gives it back the name it kept.
     """
 
     POSITIONS = ("1",)
@@ -314,26 +314,22 @@ class _KeptChannelCase(_BranchWriteCase):
         device_type = make_device_type(manufacturer, self.PREFIX)
         make_module_bay_templates(device_type, [f"Bay {index}" for index in range(max(map(int, self.POSITIONS)) + 1)])
         self.device = make_device(self.PREFIX, device_type)
-        module_type = _channelized_module_type(manufacturer, f"{self.PREFIX}-QSFP")
-        # No rule exists yet, so every family keeps NetBox's raw names.
-        self.modules = {
-            position: Module.objects.create(
-                device=self.device,
-                module_bay=ModuleBay.objects.get(device=self.device, name=f"Bay {position}"),
-                module_type=module_type,
-            )
-            for position in self.POSITIONS
-        }
+        self.module_type = _channelized_module_type(manufacturer, f"{self.PREFIX}-QSFP")
         for position in self.POSITIONS:
             Interface.objects.create(device=self.device, name=f"xe-0/0/{position}:1", type=PLAIN_TYPE)
+
+    def add_rule(self):
         self.rule = InterfaceNameRule.objects.create(
-            module_type=module_type,
+            module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
             parent_name_template="et-0/0/{bay_position}",
             breakout_mode=CHANNELIZED,
             channel_count=4,
             channel_start=0,
         )
+
+    def bay(self, position):
+        return ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
 
     @staticmethod
     def kept(position):
@@ -351,6 +347,26 @@ class _KeptChannelCase(_BranchWriteCase):
         """Return the names of the family at *position* when channel 2 carries the name of NetBox's cascade."""
         return sorted([f"et-0/0/{position}:2", f"et-0/0/{position}", *(f"xe-0/0/{position}:{c}" for c in (0, 2, 3))])
 
+    def names(self, position):
+        """Return the sorted interface names in the branch of the module in the bay at *position*."""
+        with self.in_branch():
+            interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
+            return sorted(interfaces.values_list("name", flat=True))
+
+
+class _KeptChannelCase(_ChannelCase):
+    """The families installed on main before the rule exists, so they keep NetBox's raw names, and the rule."""
+
+    def build(self):
+        super().build()
+        self.modules = {
+            position: Module.objects.create(
+                device=self.device, module_bay=self.bay(position), module_type=self.module_type
+            )
+            for position in self.POSITIONS
+        }
+        self.add_rule()
+
     def parent(self, position):
         return Interface.objects.get(module=self.modules[position], channels__isnull=False)
 
@@ -358,10 +374,6 @@ class _KeptChannelCase(_BranchWriteCase):
         """Apply the rule in the branch to the family at *position*."""
         with self.in_branch():
             return apply_rule_to_existing(self.rule, interface_ids=[self.parent(position).pk])
-
-    def names(self, position):
-        with self.in_branch():
-            return names_of(self.modules[position])
 
 
 class CommitOrderInEveryNestingTest(_KeptChannelCase):
