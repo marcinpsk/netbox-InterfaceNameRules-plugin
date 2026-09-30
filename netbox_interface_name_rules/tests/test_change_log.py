@@ -16,7 +16,9 @@ from core.models import Job, ObjectChange
 from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox import context as netbox_context
 from netbox.registry import registry
@@ -117,13 +119,43 @@ class RuleToggleChangeLogTest(TestCase):
         cls.rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="et-0/0/{bay_position}")
         cls.user = User.objects.create_user(username="chglogtoggle-operator", is_superuser=True)
 
+    def _toggle(self):
+        self.client.post(reverse("plugins:netbox_interface_name_rules:interfacenamerule_toggle", args=[self.rule.pk]))
+
     def test_the_toggle_records_the_flag_before_and_after(self):
         self.client.force_login(self.user)
 
-        self.client.post(reverse("plugins:netbox_interface_name_rules:interfacenamerule_toggle", args=[self.rule.pk]))
+        self._toggle()
 
         change = updates_of(self.rule).get()
         self.assertEqual((change.prechange_data["enabled"], change.postchange_data["enabled"]), (True, False))
+
+    def test_each_toggle_records_the_flag_that_the_one_before_it_wrote(self):
+        self.client.force_login(self.user)
+
+        self._toggle()
+        self._toggle()
+
+        flags = [
+            (change.prechange_data["enabled"], change.postchange_data["enabled"]) for change in updates_of(self.rule)
+        ]
+        self.assertEqual(flags, [(True, False), (False, True)])
+
+    def test_the_toggle_locks_the_rule_before_it_writes_the_flag(self):
+        """A concurrent toggle waits for the lock, so it reads and flips the flag that this one wrote."""
+        self.client.force_login(self.user)
+        table = f'"{InterfaceNameRule._meta.db_table}"'
+
+        with CaptureQueriesContext(connection) as queries:
+            self._toggle()
+
+        statements = [query["sql"] for query in queries.captured_queries if table in query["sql"]]
+        writes = [
+            "lock" if sql.endswith("FOR UPDATE") else "update"
+            for sql in statements
+            if sql.endswith("FOR UPDATE") or sql.startswith("UPDATE")
+        ]
+        self.assertEqual(writes, ["lock", "update"])
 
 
 class ApplyRuleJobChangeLogTest(_ModuleFixture, TestCase):

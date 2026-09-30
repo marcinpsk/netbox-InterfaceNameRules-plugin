@@ -8,6 +8,7 @@ import yaml
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -669,9 +670,11 @@ class RuleToggleView(generic.ObjectView):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"error": "Permission denied"}, status=403)
             raise PermissionDenied
-        rule.snapshot()
-        rule.enabled = not rule.enabled
-        rule.save(update_fields=["enabled"])
+        with transaction.atomic():
+            rule = InterfaceNameRule.objects.select_for_update().get(pk=rule.pk)
+            rule.snapshot()
+            rule.enabled = not rule.enabled
+            rule.save(update_fields=["enabled"])
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"enabled": rule.enabled, "pk": pk})
         state = "enabled" if rule.enabled else "disabled"
