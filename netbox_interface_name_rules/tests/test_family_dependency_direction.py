@@ -3,11 +3,12 @@
 """Keep the family package below the engine, as specified in ADR 0011."""
 
 import ast
-from importlib.util import resolve_name
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from django.test import SimpleTestCase
+
+from netbox_interface_name_rules.tests.import_records import import_records
 
 _PLUGIN = "netbox_interface_name_rules"
 _FAMILY = Path(__file__).resolve().parents[1] / "family"
@@ -15,14 +16,12 @@ _FAMILY = Path(__file__).resolve().parents[1] / "family"
 
 def _plugin_dependencies(path):
     dependencies = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
-        if isinstance(node, ast.Import):
-            modules = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            module = resolve_name("." * node.level + (node.module or ""), f"{_PLUGIN}.family")
-            modules = [module, *(f"{module}.{alias.name}" for alias in node.names)]
+    for record in import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))):
+        if record.name is None:
+            modules = [record.module]
         else:
-            continue
+            module = record.absolute(f"{_PLUGIN}.family")
+            modules = [module, f"{module}.{record.name}"]
         for module in modules:
             if not module.startswith(f"{_PLUGIN}."):
                 continue

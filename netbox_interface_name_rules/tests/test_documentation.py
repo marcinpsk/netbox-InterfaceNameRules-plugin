@@ -442,6 +442,16 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             adr,
         )
 
+    def test_branching_record_separates_its_executed_checks_from_unrun_claims(self):
+        record = (_PROJECT_ROOT / "docs" / "design" / "netbox-branching.md").read_text(encoding="utf-8")
+        evidence = " ".join(record.split("\n## Evidence\n", 1)[1].split("\n## ", 1)[0].split())
+        rounds = record.split("\n## Rounds\n", 1)[1]
+        executed = re.findall(r"(?<!Not )\bexecuted\b", rounds, flags=re.IGNORECASE)
+
+        self.assertIn("no claim below is from a run with netbox-branching until the CI leg exists.", evidence)
+        self.assertIn("The reviewers executed three narrower checks without netbox-branching:", evidence)
+        self.assertEqual(len(executed), 3)
+
     def test_glossary_separates_an_unclaimed_outcome_from_a_rule_that_does_not_match(self):
         glossary = (_PROJECT_ROOT / "CONTEXT.md").read_text(encoding="utf-8")
         entry = glossary.split("**Rename outcome**:", 1)[1].split("\n**", 1)[0]
