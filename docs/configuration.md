@@ -275,9 +275,11 @@ outside a request, for example from the shell, writes no record, as for any
 other change in NetBox.
 
 NetBox event rules (webhooks, scripts and notifications) get the same changes.
-A family that the plugin cannot finish keeps none of its changes, and it sends
-no event. The same applies to the conversions that the Apply page runs and
-rolls back to show each verdict.
+A change that the plugin rolls back sends no event. For example, NetBox can
+refuse a new family or a conversion after the plugin wrote part of it, and the
+Apply page runs each conversion and rolls it back to show its verdict. A
+rename of an existing family keeps each member that it renamed when NetBox
+refuses another member, and sends an event for each one that it kept.
 
 ### Apply Rules and the Applicable Column
 
