@@ -19,7 +19,7 @@ from django.db import connection, connections, router
 from django.test import SimpleTestCase, TransactionTestCase
 
 from netbox_interface_name_rules.branching import check_version
-from netbox_interface_name_rules.tests.helpers import make_device, make_device_type, make_manufacturer
+from netbox_interface_name_rules.tests.helpers import activate, make_device, make_device_type, make_manufacturer
 
 BRANCHING_INSTALLED = apps.is_installed("netbox_branching")
 BRANCHING_SKIP_REASON = "netbox-branching is not installed"
@@ -113,11 +113,9 @@ class BranchProvisioningTest(BranchTestCase):
         self.assertTrue(schema_exists(branch.schema_name))
 
     def test_a_write_in_the_active_branch_lands_in_the_branch_schema_only(self):
-        from netbox_branching.utilities import activate_branch
-
         branch = self.provision_branch("Write", self.user)
 
-        with activate_branch(branch):
+        with activate(branch):
             self.assertEqual(router.db_for_write(Interface), branch.connection_name)
             Interface.objects.create(device=self.device, name="branch-only", type="1000base-t")
             self.assertTrue(Interface.objects.filter(device=self.device, name="branch-only").exists())
@@ -126,10 +124,8 @@ class BranchProvisioningTest(BranchTestCase):
         self.assertFalse(Interface.objects.filter(device=self.device, name="branch-only").exists())
 
     def test_the_teardown_drops_the_schema_and_closes_the_connection(self):
-        from netbox_branching.utilities import activate_branch
-
         branch = self.provision_branch("Teardown", self.user)
-        with activate_branch(branch):
+        with activate(branch):
             self.assertFalse(Interface.objects.filter(device=self.device).exists())
         branch_connection = connections[branch.connection_name]
         self.assertIsNotNone(branch_connection.connection)

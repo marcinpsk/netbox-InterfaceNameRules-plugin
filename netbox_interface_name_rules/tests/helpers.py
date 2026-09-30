@@ -25,10 +25,12 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
+from django.db import connections
 from extras.choices import EventRuleActionChoices
 from extras.models import EventRule, Webhook
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.transactions import READ_LOCK_TIMEOUT, SET_LOCK_TIMEOUT
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:
@@ -118,6 +120,27 @@ def make_unrunnable_rule(prefix: str) -> InterfaceNameRule:
     # Only a queryset update stores a pattern that validation refuses.
     InterfaceNameRule.objects.filter(pk=rule.pk).update(module_type_pattern="(")
     return rule
+
+
+def activate(branch):
+    """Return netbox-branching's context manager that makes *branch* active, or main for None."""
+    # Imported here, so that this module imports where netbox-branching is not installed.
+    from netbox_branching.utilities import activate_branch
+
+    return activate_branch(branch)
+
+
+def lock_timeout(alias: str) -> str:
+    """Return the ``lock_timeout`` of the session of *alias*, read as the write scope reads it."""
+    with connections[alias].cursor() as cursor:
+        cursor.execute(READ_LOCK_TIMEOUT)
+        return cursor.fetchone()[0]
+
+
+def set_lock_timeout(alias: str, value: str) -> None:
+    """Set the ``lock_timeout`` of the session of *alias*, as the write scope sets it."""
+    with connections[alias].cursor() as cursor:
+        cursor.execute(SET_LOCK_TIMEOUT, [value])
 
 
 def run_job_logged(test_case, runner, raises=None, **kwargs):
