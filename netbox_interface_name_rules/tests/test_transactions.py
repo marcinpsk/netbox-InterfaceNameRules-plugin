@@ -6,6 +6,7 @@ import contextvars
 import uuid
 from contextlib import contextmanager
 from itertools import product
+from unittest import skipUnless
 
 from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
 from dcim.models import Interface
@@ -13,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.db import connection, transaction
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
+from extras import events as netbox_events
 from extras.events import serialize_for_event
 from extras.models import Tag
 from netbox.context import current_request, events_queue
@@ -159,6 +161,26 @@ class AtomicWithEventsTest(TestCase):
             (webhook.kwargs["event_type"], webhook.kwargs["data"]["description"]), (OBJECT_UPDATED, "before the block")
         )
 
+    def test_a_delete_before_a_block_that_recreates_the_row_and_rolls_back_stays_a_delete(self):
+        interface = Interface.objects.create(device=self.device, name="eth2", type="1000base-t")
+        pk = interface.pk
+
+        def body():
+            interface.delete()
+            with atomic_with_events():
+                interface.pk = pk
+                interface.save()
+                transaction.set_rollback(True)
+
+        self._run_as_a_request(body)
+
+        [webhook] = queued_webhook_jobs(self.event_rule)
+        self.assertEqual((webhook.kwargs["event_type"], webhook.kwargs["data"]["id"]), (OBJECT_DELETED, pk))
+        self.assertFalse(Interface.objects.filter(pk=pk).exists())
+
+    @skipUnless(
+        hasattr(netbox_events, "EventContext"), "NetBox before 4.5 serializes a payload when it queues the event"
+    )
     def test_an_event_whose_row_is_gone_after_a_rollback_stops_the_request(self):
         """A row removed without a NetBox event leaves the helper no saved state to send, so it refuses to go on."""
         pk = self.interface.pk
