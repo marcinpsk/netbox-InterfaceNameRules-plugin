@@ -13,7 +13,7 @@ from contextlib import ExitStack
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange
-from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay
+from dcim.models import Device, Interface, InterfaceTemplate, Module
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, transaction
 from django.db.models.signals import post_save
@@ -76,21 +76,9 @@ class _InstallCase(_BranchWriteCase):
             InterfaceTemplate.objects.create(module_type=self.module_type, name=template, type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=self.module_type, name_template="{base}.br")
 
-    def bay(self, position):
-        return ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
-
     def install(self, position):
         """Install a module in the bay at *position* through the ORM, on the alias that the router gives."""
         return Module.objects.create(device=self.device, module_bay=self.bay(position), module_type=self.module_type)
-
-    def interfaces_in_branch(self, position):
-        """Return ``(pk, name)`` of each interface in the branch of the module in the bay at *position*."""
-        with self.in_branch():
-            interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
-            return list(interfaces.values_list("pk", "name"))
-
-    def names_in_branch(self, position):
-        return sorted(name for _, name in self.interfaces_in_branch(position))
 
     def renames_in_branch(self, position):
         """Return ``(name before, name after)`` of each interface update in the branch at *position*, sorted."""
@@ -208,20 +196,24 @@ class TriggerTransactionsInABranchTest(_InstallCase):
         self.assertEqual(Device.objects.get(pk=self.device.pk).name, self.device.name)
 
 
-class ChannelizedInstallInABranchTest(_ChannelCase):
-    PREFIX = "BrChanInstall"
-    POSITIONS = ("1", "2", "3", "4")
+class _RuledChannelCase(_ChannelCase):
+    """The channelized case with its rule on main, so an install in the branch is a rename trigger."""
 
     def build(self):
         super().build()
         self.add_rule()
+
+
+class ChannelizedInstallInABranchTest(_RuledChannelCase):
+    PREFIX = "BrChanInstall"
+    POSITIONS = ("1", "2", "3", "4")
 
     def test_trigger_runner_reconciliation_during_branch_callback_drain(self):
         """The plan runs in the commit callbacks of the branch; the reconciliation still follows NetBox's cascade."""
         response = self.client.post(reverse("dcim:module_add"), install_form(self.bay("1"), self.module_type))
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(self.names("1"), self.kept("1"))
+        self.assertEqual(self.names_in_branch("1"), self.kept("1"))
         for position, nesting in zip(("2", "3", "4"), NESTINGS, strict=True):
             with self.subTest(nesting=nesting), self.in_branch():
                 with ExitStack() as caller:
@@ -230,17 +222,13 @@ class ChannelizedInstallInABranchTest(_ChannelCase):
                     Module.objects.create(
                         device=self.device, module_bay=self.bay(position), module_type=self.module_type
                     )
-                self.assertEqual(self.names(position), self.kept(position))
+                self.assertEqual(self.names_in_branch(position), self.kept(position))
 
 
-class ScriptTriggerInABranchTest(_ChannelCase):
+class ScriptTriggerInABranchTest(_RuledChannelCase):
     """A NetBox script installs a module in a branch; each connection starts from its own ``lock_timeout``."""
 
     PREFIX = "BrScript"
-
-    def build(self):
-        super().build()
-        self.add_rule()
 
     def setUp(self):
         super().setUp()
@@ -270,7 +258,8 @@ class ScriptTriggerInABranchTest(_ChannelCase):
         class InstallModule(Script):
             def run(self, data, commit):
                 transaction.on_commit(
-                    lambda: seen.setdefault("script callback", (case.timeouts(), case.names("1"))), using="default"
+                    lambda: seen.setdefault("script callback", (case.timeouts(), case.names_in_branch("1"))),
+                    using="default",
                 )
                 Module.objects.create(device_id=bay.device_id, module_bay_id=bay.pk, module_type=case.module_type)
 
@@ -288,4 +277,4 @@ class ScriptTriggerInABranchTest(_ChannelCase):
                 "script callback": ((DEFAULT_BEFORE, BRANCH_BEFORE), self.cascaded("1")),
             },
         )
-        self.assertEqual(self.names("1"), self.kept("1"))
+        self.assertEqual(self.names_in_branch("1"), self.kept("1"))

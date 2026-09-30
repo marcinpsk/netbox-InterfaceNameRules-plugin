@@ -103,6 +103,19 @@ class _BranchWriteCase(BranchTestCase):
     def in_branch(self):
         return activate(self.branch)
 
+    def bay(self, position):
+        return ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
+
+    def interfaces_in_branch(self, position):
+        """Return ``(pk, name)`` of each interface in the branch of the module in the bay at *position*."""
+        with self.in_branch():
+            interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
+            return list(interfaces.values_list("pk", "name"))
+
+    def names_in_branch(self, position):
+        """Return the sorted interface names in the branch of the module in the bay at *position*."""
+        return sorted(name for _, name in self.interfaces_in_branch(position))
+
     def apply_url(self, rule):
         return reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": rule.pk})
 
@@ -131,9 +144,8 @@ class _PlainModuleCase(_BranchWriteCase):
         self.device_type = device_type
         self.module_type = make_module_type(manufacturer, self.PREFIX)
         InterfaceTemplate.objects.create(module_type=self.module_type, name="{module}", type=PLAIN_TYPE)
-        bay = ModuleBay.objects.get(device=self.device, name="Bay 0")
         # No rule exists yet, so the interface keeps NetBox's raw name.
-        self.module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
+        self.module = Module.objects.create(device=self.device, module_bay=self.bay(0), module_type=self.module_type)
         self.interface = Interface.objects.get(module=self.module)
 
 
@@ -260,10 +272,9 @@ class _ConversionCase(_BranchWriteCase):
             channel_count=4,
             channel_start=0,
         )
-        bay = ModuleBay.objects.get(device=self.device, name="Bay 3")
         # The rename trigger builds the family when the install commits.
         with transaction.atomic():
-            self.module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
+            self.module = Module.objects.create(device=self.device, module_bay=self.bay(3), module_type=module_type)
         self.rule.snapshot()
         self.rule.breakout_mode = CHANNELIZED
         self.rule.parent_name_template = "et-0/0/{bay_position}"
@@ -328,9 +339,6 @@ class _ChannelCase(_BranchWriteCase):
             channel_start=0,
         )
 
-    def bay(self, position):
-        return ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
-
     @staticmethod
     def kept(position):
         """Return the names of the family at *position* after the reconciliation gave channel 2 its kept name."""
@@ -346,12 +354,6 @@ class _ChannelCase(_BranchWriteCase):
     def cascaded(position):
         """Return the names of the family at *position* when channel 2 carries the name of NetBox's cascade."""
         return sorted([f"et-0/0/{position}:2", f"et-0/0/{position}", *(f"xe-0/0/{position}:{c}" for c in (0, 2, 3))])
-
-    def names(self, position):
-        """Return the sorted interface names in the branch of the module in the bay at *position*."""
-        with self.in_branch():
-            interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
-            return sorted(interfaces.values_list("name", flat=True))
 
 
 class _KeptChannelCase(_ChannelCase):
@@ -398,14 +400,14 @@ class CommitOrderInEveryNestingTest(_KeptChannelCase):
                 with ExitStack() as caller:
                     self._enter(caller, nesting)
                     self.apply(position)
-                self.assertEqual(self.names(position), self.kept(position))
+                self.assertEqual(self.names_in_branch(position), self.kept(position))
 
     def test_branch_outer_default_rollback_discards_reconciliation(self):
         with self.in_branch(), transaction.atomic(using=self.alias), transaction.atomic(using="default"):
             self.apply("1")
             transaction.set_rollback(True, using="default")
 
-        self.assertEqual(self.names("1"), self.cascaded("1"))
+        self.assertEqual(self.names_in_branch("1"), self.cascaded("1"))
 
     def test_default_savepoint_rollback_discards_reconciliation_before_branch_commit(self):
         with self.in_branch(), transaction.atomic(using="default"), transaction.atomic(using=self.alias):
@@ -413,7 +415,7 @@ class CommitOrderInEveryNestingTest(_KeptChannelCase):
                 self.apply("1")
                 transaction.set_rollback(True, using="default")
 
-        self.assertEqual(self.names("1"), self.cascaded("1"))
+        self.assertEqual(self.names_in_branch("1"), self.cascaded("1"))
 
 
 class CollisionInABranchTest(_KeptChannelCase):
@@ -442,7 +444,7 @@ class CollisionInABranchTest(_KeptChannelCase):
                 ("warning", "2 interface(s) skipped. The plugin log names each one."),
             ],
         )
-        self.assertEqual(self.names("1"), ["1:2", "1:3", "et-0/0/1", "xe-0/0/1:0", "xe-0/0/1:3"])
+        self.assertEqual(self.names_in_branch("1"), ["1:2", "1:3", "et-0/0/1", "xe-0/0/1:0", "xe-0/0/1:3"])
         with self.in_branch():
             self.assertEqual(Interface.objects.get(pk=occupied[0]).name, "xe-0/0/1:2")
 
@@ -469,7 +471,7 @@ class ReconciliationLockTimeoutTest(_KeptChannelCase):
         self.assertEqual(level, "danger")
         self.assertTrue(text.startswith(f"Failed to apply rule {self.rule}: "), text)
         self.assertIn("Rename each channel back: `et-0/0/1:2` to `1:2`", text)
-        self.assertEqual(self.names("1"), self.cascaded("1"))
+        self.assertEqual(self.names_in_branch("1"), self.cascaded("1"))
         with self.in_branch():
             renamed = set(
                 Interface.objects.filter(module=self.modules["1"]).exclude(pk=channel.pk).values_list("pk", flat=True)
