@@ -7,6 +7,7 @@ import os
 
 import pytest
 
+from netbox_interface_name_rules.tests import snapshot_guard
 from netbox_interface_name_rules.tests.parallel import isolated_test_database_name
 
 
@@ -21,6 +22,24 @@ def django_db_modify_db_settings(django_db_modify_db_settings):
         os.environ.get("PYTEST_XDIST_WORKER"),
     )
     settings.DATABASES["default"]["TEST"] = test_settings
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _changelog_snapshot_guard():
+    """Check every save and many-to-many change of the session, from before the first class setup."""
+    snapshot_guard.connect()
+    yield
+    snapshot_guard.disconnect()
+
+
+@pytest.fixture(autouse=True)
+def _no_write_without_a_current_snapshot(_changelog_snapshot_guard):
+    """Fail a test, or the class setup before it, in which plugin code wrote a row without a current snapshot."""
+    violations = snapshot_guard.take_violations()
+    assert not violations, "\n".join(violations)
+    yield
+    violations = snapshot_guard.take_violations()
+    assert not violations, "\n".join(violations)
 
 
 @pytest.fixture(autouse=True)
