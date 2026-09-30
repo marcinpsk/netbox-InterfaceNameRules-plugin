@@ -1225,6 +1225,7 @@ class ConversionJobTest(ConversionTestCase):
         manufacturer, cls.device = _build_device("ConvJob", ["3", "4"])
         cls.module_type = _plain_module_type(manufacturer, "ConvJob-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
+        cls.operator = User.objects.create_user(username="convjob-operator")
 
     def setUp(self):
         """Install two flat families and switch the rule to the channelized topology."""
@@ -1236,7 +1237,7 @@ class ConversionJobTest(ConversionTestCase):
         """Run the conversion job against a real Job row, the way the worker does."""
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
-        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4())
+        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4(), user=self.operator)
         ConvertFlatFamiliesJob(job).run(rule_id=self.rule.pk, **kwargs)
         return job
 
@@ -1246,6 +1247,18 @@ class ConversionJobTest(ConversionTestCase):
 
         self.assertEqual(self._names(self.module), self._channelized_names("3"))
         self.assertEqual(self._names(self.other_module), self._channelized_names("4"))
+
+    def test_the_job_records_the_parent_as_its_user_with_the_name_before_and_after(self):
+        """A background conversion is as auditable as one confirmed on the page."""
+        job = self._run_job()
+
+        change = ObjectChange.objects.get(
+            changed_object_type=ObjectType.objects.get_for_model(Interface),
+            changed_object_id=self._parent(self.module).pk,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+        )
+        self.assertEqual((change.prechange_data["name"], change.postchange_data["name"]), ("xe-0/0/3:0", "et-0/0/3"))
+        self.assertEqual((change.user, change.request_id), (self.operator, job.job_id))
 
     def test_the_job_leaves_a_blocked_family_flat(self):
         """A batch is still per family: one refusal converts the others and reports the one it skipped."""
@@ -1261,7 +1274,7 @@ class ConversionJobTest(ConversionTestCase):
         """A rule deleted between enqueue and execution must not fail the worker's job."""
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
-        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4())
+        job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4(), user=self.operator)
         rule_id = self.rule.pk
         self.rule.delete()
 
