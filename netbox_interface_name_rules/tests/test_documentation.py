@@ -423,6 +423,15 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_states_whom_the_change_log_of_a_job_names(self):
+        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+
+        self.assertIn(
+            "**Run as Background Job** and **Convert as Background Job** record each change as the user who "
+            "started the job. The request ID of these records is the job ID,",
+            guide,
+        )
+
     def test_transaction_adr_states_unrelated_failure_behavior(self):
         adr = (_PROJECT_ROOT / "docs" / "adr" / "0005-execute-each-family-in-its-own-transaction.md").read_text(
             encoding="utf-8"

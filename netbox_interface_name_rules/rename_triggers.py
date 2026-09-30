@@ -38,6 +38,7 @@ from netbox.context import current_request
 from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 from .rule_selection import parent_type_scopes_a_rule
+from .transactions import atomic_with_events
 
 if TYPE_CHECKING:
     from .engine import ModuleNaming
@@ -535,7 +536,7 @@ def _report(target, outcomes, author):
     )
     logger.warning("Rename trigger on %s: %d interface(s) skipped or failed; see its journal", target, len(reported))
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             JournalEntry.objects.create(assigned_object=target, created_by=author, kind=kind, comments=comments)
     except Exception:
         logger.exception("Failed to write the rename journal entry for %s", target)

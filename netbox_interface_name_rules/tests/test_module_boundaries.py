@@ -11,6 +11,7 @@ import functools
 import pathlib
 import tempfile
 import tomllib
+from collections import Counter
 from importlib.util import resolve_name
 from unittest.mock import patch
 
@@ -29,6 +30,36 @@ PRIVATE_PLUGIN_ATTRIBUTE_PERMITS = frozenset()
 EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
 SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
+_MIGRATION_BULK_WRITE = "a data migration runs outside a request on a historical model, so NetBox logs no change there"
+_MIGRATION_0015 = "migrations/0015_align_rule_constraints_with_clean.py"
+# Each bulk write of a change-logged row that production code keeps, by module and call source, with its reason.
+BULK_WRITE_PERMITS = {
+    (_MIGRATION_0015, "device_rules.filter(module_type_is_regex=True).update(module_type_is_regex=False)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (_MIGRATION_0015, "device_rules.filter(breakout_mode=CHANNELIZED).update(breakout_mode=FLAT)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (_MIGRATION_0015, "rules.filter(breakout_mode=CHANNELIZED, channel_count=0).update(breakout_mode=FLAT)"): (
+        _MIGRATION_BULK_WRITE
+    ),
+    (
+        _MIGRATION_0015,
+        "rules.exclude(breakout_mode=CHANNELIZED).exclude(parent_name_template='').update(parent_name_template='')",
+    ): _MIGRATION_BULK_WRITE,
+    (
+        "migrations/0016_restrict_breakout_mode_values.py",
+        "rules.exclude(breakout_mode__in=(FLAT, CHANNELIZED)).update(breakout_mode=FLAT)",
+    ): _MIGRATION_BULK_WRITE,
+    (
+        "migrations/0018_refuse_device_rule_parent_module_type.py",
+        "rules.update(parent_module_type=None)",
+    ): _MIGRATION_BULK_WRITE,
+}
+BULK_WRITE_METHODS = frozenset({"bulk_create", "bulk_update"})
+# The one module that opens atomic blocks: each block there keeps its NetBox events only when it commits.
+TRANSACTIONS_MODULE = PACKAGE / "transactions.py"
+TRANSACTION_BLOCK_NAMES = frozenset({"atomic", "savepoint", "savepoint_commit", "savepoint_rollback"})
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 
@@ -152,6 +183,40 @@ def _identifier_approximations(path: pathlib.Path) -> list[int]:
         and isinstance(node.value, str)
         and any(shape in node.value for shape in _IDENTIFIER_APPROXIMATIONS)
     ]
+
+
+def _bulk_writes(path: pathlib.Path) -> list[str]:
+    """Return the source of each call that writes rows past ``Model.save()``: bulk_create, bulk_update or update.
+
+    ``QuerySet.update()`` takes keyword arguments only, and ``dict.update()`` and ``set.update()`` take
+    a positional one, so an ``update()`` call without a positional argument counts as a bulk write.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and (node.func.attr in BULK_WRITE_METHODS or (node.func.attr == "update" and not node.args))
+    ]
+
+
+def _transaction_blocks(path: pathlib.Path) -> list[str]:
+    """Return the source of each use of Django's atomic block or savepoint API, as an attribute or an import."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr in TRANSACTION_BLOCK_NAMES)
+        or (isinstance(node, ast.ImportFrom) and any(alias.name in TRANSACTION_BLOCK_NAMES for alias in node.names))
+    ]
+
+
+def _production_bulk_writes() -> Counter:
+    """Count each bulk write of the production modules by ``(module, call source)``."""
+    return Counter(
+        (str(path.relative_to(PACKAGE)), call) for path in _production_modules() for call in _bulk_writes(path)
+    )
 
 
 def _test_modules() -> list[pathlib.Path]:
@@ -624,6 +689,95 @@ class PluginModuleBoundaryTest(SimpleTestCase):
             path.write_text("import re\nNAME = re.compile(r'[A-Za-z_]\\w*')\n", encoding="utf-8")
 
             self.assertEqual(_identifier_approximations(path), [2])
+
+
+class ChangeLoggedBulkWriteTest(SimpleTestCase):
+    """Production code writes change-logged rows through ``Model.save()``, which NetBox logs.
+
+    A bulk write sends no ``pre_save`` or ``post_save``, so NetBox records no change for the rows it
+    writes, and the snapshot guard cannot see them either.
+    """
+
+    def test_production_code_writes_no_rows_in_bulk(self):
+        """A second copy of a permitted call is refused too: each permit covers one call."""
+        self.assertEqual(_production_bulk_writes() - Counter(BULK_WRITE_PERMITS.keys()), Counter())
+
+    def test_every_permitted_bulk_write_still_exists(self):
+        self.assertEqual(Counter(BULK_WRITE_PERMITS.keys()) - _production_bulk_writes(), Counter())
+
+    def test_the_detector_catches_each_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "Interface.objects.filter(pk=1).update(name='x')\n"
+                "Interface.objects.bulk_create(rows)\n"
+                "queryset.bulk_update(rows, ['name'])\n"
+                "queryset.update(**fields)\n",
+                encoding="utf-8",
+            )
+
+            self.assertCountEqual(
+                _bulk_writes(path),
+                [
+                    "Interface.objects.filter(pk=1).update(name='x')",
+                    "Interface.objects.bulk_create(rows)",
+                    "queryset.bulk_update(rows, ['name'])",
+                    "queryset.update(**fields)",
+                ],
+            )
+
+    def test_a_dict_or_set_update_is_not_a_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("names.update(other)\nseen.update({1: 2}, extra=3)\n", encoding="utf-8")
+
+            self.assertEqual(_bulk_writes(path), [])
+
+
+class TransactionBlockTest(SimpleTestCase):
+    """Production code opens an atomic block only through ``transactions.atomic_with_events()``.
+
+    A bare block that rolls back while the work around it continues leaves its NetBox events in the
+    request's queue, and NetBox then sends them for changes that the database never kept.
+    """
+
+    def test_only_the_transactions_module_opens_an_atomic_block(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), block)
+            for path in _production_modules()
+            if path != TRANSACTIONS_MODULE
+            for block in _transaction_blocks(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_the_transactions_module_opens_one_atomic_block(self):
+        self.assertEqual(_transaction_blocks(TRANSACTIONS_MODULE), ["transaction.atomic"])
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "with transaction.atomic():\n    pass\n": ["transaction.atomic"],
+            "@transaction.atomic\ndef write():\n    pass\n": ["transaction.atomic"],
+            "from django.db.transaction import atomic\n": ["from django.db.transaction import atomic"],
+            "from django.db import transaction as tx\ntx.atomic(using='default')\n": ["tx.atomic"],
+            "sid = transaction.savepoint()\n": ["transaction.savepoint"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_transaction_blocks(path), expected)
+
+    def test_the_helper_and_the_other_transaction_calls_are_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "with atomic_with_events():\n    transaction.set_rollback(True)\ntransaction.on_commit(f)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_transaction_blocks(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

@@ -3,13 +3,18 @@
 """Tests for jobs, model properties, family contracts, and API serializer edge-cases."""
 
 from typing import get_args, get_type_hints
-from unittest.mock import MagicMock, patch
 
 from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_job, make_unrunnable_rule, run_job_logged
+
+
+def levels(records):
+    """Return the level name of each log record."""
+    return [record.levelname for record in records]
 
 
 class FamilyTargetContractTest(TestCase):
@@ -42,25 +47,17 @@ class ApplyRuleJobMetaTest(TestCase):
 
     def test_job_run_missing_rule_id(self):
         """ApplyRuleJob.run logs warning and returns without error when rule_id is missing."""
-        from unittest.mock import MagicMock
-
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
-        job = ApplyRuleJob.__new__(ApplyRuleJob)
-        job.logger = MagicMock()
-        job.run()  # No rule_id kwarg
-        job.logger.warning.assert_called_once()
+        self.assertEqual(levels(run_job_logged(self, ApplyRuleJob(make_job("JobMissingRule")))), ["WARNING"])
 
     def test_job_run_nonexistent_rule_id(self):
         """ApplyRuleJob.run logs warning when rule_id doesn't correspond to a rule."""
-        from unittest.mock import MagicMock
-
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
-        job = ApplyRuleJob.__new__(ApplyRuleJob)
-        job.logger = MagicMock()
-        job.run(rule_id=999999)
-        job.logger.warning.assert_called_once()
+        job = ApplyRuleJob(make_job("JobGoneRule"))
+
+        self.assertEqual(levels(run_job_logged(self, job, rule_id=999999)), ["WARNING"])
 
 
 # ---------------------------------------------------------------------------
@@ -679,23 +676,19 @@ class JobRunSuccessAndExceptionTest(TestCase):
     def _make_job(self):
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
-        job = ApplyRuleJob.__new__(ApplyRuleJob)
-        job.logger = MagicMock()
-        return job
+        return ApplyRuleJob(make_job("JobX"))
 
     def test_job_run_success_logs_info(self):
         """ApplyRuleJob.run() with valid rule calls apply_rule_to_existing and logs (lines 30-36)."""
-        job = self._make_job()
-        job.run(rule_id=self.rule.pk)
-        job.logger.info.assert_called_once()
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=self.rule.pk)), ["INFO"])
 
     def test_job_run_exception_reraises_and_logs(self):
         """ApplyRuleJob.run() re-raises exception from apply_rule_to_existing (lines 32-34)."""
-        job = self._make_job()
-        with patch("netbox_interface_name_rules.engine.apply_rule_to_existing", side_effect=RuntimeError("boom")):
-            with self.assertRaises(RuntimeError):
-                job.run(rule_id=self.rule.pk)
-        job.logger.exception.assert_called_once()
+        rule = make_unrunnable_rule("JobX")
+
+        records = run_job_logged(self, self._make_job(), raises=ValueError, rule_id=rule.pk)
+
+        self.assertEqual(levels(records), ["ERROR"])
 
 
 class ConvertFlatFamiliesJobTest(TestCase):
@@ -716,9 +709,7 @@ class ConvertFlatFamiliesJobTest(TestCase):
     def _make_job(self):
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
-        job = ConvertFlatFamiliesJob.__new__(ConvertFlatFamiliesJob)
-        job.logger = MagicMock()
-        return job
+        return ConvertFlatFamiliesJob(make_job("ConvJobX"))
 
     def test_job_meta_name_names_the_conversion(self):
         """The name is what an operator looks for in Core → Jobs."""
@@ -728,36 +719,23 @@ class ConvertFlatFamiliesJobTest(TestCase):
 
     def test_job_run_without_a_rule_id_is_logged(self):
         """An enqueue that lost its argument must not fail the worker."""
-        job = self._make_job()
-
-        job.run()
-
-        job.logger.warning.assert_called_once()
+        self.assertEqual(levels(run_job_logged(self, self._make_job())), ["WARNING"])
 
     def test_job_run_with_a_deleted_rule_is_logged(self):
         """A rule deleted between enqueue and execution is a warning, not a traceback."""
-        job = self._make_job()
-
-        job.run(rule_id=999999)
-
-        job.logger.warning.assert_called_once()
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=999999)), ["WARNING"])
 
     def test_job_run_reports_the_family_count(self):
         """The count is the job's whole output, so it is always logged."""
-        job = self._make_job()
-
-        job.run(rule_id=self.rule.pk)
-
-        job.logger.info.assert_called_once()
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=self.rule.pk)), ["INFO"])
 
     def test_job_run_reraises_an_unexpected_failure(self):
         """A failed conversion has to fail the job, or the operator reads it as done."""
-        job = self._make_job()
-        with patch("netbox_interface_name_rules.engine.convert_flat_families", side_effect=RuntimeError("boom")):
-            with self.assertRaises(RuntimeError):
-                job.run(rule_id=self.rule.pk)
+        rule = make_unrunnable_rule("ConvJobX")
 
-        job.logger.exception.assert_called_once()
+        records = run_job_logged(self, self._make_job(), raises=ValueError, rule_id=rule.pk)
+
+        self.assertEqual(levels(records), ["ERROR"])
 
 
 # ---------------------------------------------------------------------------

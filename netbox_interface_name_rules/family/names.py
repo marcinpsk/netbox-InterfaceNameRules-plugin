@@ -8,6 +8,8 @@ from dcim.models import Interface
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
+from ..transactions import atomic_with_events
+
 logger = logging.getLogger(__name__)
 
 COLLISION_REASON = "target name is already in use"
@@ -39,7 +41,7 @@ def is_name_collision(error: IntegrityError) -> bool:
 def restore_deferred_channel_names(reconciliations):
     """Restore plugin-owned names that NetBox's parent cascade changed after commit."""
     child_pks = [child_pk for child_pk, _final_name, _cascade_name in reconciliations]
-    with transaction.atomic():
+    with atomic_with_events():
         children = (
             Interface.objects.select_for_update(of=("self",)).select_related("device").order_by("pk").in_bulk(child_pks)
         )
@@ -56,8 +58,9 @@ def restore_deferred_channel_names(reconciliations):
                 )
                 continue
             previous_name = child.name
+            child.snapshot()
             try:
-                with transaction.atomic():
+                with atomic_with_events():
                     child.name = final_name
                     child.full_clean()
                     child.save()
