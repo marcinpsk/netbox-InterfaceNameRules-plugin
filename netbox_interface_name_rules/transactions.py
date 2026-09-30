@@ -21,21 +21,26 @@ def atomic_with_events(using=None):
     enclosing = (*_enclosing_queues.get(), events_queue.get())
     enclosing_token = _enclosing_queues.set(enclosing)
     queue_token = events_queue.set({})
-    committed = False
+    outermost = transaction.get_autocommit(using=using)
+    commit_marks = []
+    released = False
     try:
         with transaction.atomic(using=using):
+            if outermost:
+                # The first commit callback: it runs after COMMIT, before a callback that can raise.
+                transaction.on_commit(lambda: commit_marks.append(True), using=using)
             yield
-            marked_for_rollback = transaction.get_rollback(using=using)
-        # The exit of the outermost block runs COMMIT, which can still fail on a deferred constraint.
-        committed = not marked_for_rollback
+            rollback_marked = transaction.get_rollback(using=using)
+        released = not rollback_marked
     finally:
         events = events_queue.get()
         events_queue.reset(queue_token)
         _enclosing_queues.reset(enclosing_token)
-        if not committed:
+        # COMMIT runs only at the exit of the outermost block, and it can fail there or in a callback after it.
+        if commit_marks if outermost else released:
+            _keep(events)
+        else:
             _point_at_saved_rows(events, enclosing, using)
-    if committed:
-        _keep(events)
 
 
 def _point_at_saved_rows(dropped, enclosing, using):

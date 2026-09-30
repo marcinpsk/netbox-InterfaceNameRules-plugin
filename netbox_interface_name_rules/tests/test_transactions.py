@@ -4,7 +4,7 @@
 
 import contextvars
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from itertools import product
 from unittest import skipUnless
 
@@ -271,26 +271,100 @@ def _payload(event):
     return event["data"]["id"] if event["event_type"] == OBJECT_DELETED else event["data"]
 
 
-class CommitFailureTest(TransactionTestCase):
-    """The block is the outermost atomic block, and PostgreSQL refuses its COMMIT on a deferred foreign key."""
+class _CallbackError(Exception):
+    """Raised by a commit callback after the database committed."""
+
+
+def _raise_after_commit():
+    raise _CallbackError
+
+
+# How a block ends, and whether its changes reach the database.
+BLOCK_ENDINGS = {
+    "returns": True,
+    "raises": False,
+    "sets rollback": False,
+    "fails at COMMIT": False,
+    "has a commit callback that raises": True,
+}
+
+
+class CommitOutcomeTest(TransactionTestCase):
+    """The helper keeps a block's events exactly when its changes committed, as the outermost block or a savepoint.
+
+    Only an outermost block runs COMMIT and its commit callbacks at its exit. A savepoint defers its callbacks to
+    the enclosing transaction, and releasing a savepoint checks no deferred constraint.
+    """
 
     def setUp(self):
-        device = make_device("TxCommit", make_device_type(make_manufacturer("TxCommit"), "TxCommit"))
-        self.interface = Interface.objects.create(device=device, name="eth0", type="1000base-t")
-        self.user = get_user_model().objects.create_user(username="txcommit-operator")
+        self.device = make_device("TxOutcome", make_device_type(make_manufacturer("TxOutcome"), "TxOutcome"))
+        self.user = get_user_model().objects.create_user(username="txoutcome-operator")
 
-    def test_a_block_whose_commit_fails_keeps_no_event_and_restores_the_payload_before_it(self):
+    def test_every_block_ending(self):
+        cases = [
+            (outermost, ending)
+            for outermost, ending in product((True, False), BLOCK_ENDINGS)
+            if outermost or ending != "fails at COMMIT"
+        ]
+        self.assertEqual(len(cases), 9)
+        for number, (outermost, ending) in enumerate(cases):
+            with self.subTest(outermost=outermost, ending=ending):
+                self._check(number, outermost, ending)
+
+    def _check(self, number, outermost, ending):
+        existing = Interface.objects.create(device=self.device, name=f"txoutcome-{number}", type="1000base-t")
+        callbacks = []
         with request_context(self.user):
-            _describe(self.interface, "before the block")
-            with self.assertRaises(IntegrityError), atomic_with_events():
-                _describe(self.interface, "inside the block")
-                # No tenant has this ID; PostgreSQL checks the deferred foreign key at COMMIT.
-                Site.objects.create(name="TxCommit dangling", slug="txcommit-dangling", tenant_id=2_000_000_000)
+            if outermost:
+                new_pk = self._change(number, existing, ending, callbacks)
+            else:
+                with self.assertRaises(_CallbackError) if "callback" in ending else nullcontext():
+                    with transaction.atomic():
+                        new_pk = self._change(number, existing, ending, callbacks)
+                        # A savepoint leaves its commit callbacks to the enclosing transaction.
+                        self.assertEqual(callbacks, [])
             queue = dict(events_queue.get())
+        self.assertEqual(Interface.objects.filter(pk=new_pk).exists(), BLOCK_ENDINGS[ending])
+        self.assertEqual(callbacks, ["ran"] if "callback" in ending else [])
+        rows = Interface.objects.filter(pk__in=(existing.pk, new_pk))
+        self.assertEqual({key: _payload(event) for key, event in queue.items()}, _saved_payloads(rows))
 
-        self.assertEqual(list(queue), [f"dcim.interface:{self.interface.pk}"])
-        self.assertEqual(queue[f"dcim.interface:{self.interface.pk}"]["data"]["description"], "before the block")
-        self.assertFalse(Site.objects.filter(slug="txcommit-dangling").exists())
+    def _change(self, number, existing, ending, callbacks):
+        """Queue an event for *existing*, then change it and create a row in a block that ends as *ending* says."""
+        _describe(existing, "before the block")
+        new_pk = None
+        try:
+            with atomic_with_events():
+                _describe(existing, "inside the block")
+                new_pk = Interface.objects.create(
+                    device=self.device, name=f"txoutcome-new-{number}", type="1000base-t"
+                ).pk
+                self._end(number, ending, callbacks)
+        except (_BlockRollbackError, IntegrityError):
+            return new_pk
+        except _CallbackError:
+            self.assertEqual(callbacks, ["ran"])
+        return new_pk
+
+    @staticmethod
+    def _end(number, ending, callbacks):
+        if ending == "raises":
+            raise _BlockRollbackError
+        if ending == "sets rollback":
+            transaction.set_rollback(True)
+        elif ending == "fails at COMMIT":
+            # No tenant has this ID; PostgreSQL checks the deferred foreign key at COMMIT.
+            Site.objects.create(
+                name=f"TxOutcome dangling {number}", slug=f"txoutcome-dangling-{number}", tenant_id=2_000_000_000
+            )
+        elif ending == "has a commit callback that raises":
+            transaction.on_commit(lambda: callbacks.append("ran"))
+            transaction.on_commit(_raise_after_commit)
+
+
+def _saved_payloads(rows):
+    """Return the payload a flush must send for each row, keyed as NetBox keys its queue."""
+    return {_event_key(row.pk): serialize_for_event(row) for row in rows}
 
 
 class _SequenceCases:
