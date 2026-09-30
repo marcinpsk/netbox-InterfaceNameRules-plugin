@@ -4,6 +4,8 @@ status: accepted
 
 # Reapply from a rename trigger with its previous state
 
+ADR 0016 revises the connection and transaction decisions of this ADR for netbox-branching.
+
 A rename trigger compares the previous state with the saved row, and reapplies the rules after commit. Five decisions shape it.
 
 A save fails when its previous state cannot be read. The receivers used to catch the error and store no previous state, and the module path then read that as "no change" and dropped the reapply; the device path read it as a change. NetBox runs every edit view, bulk view and REST write inside a transaction, and PostgreSQL refuses every later statement in a transaction once one fails, so the save failed anyway and the catch only hid the cause. Reading an unknown state as "changed" was rejected because it still hides the error and does work nobody asked for.
