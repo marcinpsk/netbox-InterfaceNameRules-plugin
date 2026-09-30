@@ -30,6 +30,7 @@ from .models import InterfaceNameRule, csv_export_entry
 from .name_template import NamingContext, variables_for_context
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
+from .transactions import atomic_with_events
 
 logger = logging.getLogger(__name__)
 
@@ -675,8 +676,11 @@ class RuleToggleView(generic.ObjectView):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"error": "Permission denied"}, status=403)
             raise PermissionDenied
-        rule.enabled = not rule.enabled
-        rule.save(update_fields=["enabled"])
+        with atomic_with_events():
+            rule = InterfaceNameRule.objects.select_for_update().get(pk=rule.pk)
+            rule.snapshot()
+            rule.enabled = not rule.enabled
+            rule.save(update_fields=["enabled"])
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"enabled": rule.enabled, "pk": pk})
         state = "enabled" if rule.enabled else "disabled"

@@ -4,7 +4,7 @@ import inspect
 
 from dcim.models import DeviceType, ModuleType, Platform
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, router
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
@@ -12,6 +12,7 @@ from taggit.managers import TaggableManager
 from .choices import BreakoutModeChoices
 from .name_template import validate_rule
 from .regex_safety import compile_module_type_pattern
+from .transactions import atomic_with_events
 
 
 def csv_export_entry(headers, values):
@@ -363,7 +364,7 @@ class InterfaceNameRule(NetBoxModel):
         if written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
             # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
             kwargs["using"] = using
-            with transaction.atomic(using=using):
+            with atomic_with_events(using=using):
                 stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
                 # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.
                 row = stored.order_by().values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()

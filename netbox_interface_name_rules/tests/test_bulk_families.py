@@ -49,6 +49,7 @@ from netbox_interface_name_rules.family import (
 from netbox_interface_name_rules.family.names import COLLISION_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
+from netbox_interface_name_rules.tests.helpers import make_job, run_job_logged
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
 
@@ -789,14 +790,10 @@ class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):
     def test_the_background_job_warns_about_what_it_skipped(self):
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
-        job = ApplyRuleJob.__new__(ApplyRuleJob)
-        job.logger = MagicMock()
+        records = run_job_logged(self, ApplyRuleJob(make_job("BulkJob")), rule_id=self.rule.pk)
 
-        job.run(rule_id=self.rule.pk)
-
-        job.logger.info.assert_called_once()
-        job.logger.warning.assert_called_once()
-        self.assertEqual(job.logger.warning.call_args.args[1], 4)
+        self.assertEqual([record.levelname for record in records], ["INFO", "WARNING"])
+        self.assertEqual(records[1].args, (4,))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

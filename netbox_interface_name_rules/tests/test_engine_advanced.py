@@ -21,6 +21,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
+from django.db import DatabaseError
 from django.test import TestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -1319,12 +1320,12 @@ class BuildModuleQsParentTypeTest(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# engine.py — _flag_rule_potentially_deprecated exception handler (lines 282-283)
+# engine.py — _flag_rule_potentially_deprecated failures
 # ---------------------------------------------------------------------------
 
 
 class FlagDeprecatedExceptionTest(TestCase):
-    """Test that _flag_rule_potentially_deprecated swallows exceptions (lines 282-283)."""
+    """A database failure while tagging the rule is logged; any other error reaches the caller."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1335,21 +1336,39 @@ class FlagDeprecatedExceptionTest(TestCase):
             name_template="et-0/0/{bay_position}",
         )
 
-    def test_tags_add_exception_is_swallowed(self):
-        """_flag_rule_potentially_deprecated does not propagate exception from tags.add (lines 282-283)."""
-        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
-
-        with patch.object(self.rule.tags, "add", side_effect=Exception("tag DB error")):
-            _flag_rule_potentially_deprecated(self.rule)  # Must not raise
-
-    def test_tag_getorcreate_exception_is_swallowed(self):
-        """_flag_rule_potentially_deprecated swallows Tag.objects.get_or_create failures."""
+    def test_a_database_failure_is_logged_and_not_raised(self):
         from extras.models import Tag
 
         from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
 
-        with patch.object(Tag.objects, "get_or_create", side_effect=Exception("tag table error")):
-            _flag_rule_potentially_deprecated(self.rule)  # Must not raise
+        with (
+            patch.object(Tag.objects, "get_or_create", side_effect=DatabaseError("tag table error")),
+            self.assertLogs("netbox_interface_name_rules.engine", level="ERROR"),
+        ):
+            _flag_rule_potentially_deprecated(self.rule)
+
+        self.assertFalse(self.rule.tags.exists())
+
+    def test_another_error_reaches_the_caller(self):
+        from extras.models import Tag
+
+        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
+
+        with (
+            patch.object(Tag.objects, "get_or_create", side_effect=RuntimeError("a bug")),
+            self.assertRaises(RuntimeError),
+        ):
+            _flag_rule_potentially_deprecated(self.rule)
+
+    def test_a_rule_deleted_before_the_tag_is_left_alone(self):
+        from netbox_interface_name_rules.engine import _flag_rule_potentially_deprecated
+
+        copy = InterfaceNameRule.objects.get(pk=self.rule.pk)
+        self.rule.delete()
+
+        _flag_rule_potentially_deprecated(copy)
+
+        self.assertFalse(InterfaceNameRule.objects.filter(pk=copy.pk).exists())
 
 
 # ---------------------------------------------------------------------------
