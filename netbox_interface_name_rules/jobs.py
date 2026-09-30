@@ -8,9 +8,9 @@ import logging
 from abc import abstractmethod
 from contextlib import ExitStack
 
+from django.http import HttpRequest
 from netbox.jobs import JobRunner
 from netbox.registry import registry
-from utilities.request import NetBoxFakeRequest
 
 
 def _run_under_request_processors(request, body):
@@ -29,19 +29,11 @@ def run_as_job_user(job, body):
     """
     if job.user is None:
         raise ValueError(f"Job {job.pk} has no user, and the change log must name the user of each change.")
-    request = NetBoxFakeRequest(
-        {
-            "META": {},
-            "COOKIES": {},
-            "POST": {},
-            "GET": {},
-            "FILES": {},
-            "user": job.user,
-            "method": "POST",
-            "path": "",
-            "id": job.job_id,
-        }
-    )
+    # A Django request has each attribute that NetBox copies when an event rule acts on a change.
+    request = HttpRequest()
+    request.method = "POST"
+    request.user = job.user
+    request.id = job.job_id
     # The copy discards what the processors set; before NetBox 4.7, event_tracking keeps it when the body raises.
     return contextvars.copy_context().run(_run_under_request_processors, request, body)
 

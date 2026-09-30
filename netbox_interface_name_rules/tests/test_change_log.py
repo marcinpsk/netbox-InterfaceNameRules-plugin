@@ -11,8 +11,10 @@ import contextvars
 import uuid
 from contextlib import contextmanager
 
+import django_rq
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.models import Job, ObjectChange
+from core.events import OBJECT_UPDATED
+from core.models import Job, ObjectChange, ObjectType
 from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -20,6 +22,8 @@ from django.db import connection
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from extras.choices import EventRuleActionChoices
+from extras.models import EventRule, Webhook
 from netbox import context as netbox_context
 from netbox.registry import registry
 
@@ -221,6 +225,43 @@ class ApplyRuleJobChangeLogTest(_ModuleFixture, TestCase):
         self.assertEqual(job.status, JobStatusChoices.STATUS_ERRORED)
         self.assertIn("has no user", job.error)
         self.assertEqual(Interface.objects.get(module=self.module).name, "0")
+
+
+class JobEventRuleTest(_ModuleFixture, TestCase):
+    """An event rule that matches a change of a job runs its action, as for a change in the web UI."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.build("ChgLogEvt")
+        # The test transaction never commits, so the install runs no rename trigger.
+        cls.module = Module.objects.create(device=cls.device, module_bay=cls._bay(), module_type=cls.module_type)
+        cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="et-0/0/{bay_position}")
+        webhook = Webhook.objects.create(name="ChgLogEvt hook", payload_url="http://localhost:9000/")
+        cls.event_rule = EventRule.objects.create(
+            name="ChgLogEvt interface update",
+            event_types=[OBJECT_UPDATED],
+            action_type=EventRuleActionChoices.WEBHOOK,
+            action_object_type=ObjectType.objects.get_for_model(Webhook),
+            action_object_id=webhook.pk,
+        )
+        cls.event_rule.object_types.set([ObjectType.objects.get_for_model(Interface)])
+
+    def setUp(self):
+        self.queue = django_rq.get_queue("default")
+        self.queue.empty()
+        self.addCleanup(self.queue.empty)
+
+    def test_a_webhook_rule_gets_the_rename_and_the_job_completes(self):
+        job = make_job("ChgLogEvt", self.user)
+
+        # django-rq enqueues the webhook when the transaction commits.
+        with self.captureOnCommitCallbacks(execute=True):
+            ApplyRuleJob.handle(job, rule_id=self.rule.pk)
+
+        job.refresh_from_db()
+        self.assertEqual((job.status, job.error), (JobStatusChoices.STATUS_COMPLETED, ""))
+        webhooks = [queued for queued in self.queue.jobs if queued.kwargs["event_rule"] == self.event_rule]
+        self.assertEqual([queued.kwargs["data"]["name"] for queued in webhooks], ["et-0/0/0"])
 
 
 def request_context_left_set():
