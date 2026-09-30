@@ -22,10 +22,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_bay_templates,
     make_module_type,
 )
-from netbox_interface_name_rules.tests.snapshot_guard import MissingSnapshotError
-
-NO_SNAPSHOT = "was written with no prechange snapshot"
-EARLIER_SNAPSHOT = "was written with the prechange snapshot of an earlier write"
+from netbox_interface_name_rules.tests.snapshot_guard import EARLIER_SNAPSHOT, NO_SNAPSHOT, MissingSnapshotError
 
 
 def _save(instance):
@@ -89,12 +86,14 @@ class SnapshotGuardTestCase(TestCase):
     def _site(self):
         return Site.objects.get(pk=self.site_pk)
 
-    def assert_refused(self, fragment, write, *args):
-        """Assert that *write* is refused with *fragment*, and that the refusal is recorded."""
-        with self.assertRaisesMessage(MissingSnapshotError, fragment) as raised:
+    def assert_refused(self, problem, write, *args):
+        """Assert that *write* is refused for *problem*, that the refusal is recorded, and return its message."""
+        with self.assertRaisesMessage(MissingSnapshotError, problem) as raised:
             write(*args)
-        self.assertIn(f"{__file__}:", str(raised.exception))
-        self.assertEqual(snapshot_guard.take_violations(), [str(raised.exception)])
+        message = str(raised.exception)
+        self.assertIn(f"{__file__}:", message)
+        self.assertEqual(snapshot_guard.take_violations(), [message])
+        return message
 
 
 class SnapshotGuardSaveTest(SnapshotGuardTestCase):
@@ -103,7 +102,9 @@ class SnapshotGuardSaveTest(SnapshotGuardTestCase):
     def test_a_plugin_save_without_a_snapshot_is_refused(self):
         site = self._site()
 
-        self.assert_refused(f"dcim.Site pk={site.pk} {NO_SNAPSHOT}", plugin_save, site)
+        message = self.assert_refused(NO_SNAPSHOT, plugin_save, site)
+
+        self.assertTrue(message.startswith(f"dcim.Site pk={site.pk} "), message)
 
     def test_a_plugin_save_with_a_current_snapshot_passes(self):
         site = self._site()

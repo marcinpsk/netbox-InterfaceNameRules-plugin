@@ -2,13 +2,10 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Fail a test when plugin code writes an existing change-logged row without a current snapshot.
 
-NetBox logs the before-state of a change from ``_prechange_snapshot``, which only ``snapshot()`` sets
-and nothing clears. A snapshot is current when no earlier write of the same instance used it. The
-guard checks the nearest calling frame outside Django and outside the instance's own write, so a
-save that NetBox makes inside a plugin call is NetBox's, and a save from a test is the test's.
+A snapshot is current when no earlier write of the same instance used it.
 """
 
-import sys
+import inspect
 import weakref
 from dataclasses import dataclass
 from types import FrameType
@@ -20,6 +17,8 @@ TESTS_PACKAGE = f"{PLUGIN_PACKAGE}.tests"
 DISPATCH_UID = f"{TESTS_PACKAGE}.snapshot_guard"
 M2M_WRITES = ("pre_add", "pre_remove", "pre_clear")
 OWN_SAVE_METHODS = ("save", "save_base")
+NO_SNAPSHOT = "no prechange snapshot"
+EARLIER_SNAPSHOT = "the prechange snapshot of an earlier write"
 
 
 class MissingSnapshotError(AssertionError):
@@ -60,12 +59,7 @@ def _is_plugin(frame) -> bool:
 
 
 def _is_own_write(frame, instance, via_manager) -> bool:
-    """Return whether *frame* runs the instance's own save, or a method of its own related manager.
-
-    A many-to-many change inside the instance's own save, such as NetBox's ``BaseInterface.save()``
-    clearing tagged VLANs, is part of that save. The locals of a plugin or test frame are not read:
-    on Python 3.12 a read keeps a copy of them on the frame, and the copy keeps a deleted object alive.
-    """
+    """Return whether *frame* runs the instance's own save, or for an M2M change, its own related manager."""
     if frame.f_code.co_name in OWN_SAVE_METHODS:
         return frame.f_locals.get("self") is instance
     if not via_manager or _in_package(frame, PLUGIN_PACKAGE):
@@ -75,21 +69,22 @@ def _is_own_write(frame, instance, via_manager) -> bool:
 
 def _calling_frames(instance, via_manager):
     """Return the nearest frame that called the write, and the outermost frame of the write call itself."""
+    frame = inspect.currentframe()
+    while frame is not None and _module_of(frame) == __name__:
+        frame = frame.f_back
     call = None
-    frame = sys._getframe(3)
     while frame is not None and (_is_django(frame) or _is_own_write(frame, instance, via_manager)):
         call = frame
         frame = frame.f_back
     return frame, call
 
 
-def _problem(instance, last) -> str:
-    """Return why the snapshot of *instance* is not current, or an empty string."""
-    snapshot = getattr(instance, "_prechange_snapshot", None)
+def _problem(snapshot, last) -> str:
+    """Return why *snapshot* is not current, or an empty string."""
     if snapshot is None:
-        return "no prechange snapshot"
+        return NO_SNAPSHOT
     if last is not None and last.snapshot is snapshot:
-        return "the prechange snapshot of an earlier write"
+        return EARLIER_SNAPSHOT
     return ""
 
 
@@ -103,20 +98,23 @@ def _check(instance, *, m2m, inserting=False):
     """Record one write of *instance*, and refuse it when plugin code makes it without a current snapshot."""
     frame, call = _calling_frames(instance, via_manager=m2m)
     last = _last_write(instance)
-    same_call = call is not None and last is not None and last.call is call
+    snapshot = getattr(instance, "_prechange_snapshot", None)
     plugin_caller = frame is not None and _is_plugin(frame)
+    same_call = call is not None and last is not None and last.call is call
     # The create record of a row absorbs the M2M changes of the same request, so they need no before-state.
     plugin_insert = (inserting and plugin_caller) or (last is not None and last.plugin_insert and (m2m or same_call))
-    problem = "" if inserting or same_call or plugin_insert or not plugin_caller else _problem(instance, last)
-    snapshot = getattr(instance, "_prechange_snapshot", None)
     _writes[id(instance)] = Write(weakref.ref(instance), snapshot, call if plugin_caller else None, plugin_insert)
-    if problem:
-        message = (
-            f"{instance._meta.label} pk={instance.pk} was written with {problem} "
-            f"from {frame.f_code.co_filename}:{frame.f_lineno}. Call snapshot() before each change."
-        )
-        _violations.append(message)
-        raise MissingSnapshotError(message)
+    if not plugin_caller or same_call or plugin_insert:
+        return
+    problem = _problem(snapshot, last)
+    if not problem:
+        return
+    message = (
+        f"{instance._meta.label} pk={instance.pk} was written with {problem} "
+        f"from {frame.f_code.co_filename}:{frame.f_lineno}. Call snapshot() before each change."
+    )
+    _violations.append(message)
+    raise MissingSnapshotError(message)
 
 
 def check_save(sender, instance, raw=False, **kwargs):

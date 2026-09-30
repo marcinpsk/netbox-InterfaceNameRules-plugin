@@ -32,14 +32,17 @@ def _changelog_snapshot_guard():
     snapshot_guard.disconnect()
 
 
+def _assert_no_snapshot_violations():
+    violations = snapshot_guard.take_violations()
+    assert not violations, "\n".join(violations)
+
+
 @pytest.fixture(autouse=True)
 def _no_write_without_a_current_snapshot(_changelog_snapshot_guard):
     """Fail a test, or the class setup before it, in which plugin code wrote a row without a current snapshot."""
-    violations = snapshot_guard.take_violations()
-    assert not violations, "\n".join(violations)
+    _assert_no_snapshot_violations()
     yield
-    violations = snapshot_guard.take_violations()
-    assert not violations, "\n".join(violations)
+    _assert_no_snapshot_violations()
 
 
 @pytest.fixture(autouse=True)
