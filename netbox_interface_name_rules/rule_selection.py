@@ -4,6 +4,7 @@
 
 import contextlib
 import threading
+from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
 from django.db.models import Aggregate, F, TextField, Value
@@ -11,9 +12,25 @@ from django.db.models.functions import Cast, Coalesce, Concat, Length
 
 from .regex_safety import compile_module_type_pattern
 
-# Publish each loaded rule set as one new dictionary. Concurrent readers then see
-# one complete version rather than a mixture of cache entries from two versions.
-_RULE_CACHE = {"alias": None, "version": None, "exact": (), "regex": (), "memo": {}}
+
+@dataclass(frozen=True, slots=True)
+class _RuleSnapshot:
+    """One enabled-rule set read from one alias; only the memo changes after publication."""
+
+    alias: str | None
+    version: str | None
+    exact: tuple
+    regex: tuple
+    memo: dict
+
+
+def _empty_rule_cache():
+    """Return a new snapshot that matches no alias, so the next read reloads."""
+    return _RuleSnapshot(alias=None, version=None, exact=(), regex=(), memo={})
+
+
+# A reload rebinds this to a new snapshot, so a reader never mixes entries from two versions.
+_RULE_CACHE = _empty_rule_cache()
 
 # Bound the number of module and scope contexts retained for one rule-set version.
 _MEMO_MAX = 4096
@@ -152,7 +169,7 @@ def _get_enabled_rules():
 
     Exact rules retain model ordering, which reduces to primary-key order for one
     module type. Regex rules are compiled once and ordered by decreasing pattern
-    length, then primary key. A reload publishes one new cache dictionary so a
+    length, then primary key. A reload publishes one new cache snapshot so a
     concurrent reader cannot combine values from two versions.
     """
     # One module-level cache, replaced atomically.
@@ -167,7 +184,7 @@ def _get_enabled_rules():
 
     cache = _RULE_CACHE
     version = _enabled_rules_version(alias)
-    if (cache["alias"], cache["version"]) != (alias, version):
+    if (cache.alias, cache.version) != (alias, version):
         rules = list(_enabled_module_rules().using(alias).order_by("module_type__model", "pk"))
         exact = tuple(rule for rule in rules if not rule.module_type_is_regex)
         regex_rules = sorted(
@@ -175,19 +192,19 @@ def _get_enabled_rules():
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
         regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
-        cache = {"alias": alias, "version": version, "exact": exact, "regex": regex, "memo": {}}
+        cache = _RuleSnapshot(alias=alias, version=version, exact=exact, regex=regex, memo={})
         _RULE_CACHE = cache
 
     if pinned:
         # Keep a private memo so another thread cannot clear this batch's entries.
         _pin.alias = alias
-        _pin.exact = cache["exact"]
-        _pin.regex = cache["regex"]
-        _pin.memo = dict(cache["memo"])
+        _pin.exact = cache.exact
+        _pin.regex = cache.regex
+        _pin.memo = dict(cache.memo)
         _pin.primed = True
         return _pin.exact, _pin.regex, _pin.memo
 
-    return cache["exact"], cache["regex"], cache["memo"]
+    return cache.exact, cache.regex, cache.memo
 
 
 def _scope_ids(parent_module_type, device_type, platform):

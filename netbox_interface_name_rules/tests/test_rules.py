@@ -5,6 +5,7 @@
 These tests create real DB objects and exercise the full engine pipeline.
 """
 
+import dataclasses
 import threading
 
 from dcim.models import (
@@ -304,7 +305,7 @@ class FindMatchingRuleCachingTest(TestCase):
         # and a stale snapshot from a prior method can't be reused for a same-content rule set.
         from netbox_interface_name_rules import rule_selection
 
-        rule_selection._RULE_CACHE.update({"alias": None, "version": None, "exact": (), "regex": (), "memo": {}})
+        rule_selection._RULE_CACHE = rule_selection._empty_rule_cache()
         rule_selection._pin.depth = 0
         rule_selection._pin.primed = False
         for attr in ("alias", "exact", "regex", "memo"):
@@ -498,7 +499,7 @@ class FindMatchingRuleCachingTest(TestCase):
                 # would slip past an end-of-loop `<=` snapshot (which only sees the post-clear size) but
                 # trips here on the very insert that crosses the cap.
                 self.assertLessEqual(
-                    len(rule_selection._RULE_CACHE["memo"]),
+                    len(rule_selection._RULE_CACHE.memo),
                     rule_selection._MEMO_MAX,
                     f"memo exceeded the cap mid-insertion after {i} contexts",
                 )
@@ -506,7 +507,7 @@ class FindMatchingRuleCachingTest(TestCase):
             # And the eviction actually fired: the final size is below the number of distinct contexts,
             # so the test isn't vacuously green on a memo that simply never reached the cap.
             self.assertLess(
-                len(rule_selection._RULE_CACHE["memo"]),
+                len(rule_selection._RULE_CACHE.memo),
                 len(module_types),
                 "memo never evicted — the cap was never exercised",
             )
@@ -561,7 +562,7 @@ class FindMatchingRuleCachingTest(TestCase):
         different rule set — renaming one device's modules with mixed rule versions. This exercises the
         guarantee across an actual thread: the worker must NOT inherit this thread's pin (``_pin`` is
         ``threading.local``), and its reload — published the way ``_get_enabled_rules`` does, by
-        rebinding ``_RULE_CACHE`` to a fresh dict — must leave our primed snapshot untouched. A plain
+        rebinding ``_RULE_CACHE`` to a new snapshot — must leave our primed snapshot untouched. A plain
         global ``_pin`` would leak the pin into the worker and pass the old same-thread test, but fail here.
         """
         from netbox_interface_name_rules import rule_selection
@@ -577,12 +578,9 @@ class FindMatchingRuleCachingTest(TestCase):
             # way _get_enabled_rules() does: one atomic rebind of the module global. (No DB access — a
             # separate thread has its own connection and cannot see this TestCase's uncommitted rows.)
             worker_pin_depth.append(getattr(rule_selection._pin, "depth", 0))
-            rule_selection._RULE_CACHE = {
-                "version": "concurrent-reload-other-version",
-                "exact": (),
-                "regex": (),
-                "memo": {},
-            }
+            rule_selection._RULE_CACHE = rule_selection._RuleSnapshot(
+                alias=DEFAULT_DB_ALIAS, version="concurrent-reload-other-version", exact=(), regex=(), memo={}
+            )
 
         try:
             with pinned_rule_cache():
@@ -595,7 +593,7 @@ class FindMatchingRuleCachingTest(TestCase):
                 # The worker did not inherit our pin — proves _pin is per-thread, not a shared global.
                 self.assertEqual(worker_pin_depth, [0], "pin leaked across threads — _pin is not thread-local")
                 # ...and its reload really did replace the shared cache.
-                self.assertEqual(rule_selection._RULE_CACHE["version"], "concurrent-reload-other-version")
+                self.assertEqual(rule_selection._RULE_CACHE.version, "concurrent-reload-other-version")
 
                 # Still inside the pin: must serve the snapshot captured at entry, not the worker's reload.
                 self.assertEqual(
@@ -606,14 +604,17 @@ class FindMatchingRuleCachingTest(TestCase):
         finally:
             # This test deliberately rebinds the module global from another thread; restore a clean
             # sentinel so the simulated reload can't leak into sibling tests even if setUp() is weakened.
-            rule_selection._RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
+            rule_selection._RULE_CACHE = rule_selection._empty_rule_cache()
 
-    def test_reload_publishes_a_fresh_cache_dict_atomically(self):
-        """A version change rebinds _RULE_CACHE to a new dict instead of mutating the old one in place.
+        # The restored cache must serve an unpinned lookup, so a later test cannot inherit a broken cache.
+        self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)
 
-        This is what makes the unpinned three-key read a consistent snapshot: a reader that grabbed the
+    def test_reload_publishes_a_fresh_cache_snapshot_atomically(self):
+        """A version change rebinds _RULE_CACHE to a new snapshot instead of mutating the old one in place.
+
+        This is what makes the unpinned read a consistent snapshot: a reader that grabbed the
         cache before a concurrent reload keeps one whole rule-set version, never exact from V1 paired
-        with memo from V2. We assert the published dict is a *new object* and that a reference captured
+        with memo from V2. We assert the published snapshot is a *new object* and that a reference captured
         before the reload is left untouched — the in-place mutation the previous code did would fail both.
         """
         from netbox_interface_name_rules import rule_selection
@@ -622,8 +623,8 @@ class FindMatchingRuleCachingTest(TestCase):
         find_matching_rule(self.module_type, None, self.device_type)  # prime version 1
 
         snap = rule_selection._RULE_CACHE
-        snap_version = snap["version"]
-        snap_exact = snap["exact"]
+        snap_version = snap.version
+        snap_exact = snap.exact
 
         # Change the rule set so the next lookup must reload to a new version.
         InterfaceNameRule.objects.create(
@@ -634,10 +635,10 @@ class FindMatchingRuleCachingTest(TestCase):
         self.assertIsNot(
             rule_selection._RULE_CACHE,
             snap,
-            "reload mutated the cache dict in place instead of publishing a new one",
+            "reload mutated the cache snapshot in place instead of publishing a new one",
         )
-        self.assertEqual(snap["version"], snap_version, "a reload mutated a previously-published cache dict")
-        self.assertEqual(snap["exact"], snap_exact, "the captured exact snapshot changed under a concurrent reload")
+        self.assertEqual(snap.version, snap_version, "a reload mutated a previously-published cache snapshot")
+        self.assertEqual(snap.exact, snap_exact, "the captured exact snapshot changed under a concurrent reload")
 
     def test_find_matching_rule_survives_concurrent_memo_clear(self):
         """A memo cleared between the membership check and the lookup must not raise KeyError.
@@ -663,7 +664,8 @@ class FindMatchingRuleCachingTest(TestCase):
                 return present
 
         # Same version → no reload; the racing memo is what find_matching_rule reads next.
-        rule_selection._RULE_CACHE["memo"] = _RacingMemo(rule_selection._RULE_CACHE["memo"])
+        cache = rule_selection._RULE_CACHE
+        rule_selection._RULE_CACHE = dataclasses.replace(cache, memo=_RacingMemo(cache.memo))
 
         self.assertEqual(
             find_matching_rule(self.module_type, None, self.device_type),
@@ -684,14 +686,14 @@ class FindMatchingRuleCachingTest(TestCase):
 
             self.assertIsNot(
                 rule_selection._pin.memo,
-                rule_selection._RULE_CACHE["memo"],
+                rule_selection._RULE_CACHE.memo,
                 "pinned memo aliases the shared cache memo instead of holding a private copy",
             )
 
             # An unpinned thread clearing the shared memo at the cap must not disturb the pinned
             # batch. _pin is a threading.local, so the worker holds no pin of its own. The target is
             # a plain dict.clear(), so the worker touches no ORM and needs no connection.
-            clear = threading.Thread(target=rule_selection._RULE_CACHE["memo"].clear)
+            clear = threading.Thread(target=rule_selection._RULE_CACHE.memo.clear)
             clear.start()
             clear.join()
 
@@ -703,7 +705,7 @@ class FindMatchingRuleCachingTest(TestCase):
             # memo instead of its private copy would return the decoy rather than recomputing, so
             # this is what separates "the copy was used" from "the answer was recomputed".
             decoy = InterfaceNameRule(name_template="decoy-must-not-be-returned")
-            rule_selection._RULE_CACHE["memo"].update(dict.fromkeys(rule_selection._pin.memo, decoy))
+            rule_selection._RULE_CACHE.memo.update(dict.fromkeys(rule_selection._pin.memo, decoy))
             self.assertEqual(
                 find_matching_rule(self.module_type, None, self.device_type),
                 rule,
