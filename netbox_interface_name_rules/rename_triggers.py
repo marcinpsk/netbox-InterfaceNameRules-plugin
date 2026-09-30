@@ -159,7 +159,7 @@ class PlanRunner:
     def __call__(self):
         """Reapply the rules for the triggers whose savepoints committed, when this is the newest runner.
 
-        The reapply runs in a write scope on the plan's alias, which raises when the write alias is another.
+        The reapply runs in a write scope on the plan's alias. The scope raises when the write alias differs.
         """
         if self.plan.runner is not self or self.plan.started:
             return
