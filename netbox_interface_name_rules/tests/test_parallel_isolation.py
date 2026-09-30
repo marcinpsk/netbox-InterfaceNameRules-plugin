@@ -189,5 +189,8 @@ def test_the_running_worker_uses_its_private_targets(settings):
 
 
 def test_only_this_plugin_loads_under_the_test_settings(settings):
-    """A co-installed plugin must not reach a run of this suite."""
-    assert settings.PLUGINS == ["netbox_interface_name_rules"]
+    """A co-installed plugin must not reach a run of this suite. The branch leg adds netbox-branching, last."""
+    expected = ["netbox_interface_name_rules"]
+    if os.environ.get("EXPECT_NETBOX_BRANCHING") == "1":
+        expected.append("netbox_branching")
+    assert expected == settings.PLUGINS
