@@ -136,7 +136,10 @@ class InstallInABranchTest(_InstallCase):
         self.assertEqual(
             [self.names_in_branch(position) for position in (0, 1)], [["a0.br", "b0.br"], ["a1.br", "b1.br"]]
         )
-        self.assertEqual(self.renames_in_branch(1), [("a1", "a1.br"), ("b1", "b1.br")])
+        self.assertEqual(
+            [self.renames_in_branch(position) for position in (0, 1)],
+            [[("a0", "a0.br"), ("b0", "b0.br")], [("a1", "a1.br"), ("b1", "b1.br")]],
+        )
         self.assert_nothing_on_main()
 
     def test_a_name_collision_on_install_skips_that_interface_and_keeps_the_rest_of_the_save(self):
@@ -147,6 +150,7 @@ class InstallInABranchTest(_InstallCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.names_in_branch(0), ["a0.br", "b0"])
+        self.assertEqual(self.renames_in_branch(0), [("a0", "a0.br")])
         with self.in_branch():
             module = Module.objects.get(module_bay=self.bay(0))
             (entry,) = JournalEntry.objects.filter(
