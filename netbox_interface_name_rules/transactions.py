@@ -23,8 +23,29 @@ def atomic_with_events(using=None):
     finally:
         events = events_queue.get()
         events_queue.reset(token)
+        if not committed:
+            _restore_payloads(events)
     if committed:
         _keep(events)
+
+
+def _restore_payloads(dropped):
+    """Reload the object of each enclosing event that the rolled-back block queued again, as the database holds it.
+
+    NetBox 4.5 and later serialize a queued object at the flush, and the block can have changed that same instance.
+    """
+    from core.events import OBJECT_DELETED
+
+    queue = events_queue.get()
+    for key in dropped:
+        earlier = queue.get(key)
+        instance = None if earlier is None or earlier["event_type"] == OBJECT_DELETED else earlier.get("object")
+        if instance is None:
+            continue
+        instance.refresh_from_db()
+        # NetBox 4.7 serializes the latest instance that queued the object, which can be another one.
+        if hasattr(earlier, "refresh_serialization_source"):
+            earlier.refresh_serialization_source(instance)
 
 
 def _keep(events):

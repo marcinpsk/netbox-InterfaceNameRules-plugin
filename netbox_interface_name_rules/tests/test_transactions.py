@@ -88,6 +88,29 @@ class AtomicWithEventsTest(TestCase):
 
         [webhook] = queued_webhook_jobs(self.event_rule)
         self.assertEqual(webhook.kwargs["snapshots"]["postchange"]["description"], "before the block")
+        self.assertEqual(webhook.kwargs["data"]["description"], "before the block")
+        self.interface.refresh_from_db()
+        self.assertEqual(self.interface.description, "before the block")
+
+    def test_a_block_that_raises_leaves_the_payload_of_a_second_instance_at_its_saved_state(self):
+        """NetBox 4.7 serializes the latest instance that queued the object, which here the block then changed."""
+        second = Interface.objects.get(pk=self.interface.pk)
+
+        def change_and_fail():
+            with atomic_with_events():
+                _describe(second, "inside the block")
+                raise RuntimeError("roll the block back")
+
+        def body():
+            _describe(self.interface, "first instance")
+            _describe(second, "second instance")
+            with self.assertRaises(RuntimeError):
+                change_and_fail()
+
+        self._run_as_a_request(body)
+
+        [webhook] = queued_webhook_jobs(self.event_rule)
+        self.assertEqual(webhook.kwargs["data"]["description"], "second instance")
 
     def test_a_block_that_sets_rollback_drops_its_events(self):
         def body():
