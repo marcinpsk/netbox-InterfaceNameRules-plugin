@@ -14,10 +14,12 @@ from django.test import TestCase
 from extras.models import Tag
 from ipam.models import VLAN
 
+from netbox_interface_name_rules.jobs import run_as_job_user
 from netbox_interface_name_rules.tests import snapshot_guard
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
     make_device_type,
+    make_job,
     make_manufacturer,
     make_module_bay_templates,
     make_module_type,
@@ -239,6 +241,22 @@ class SnapshotGuardM2MTest(SnapshotGuardTestCase):
 
         self.assertEqual(snapshot_guard.take_violations(), [])
         self.assertFalse(interface.tagged_vlans.exists())
+
+    def test_a_tag_change_in_the_request_that_created_the_row_joins_the_create_record(self):
+        site = Site(name="Guard Created", slug="guard-created")
+
+        run_as_job_user(make_job("GuardOne"), lambda: (plugin_save(site), plugin_add_tags(site, self.tag)))
+
+        self.assertEqual(snapshot_guard.take_violations(), [])
+
+    def test_a_tag_change_in_a_later_request_needs_a_snapshot(self):
+        """NetBox merges an M2M change only into a record of the same request, so the later one needs a before-state."""
+        site = Site(name="Guard Created", slug="guard-created")
+        run_as_job_user(make_job("GuardFirst"), lambda: plugin_save(site))
+
+        self.assert_refused(
+            NO_SNAPSHOT, run_as_job_user, make_job("GuardSecond"), lambda: plugin_add_tags(site, self.tag)
+        )
 
     def test_a_tag_change_of_a_row_that_a_test_created_needs_a_snapshot(self):
         site = Site(name="Guard Created", slug="guard-created")

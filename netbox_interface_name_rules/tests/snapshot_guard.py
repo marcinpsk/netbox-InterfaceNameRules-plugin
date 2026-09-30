@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from types import FrameType
 
 from django.db.models.signals import m2m_changed, pre_save
+from netbox.context import current_request
 
 PLUGIN_PACKAGE = "netbox_interface_name_rules"
 TESTS_PACKAGE = f"{PLUGIN_PACKAGE}.tests"
@@ -34,6 +35,7 @@ class Write:
     # Held so that its id() is not reused while recorded; the frame keeps the instance alive until the test ends.
     call: FrameType | None
     plugin_insert: bool
+    request_id: object
 
 
 _writes: dict[int, Write] = {}
@@ -101,9 +103,12 @@ def _check(instance, *, m2m, inserting=False):
     snapshot = getattr(instance, "_prechange_snapshot", None)
     plugin_caller = frame is not None and _is_plugin(frame)
     same_call = call is not None and last is not None and last.call is call
-    # The create record of a row absorbs the M2M changes of the same request, so they need no before-state.
-    plugin_insert = (inserting and plugin_caller) or (last is not None and last.plugin_insert and (m2m or same_call))
-    _writes[id(instance)] = Write(weakref.ref(instance), snapshot, call if plugin_caller else None, plugin_insert)
+    request_id = getattr(current_request.get(), "id", None)
+    # NetBox merges an M2M change into the create record of the same request ID, so it needs no before-state.
+    joins_insert = last is not None and last.plugin_insert and last.request_id == request_id and (m2m or same_call)
+    plugin_insert = (inserting and plugin_caller) or joins_insert
+    plugin_call = call if plugin_caller else None
+    _writes[id(instance)] = Write(weakref.ref(instance), snapshot, plugin_call, plugin_insert, request_id)
     if not plugin_caller or same_call or plugin_insert:
         return
     problem = _problem(snapshot, last)
