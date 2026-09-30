@@ -6,9 +6,10 @@ import logging
 
 from dcim.models import Interface
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 from django.db.models import Q
 
+from ..transactions import atomic_with_events
 from .domain import (
     FamilyOutcome,
     FamilyStatus,
@@ -85,7 +86,7 @@ def _rename_member(member, interface):
     previous_name = interface.name
     interface.snapshot()
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             interface.name = target_name
             interface.full_clean()
             interface.save()
@@ -182,7 +183,7 @@ def _stale_outcome(plan: InstalledFamilyPlan) -> FamilyOutcome:
 
 def execute_installed_plan(plan: InstalledFamilyPlan) -> FamilyOutcome:
     """Execute one family plan in its own transaction."""
-    with transaction.atomic():
+    with atomic_with_events():
         interfaces = _lock_family(plan)
         if _is_stale(plan, interfaces):
             return _stale_outcome(plan)

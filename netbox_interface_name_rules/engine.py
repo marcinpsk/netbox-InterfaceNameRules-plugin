@@ -14,13 +14,14 @@ from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError
 
 from . import family as family_ops
 from . import name_template, naming, rule_selection
 from .family import template_names as family_template_names
 from .regex_safety import compile_module_type_pattern
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
+from .transactions import atomic_with_events
 
 logger = logging.getLogger(__name__)
 
@@ -656,7 +657,7 @@ def _flag_rule_potentially_deprecated(rule):
     from .models import InterfaceNameRule
 
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             # The caller read the rule before the reapply, so the stored row can be newer.
             stored = InterfaceNameRule.objects.select_for_update().filter(pk=rule.pk).order_by("pk").first()
             if stored is None:

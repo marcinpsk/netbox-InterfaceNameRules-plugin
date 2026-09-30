@@ -20,6 +20,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from ..naming import build_variables
+from ..transactions import atomic_with_events
 from .batch import BatchOutcome
 from .capabilities import supports_channelization
 from .domain import (
@@ -342,7 +343,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
     rewrite back, so a family is never half converted and a scan writes nothing at all.
     """
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             live = _locked_family(plan)
             if _is_stale(plan, live):
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON)

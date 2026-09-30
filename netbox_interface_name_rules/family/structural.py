@@ -7,8 +7,9 @@ import logging
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import Interface, InterfaceTemplate
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
+from ..transactions import atomic_with_events
 from .capabilities import supports_channelization
 from .domain import (
     FamilyOutcome,
@@ -200,7 +201,7 @@ def _create_family(plan, base):  # pragma: no cover - requires channelization su
 def _install_family(plan):  # pragma: no cover - requires channelization support
     """Create the whole family in one transaction, or write nothing at all."""
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             base = _locked_base(plan)
             if base is None or InterfaceSnapshot.from_interface(base) != plan.base:
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON, plan.parent_target_name)
@@ -338,7 +339,7 @@ def _build_flat_family(plan, base):
 def _install_flat_family(plan):
     """Build the whole family in one transaction, or write nothing at all."""
     try:
-        with transaction.atomic():
+        with atomic_with_events():
             rows = _locked_flat_rows(plan)
             if _is_flat_stale(plan, rows):
                 return _flat_refused(plan, FamilyStatus.STALE, STALE_REASON)

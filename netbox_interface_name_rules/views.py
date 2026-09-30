@@ -8,7 +8,6 @@ import yaml
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -31,6 +30,7 @@ from .models import InterfaceNameRule, csv_export_entry
 from .name_template import NamingContext, variables_for_context
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
+from .transactions import atomic_with_events
 
 logger = logging.getLogger(__name__)
 
@@ -670,7 +670,7 @@ class RuleToggleView(generic.ObjectView):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"error": "Permission denied"}, status=403)
             raise PermissionDenied
-        with transaction.atomic():
+        with atomic_with_events():
             rule = InterfaceNameRule.objects.select_for_update().get(pk=rule.pk)
             rule.snapshot()
             rule.enabled = not rule.enabled

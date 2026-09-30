@@ -11,10 +11,9 @@ import contextvars
 import uuid
 from contextlib import contextmanager
 
-import django_rq
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.events import OBJECT_UPDATED
-from core.models import Job, ObjectChange, ObjectType
+from core.events import OBJECT_CREATED, OBJECT_UPDATED
+from core.models import Job, ObjectChange
 from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -22,22 +21,24 @@ from django.db import connection
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from extras.choices import EventRuleActionChoices
-from extras.models import EventRule, Webhook
 from netbox import context as netbox_context
 from netbox.registry import registry
 
 from netbox_interface_name_rules import engine
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.jobs import ApplyRuleJob, run_as_job_user
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
+    empty_the_webhook_queue,
     make_device,
     make_device_type,
+    make_interface_webhook_rule,
     make_job,
     make_manufacturer,
     make_module_bay_templates,
     make_module_type,
     make_unrunnable_rule,
+    queued_webhooks,
 )
 
 User = get_user_model()
@@ -103,6 +104,32 @@ class RenameTriggerChangeLogTest(_ModuleFixture, TransactionTestCase):
         change = updates_of(interface).get()
         self.assertEqual(names_before_and_after(change), ("0", "et-0/0/0"))
         self.assertEqual(change.user, self.user)
+
+    def test_the_rename_after_an_install_joins_the_create_event_of_the_interface(self):
+        event_rule = make_interface_webhook_rule("ChgLogTrig")
+        InterfaceNameRule.objects.create(module_type=self.module_type, name_template="et-0/0/{bay_position}")
+        empty_the_webhook_queue(self)
+
+        self._install_through_the_api()
+
+        self.assertEqual(queued_webhooks(event_rule), [(OBJECT_CREATED, "et-0/0/0")])
+
+    def test_a_family_blocked_after_partial_writes_queues_no_event_for_them(self):
+        """The eleventh name is one character longer than NetBox allows, after ten rows were written."""
+        event_rule = make_interface_webhook_rule("ChgLogTrig")
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template=f"{'e' * 60}-{{bay_position}}:{{channel}}",
+            breakout_mode=BreakoutModeChoices.FLAT,
+            channel_count=11,
+            channel_start=0,
+        )
+        empty_the_webhook_queue(self)
+
+        module = self._install_through_the_api()
+
+        self.assertEqual(list(Interface.objects.filter(module=module).values_list("name", flat=True)), ["0"])
+        self.assertEqual(queued_webhooks(event_rule), [(OBJECT_CREATED, "0")])
 
     def test_flagging_a_rule_records_its_tags_before_and_after(self):
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="{bay_position}")
@@ -236,20 +263,10 @@ class JobEventRuleTest(_ModuleFixture, TestCase):
         # The test transaction never commits, so the install runs no rename trigger.
         cls.module = Module.objects.create(device=cls.device, module_bay=cls._bay(), module_type=cls.module_type)
         cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="et-0/0/{bay_position}")
-        webhook = Webhook.objects.create(name="ChgLogEvt hook", payload_url="http://localhost:9000/")
-        cls.event_rule = EventRule.objects.create(
-            name="ChgLogEvt interface update",
-            event_types=[OBJECT_UPDATED],
-            action_type=EventRuleActionChoices.WEBHOOK,
-            action_object_type=ObjectType.objects.get_for_model(Webhook),
-            action_object_id=webhook.pk,
-        )
-        cls.event_rule.object_types.set([ObjectType.objects.get_for_model(Interface)])
+        cls.event_rule = make_interface_webhook_rule("ChgLogEvt")
 
     def setUp(self):
-        self.queue = django_rq.get_queue("default")
-        self.queue.empty()
-        self.addCleanup(self.queue.empty)
+        empty_the_webhook_queue(self)
 
     def test_a_webhook_rule_gets_the_rename_and_the_job_completes(self):
         job = make_job("ChgLogEvt", self.user)
@@ -260,8 +277,7 @@ class JobEventRuleTest(_ModuleFixture, TestCase):
 
         job.refresh_from_db()
         self.assertEqual((job.status, job.error), (JobStatusChoices.STATUS_COMPLETED, ""))
-        webhooks = [queued for queued in self.queue.jobs if queued.kwargs["event_rule"] == self.event_rule]
-        self.assertEqual([queued.kwargs["data"]["name"] for queued in webhooks], ["et-0/0/0"])
+        self.assertEqual(queued_webhooks(self.event_rule), [(OBJECT_UPDATED, "et-0/0/0")])
 
 
 def request_context_left_set():

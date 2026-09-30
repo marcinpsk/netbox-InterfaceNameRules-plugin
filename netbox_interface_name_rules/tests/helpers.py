@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Builders for the objects the tests need, and a runner for the background jobs.
+"""Builders for the objects the tests need, a runner for the background jobs, and a reader of their webhooks.
 
 Every builder takes a *prefix* and derives names and slugs from it. Test classes share one database
 per worker, so a class that names its objects after itself cannot collide with another class, and a
@@ -11,17 +11,22 @@ import contextlib
 import uuid
 from dataclasses import dataclass
 
-from core.models import Job
+import django_rq
+from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
+from core.models import Job, ObjectType
 from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
+    Interface,
     Manufacturer,
     ModuleBayTemplate,
     ModuleType,
     Site,
 )
 from django.contrib.auth import get_user_model
+from extras.choices import EventRuleActionChoices
+from extras.models import EventRule, Webhook
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 
@@ -121,3 +126,34 @@ def run_job_logged(test_case, runner, raises=None, **kwargs):
         with test_case.assertRaises(raises) if raises else contextlib.nullcontext():
             runner.run(**kwargs)
     return logs.records
+
+
+def make_interface_webhook_rule(prefix: str) -> EventRule:
+    """Return a webhook event rule for every create, update and delete of an interface."""
+    webhook = Webhook.objects.create(name=f"{prefix} hook", payload_url="http://localhost:9000/")
+    event_rule = EventRule.objects.create(
+        name=f"{prefix} interface events",
+        event_types=[OBJECT_CREATED, OBJECT_UPDATED, OBJECT_DELETED],
+        action_type=EventRuleActionChoices.WEBHOOK,
+        action_object_type=ObjectType.objects.get_for_model(Webhook),
+        action_object_id=webhook.pk,
+    )
+    event_rule.object_types.set([ObjectType.objects.get_for_model(Interface)])
+    return event_rule
+
+
+def empty_the_webhook_queue(test_case):
+    """Empty the RQ queue that webhooks go to, now and when *test_case* ends."""
+    queue = django_rq.get_queue("default")
+    queue.empty()
+    test_case.addCleanup(queue.empty)
+
+
+def queued_webhook_jobs(event_rule) -> list:
+    """Return the RQ job of each webhook that *event_rule* queued."""
+    return [job for job in django_rq.get_queue("default").jobs if job.kwargs["event_rule"] == event_rule]
+
+
+def queued_webhooks(event_rule) -> list[tuple[str, str]]:
+    """Return the event type and object name of each webhook that *event_rule* queued, sorted."""
+    return sorted((job.kwargs["event_type"], job.kwargs["data"]["name"]) for job in queued_webhook_jobs(event_rule))
