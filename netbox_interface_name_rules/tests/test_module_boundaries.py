@@ -29,6 +29,17 @@ PRIVATE_PLUGIN_ATTRIBUTE_PERMITS = frozenset()
 EXPRESSION_PARSE_PERMITS = frozenset()
 PRODUCTION_AST_IMPORT_PERMITS = frozenset()
 SIMPLE_TEST_CASE_REVERSE_PERMITS = frozenset()
+_MIGRATION_BULK_WRITE = "a data migration runs outside a request on a historical model, so NetBox logs no change there"
+# Each bulk write of a change-logged row that production code keeps, with the reason it writes no change log.
+BULK_WRITE_PERMITS = {
+    ("migrations/0015_align_rule_constraints_with_clean.py", 21): _MIGRATION_BULK_WRITE,
+    ("migrations/0015_align_rule_constraints_with_clean.py", 22): _MIGRATION_BULK_WRITE,
+    ("migrations/0015_align_rule_constraints_with_clean.py", 23): _MIGRATION_BULK_WRITE,
+    ("migrations/0015_align_rule_constraints_with_clean.py", 24): _MIGRATION_BULK_WRITE,
+    ("migrations/0016_restrict_breakout_mode_values.py", 15): _MIGRATION_BULK_WRITE,
+    ("migrations/0018_refuse_device_rule_parent_module_type.py", 25): _MIGRATION_BULK_WRITE,
+}
+BULK_WRITE_METHODS = frozenset({"bulk_create", "bulk_update"})
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 
@@ -151,6 +162,22 @@ def _identifier_approximations(path: pathlib.Path) -> list[int]:
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
         and any(shape in node.value for shape in _IDENTIFIER_APPROXIMATIONS)
+    ]
+
+
+def _bulk_writes(path: pathlib.Path) -> list[int]:
+    """Return lines that write rows past ``Model.save()``: ``bulk_create()``, ``bulk_update()`` or ``update()``.
+
+    ``QuerySet.update()`` takes keyword arguments only, and ``dict.update()`` and ``set.update()`` take
+    a positional one, so an ``update()`` call without a positional argument counts as a bulk write.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and (node.func.attr in BULK_WRITE_METHODS or (node.func.attr == "update" and not node.args))
     ]
 
 
@@ -624,6 +651,48 @@ class PluginModuleBoundaryTest(SimpleTestCase):
             path.write_text("import re\nNAME = re.compile(r'[A-Za-z_]\\w*')\n", encoding="utf-8")
 
             self.assertEqual(_identifier_approximations(path), [2])
+
+
+class ChangeLoggedBulkWriteTest(SimpleTestCase):
+    """Production code writes change-logged rows through ``Model.save()``, which NetBox logs.
+
+    A bulk write sends no ``pre_save`` or ``post_save``, so NetBox records no change for the rows it
+    writes, and the snapshot guard cannot see them either.
+    """
+
+    def test_production_code_writes_no_rows_in_bulk(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), line) for path in _production_modules() for line in _bulk_writes(path)
+        }
+
+        self.assertEqual(violations - BULK_WRITE_PERMITS.keys(), set())
+
+    def test_every_permitted_bulk_write_still_exists(self):
+        found = {
+            (str(path.relative_to(PACKAGE)), line) for path in _production_modules() for line in _bulk_writes(path)
+        }
+
+        self.assertEqual(BULK_WRITE_PERMITS.keys() - found, set())
+
+    def test_the_detector_catches_each_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "Interface.objects.filter(pk=1).update(name='x')\n"
+                "Interface.objects.bulk_create(rows)\n"
+                "queryset.bulk_update(rows, ['name'])\n"
+                "queryset.update(**fields)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_bulk_writes(path), [1, 2, 3, 4])
+
+    def test_a_dict_or_set_update_is_not_a_bulk_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("names.update(other)\nseen.update({1: 2}, extra=3)\n", encoding="utf-8")
+
+            self.assertEqual(_bulk_writes(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):
