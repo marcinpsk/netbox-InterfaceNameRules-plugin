@@ -41,7 +41,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: uv pip install --system --group docs
+        run: uv sync --locked --no-build --only-group docs
 
       - name: Save coverage report from gh-pages
         run: |
@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Deploy documentation
-        run: mkdocs gh-deploy --force --strict
+        run: uv run --no-sync mkdocs gh-deploy --force --strict
 
       - name: Restore coverage report
         if: always()
