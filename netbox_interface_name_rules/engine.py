@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError, transaction
 
 from . import family as family_ops
 from . import name_template, naming, rule_selection
@@ -647,24 +648,32 @@ def _flag_rule_potentially_deprecated(rule):
     improved template resolution), or only needed for a subset of module types.
 
     Adds a NetBox Tag 'potentially-deprecated' so the rule is visually flagged
-    in the UI for operator review.  Failures are logged but never re-raised so
-    the install path is not disrupted.
+    in the UI for operator review.  A database failure is logged but never
+    re-raised so the install path is not disrupted.
     """
-    try:
-        from extras.models import Tag
+    from extras.models import Tag
 
-        tag, _ = Tag.objects.get_or_create(
-            slug="potentially-deprecated",
-            defaults={"name": "potentially-deprecated", "color": "ffc107"},
-        )
-        rule.snapshot()
-        rule.tags.add(tag)
-        logger.info(
-            "Rule '%s' flagged as potentially-deprecated: NetBox already generates the correct interface names.",
-            rule,
-        )
-    except Exception:
+    from .models import InterfaceNameRule
+
+    try:
+        with transaction.atomic():
+            # The caller read the rule before the reapply, so the stored row can be newer.
+            stored = InterfaceNameRule.objects.select_for_update().filter(pk=rule.pk).order_by("pk").first()
+            if stored is None:
+                return
+            tag, _ = Tag.objects.get_or_create(
+                slug="potentially-deprecated",
+                defaults={"name": "potentially-deprecated", "color": "ffc107"},
+            )
+            stored.snapshot()
+            stored.tags.add(tag)
+    except DatabaseError:
         logger.exception("Failed to flag rule '%s' as potentially-deprecated.", rule)
+        return
+    logger.info(
+        "Rule '%s' flagged as potentially-deprecated: NetBox already generates the correct interface names.",
+        stored,
+    )
 
 
 def _matching_moduletype_pks(module_type_pattern):

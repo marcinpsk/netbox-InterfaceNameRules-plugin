@@ -23,7 +23,8 @@ from django.urls import reverse
 from netbox import context as netbox_context
 from netbox.registry import registry
 
-from netbox_interface_name_rules.jobs import ApplyRuleJob
+from netbox_interface_name_rules import engine
+from netbox_interface_name_rules.jobs import ApplyRuleJob, run_as_job_user
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     make_device,
@@ -156,6 +157,28 @@ class RuleToggleChangeLogTest(TestCase):
             if sql.endswith("FOR UPDATE") or sql.startswith("UPDATE")
         ]
         self.assertEqual(writes, ["lock", "update"])
+
+
+class DeprecatedTagChangeLogTest(TestCase):
+    """The rename path tags a rule it read before the reapply, so the stored row can be newer."""
+
+    @classmethod
+    def setUpTestData(cls):
+        module_type = make_module_type(make_manufacturer("ChgLogFlag"), "ChgLogFlag")
+        cls.rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="{bay_position}")
+
+    def test_the_tag_records_the_stored_rule_not_the_caller_s_copy(self):
+        copy = InterfaceNameRule.objects.get(pk=self.rule.pk)
+        InterfaceNameRule.objects.filter(pk=self.rule.pk).update(description="edited after the read")
+
+        run_as_job_user(make_job("ChgLogFlag"), lambda: engine._flag_rule_potentially_deprecated(copy))
+
+        change = updates_of(self.rule).get()
+        descriptions = (change.prechange_data["description"], change.postchange_data["description"])
+        self.assertEqual(descriptions, ("edited after the read", "edited after the read"))
+        self.assertEqual(
+            (change.prechange_data["tags"], change.postchange_data["tags"]), ([], ["potentially-deprecated"])
+        )
 
 
 class ApplyRuleJobChangeLogTest(_ModuleFixture, TestCase):
