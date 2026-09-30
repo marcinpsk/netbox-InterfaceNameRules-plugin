@@ -169,6 +169,24 @@ def _in_scope_installed(plans, bases, scope):
     )
 
 
+def _is_unclaimed_top_level(interface, bases) -> bool:
+    """Return whether *interface* is a top-level interface that no single template claims."""
+    return _is_top_level(interface) and bases.base_for(interface.name) is None
+
+
+def _kept_module_plans(module, rule, variables, interfaces, bases) -> ModuleFamilyPlans:
+    """Report each unclaimed top-level interface, and keep every other interface of *module* (ADR 0015)."""
+    return ModuleFamilyPlans(
+        installed=(),
+        leftover=tuple(
+            plan_interface_rename(module, rule, variables, interface, bases)
+            if _is_unclaimed_top_level(interface, bases)
+            else plan_kept_interface(module, interface, NOT_RENAMED_REASON)
+            for interface in interfaces
+        ),
+    )
+
+
 def plan_module_families(
     module, rule, variables, interfaces, bases, scope=None, selected_pks=None
 ) -> ModuleFamilyPlans:
@@ -177,19 +195,9 @@ def plan_module_families(
     A *scope* limits an automatic run before interfaces that intend one family collapse (ADR 0013).
     """
     previous_forms = bases.previous_forms
-    if previous_forms is not None and any(
-        _is_top_level(interface) and bases.base_for(interface.name) is None for interface in interfaces
-    ):
+    if previous_forms is not None and any(_is_unclaimed_top_level(interface, bases) for interface in interfaces):
         # An unclaimed interface may belong to a family, so its module keeps every name.
-        return ModuleFamilyPlans(
-            installed=(),
-            leftover=tuple(
-                plan_interface_rename(module, rule, variables, interface, bases)
-                if _is_top_level(interface) and bases.base_for(interface.name) is None
-                else plan_kept_interface(module, interface, NOT_RENAMED_REASON)
-                for interface in interfaces
-            ),
-        )
+        return _kept_module_plans(module, rule, variables, interfaces, bases)
     installed = plan_installed_families_from(module, rule, variables, interfaces, bases)
     claimed = installed.member_pks
     plain = [
