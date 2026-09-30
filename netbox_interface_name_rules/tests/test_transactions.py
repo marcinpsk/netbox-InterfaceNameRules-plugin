@@ -9,11 +9,11 @@ from itertools import product
 from unittest import skipUnless
 
 from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
-from dcim.models import Interface
+from dcim.models import Interface, Site
 from django.contrib.auth import get_user_model
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.http import HttpRequest
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from extras import events as netbox_events
 from extras.events import serialize_for_event
 from extras.models import Tag
@@ -269,6 +269,28 @@ def _event_key(pk):
 def _payload(event):
     """Return what the flush serializes for *event*; a delete freezes it before the row goes, so only its ID is read."""
     return event["data"]["id"] if event["event_type"] == OBJECT_DELETED else event["data"]
+
+
+class CommitFailureTest(TransactionTestCase):
+    """The block is the outermost atomic block, and PostgreSQL refuses its COMMIT on a deferred foreign key."""
+
+    def setUp(self):
+        device = make_device("TxCommit", make_device_type(make_manufacturer("TxCommit"), "TxCommit"))
+        self.interface = Interface.objects.create(device=device, name="eth0", type="1000base-t")
+        self.user = get_user_model().objects.create_user(username="txcommit-operator")
+
+    def test_a_block_whose_commit_fails_keeps_no_event_and_restores_the_payload_before_it(self):
+        with request_context(self.user):
+            _describe(self.interface, "before the block")
+            with self.assertRaises(IntegrityError), atomic_with_events():
+                _describe(self.interface, "inside the block")
+                # No tenant has this ID; PostgreSQL checks the deferred foreign key at COMMIT.
+                Site.objects.create(name="TxCommit dangling", slug="txcommit-dangling", tenant_id=2_000_000_000)
+            queue = dict(events_queue.get())
+
+        self.assertEqual(list(queue), [f"dcim.interface:{self.interface.pk}"])
+        self.assertEqual(queue[f"dcim.interface:{self.interface.pk}"]["data"]["description"], "before the block")
+        self.assertFalse(Site.objects.filter(slug="txcommit-dangling").exists())
 
 
 class _SequenceCases:

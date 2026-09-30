@@ -25,7 +25,9 @@ def atomic_with_events(using=None):
     try:
         with transaction.atomic(using=using):
             yield
-            committed = not transaction.get_rollback(using=using)
+            marked_for_rollback = transaction.get_rollback(using=using)
+        # The exit of the outermost block runs COMMIT, which can still fail on a deferred constraint.
+        committed = not marked_for_rollback
     finally:
         events = events_queue.get()
         events_queue.reset(queue_token)
