@@ -3,9 +3,13 @@
 """Atomic blocks whose NetBox events count only when the block commits."""
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.db import transaction
 from netbox.context import events_queue
+
+# The event queues that enclose the current block, outermost first.
+_enclosing_queues = ContextVar("atomic_with_events_enclosing_queues", default=())
 
 
 @contextmanager
@@ -14,7 +18,9 @@ def atomic_with_events(using=None):
 
     A block that raises, or that ``transaction.set_rollback()`` rolls back, drops the events that it queued.
     """
-    token = events_queue.set({})
+    enclosing = (*_enclosing_queues.get(), events_queue.get())
+    enclosing_token = _enclosing_queues.set(enclosing)
+    queue_token = events_queue.set({})
     committed = False
     try:
         with transaction.atomic(using=using):
@@ -22,30 +28,36 @@ def atomic_with_events(using=None):
             committed = not transaction.get_rollback(using=using)
     finally:
         events = events_queue.get()
-        events_queue.reset(token)
+        events_queue.reset(queue_token)
+        _enclosing_queues.reset(enclosing_token)
         if not committed:
-            _restore_payloads(events)
+            _point_at_saved_rows(events, enclosing, using)
     if committed:
         _keep(events)
 
 
-def _restore_payloads(dropped):
-    """Reload the object of each enclosing event that the rolled-back block queued again, as the database holds it.
+def _point_at_saved_rows(dropped, enclosing, using):
+    """Point each enclosing event of an object that the rolled-back block queued at a new copy of its saved row.
 
-    NetBox 4.5 and later serialize a queued object at the flush, and the block can have changed that same instance.
+    NetBox 4.5 and later serialize the queued instance at the flush, and the block can have changed it.
     """
     from core.events import OBJECT_DELETED
 
-    queue = events_queue.get()
-    for key in dropped:
-        earlier = queue.get(key)
-        instance = None if earlier is None or earlier["event_type"] == OBJECT_DELETED else earlier.get("object")
-        if instance is None:
+    for event in (queue[key] for key in dropped for queue in enclosing if key in queue):
+        if event["event_type"] == OBJECT_DELETED or "object" not in event:
             continue
-        instance.refresh_from_db()
-        # NetBox 4.7 serializes the latest instance that queued the object, which can be another one.
-        if hasattr(earlier, "refresh_serialization_source"):
-            earlier.refresh_serialization_source(instance)
+        model = event["object_type"].model_class()
+        row = model._base_manager.using(using).filter(pk=event["object_id"]).first()
+        if row is None:
+            raise RuntimeError(
+                f"{model._meta.label} {event['object_id']} has a queued event but no row after a rollback"
+            )
+        if hasattr(event, "refresh_serialization_source"):
+            event.refresh_serialization_source(row)
+        else:
+            event["object"] = row
+            if "data" in event:
+                del event["data"]
 
 
 def _keep(events):
