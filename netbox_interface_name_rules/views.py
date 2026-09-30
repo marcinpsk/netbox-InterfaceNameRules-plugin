@@ -386,19 +386,11 @@ class RuleTestView(BaseMultiObjectView):
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
         from .name_template import evaluate_name_template
-        from .naming import build_bay_chain_variables, build_device_interface_variables
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
         channel_start = cd.get("channel_start") or 0
-        slot = cd.get("var_slot") or "1"
-        bay_position = cd.get("var_bay_position") or "1"
-        parent_bay_position = cd.get("var_parent_bay_position") or "1"
-        if cd.get("applies_to_device_interfaces"):
-            variables = build_device_interface_variables(cd.get("var_base") or "Ethernet1", cd.get("var_vc_position"))
-        else:
-            variables = build_bay_chain_variables(slot, bay_position, parent_bay_position, cd.get("var_vc_position"))
-            variables["base"] = cd.get("var_base") or "Ethernet1"
+        variables = self._template_preview_variables(cd)
 
         def row(result, role, channel=None):
             """Describe one previewed name."""
@@ -433,6 +425,20 @@ class RuleTestView(BaseMultiObjectView):
             return None, type(exc).__name__
         else:
             return preview_results, None
+
+    @staticmethod
+    def _template_preview_variables(cd):
+        """Build the template variables from the form's sample values."""
+        from .naming import build_bay_chain_variables, build_device_interface_variables
+
+        if cd.get("applies_to_device_interfaces"):
+            return build_device_interface_variables(cd.get("var_base") or "Ethernet1", cd.get("var_vc_position"))
+        slot = cd.get("var_slot") or "1"
+        bay_position = cd.get("var_bay_position") or "1"
+        parent_bay_position = cd.get("var_parent_bay_position") or "1"
+        variables = build_bay_chain_variables(slot, bay_position, parent_bay_position, cd.get("var_vc_position"))
+        variables["base"] = cd.get("var_base") or "Ethernet1"
+        return variables
 
     def _fetch_db_preview(self, cd):
         """Run find_interfaces_for_rule against the DB; return (db_preview, db_total, error)."""
