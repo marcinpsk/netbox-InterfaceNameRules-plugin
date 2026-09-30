@@ -57,6 +57,9 @@ BULK_WRITE_PERMITS = {
     ): _MIGRATION_BULK_WRITE,
 }
 BULK_WRITE_METHODS = frozenset({"bulk_create", "bulk_update"})
+# The one module that opens atomic blocks: each block there keeps its NetBox events only when it commits.
+TRANSACTIONS_MODULE = PACKAGE / "transactions.py"
+TRANSACTION_BLOCK_NAMES = frozenset({"atomic", "savepoint", "savepoint_commit", "savepoint_rollback"})
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 
@@ -195,6 +198,17 @@ def _bulk_writes(path: pathlib.Path) -> list[str]:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and (node.func.attr in BULK_WRITE_METHODS or (node.func.attr == "update" and not node.args))
+    ]
+
+
+def _transaction_blocks(path: pathlib.Path) -> list[str]:
+    """Return the source of each use of Django's atomic block or savepoint API, as an attribute or an import."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr in TRANSACTION_BLOCK_NAMES)
+        or (isinstance(node, ast.ImportFrom) and any(alias.name in TRANSACTION_BLOCK_NAMES for alias in node.names))
     ]
 
 
@@ -718,6 +732,52 @@ class ChangeLoggedBulkWriteTest(SimpleTestCase):
             path.write_text("names.update(other)\nseen.update({1: 2}, extra=3)\n", encoding="utf-8")
 
             self.assertEqual(_bulk_writes(path), [])
+
+
+class TransactionBlockTest(SimpleTestCase):
+    """Production code opens an atomic block only through ``transactions.atomic_with_events()``.
+
+    A bare block that rolls back while the work around it continues leaves its NetBox events in the
+    request's queue, and NetBox then sends them for changes that the database never kept.
+    """
+
+    def test_only_the_transactions_module_opens_an_atomic_block(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), block)
+            for path in _production_modules()
+            if path != TRANSACTIONS_MODULE
+            for block in _transaction_blocks(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_the_transactions_module_opens_one_atomic_block(self):
+        self.assertEqual(_transaction_blocks(TRANSACTIONS_MODULE), ["transaction.atomic"])
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "with transaction.atomic():\n    pass\n": ["transaction.atomic"],
+            "@transaction.atomic\ndef write():\n    pass\n": ["transaction.atomic"],
+            "from django.db.transaction import atomic\n": ["from django.db.transaction import atomic"],
+            "from django.db import transaction as tx\ntx.atomic(using='default')\n": ["tx.atomic"],
+            "sid = transaction.savepoint()\n": ["transaction.savepoint"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_transaction_blocks(path), expected)
+
+    def test_the_helper_and_the_other_transaction_calls_are_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "with atomic_with_events():\n    transaction.set_rollback(True)\ntransaction.on_commit(f)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_transaction_blocks(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):
