@@ -7,8 +7,10 @@ per worker, so a class that names its objects after itself cannot collide with a
 failure still names the class it came from.
 """
 
+import uuid
 from dataclasses import dataclass
 
+from core.models import Job
 from dcim.models import (
     Device,
     DeviceRole,
@@ -18,6 +20,7 @@ from dcim.models import (
     ModuleType,
     Site,
 )
+from django.contrib.auth import get_user_model
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:
@@ -91,3 +94,9 @@ def make_device(
         site=placement.site,
         **fields,
     )
+
+
+def make_job(prefix: str, user=None) -> Job:
+    """Return a job row that *user*, or a new user named after *prefix*, enqueued as the Apply page does."""
+    user = user or get_user_model().objects.create_user(username=slug_for(prefix, "operator"))
+    return Job.objects.create(name=f"{prefix} job", job_id=uuid.uuid4(), user=user)

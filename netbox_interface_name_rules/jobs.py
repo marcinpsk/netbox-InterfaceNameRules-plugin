@@ -2,10 +2,22 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Background jobs for bulk rule application."""
 
+import logging
+
 from netbox.jobs import JobRunner
 
 
-class ApplyRuleJob(JobRunner):
+class RuleJobRunner(JobRunner):
+    """A background job over one rule, with the runner logger that NetBox 4.3 does not give."""
+
+    def __init__(self, job):
+        super().__init__(job)
+        # NetBox 4.4 added this logger, which also writes the job log; NetBox 4.3 has none.
+        if not hasattr(self, "logger"):
+            self.logger = logging.getLogger(f"netbox.jobs.{type(self).__name__}")
+
+
+class ApplyRuleJob(RuleJobRunner):
     """Apply an InterfaceNameRule retroactively to all matching installed modules."""
 
     class Meta:
@@ -38,7 +50,7 @@ class ApplyRuleJob(JobRunner):
             self.logger.warning("%d interface(s) skipped. The plugin log names each one.", len(outcome.skipped_members))
 
 
-class ConvertFlatFamiliesJob(JobRunner):
+class ConvertFlatFamiliesJob(RuleJobRunner):
     """Convert the flat breakout families a rule's modules still carry to the channelized topology."""
 
     class Meta:
