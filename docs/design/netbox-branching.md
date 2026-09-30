@@ -49,7 +49,9 @@ test pins it.
 
 Source-read: netbox-branching v1.2.1 (and v1.1.3 for comparison), NetBox 4.7.0, the plugin at
 `develop` ad4a979. netbox-branching was not installed in the development environment, so no claim
-below is from a run until the CI leg exists.
+below is from a run with netbox-branching until the CI leg exists. The reviewers executed three
+narrower checks without netbox-branching: the `reconcile_after_parent_cascade` check in round 3 and
+the queue-level proofs in rounds 5 and 6. The record marks each of them "executed".
 
 ## Process
 
