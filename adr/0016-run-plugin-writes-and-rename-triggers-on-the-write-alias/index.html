@@ -8,7 +8,7 @@
       
       
       
-        <link rel="canonical" href="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0013-centralize-template-claim-ambiguity/">
+        <link rel="canonical" href="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/adr/0016-run-plugin-writes-and-rename-triggers-on-the-write-alias/">
       
       
       
@@ -21,7 +21,7 @@
     
     
       
-        <title>Centralize template claim ambiguity - NetBox Interface Name Rules</title>
+        <title>Run plugin writes and rename triggers on the write alias - NetBox Interface Name Rules</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#centralize-template-claim-ambiguity" class="md-skip">
+        <a href="#run-plugin-writes-and-rename-triggers-on-the-write-alias" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Centralize template claim ambiguity
+              Run plugin writes and rename triggers on the write alias
             
           </span>
         </div>
@@ -474,87 +474,20 @@
   
 
 
-<h1 id="centralize-template-claim-ambiguity">Centralize template claim ambiguity</h1>
-<p>NetBox keeps no link from an interface to the template that created it, so the plugin decides by a
-name claim which template an interface stands for. One claim pass decides it for a module on every
-path: an install, a forced reapply after a virtual-chassis or type change, Apply Rules and its
-preview, conversion, and the reapply after a move or a bay edit (ADR 0015). The family package owns
-the pass (<code>RawBases</code>) and its primitive (<code>TemplateClaim</code>, <code>resolve_template_claims</code>). No stage
-accepts or discards a claim before the pass, and every path reads the same result.</p>
-<p>The pass collects every form of every template as evidence, in this one order:</p>
-<ol>
-<li>the template's raw name now;</li>
-<li>a raw name at an earlier virtual-chassis position that is no template's raw name now, so a raw
-   name beats another template's earlier virtual-chassis form;</li>
-<li>a name the rule gives the template. <code>{base}</code> stands for the raw name now or at any virtual-chassis
-   position, and <code>{vc_position}</code> stands for any position. A parent name without <code>{base}</code> counts only
-   through a channel that the rule gave the template's base;</li>
-<li>a flat family: the plain interfaces that the rule's channel names spell from one of those bases,
-   when the module carries the first one. A flat breakout rule gives it. A channelized rule gave it
-   while the rule was flat;</li>
-<li>after a move or a bay edit, the raw name and the names the previous rule gave, from the previous
-   state. A move recognises no flat family (ADR 0015), so its pass has no flat family forms.</li>
-</ol>
-<p>A module type without interface templates claims as one template whose raw name is the bay position,
-and its claim is read like any template's. So there <code>{base}</code> is the bay position, and a rule that reads
-<code>{base}</code> or a breakout rule acts only on the interfaces this template claims. After a move it claims
-nothing (ADR 0015).</p>
-<p>The primitive takes the complete relation. A claim is a set of units: one interface name, or the
-names of one flat family. A template claims one unit when exactly one of its units holds every name
-it claims. A template that claims more, or a name that more than one template claims, disqualifies
-every claim involved. Repeated units count once, duplicate claimant IDs are invalid, and accepted
-pairs keep claimant order. The primitive renders the collision messages and does not log, so the
-decision has no side effects; the pass logs each message once through its own logger. The primitive
-uses only the standard library and does not discover candidates.</p>
-<p>The paths read the result as follows:</p>
-<ul>
-<li>A rule that reads <code>{base}</code> gets the raw name of the accepted claim. A name that no single template
-  claims has no base, so the rule does not rename it. After a move every rule reads the claim this
-  way. Otherwise a rule that does not read <code>{base}</code> takes each name as its own base.</li>
-<li>The engine chooses the scope of an automatic run, and the family package applies it with the
-  claim. An install touches an interface that a template claims as its raw name, now or at an
-  earlier position. A forced reapply and Apply Rules touch every interface. In scope, a rule without
-  channels that does not read <code>{base}</code> needs no template, so it renames every interface. A rule that
-  reads <code>{base}</code> keeps an interface that no single template claims and reports it as unclaimed. The
-  scope applies before two interfaces that intend one family collapse into one (ADR 0011).</li>
-<li>A breakout rule builds a family only on an interface that one template alone claims. This holds on
-  every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
-  does not read <code>{base}</code>, and on a module type without templates. Every other interface keeps its
-  name and is reported as unclaimed. No family takes an interface by its name. A flat family keeps
-  only the other interfaces of the flat family unit that the claim gave its template, and its plan
-  holds them by primary key. Another interface that has one of the family's names is a collision:
-  the family is refused, and that interface has its own plan. So when two interfaces would build one
-  family, the first plan builds it and the other is refused, because its names are in use. At
-  execution the executor locks the base and the interfaces the family keeps, and refuses the family
-  when one of them changed (ADR 0002). It builds the whole family or nothing (ADR 0001), and a refusal
-  reports each planned interface once with the same reason. In Apply Rules a selection of any
-  interface that a flat family keeps reaches that family. So every interface in scope is built, kept
-  by its family or reported, once. One exception: a breakout rule adds no family beside the
-  channelized families a module already models, and it reports a claimed interface there only when
-  Apply Rules selects it. A subinterface that no template claims is no candidate of its
-  own, so a breakout rule neither touches nor reports it. Prediction refuses a given name that the
-  claim finds ambiguous, and predicts every other given name from itself.</li>
-<li>A flat breakout rule renames a complete flat family that one template alone claims. It keeps and
-  reports a family that lost a member, unless the rule gives the family those names already: the
-  family's first interface then builds it again. A channelized rule renames no flat family, and
-  conversion converts only a flat family that one template alone claims.</li>
-</ul>
-<p>Installed-family discovery and the engine's admission guard used to resolve the historical
-<code>{vc_position}</code> claims in stages of their own, before the raw-name guard admitted the remaining
-interfaces. After a renumber, the stages could each accept one of two candidates of one template,
-such as a family named at the old position and an interface at the new raw name, where one pass
-refuses both and reports them. Keeping the stages and aligning their filters was rejected, because
-each stage decides without the evidence the others hold. Dropping a historical base that some
-template resolves to now was also rejected: that filter ran before the claim, and a name the rule
-gives two templates belongs to neither.</p>
-<p>A flat family used to take each module interface that had one of its channel names, and to skip a
-sibling whose name another interface held while it created the rest. A match by name put one
-interface in two plans, or in none: a raw name that another template's family would take, or an
-interface renamed after planning to one of the family's names, was reported twice or not at all. A
-flat family now keeps interfaces by primary key, and only those that the claim gave it. This changes
-what an operator sees. A sibling name in use now refuses the whole flat family, where the family used
-to be built without that sibling. When a port still has its raw name, an interface that has one of
-its family's names is now reported on its own, and the family is not built.</p>
+<h1 id="run-plugin-writes-and-rename-triggers-on-the-write-alias">Run plugin writes and rename triggers on the write alias</h1>
+<p>When netbox-branching is installed and a branch is active, its router sends every read and write of a branchable model to a second Django connection, the branch alias. netbox-branching writes a ChangeDiff row on <code>default</code> for each change in the branch. This ADR records how the plugin's writes and the rename-trigger lifecycle of ADR 0015 work on the write alias. It revises the connection and transaction decisions of ADR 0015. On main, with no branch or without netbox-branching, the behaviour does not change. The review history and the evidence are in <code>docs/design/netbox-branching.md</code>.</p>
+<p>The rename trigger works on the connection of the save. The receivers pass the signal's <code>using</code>, and <code>raw</code> stays unread. The trigger raises when <code>using</code> differs from the write alias that the router gives for Interface. It defers on the connection of <code>using</code>: it checks the atomic state of that connection, finds the plan in the commit callbacks of that connection, registers each trigger there with its savepoint tag, and appends the untagged runner there. The coalescing, the order and the savepoint filtering of ADR 0015 stay. In a branch, the plan runs after NetBox's branch transaction commits, so it runs after NetBox created the interfaces of a new module. The plan records its alias, and its runner opens the write scope with that alias as the expected alias. Event tracking is still active, so each rename gets an ObjectChange with its previous data in the branch. Checking the connection of <code>default</code> was rejected because in a branch <code>default</code> is not in an atomic block during a save, so the plan runs at once inside post_save, before the interfaces of a new module exist. Skipping raw saves was rejected because it changes behaviour on main, for example a fixture load of a module.</p>
+<p>Every plugin write runs inside a write scope, and the plugin writes only through an alias of the open scope. The scope pins the aliases of the operation: <code>default</code> on main, or <code>default</code> and the branch alias in a branch. With an expected alias, the scope raises before any query when the write alias differs. A nested scope inherits the outer one. A plugin transaction opens <code>default</code> as the outer block and the branch alias as the inner block. So the branch commits first and <code>default</code> second, as NetBox scripts and the netbox-branching sync nest them. Each member savepoint opens on both aliases, so a name collision rolls back that member on both connections and the other members continue. A rollback mark applies to every alias. The plugin keeps its queued events when the branch block commits, or is released when nested, with no alias marked for rollback. NetBox dispatches them only when its event context exits without an error. A transaction on the branch alias alone was rejected because a rollback then leaves ChangeDiff rows on <code>default</code> for changes that do not exist.</p>
+<p>In a branch only, the outermost scope sets a session-level <code>lock_timeout</code> of 10 seconds on both connections. A request in a branch holds two PostgreSQL sessions, and PostgreSQL does not detect a lock cycle through the two sessions of one request. It restores the previous value on each connection in a <code>finally</code> after the last commit callback of the plugin's own transactions. On main the scope runs no query. The timeout covers the plugin's own transactions and every callback that runs before the plugin's outermost scope exits. When a caller already holds a transaction on a connection, the scope sets and restores the timeout inside that transaction. PostgreSQL undoes a session <code>SET</code> when its transaction rolls back and keeps it when the transaction commits, so the connection keeps the value from before the transaction after either result. The callbacks that run at the caller's commit belong to the caller. Rule changes through NetBox's generic views and API belong to NetBox, as for every NetBox model. A restore that fails closes the raw DB-API connection and then Django's connection, and raises from the original error, whatever the transaction state at entry. A partial setup restores what it changed. Setting the timeout before either transaction opens was rejected because a trigger plan in a NetBox script starts while <code>default</code> is in the script's transaction. Refusing a scope that starts inside a transaction was rejected because it refuses every script in a branch. Discarding a connection only when the scope started in autocommit was rejected because a session with the changed setting can then return to the pool.</p>
+<p>The plugin's <code>on_commit</code> helper is a join of the two commits. At the call, it registers one acknowledgement on each connection with Django's own <code>on_commit</code>, which tags each acknowledgement with the current savepoints of that connection. The callback runs once, when both acknowledgements have fired. A rollback on either connection, of the transaction or of a savepoint around the call, drops that acknowledgement, so the callback does not run. The branch acknowledgement queues after NetBox's channel cascade, which the parent save registered earlier on the branch connection, so the channel reconciliation always runs after that cascade. On main there is one registration, as before. The trigger deferral does not use this helper. A registration on the branch connection alone was rejected because the callback then runs inside the open transaction of <code>default</code>, and a failed reconciliation rolls back the ChangeDiff rows of a branch family that already committed. A registration on <code>default</code> alone was rejected because it ran before NetBox's cascade when a caller held only the branch transaction. A registration on <code>default</code> that is forwarded from the branch commit was rejected because it loses a rollback of <code>default</code> that occurs before the branch commit.</p>
+<p>The internal commit marker of the plugin's transaction block stays on the branch connection. It records the branch commit before a later callback or the <code>default</code> commit can fail.</p>
+<p>The rename triggers do nothing during a netbox-branching merge, revert or sync. The plugin wraps <code>Branch.merge</code>, <code>Branch.revert</code> and <code>Branch.sync</code> once. Each wrapper sets a ContextVar and resets its token in a <code>finally</code>, so the skip ends on every exit, also on a failure or an early return. While the skip is set, the receivers read no previous state. This is the one patch of a class of another plugin, so the version check limits it to one release line and a contract test checks it. Setting the skip from netbox-branching's <code>pre_</code> signals and clearing it from its <code>post_</code> signals was rejected because netbox-branching does not send the <code>post_</code> signals on the "no changes" return or on a failure. A reset from the branch status was rejected because it couples the plugin to netbox-branching's status values and adds one query on <code>default</code> for each trigger. Relying on an idempotent reapply was rejected because a rename after the merge commit runs outside event tracking and has no ObjectChange, and a rename during a sync lands in the branch with no ObjectChange, so a merge never carries it.</p>
+<p>The operator accepted one limit of the replay: when a merge, revert or sync replays a parent rename, NetBox's channel cascade runs again at the commit. It can then rename a channel child that the plugin kept at its old name because its configured target was taken. The plugin does not change the cascade; the documentation describes it and a test pins it.</p>
+<p>A job runs in the branch it was enqueued from. At enqueue, the plugin stores the schema id of the active branch and the write alias, both derived on the server. The runner puts netbox-branching's branch cookie on its synthetic request, enters NetBox's request processors strictly, and opens the write scope with the expected alias before it reads the rule. When the branch is not ready, the cookie gives no branch, the router gives <code>default</code>, and the job fails with an error that names both aliases. Copying the enqueuing request was rejected because it stores the session cookie in Redis. The header was rejected because netbox-branching reads it only on an API path. The query parameter was rejected because it writes flash messages. A job enqueued before the upgrade fails. There is no compatibility path, so the upgrade notes tell operators to let pending plugin jobs finish before the upgrade.</p>
+<p>NetBox's background REST requests (<code>AsyncAPIJob</code>) drop the branch identity and run on main. The REST endpoints of the rule model refuse a background request while a branch is active, with an error before any write.</p>
+<p>The rule cache adds the read alias to its snapshot keys and memo keys. A pinned cache checks its alias before its fast return. A cached instance must come from the alias that it serves.</p>
+<p>The plugin supports netbox-branching 1.2.x on NetBox 4.7. When netbox-branching is installed, startup fails with an ImproperlyConfigured error for any other version. Without netbox-branching, the plugin supports NetBox 4.3 to 4.7 with no change in behaviour. A NetBox version check was rejected because netbox-branching 1.2 already requires NetBox 4.7. Support for netbox-branching 1.1.x on NetBox 4.4.1 to 4.6 was rejected because the operator chose 1.2.x only. A warning for a later release was rejected in favour of a refusal, until the operator decides otherwise.</p>
+<p>These limits are accepted and documented. Nested Django atomic blocks give no atomicity across sessions: a failure of <code>default</code> after the branch commit, or a failure in a callback on the branch connection, leaves branch rows and ObjectChanges without ChangeDiff rows. A merge still replays them, but the branch diff view does not show them. NetBox ignores a failed branch activation in its request processors, and the core writes of that request share the problem. <code>AsyncAPIJob</code> drops the branch for NetBox's other endpoints, including DCIM saves that fire the rename triggers. A session <code>SET</code> does not survive connection pooling in transaction mode, so that pooling mode is not supported.</p>
 
 
 

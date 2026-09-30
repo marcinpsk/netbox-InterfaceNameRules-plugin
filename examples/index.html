@@ -1268,7 +1268,7 @@ save the rule.</p>
 <tbody>
 <tr>
 <td><code>flat</code> (default)</td>
-<td>The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces.</td>
+<td>The base interface is renamed to the first channel and the remaining channels are created as sibling interfaces. When one of the family's names is in use on the device, no interface is renamed or created.</td>
 </tr>
 <tr>
 <td><code>channelized</code></td>
@@ -1360,9 +1360,12 @@ unsupported without a conversion checkbox. A direct conversion request returns t
 unsupported family outcome and changes no row.</p>
 <h3 id="partial-breakout-repair">Partial breakout repair</h3>
 <p>If a device was provisioned partially (e.g. only 2 of 4 channels were created
-manually), run <strong>Apply Rules → Preview &amp; Apply</strong> for the matching rule. The
-engine detects the missing channels and creates only those — existing
-interfaces are left unchanged.</p>
+manually), run <strong>Apply Rules → Preview &amp; Apply</strong> for the matching rule. When
+the interfaces carry the family's channel names and the first channel is one of
+them, the engine creates only the missing channels and leaves the existing
+interfaces unchanged. When the port still has its raw name, an interface with
+one of the family's channel names is not part of the family. The family is then
+not built, and the plugin reports the port and that interface.</p>
 <h3 id="build-rule-sonic-qsfp-dd-4100g-breakout">Build Rule — SONiC QSFP-DD 4×100G breakout</h3>
 <p><img alt="Build Rule tester showing QSFP-DD-400G-.* → swp{bay_position_num}s{channel} with 4 channels at swp5s0..swp5s3" src="../screenshots/10-build-rule-sonic-breakout-result.png" /></p>
 <hr />

@@ -456,10 +456,54 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#moving-a-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moving a module
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-module-bay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a module bay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changing-a-modules-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing a module's type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#journal-entries-after-an-automatic-rename" class="md-nav__link">
     <span class="md-ellipsis">
       
         Journal entries after an automatic rename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#change-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Change log
       
     </span>
   </a>
@@ -731,10 +775,54 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#moving-a-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moving a module
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-module-bay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a module bay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changing-a-modules-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changing a module's type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#journal-entries-after-an-automatic-rename" class="md-nav__link">
     <span class="md-ellipsis">
       
         Journal entries after an automatic rename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#change-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Change log
       
     </span>
   </a>
@@ -964,19 +1052,147 @@ This means:</p>
 <li>For <strong>retroactive applies</strong>: the rule is still useful for modules installed before the rule existed</li>
 </ul>
 <p>The tag is informational only — the rule remains active.</p>
+<h3 id="moving-a-module">Moving a module</h3>
+<p>NetBox 4.7 can move an installed module to another module bay or to another
+device. After the move, the plugin renames the interfaces of the moved module
+and of every module nested in it. The new names come from the rule that matches
+each module at its new position. That rule can be a different rule, because the
+device type, the platform and the parent module type select the rule.</p>
+<p>NetBox renames a moved module's interfaces only while they carry their raw
+template name. To find the interfaces that the plugin renamed earlier, the plugin
+rebuilds their earlier names from the state before the move: the old module bay,
+the old device and its virtual-chassis position, and the rule that matched there.
+It reads that state before the save, because in the same save NetBox can change
+the position and the name of the module bays that the moved module holds.
+When the same transaction first changes the virtual-chassis position of the old
+device, the plugin rebuilds the earlier names from the position before that
+change, also after a move to another device. NetBox 4.7 renames the raw
+interface names of a moved module for the position that the new device has at
+the move. When the same transaction then changes the position of that device,
+the plugin recognises those names at the position of the move. NetBox can also
+keep those names when the module moves back to its bay after a position change
+or a bay edit, and the plugin recognises them there too.</p>
+<p>The plugin renames an interface only when exactly one interface template claims
+it. A template claims an interface through its raw template name before or after
+the move, or through the name that the old rule or the new rule gives it. When one
+template claims two interfaces, or two templates claim one interface, the plugin
+renames none of them. When any interface of the module is left unclaimed, the
+plugin renames nothing on that module, because the unclaimed interface can belong
+to a breakout family: every interface keeps its name, and the journal entry lists
+them all. A channel or a subinterface of another interface does not count. A
+module type without interface templates claims nothing, so after a move its
+interfaces keep their names and are listed.</p>
+<p>When no rule matches the module at its new position, the interfaces keep their
+names. The journal entry lists each interface that the old rule named. When no
+rule matched the module at its old position, the plugin renames the raw template
+names as an install does.</p>
+<p>Limits:</p>
+<ul>
+<li>A move does not rename a flat breakout family. When the rule that matched a
+  module before the move uses the flat breakout mode, the plugin renames nothing
+  on that module, and the journal entry lists each of its interfaces. NetBox keeps
+  no link from an interface to its template or its family, so the plugin cannot
+  tell with certainty which interfaces form a flat family. On NetBox 4.7, use the
+  channelized breakout mode to have a move rename a breakout family, or rename the
+  interfaces by hand. A move into the scope of a flat breakout rule builds the
+  family as an install does.</li>
+<li>The plugin does not repair names that module moves left wrong before this
+  version. Apply Rules cannot repair them either, because it has no state from
+  before the move. Rename these interfaces by hand.</li>
+<li>NetBox before 4.7 saves a move as a change of the module row only. After a
+  move to another bay of the same device, the plugin renames the moved module's
+  interfaces, and recognises the raw template names from the old bay. The
+  module bays of the moved module keep the old parent bay, which no longer
+  holds the moved module. The plugin renames no interface of a module installed
+  in such a bay, after the move and after a later virtual-chassis change, and
+  the journal entry lists each of them. After a move to another device, the
+  interfaces stay on the old device. The plugin then renames no interface of
+  that module, and the journal entry lists each of them.</li>
+</ul>
+<h3 id="editing-a-module-bay">Editing a module bay</h3>
+<p>NetBox renames no interface when the position or the name of a module bay
+changes. When you change the position of a bay that holds a module, the plugin
+renames the interfaces of that module and of every module nested in it for the
+new position. When you change the name of such a bay, the plugin renames them
+only when a template variable reads the name: a bay whose position is a
+template token, such as <code>{module}</code>, takes its position from the number at the
+end of its name. Any other name change renames nothing. An edit of an empty bay
+renames nothing.</p>
+<p>The plugin finds the interfaces that it renamed earlier as it does after a
+move. It reads the bay's position and name before the save, and rebuilds the
+earlier names from them. The claim rules of a move apply, and a bay edit does
+not rename a flat breakout family either. The journal entry goes on the module
+in the bay. The plugin does not repair names that bay edits left wrong before
+this version, for the same reason as after a move.</p>
+<p>The plugin renames each module at most once per transaction, from the state
+before the first change in that transaction. This includes a virtual-chassis
+position change of the module's device in the same transaction: the plugin
+rebuilds the earlier names from the position before that change, and the
+device does not rename the module again. Several edits of one bay rename once,
+and an edit that the same transaction undoes renames nothing. When one
+transaction edits a bay and a bay nested below it, or edits a bay and moves,
+installs or changes the type of a module in it, each module is renamed once. A
+module installed in the same transaction is named as an install names it, from
+the position at its install, also when a virtual-chassis position change comes
+before or after the install, and also under a flat breakout rule.</p>
+<h3 id="changing-a-modules-type">Changing a module's type</h3>
+<p>When you change the type of an installed module, the plugin renames the
+interfaces of that module with the rule that matches its new type. A rule can
+be scoped to a parent module type, so a module nested in the changed module can
+get a different rule too. The plugin also renames the interfaces of each nested
+module whose rule changes. A nested module whose rule does not change keeps its
+names, and the journal entry does not list it.</p>
+<p>The plugin finds the interfaces of a nested module that it renamed earlier as it
+does after a move. It reads what named them before the save, and rebuilds the
+names that the old rule gave. It reads this state only when an enabled rule has
+the old type or the new type as its parent module type, because only then can a
+nested module get a different rule. The claim rules of a move apply, and a type
+change does not rename the flat breakout family of a nested module either. When
+no rule matches a nested module after the change, its interfaces keep their
+names, and the journal entry lists each interface that the old rule named. The
+journal entry goes on the module whose type changed.</p>
+<p>When one transaction changes the type of a module and then moves the module or
+edits the bay that holds it, the plugin recognises the names of the nested
+modules from the state before the type change.</p>
 <h3 id="journal-entries-after-an-automatic-rename">Journal entries after an automatic rename</h3>
 <p>The plugin renames interfaces again after a save that can make a name wrong: a
-module install, a module type change, and a device that joins or changes position
-in a virtual chassis. When that rename leaves an interface unrenamed although a
-rule matched it, or fails, the plugin writes one journal entry. The entry goes on
-the module, or on the device for a virtual-chassis change. It lists each
+module install, a module type change, a module move to another bay or device,
+an edit of the position or the name of an occupied module bay, and a device
+that joins or changes position in a virtual chassis. When that rename leaves an
+interface unrenamed although a rule matched it, or fails, the plugin writes one
+journal entry. The entry goes on the module, or on the device for a
+virtual-chassis change. The entry for a move goes on the moved module, the
+entry for a bay edit goes on the module in the bay, and the entry for a type
+change goes on the module whose type changed. Each also lists the interfaces of
+the modules nested in that module, also of a nested module that was moved,
+edited or installed in the same transaction. When the same transaction also
+changes the virtual-chassis position of the device, the entry of the device
+does not list the modules that these entries list. An entry lists each
 interface and the reason:</p>
 <ul>
 <li>the name the rule gives is already in use on the device,</li>
 <li>a template variable is not available, such as <code>{vc_position}</code> on a device
   outside a virtual chassis,</li>
-<li>no interface template claims the interface, so the rule cannot find its
-  <code>{base}</code>,</li>
+<li>no single interface template claims the interface: two templates claim it,
+  its template also claims another interface or flat family, or no template
+  claims it. This applies to a rule that uses <code>{base}</code>, to a breakout rule, and
+  after a move, a bay edit or a type change of the parent module. An install
+  reports only an interface that still carries a raw name. A breakout rule does
+  not report a subinterface that no template claims,</li>
+<li>a flat breakout family that the rule named at another virtual-chassis
+  position lost one of its interfaces, so the plugin keeps the names of the
+  rest,</li>
+<li>no rule matches a moved module, the module in an edited bay, or a module
+  nested in a module whose type changed, after the change,</li>
+<li>the interface is not on the device of its module, which NetBox before 4.7
+  leaves after a move to another device,</li>
+<li>the module bay still has the parent bay it had before its module moved,
+  which NetBox before 4.7 leaves for the modules nested in a moved module,</li>
+<li>the rule of a moved module, of the module in an edited bay, or of a module
+  nested in a module whose type changed, before the change is a flat breakout
+  rule,</li>
+<li>another interface of the module is unclaimed after a move, a bay edit or a
+  type change of the parent module, so nothing on the module is renamed,</li>
 <li>the rule failed, for example on a division by zero in its template.</li>
 </ul>
 <p>When an error stops the rename, the entry also has one line for that error,
@@ -991,6 +1207,26 @@ is the user of the request that saved the change. A save outside a request, for
 example from a script or the shell, writes an entry with no author. An interface
 that already has its correct name, or that the rule does not match, is not listed.
 The server log records the same events.</p>
+<h3 id="change-log">Change log</h3>
+<p>Each row that the plugin creates or changes gets a record in the NetBox change
+log. The record of a change holds the values before and after the change. This
+applies to a rename after a rename trigger, a rename from Apply Rules, a
+flat-to-channelized conversion and the IP addresses and FHRP group assignments
+that a conversion moves. It also applies to a rule that you enable or disable
+from the rule list, and to the <code>potentially-deprecated</code> tag.</p>
+<p>A rename after a rename trigger is recorded under the request that saved the
+change, as the user of that request. <strong>Run as Background Job</strong> and <strong>Convert as
+Background Job</strong> record each change as the user who started the job. The request
+ID of these records is the job ID, so you can find all the changes of one job in
+the change log. A job that has no user fails before it changes a row. A save
+outside a request, for example from the shell, writes no record, as for any
+other change in NetBox.</p>
+<p>NetBox event rules (webhooks, scripts and notifications) get the same changes.
+A change that the plugin rolls back sends no event. For example, NetBox can
+refuse a new family or a conversion after the plugin wrote part of it, and the
+Apply page runs each conversion and rolls it back to show its verdict. A
+rename of an existing family keeps each member that it renamed when NetBox
+refuses another member, and sends an event for each one that it kept.</p>
 <h3 id="apply-rules-and-the-applicable-column">Apply Rules and the Applicable Column</h3>
 <p><strong>Apply Rules</strong> is designed for <strong>retroactive renames</strong>.  Interfaces installed
 after a matching rule is active are renamed automatically at install time.

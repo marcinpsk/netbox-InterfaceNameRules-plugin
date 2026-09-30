@@ -1,0 +1,1578 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/design/netbox-branching/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Design record: netbox-branching support (#143) - NetBox Interface Name Rules</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#design-record-netbox-branching-support-143" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="NetBox Interface Name Rules" class="md-header__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            NetBox Interface Name Rules
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Design record: netbox-branching support (#143)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    marcinpsk/netbox-InterfaceNameRules-plugin
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="NetBox Interface Name Rules" class="md-nav__button md-logo" aria-label="NetBox Interface Name Rules" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    NetBox Interface Name Rules
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    marcinpsk/netbox-InterfaceNameRules-plugin
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../template-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Template Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-review-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Review record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constraints-decided-by-the-operator-2026-09-30" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constraints decided by the operator (2026-09-30)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-conditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acceptance conditions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Process
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#divergence-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Divergence table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#merged-design-r6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merged design r6
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Merged design r6">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#modules-and-interfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modules and interfaces
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timeout-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timeout scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trigger-lifecycle-revises-adr-0015" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger lifecycle (revises ADR 0015)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure behaviour
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#guards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slicing-stacked-into-develop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slicing (stacked into develop)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accepted-limits-documented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accepted limits (documented)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rounds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rounds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#round-1-r1-codex-gpt-6-astra-high-not-ratified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 1 (r1, codex gpt-6-astra high): NOT RATIFIED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#round-2-r2-codex-gpt-6-astra-high-not-ratified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 2 (r2, codex gpt-6-astra high): NOT RATIFIED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#round-3-r3-codex-gpt-6-astra-high-not-ratified-a-not-ratified-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 3 (r3, codex gpt-6-astra high): NOT RATIFIED A, NOT RATIFIED B
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#round-4-r4-codex-gpt-6-astra-high-ratify-a-not-ratified-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 4 (r4, codex gpt-6-astra high): RATIFY A, NOT RATIFIED B
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#round-5-r5-codex-gpt-6-astra-high-ratify-a-not-ratified-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 5 (r5, codex gpt-6-astra high): RATIFY A, NOT RATIFIED B
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#round-6-r6-codex-gpt-6-astra-high-ratify-a-ratify-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round 6 (r6, codex gpt-6-astra high): RATIFY A, RATIFY B
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="design-record-netbox-branching-support-143">Design record: netbox-branching support (#143)</h1>
+<p>Status: ratified at r6 (2026-09-30, round 6). ADR 0016 records the decision and revises ADR 0015.</p>
+<h2 id="0-review-record">0. Review record</h2>
+<p>Refuted claims, each with its evidence and reopening condition:</p>
+<ul>
+<li>None stands. R1-1b (round 1) claimed the plugin documents no API that runs inside a caller's
+  transaction. Round 2 contradicted it: <code>docs/examples.md:404-412</code> documents a direct
+  <code>apply_device_interface_rules</code> call. The refutation is withdrawn and finding 1b is handled in r3.</li>
+</ul>
+<h2 id="decision">Decision</h2>
+<p>How the plugin's writes and its rename-trigger lifecycle (ADR 0015) work when netbox-branching is
+installed and a branch is active. Behaviour on main (no branch, or netbox-branching not installed)
+does not change.</p>
+<h2 id="constraints-decided-by-the-operator-2026-09-30">Constraints decided by the operator (2026-09-30)</h2>
+<ol>
+<li>The rename triggers do not act during a netbox-branching merge, revert or sync. The design picks
+   the mechanism and keeps it correct when those operations fail or return early.</li>
+<li>Supported: netbox-branching 1.2.x on NetBox 4.7. The plugin still supports NetBox 4.3 to 4.7
+   without netbox-branching, with no change in behaviour.</li>
+<li>A session-level <code>lock_timeout</code> (10 s) on both connections for the whole plugin operation,
+   including the commit callbacks. It is set before either transaction opens and restored in a
+   <code>finally</code>. A connection whose restore fails is discarded. A nested operation inherits the outer
+   setting.
+   <strong>Revised by the operator (2026-09-30, round 3):</strong> the timeout covers the plugin's own
+   transactions and every callback that runs before the plugin's outermost scope exits. When a
+   caller already holds a transaction on a connection, the plugin sets and restores the timeout
+   inside it, and the callbacks that run at the caller's commit are the caller's. NetBox's generic
+   views and API for the rule model are NetBox's, as for every NetBox model. Reason: a request in a branch holds two Postgres sessions, and Postgres does not detect a
+   lock cycle through both sessions of one request.</li>
+<li>Delivery: stacked PRs into <code>develop</code>, this record and the ADR first.</li>
+</ol>
+<h2 id="acceptance-conditions">Acceptance conditions</h2>
+<p>The acceptance criteria of #143, and: the existing suite passes on every CI leg.</p>
+<p><strong>Narrowed by the operator (2026-09-30, round 3):</strong> "merging gives main the branch's names" excludes
+a channel child that the plugin kept at its old name (its configured target was taken) while its
+parent was renamed. When a merge, revert or sync replays the parent's rename, NetBox's channel
+cascade (NB dcim/models/mixins.py:302-337) runs again at the commit and renames that child if the
+cascade's name is free. The plugin does not change NetBox's cascade; the behaviour is documented and a
+test pins it.</p>
+<h2 id="evidence">Evidence</h2>
+<p>Source-read: netbox-branching v1.2.1 (and v1.1.3 for comparison), NetBox 4.7.0, the plugin at
+<code>develop</code> ad4a979. netbox-branching was not installed in the development environment, so no claim
+below is from a run with netbox-branching until the CI leg exists. The reviewers executed three
+narrower checks without netbox-branching: the <code>reconcile_after_parent_cascade</code> check in round 3 and
+the queue-level proofs in rounds 5 and 6. The record marks each of them "executed".</p>
+<h2 id="process">Process</h2>
+<ul>
+<li>Round 0 (blind co-design): two designers, one brief, isolated inputs. Designer A: Claude Opus
+  (xhigh effort), fresh context. Designer B: codex gpt-6-astra (high effort), read-only sandbox.
+  Neither saw the other's design, the sibling plugins' designs, or the coordinator's research notes.</li>
+<li>Merge: divergence table below.</li>
+<li>Ratify rounds: codex gpt-6-astra (high), read-only.</li>
+</ul>
+<h2 id="divergence-table">Divergence table</h2>
+<p>A = designer A (Opus), B = designer B (codex). NB = NetBox 4.7.0 <code>netbox/</code>, BR = netbox-branching 1.2.1
+<code>netbox_branching/</code>, INR = this plugin's package.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Decision</th>
+<th>A</th>
+<th>B</th>
+<th>Evidence</th>
+<th>Disposition</th>
+<th>Consequence (a test that differs)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Merge/revert/sync skip</td>
+<td><code>pre_*</code> sets a ContextVar, <code>post_*</code> resets it; a stale value resets when the branch no longer has the transitional status (one <code>default</code> query per trigger while set)</td>
+<td>wrap <code>Branch.merge/revert/sync</code>; ContextVar token reset in <code>finally</code></td>
+<td><code>post_*</code> is not sent on the "no changes" return or on failure (BR models/branches.py:917-925, 1114-1121, 1187-1197). A's reset reads BR status values and leaves its own open question of a stale skip beside a concurrent operation</td>
+<td><strong>B</strong>. The <code>finally</code> covers every exit exactly; no status coupling, no extra query. The wrapper is the one patch of another plugin's class; the version gate pins it to 1.2.x and a contract test checks it</td>
+<td>after a failed merge, a save in the same context before any trigger query: A skips if the status restore has not landed, B never skips</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Alias of plugin commit callbacks (<code>names.py:101</code>)</td>
+<td><code>default</code> (runs after both commit)</td>
+<td>the write alias, after NetBox's own channel cascade</td>
+<td>NB queues the channel cascade on the saved interface's alias (NB dcim/models/mixins.py:291-307)</td>
+<td><strong>A (reversed in r3; r1 and r2 chose B), made independent of nesting in r6</strong>. With B, the callback runs inside <code>default</code>'s open transaction, so a failed reconciliation rolls back the ChangeDiff rows of a branch family that already committed (round 2, finding 5). With A, it runs after both commit, so ChangeDiff stays intact, and the order cascade → reconciliation holds (round 1, Q-C). Registering on <code>default</code> alone ran it before the cascade when a caller held only the branch transaction (round 4, finding 1), so r6 joins an acknowledgement from each connection (r5's forwarding lost a <code>default</code> rollback, round 5). Channels stay unreconciled when <code>default</code> fails after the branch commit (under A and B) and when the reconciliation itself fails (failure table)</td>
+<td>a reconciliation lock timeout: ChangeDiff kept (A) or lost (B)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>How a job finds its branch</td>
+<td><code>copy_safe_request</code> of the enqueuing request (session cookie stored in Redis) + expected alias</td>
+<td>branch schema id + expected alias, derived server side; the runner puts the id on its synthetic request</td>
+<td>BR reads the schema id from a header only on an API path (BR utilities.py:542), from a query parameter with flash messages (:551-571), or from its cookie (:574-581); A lists the session cookie in Redis as its own open question</td>
+<td><strong>B</strong>, with BR's branch cookie as the carrier (the header needs an API path, the query parameter writes flash messages). It carries only the identity the job needs</td>
+<td>a job's stored kwargs contain no session cookie (B)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>NetBox swallows a failed branch activation (NB utilities/request.py:132-142)</td>
+<td>document only</td>
+<td>a middleware check before every view</td>
+<td>the swallow affects every core write in that request, which INR cannot make safe</td>
+<td><strong>A</strong>. Upstream-owned; INR's trigger checks <code>using</code> against the router for its own writes</td>
+<td>none for INR's acceptance conditions</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>raw</code> saves</td>
+<td>not skipped</td>
+<td>skipped</td>
+<td>INR does not read <code>raw</code> today (INR signals.py:18-50); replayed creates are covered by #1</td>
+<td><strong>A</strong>. Skipping raw saves changes behaviour on main (fixture loads)</td>
+<td><code>loaddata</code> of a module on main: A reapplies as today</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Timeout scope entered while <code>default</code> is already in a transaction (NB ScriptJob: extras/jobs.py:316-326)</td>
+<td>not addressed</td>
+<td>refuse</td>
+<td>Postgres undoes a session <code>SET</code> when its transaction aborts and keeps it when it commits</td>
+<td><strong>Neither</strong>: allow it, with the set and the restore in the same transaction state on each connection (r2, "Timeout scope"; confirmed in round 1, Q-A)</td>
+<td>a script in a branch: runs (proposed) or refused (B)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>NetBox version check</td>
+<td>none</td>
+<td>refuse NetBox outside 4.7</td>
+<td>BR 1.2 declares NetBox 4.7 as its minimum (BR <strong>init</strong>.py:17-21)</td>
+<td><strong>A</strong>. BR already enforces it</td>
+<td>none</td>
+</tr>
+<tr>
+<td>8</td>
+<td>CI cells</td>
+<td>one: NetBox 4.7.0 + BR 1.2.x</td>
+<td>two: minimum 1.2.0 and latest 1.2.x</td>
+<td>reproducible pins; 1.2.0 and 1.2.1 share the paths INR uses</td>
+<td><strong>A, pinned to 1.2.1</strong></td>
+<td>none</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Slicing</td>
+<td>6 PRs, CI leg second</td>
+<td>4 PRs, CI inside the write-lifecycle PR</td>
+<td>a harness first lets later slices start red</td>
+<td><strong>A</strong></td>
+<td>none</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Scope name</td>
+<td><code>plugin_operation(expected_write_alias=)</code></td>
+<td><code>write_scope(using=)</code></td>
+<td>naming only</td>
+<td><code>write_scope(expected_alias=)</code></td>
+<td>none</td>
+</tr>
+<tr>
+<td>11</td>
+<td>netbox-branching 1.3 or later</td>
+<td>refuse (open)</td>
+<td>refuse</td>
+<td>operator: 1.2.x only</td>
+<td><strong>refuse</strong>; reopen if the operator prefers a warning</td>
+<td>NetBox refuses to start with an unsupported version</td>
+</tr>
+</tbody>
+</table>
+<p>Round 1 resolved #6 and the rule-cache question (r2).</p>
+<h2 id="merged-design-r6">Merged design r6</h2>
+<p>Changes from r5 (round 5):</p>
+<ol>
+<li><code>on_commit</code> is a join of the two commits: at the call it registers one acknowledgement on each
+   connection with Django's own savepoint-tagged <code>on_commit</code>, and runs the callback once, when both
+   acknowledgements have fired. A rollback on either connection, of the transaction or of a savepoint
+   around the call, drops that connection's acknowledgement, so the callback never runs (finding 1).
+   This replaces the r5 forwarding, which lost the history of a <code>default</code> rollback before the branch
+   commit. It is the general rule for this mechanism: rounds 3, 4 and 5 each found one nesting that a
+   single registration mishandled.</li>
+</ol>
+<p>Changes from r4 (round 4), carried into r5:</p>
+<ol>
+<li><code>on_commit</code> runs a plugin callback after every open transaction on both connections has
+   committed, in any nesting: it registers on the branch connection, and when it fires while
+   <code>default</code> is still in a transaction, it registers again on <code>default</code> (finding 1).</li>
+<li>The validation names NetBox's branch-side channel cascades, not the plugin's callbacks, for the
+   timeout test of a trigger in a script, and adds a sync case for the replayed cascade.</li>
+<li>Divergence #2 names every case that leaves channels unreconciled.</li>
+</ol>
+<p>Changes from r3 (round 3), carried into r4:</p>
+<ol>
+<li>The merge, revert and sync acceptance conditions exclude a channel child that NetBox's replayed
+   cascade renames (operator decision; finding 1). A test pins the behaviour.</li>
+<li>The recovery of a failed channel reconciliation is qualified: Apply Rules does not restore the kept
+   name while the configured target stays taken (finding 2).</li>
+<li>Only the public <code>on_commit</code> helper registers on <code>default</code>. The internal commit marker of
+   <code>atomic_with_events</code> stays on the branch connection, so it records the branch commit before a
+   later callback or the <code>default</code> commit can fail (round-3 callback inventory).</li>
+</ol>
+<p>Changes from r2 (round 2), carried into r3:</p>
+<ol>
+<li>Plugin commit callbacks register on <code>default</code> and run after both connections commit
+   (divergence #2 reversed; finding 5).</li>
+<li>The timeout contract names what it covers and what belongs to a caller or to NetBox, as the
+   operator's revision of constraint 3 (findings 1, 2, 3).</li>
+<li>The documented engine functions (<code>docs/examples.md:404-412</code>) are an entry point, in the table.</li>
+<li>The rule model's REST endpoints refuse a background (<code>AsyncAPIJob</code>) request while a branch is
+   active; NetBox's other endpoints keep the upstream gap, documented (finding 4).</li>
+<li>The failure table separates a failure before the branch commit, a failure in a callback on the
+   branch connection, and a failure in a plugin callback after both commit (finding 5).</li>
+<li>The entry-point table lists every entry point the round-2 audit named.</li>
+</ol>
+<p>Changes from r1 (round 1), carried into r2:</p>
+<ol>
+<li>The timeout scope rule no longer requires autocommit at entry. When a caller already holds a
+   transaction on a connection, the set and the restore run inside it (finding 1, Q-A).</li>
+<li>The supported entry points of an operation are listed, each with the transaction state at entry.</li>
+<li>A failed restore discards the connection in every entry state (finding 2).</li>
+<li>Upgrade: pending plugin jobs must finish before the upgrade (finding 3).</li>
+<li>The rule cache keys its snapshot and memo by read alias, and a pinned cache checks its alias (Q-D).</li>
+<li>"Events kept" now says that NetBox dispatches them only when its event context exits cleanly (Q-F).</li>
+</ol>
+<h3 id="modules-and-interfaces">Modules and interfaces</h3>
+<p><strong><code>transactions.py</code></strong> stays the one owner of connections and transaction state.</p>
+<ul>
+<li><code>write_alias() -&gt; str</code>: <code>router.db_for_write(Interface)</code>.</li>
+<li><code>write_scope(expected_alias=None)</code>: pins the operation's aliases, <code>("default",)</code> on main or
+  <code>("default", &lt;branch alias&gt;)</code> in a branch. With <code>expected_alias</code>, it raises before any query when
+  <code>write_alias()</code> differs. A nested scope inherits the outer one and raises when its alias differs.
+  In a branch only, the outermost scope reads <code>lock_timeout</code> on both connections and sets it to 10 s
+  (<code>set_config('lock_timeout', '10s', false)</code>), and restores each value in a <code>finally</code> after the last
+  commit callback of the plugin's own transactions. On main it runs no query. Restores are
+  independent. A restore that fails closes the raw DB-API connection, then Django's connection, and
+  raises from the original error, whatever the transaction state at entry. Partial setup restores
+  what it changed. See "Timeout scope" for the transaction state at entry.</li>
+<li><code>atomic_with_events()</code>: joins the open scope or opens one. Its first block opens after the scope
+  set the timeout. It opens <code>atomic("default")</code> and, with
+  two aliases, <code>atomic(&lt;branch alias&gt;)</code> inside it, so the branch commits first and <code>default</code> second,
+  as NB scripts (extras/jobs.py:316-326) and BR sync (models/branches.py:936-940) nest them. The
+  plugin keeps its queued events when the branch block commits (outermost) or is released (nested)
+  with no alias marked for rollback. NetBox dispatches them only when its event context exits
+  cleanly (NB netbox/context_managers.py:22-33); a later failure can still drop them. <code>Block.set_rollback()</code> marks every alias. The <code>using</code> parameter goes.</li>
+<li><code>on_commit(callback)</code>: runs <em>callback</em> once, after the transactions open at the call commit on both
+  connections, whatever their nesting. At the call it registers one acknowledgement on each
+  connection with Django's <code>on_commit</code> (non-robust), which tags it with that connection's current
+  savepoints (Django db/backends/base/base.py:727-732). A one-shot gate runs <em>callback</em> when both
+  acknowledgements have fired. A connection in autocommit at the call acknowledges at once (Django
+  runs the callback immediately, :737-747). A rollback of the transaction, or of a savepoint around
+  the call, on either connection drops that acknowledgement (:405 and the rollback path), so
+  <em>callback</em> never runs. The branch acknowledgement queues after NetBox's channel cascade, which the
+  parent save registered earlier on the branch connection (NB dcim/models/mixins.py:302-307), so
+  <em>callback</em> runs after that cascade. On main the two connections are one: one registration, as
+  today. It raises without an open scope. The gate holds the complete set of pending connections
+  before it registers the first acknowledgement, and marks itself fired before it runs <em>callback</em>.
+  Trigger deferral does not use it: the trigger registers on
+  the save's connection directly (below). The internal commit marker of <code>atomic_with_events</code> stays
+  on the branch connection (INR transactions.py:29-43).</li>
+<li>Invariant: INR writes only through an alias of the open scope.</li>
+</ul>
+<p><strong><code>branching.py</code></strong> is the one module that imports <code>netbox_branching</code>, loaded only when it is
+installed. <code>AppConfig.ready()</code> calls it.</p>
+<ul>
+<li>Version gate: raise <code>ImproperlyConfigured</code> unless the installed netbox-branching is 1.2.x.</li>
+<li>Replay suppression: wrap <code>Branch.merge</code>, <code>Branch.revert</code> and <code>Branch.sync</code> once (idempotent,
+  <code>functools.wraps</code>). Each wrapper sets a ContextVar token and resets it in <code>finally</code>.
+  <code>replay_in_progress() -&gt; bool</code>.</li>
+<li>Job identity: <code>branch_identity() -&gt; str | None</code> (the active branch's schema id) and
+  <code>activate_on(request, identity)</code>, which sets BR's branch cookie on a synthetic request.</li>
+</ul>
+<h3 id="timeout-scope">Timeout scope</h3>
+<p>A session <code>SET</code> issued inside a transaction is undone when that transaction rolls back and kept
+when it commits (PostgreSQL <code>SET</code>). So when the set and the restore run in the same transaction on a
+connection, the connection ends with its value from before that transaction after either outcome,
+also when the restore itself cannot run in an aborted transaction. The scope is lexical, so its set
+and restore run in the same transaction state on each connection. Entry points of an operation:</p>
+<table>
+<thead>
+<tr>
+<th>Entry point</th>
+<th><code>default</code> at entry</th>
+<th>Branch connection at entry</th>
+<th>Covered by the plugin's scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Apply Rules / Convert view, foreground POST; rule toggle; Convert GET dry run (rolls back both aliases)</td>
+<td>autocommit</td>
+<td>autocommit</td>
+<td>all its transactions and callbacks</td>
+</tr>
+<tr>
+<td>Plugin job (Apply Rules, Convert)</td>
+<td>autocommit</td>
+<td>autocommit</td>
+<td>all</td>
+</tr>
+<tr>
+<td>Rename-trigger plan, UI / REST / bulk import / bulk edit (incl. a bulk module-type change) / <code>AsyncViewJob</code></td>
+<td>autocommit</td>
+<td>autocommit (the plan runs at the commit of NetBox's branch block)</td>
+<td>all</td>
+</tr>
+<tr>
+<td>Rename-trigger plan, NetBox script</td>
+<td>inside the script's transaction (NB extras/jobs.py:316-326)</td>
+<td>autocommit (the plan runs at the commit of the script's branch block)</td>
+<td>the plugin's transactions and its branch-side work; plugin callbacks on <code>default</code> run at the script's commit, the caller's</td>
+</tr>
+<tr>
+<td>Documented engine function (<code>apply_device_interface_rules</code>, <code>docs/examples.md:404-412</code>) in a shell</td>
+<td>autocommit</td>
+<td>autocommit</td>
+<td>all</td>
+</tr>
+<tr>
+<td>The same function inside a caller's transaction (a script)</td>
+<td>inside the caller's transaction</td>
+<td>inside the caller's transaction</td>
+<td>the plugin's statements; every callback runs at the caller's commit, the caller's</td>
+</tr>
+<tr>
+<td>Rule create / edit / import / bulk edit / delete through NetBox's generic views and API</td>
+<td>NetBox's (branch block open at the model save)</td>
+<td>NetBox's</td>
+<td>not a plugin operation: NetBox owns it, as for every NetBox model. The partial save of <code>models.py:364-375</code> joins NetBox's transaction</td>
+</tr>
+<tr>
+<td>Rule REST request in the background (<code>AsyncAPIJob</code>) with a branch active</td>
+<td>refused with an error before any write (r3 change 4)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Plugin migrations; the management command</td>
+<td>the migration's transaction / no write</td>
+<td></td>
+<td>not a runtime operation</td>
+</tr>
+</tbody>
+</table>
+<p>NetBox's own callbacks that core saves registered are NetBox's. The upgrade notes and
+<code>docs/examples.md</code> say that the documented engine function, called inside a transaction the caller
+holds, leaves the waits of the commit callbacks to the caller.</p>
+<h3 id="trigger-lifecycle-revises-adr-0015">Trigger lifecycle (revises ADR 0015)</h3>
+<ul>
+<li>The receivers pass the signal's <code>using</code> (INR signals.py:18-50). <code>raw</code> stays unread.</li>
+<li><code>before_save</code> and <code>after_save</code> return at once while <code>replay_in_progress()</code>: no previous-state read,
+  no trigger, no plan.</li>
+<li>Otherwise the trigger raises when <code>using</code> differs from <code>write_alias()</code>.</li>
+<li>It defers on <code>transaction.get_connection(using)</code>: it checks that connection's atomic state, scans
+  its <code>run_on_commit</code> for the plan, registers each trigger with <code>on_commit(..., using=using)</code> and
+  appends the untagged runner there. ADR 0015's coalescing, ordering and savepoint filtering stay;
+  only the connection changes. In a branch the plan runs after NetBox's branch transaction commits,
+  after <code>Module._save_new()</code> created the interfaces (NB dcim/models/modules.py:524-593).</li>
+<li>The plan records its alias; the runner opens <code>write_scope(expected_alias=plan.alias)</code>. Request and
+  <code>event_tracking</code> are still active, so each rename gets an ObjectChange with <code>prechange_data</code> in the
+  branch.</li>
+</ul>
+<h3 id="jobs">Jobs</h3>
+<p><code>_enqueue</code> stores <code>branch_identity()</code> and <code>write_alias()</code>, derived server side. The runner builds its
+synthetic request with BR's branch cookie (<code>branching.activate_on</code>), enters the request processors strictly (INR jobs.py:16-38),
+and opens <code>write_scope(expected_alias=...)</code> before it reads the rule. A branch that is not ready makes BR's
+cookie path return no branch (BR utilities.py:574-581), so the router returns <code>default</code>, and the job fails naming both aliases. A job enqueued
+before the upgrade fails; there is no compatibility path, so the upgrade notes say to let pending
+plugin jobs finish first.</p>
+<h3 id="rule-cache">Rule cache</h3>
+<p>The rule cache (INR rule_selection.py:128-172) adds the read alias to its snapshot and memo keys, and
+a pinned cache checks its alias before its fast return. Round 1 found no wrong name from the missing
+key (the fingerprint covers the fields a rename reads), but a cached instance must come from the alias
+it serves.</p>
+<h3 id="failure-behaviour">Failure behaviour</h3>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Result</th>
+<th>Left behind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name collision in a member</td>
+<td>savepoints on both aliases roll back; member BLOCKED; the rest continue</td>
+<td>nothing for that member</td>
+</tr>
+<tr>
+<td>Lock timeout (55P03) or other error before the branch commit</td>
+<td>the family rolls back on both aliases; the plan reports FAILED in the journal; a view shows an error; a job errors</td>
+<td>families committed before it</td>
+</tr>
+<tr>
+<td>Failure in a callback on the branch connection after the branch commit (NetBox's channel cascade)</td>
+<td>the error leaves the branch block after its commit and rolls <code>default</code> back</td>
+<td>the branch family and its ObjectChanges without ChangeDiff rows (the partial commit below); names of the channels the cascade did not rename. Reported as FAILED</td>
+</tr>
+<tr>
+<td>Failure in a plugin callback after both commit (channel reconciliation)</td>
+<td>the callback's own transaction rolls back; the error is reported as for a failure after commit</td>
+<td>the family, its ObjectChanges and ChangeDiff rows; each child the cascade renamed carries the cascade's name. Apply Rules does not restore the kept name while its configured target stays taken: the parent is unchanged, so no reconciliation is scheduled (INR family/execution.py:120-127, family/names.py:92-93). The journal entry names each child and the name it kept, and the operator frees the target and reapplies or renames the child back</td>
+</tr>
+<tr>
+<td>Branch COMMIT fails</td>
+<td>branch rolls back; the error rolls <code>default</code> back</td>
+<td>nothing</td>
+</tr>
+<tr>
+<td><code>default</code> COMMIT fails after the branch committed</td>
+<td>error raised and reported; the plugin keeps its queued events for the committed rows, and NetBox may not dispatch them</td>
+<td>branch rows and ObjectChanges without ChangeDiff rows. A merge still replays them (it reads ObjectChanges, BR models/branches.py:427-433); the branch diff view misses them. Accepted: nested Django atomics give no cross-session atomicity</td>
+</tr>
+<tr>
+<td>Restore of <code>lock_timeout</code> fails</td>
+<td>see <code>write_scope</code></td>
+<td>no session with the setting in a pool</td>
+</tr>
+<tr>
+<td>Merge/revert/sync fails or returns early</td>
+<td>the wrapper's <code>finally</code> resets the skip</td>
+<td>nothing</td>
+</tr>
+</tbody>
+</table>
+<h3 id="guards">Guards</h3>
+<ul>
+<li>Extend <code>TransactionBlockTest</code> (INR tests/test_module_boundaries.py:737-778): outside
+  <code>transactions.py</code>, forbid <code>atomic</code>, <code>savepoint*</code>, <code>set_rollback</code>, <code>get_rollback</code>, <code>on_commit</code>,
+  <code>get_connection</code>, <code>mark_for_rollback_on_error</code>, and importing <code>connection</code>, <code>connections</code> or
+  <code>router</code> from <code>django.db</code>. Named exceptions: <code>rename_triggers.py</code> (<code>on_commit</code>/<code>get_connection</code>
+  with an explicit alias only); <code>models.py</code> (<code>router</code> for its own row).</li>
+<li>An AST test: only <code>branching.py</code> imports <code>netbox_branching</code>.</li>
+<li>CI: the branch leg sets <code>EXPECT_NETBOX_BRANCHING=1</code>, which turns the branch tests' skip into a
+  failure (the <code>EXPECT_NETBOX_CHANNELIZATION</code> pattern).</li>
+</ul>
+<h3 id="validation">Validation</h3>
+<p><code>tests/test_branching.py</code>, <code>TransactionTestCase</code>. A helper provisions as BR's tests do
+(<code>save(provision=False)</code>, <code>provision(user)</code>, <code>refresh_from_db()</code>, BR tests/utils.py:12-28);
+<code>tearDown</code> deprovisions and closes the branch connection (<code>--reuse-db</code> keeps schemas). Requests use
+the test client with BR's cookie or header, so middleware, NB's view transaction, the trigger and the
+plan run for real. One test per acceptance condition, plus: bulk import; merge with the iterative
+and the squash strategy; merge with no changes, a dry run and an injected failure, each followed by
+a save that must reapply; a flat family blocked after partial writes leaves no rows and no
+ChangeDiff; <code>lock_timeout</code> is 10 s inside and restored after, nested scopes do not restore, a failed
+restore discards (also inside a caller's transaction); a trigger in a NetBox script in a branch keeps
+10 s on both connections through NetBox's branch-side channel cascades and restores both before the
+script's <code>default</code> callbacks run (<code>test_script_trigger_restores_timeouts_before_caller_default_callbacks</code>);
+the documented engine function inside a branch-only caller transaction, and inside both nestings of
+the two connections, keeps a blocked child's name after the caller frees its target and commits;
+<code>test_on_commit_orders_cascade_and_reconciliation_for_each_transaction_nesting</code>;
+<code>test_branch_outer_default_rollback_discards_reconciliation</code>;
+<code>test_default_savepoint_rollback_discards_reconciliation_before_branch_commit</code>;
+<code>test_trigger_savepoint_rollback_filters_only_rolled_back_triggers</code>;
+<code>test_trigger_runner_reconciliation_during_branch_callback_drain</code>; the timeout after an
+aborted caller transaction; a reconciliation lock timeout keeps the ChangeDiff rows, and the journal
+names each child and its kept name; a merge and a revert (iterative and squash) and a sync after a
+blocked channel child was kept pin the documented cascade behaviour, asserting names after the
+callbacks ran; a background rule REST request in a branch is refused and writes nothing on either
+alias; the Convert GET dry run leaves no row and no ChangeDiff; the rule cache in main and in an identical branch, then after a
+branch-only rule change; the version gate.</p>
+<p>CI: one new cell, NetBox 4.7.0 + netbox-branching 1.2.1, <code>DynamicSchemaDict</code>, <code>BranchAwareRouter</code>,
+<code>netbox_branching</code> last in <code>PLUGINS</code>, <code>EXPECT_NETBOX_BRANCHING=1</code>, and the whole suite. Query counts
+are recorded, not asserted, on that leg (<code>record_change_diff</code> adds queries). The plain 4.7.0 leg
+still asserts <code>query_counts.json</code>, which proves main adds no query.</p>
+<h3 id="slicing-stacked-into-develop">Slicing (stacked into <code>develop</code>)</h3>
+<ol>
+<li>ADR 0016 + this record. AC: ADR.</li>
+<li>Branch CI leg, test helper, <code>EXPECT_NETBOX_BRANCHING</code>, version gate, a provisioning smoke test.
+   AC: CI leg.</li>
+<li>Two-alias transactions: <code>write_scope</code>, <code>atomic_with_events</code>, <code>Block.set_rollback</code>, <code>on_commit</code>,
+   <code>lock_timeout</code>, view scopes, <code>models.py</code>, guard extension, rule-cache alias key, callbacks on
+   <code>default</code>,
+   <code>template_names.py</code> docstring.
+   AC: Apply/Convert in the foreground; collision via Apply; docstring.</li>
+<li>Trigger on the write alias. AC: UI/REST install; collision on install.</li>
+<li>Jobs in the branch, and the refusal of background rule REST requests in a branch. AC: jobs and
+   the start check.</li>
+<li>Replay suppression and <code>docs/configuration.md</code>. AC: merge, revert, sync, docs.</li>
+</ol>
+<h3 id="accepted-limits-documented">Accepted limits (documented)</h3>
+<ul>
+<li>No cross-session atomicity: a <code>default</code> failure after the branch commit, or a failure in a
+  callback on the branch connection, leaves branch rows without ChangeDiff rows. NetBox scripts and
+  netbox-branching's sync nest the connections the same way.</li>
+<li>NetBox's <code>AsyncAPIJob</code> drops the branch identity (NB netbox/api/viewsets/mixins.py:345-351,
+  netbox/jobs.py:292-326), so a background REST request made in a branch runs on main. The plugin
+  refuses it for the rule model; NetBox's other endpoints, including DCIM saves that fire the rename
+  triggers, keep the gap.</li>
+<li>NetBox swallows a failed branch activation in its request processors; core writes share it.</li>
+<li>A session <code>SET</code> does not survive transaction-mode connection pooling (PgBouncer); unsupported.</li>
+<li>Upgrade: pending plugin jobs must finish before the upgrade.</li>
+<li>A replayed parent rename re-runs NetBox's channel cascade at the commit of a merge, revert or
+  sync; a child that the plugin kept at its old name can then differ from the branch (acceptance
+  conditions, narrowed).</li>
+</ul>
+<h2 id="rounds">Rounds</h2>
+<h3 id="round-1-r1-codex-gpt-6-astra-high-not-ratified">Round 1 (r1, codex gpt-6-astra high): NOT RATIFIED</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Severity</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1a</td>
+<td>The plan runner in a NetBox script enters while <code>default</code> is in the script's transaction, so "set before either transaction opens" cannot hold</td>
+<td>blocker</td>
+<td>CLOSED in r2 (changes 1, 2): the rule now rests on PostgreSQL's transactional <code>SET</code>, which the reviewer confirmed (Q-A); verified NB extras/jobs.py:316-326, 398-403</td>
+</tr>
+<tr>
+<td>1b</td>
+<td>A script calling the apply operation inside its transactions leaves callbacks unbounded</td>
+<td>blocker</td>
+<td>REFUTED (section 0, R1-1b)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Discard only when the entry was autocommit weakens the operator's constraint</td>
+<td>major</td>
+<td>CLOSED in r2 (change 3)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Queued jobs fail after the upgrade</td>
+<td>minor</td>
+<td>CLOSED in r2 (change 4)</td>
+</tr>
+<tr>
+<td>Q-B</td>
+<td>Wrapper covers every stock BR 1.2.1 merge/revert/sync path</td>
+<td>answer</td>
+<td>confirms divergence #1</td>
+</tr>
+<tr>
+<td>Q-C</td>
+<td>Callback order with #2: cascade before reconciliation on success</td>
+<td>answer</td>
+<td>confirms divergence #2</td>
+</tr>
+<tr>
+<td>Q-D</td>
+<td>Rule cache serves main instances in a branch; no wrong name found</td>
+<td>answer</td>
+<td>r2 change 5</td>
+</tr>
+<tr>
+<td>Q-E</td>
+<td>No supported path saves with <code>using</code> other than the router's alias</td>
+<td>answer</td>
+<td>trigger check stays</td>
+</tr>
+<tr>
+<td>Q-F</td>
+<td>"Events kept" overstated dispatch</td>
+<td>answer</td>
+<td>r2 change 6</td>
+</tr>
+</tbody>
+</table>
+<h3 id="round-2-r2-codex-gpt-6-astra-high-not-ratified">Round 2 (r2, codex gpt-6-astra high): NOT RATIFIED</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Severity</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1a</td>
+<td>Constraint 3 still says "before either transaction opens" while r2 allows setup inside the caller's</td>
+<td>(with 2)</td>
+<td>NOT-CLOSED in r2; r3 change 2 (constraint 3 revised by the operator)</td>
+</tr>
+<tr>
+<td>1b / 1</td>
+<td><code>docs/examples.md:404-412</code> documents a direct engine call, so the refutation fails</td>
+<td>blocker</td>
+<td>ACCEPTED (verified); refutation withdrawn; r3 changes 2, 3</td>
+</tr>
+<tr>
+<td>2</td>
+<td>r2 holds two timeout contracts at once</td>
+<td>major</td>
+<td>r3 change 2</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Rule CRUD through NetBox's generic views has no timeout owner</td>
+<td>major</td>
+<td>r3 change 2: NetBox-owned, excluded explicitly</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>AsyncAPIJob</code> runs a branch request on main</td>
+<td>major</td>
+<td>ACCEPTED (verified NB netbox/api/viewsets/mixins.py:345-351, netbox/jobs.py:292-326); r3 change 4</td>
+</tr>
+<tr>
+<td>5</td>
+<td>A callback timeout after the branch commit cannot roll the family back</td>
+<td>major</td>
+<td>ACCEPTED; r3 changes 1, 5 (divergence #2 reversed)</td>
+</tr>
+<tr>
+<td>audit</td>
+<td>Missing entry points</td>
+<td>answer</td>
+<td>r3 change 6</td>
+</tr>
+<tr>
+<td>2, Q-D, Q-F (round 1)</td>
+<td></td>
+<td></td>
+<td>CLOSED (reviewer)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="round-3-r3-codex-gpt-6-astra-high-not-ratified-a-not-ratified-b">Round 3 (r3, codex gpt-6-astra high): NOT RATIFIED A, NOT RATIFIED B</h3>
+<p>Two verdicts: A on the core, B on the timeout and callback mechanism.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Severity</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 (A)</td>
+<td>A replayed parent rename re-runs NetBox's channel cascade at commit and renames a child the plugin kept (verified BR utilities.py:512, models/changes.py:134-140; NB dcim/models/mixins.py:302-337)</td>
+<td>blocker</td>
+<td>ACCEPTED as a documented limit by the operator; acceptance condition narrowed; r4 change 1</td>
+</tr>
+<tr>
+<td>2 (B)</td>
+<td>Apply Rules does not repair a failed reconciliation while the target stays taken (executed: <code>reconcile_after_parent_cascade</code> returns at once for an unchanged parent)</td>
+<td>major</td>
+<td>ACCEPTED; r4 change 2</td>
+</tr>
+<tr>
+<td>inventory</td>
+<td>Internal commit marker must stay on the write connection</td>
+<td>note</td>
+<td>r4 change 3</td>
+</tr>
+<tr>
+<td>round-2 1, 1a, 2, 3, 4, entry points</td>
+<td></td>
+<td></td>
+<td>CLOSED (reviewer, under the revised constraint 3)</td>
+</tr>
+<tr>
+<td>round-2 5</td>
+<td></td>
+<td></td>
+<td>NOT-CLOSED in r3; r4 change 2</td>
+</tr>
+<tr>
+<td>constraint 3 original text</td>
+<td>not met for scripts, the engine call inside a caller's transaction, and rule CRUD</td>
+<td></td>
+<td>constraint 3 revised by the operator</td>
+</tr>
+</tbody>
+</table>
+<h3 id="round-4-r4-codex-gpt-6-astra-high-ratify-a-not-ratified-b">Round 4 (r4, codex gpt-6-astra high): RATIFY A, NOT RATIFIED B</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Severity</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>round-3 1, 2, inventory, round-2 5</td>
+<td></td>
+<td></td>
+<td>CLOSED (reviewer)</td>
+</tr>
+<tr>
+<td>1 (B)</td>
+<td>A caller that holds only the branch transaction gets the reconciliation before NetBox's cascade, which then moves the kept child (verified: plugin <code>default</code> block is outermost and commits first; the cascade waits for the caller's branch commit)</td>
+<td>major</td>
+<td>ACCEPTED; r5 change 1 (the reviewer's second option: an order that holds for every nesting, no entry state rejected)</td>
+</tr>
+<tr>
+<td>clarification</td>
+<td>Script timeout test wording; divergence #2 wording; a sync replay test</td>
+<td>minor</td>
+<td>r5 changes 2, 3</td>
+</tr>
+</tbody>
+</table>
+<h3 id="round-5-r5-codex-gpt-6-astra-high-ratify-a-not-ratified-b">Round 5 (r5, codex gpt-6-astra high): RATIFY A, NOT RATIFIED B</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding</th>
+<th>Severity</th>
+<th>Disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>round-4 1, wording, sync test</td>
+<td></td>
+<td></td>
+<td>CLOSED (reviewer)</td>
+</tr>
+<tr>
+<td>1 (B)</td>
+<td>r5's forwarding registers on <code>default</code> only after the branch commit, so a <code>default</code> rollback (or savepoint rollback) before it does not drop the reconciliation (executed: a queue-only proof with Django's own <code>on_commit</code>/<code>rollback</code>/<code>savepoint_rollback</code> printed <code>RECONCILED</code> for both cases)</td>
+<td>major</td>
+<td>ACCEPTED; r6 change 1, the reviewer's closing change, stated as the general rule</td>
+</tr>
+<tr>
+<td>Django</td>
+<td>Registration from a running callback runs at once on an autocommit connection; a drain aborts on a non-robust exception</td>
+<td>note</td>
+<td>used in r6</td>
+</tr>
+</tbody>
+</table>
+<h3 id="round-6-r6-codex-gpt-6-astra-high-ratify-a-ratify-b">Round 6 (r6, codex gpt-6-astra high): RATIFY A, RATIFY B</h3>
+<p>Round-5 finding CLOSED. No new finding. Two implementation notes, added to r6 without a design
+change: the gate holds the complete pending set before the first registration, and marks itself fired
+before it runs the callback. Executed: a queue-level proof with Django 6.1.1's own <code>on_commit</code>,
+<code>run_and_clear_commit_hooks</code>, <code>rollback</code> and <code>savepoint_rollback</code> and a model of the r6 gate, over
+every nesting of rounds 4 and 5, a commit, a rollback and a savepoint rollback of each connection
+before and after the other commits, the trigger runner during a callback drain, and main: 77 outcomes
+as specified, and the two r5 counterexamples still reproduce under the old rule. Not executed:
+final names, ChangeDiff rows, timeouts and connection disposal; the branch CI leg (slice 2) runs them.</p>
+<p>First increment: this record and ADR 0016 (slice 1). First executable increment: the branch CI leg
+(slice 2): a real branch provisions and deprovisions and its connection closes, the branch leg cannot
+skip its branch tests, an unsupported netbox-branching version stops startup, and the existing legs
+stay green.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "navigation.sections"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
