@@ -39,7 +39,7 @@ from netbox_interface_name_rules.tests.helpers import (
     set_lock_timeout,
 )
 from netbox_interface_name_rules.tests.test_branch_transactions import BRANCH_BEFORE, DEFAULT_BEFORE, SERVER_DEFAULT
-from netbox_interface_name_rules.tests.test_branch_writes import _BranchWriteCase, _ChannelCase
+from netbox_interface_name_rules.tests.test_branch_writes import _BranchWriteCase, _ChannelCase, names_of
 from netbox_interface_name_rules.tests.test_channelization import PLAIN_TYPE
 from netbox_interface_name_rules.transactions import LOCK_TIMEOUT
 
@@ -159,6 +159,33 @@ class InstallInABranchTest(_InstallCase):
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`b0` to `b0.br`", entry.comments)
         self.assert_nothing_on_main()
+
+
+class MoveInABranchTest(_InstallCase):
+    """A module installed on main, so the branch copies it with the names of the rule."""
+
+    PREFIX = "BrMove"
+
+    def build(self):
+        super().build()
+        with transaction.atomic():
+            self.module = self.install(0)
+
+    def test_a_module_moved_through_the_rest_api_gets_the_names_of_its_new_bay_in_the_branch(self):
+        del self.client.cookies["active_branch"]
+
+        response = self.client.patch(
+            reverse("dcim-api:module-detail", kwargs={"pk": self.module.pk}),
+            {"module_bay": self.bay(1).pk},
+            content_type="application/json",
+            headers={"X-NetBox-Branch": self.branch.schema_id},
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(self.names_in_branch(1), ["a1.br", "b1.br"])
+        self.assertEqual(self.renames_in_branch(1), [("a0.br", "a1.br"), ("b0.br", "b1.br")])
+        self.assertEqual(sorted(names_of(self.module)), ["a0.br", "b0.br"])
+        self.assertEqual(Module.objects.get(pk=self.module.pk).module_bay, self.bay(0))
 
 
 class TriggerTransactionsInABranchTest(_InstallCase):
