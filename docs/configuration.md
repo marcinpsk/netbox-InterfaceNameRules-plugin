@@ -257,6 +257,23 @@ example from a script or the shell, writes an entry with no author. An interface
 that already has its correct name, or that the rule does not match, is not listed.
 The server log records the same events.
 
+### Change log
+
+Each row that the plugin creates or changes gets a record in the NetBox change
+log. The record of a change holds the values before and after the change. This
+applies to a rename after a rename trigger, a rename from Apply Rules, a
+flat-to-channelized conversion and the IP addresses and FHRP group assignments
+that a conversion moves. It also applies to a rule that you enable or disable
+from the rule list, and to the `potentially-deprecated` tag.
+
+A rename after a rename trigger is recorded under the request that saved the
+change, as the user of that request. **Run as Background Job** and **Convert as
+Background Job** record each change as the user who started the job. The request
+ID of these records is the job ID, so you can find all the changes of one job in
+the change log. A job that has no user fails before it changes a row. A save
+outside a request, for example from the shell, writes no record, as for any
+other change in NetBox.
+
 ### Apply Rules and the Applicable Column
 
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed
