@@ -62,6 +62,7 @@ TRANSACTIONS_MODULE = PACKAGE / "transactions.py"
 TRANSACTION_BLOCK_NAMES = frozenset({"atomic", "savepoint", "savepoint_commit", "savepoint_rollback"})
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
+BRANCHING_MODULE = PACKAGE / "branching.py"
 
 
 def _family_submodules() -> set[str]:
@@ -210,6 +211,22 @@ def _transaction_blocks(path: pathlib.Path) -> list[str]:
         if (isinstance(node, ast.Attribute) and node.attr in TRANSACTION_BLOCK_NAMES)
         or (isinstance(node, ast.ImportFrom) and any(alias.name in TRANSACTION_BLOCK_NAMES for alias in node.names))
     ]
+
+
+def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
+    """Return the source of each import statement that names netbox_branching or one of its submodules."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            modules = [node.module]
+        else:
+            continue
+        if any(module == "netbox_branching" or module.startswith("netbox_branching.") for module in modules):
+            found.append(ast.unparse(node))
+    return found
 
 
 def _production_bulk_writes() -> Counter:
@@ -778,6 +795,48 @@ class TransactionBlockTest(SimpleTestCase):
             )
 
             self.assertEqual(_transaction_blocks(path), [])
+
+
+class NetboxBranchingImportTest(SimpleTestCase):
+    """Only ``branching.py`` imports netbox-branching, so every other module runs without it installed."""
+
+    def test_only_the_branching_module_imports_netbox_branching(self):
+        violations = {
+            (str(path.relative_to(PACKAGE)), statement)
+            for path in _production_modules()
+            if path != BRANCHING_MODULE
+            for statement in _netbox_branching_imports(path)
+        }
+
+        self.assertEqual(violations, set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "import netbox_branching\n": ["import netbox_branching"],
+            "import os, netbox_branching.utilities as utilities\n": [
+                "import os, netbox_branching.utilities as utilities"
+            ],
+            "from netbox_branching import AppConfig\n": ["from netbox_branching import AppConfig"],
+            "def f():\n    from netbox_branching.models import Branch\n": [
+                "from netbox_branching.models import Branch"
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_netbox_branching_imports(path), expected)
+
+    def test_a_similar_name_a_relative_import_and_the_app_label_are_not_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(
+                "import netbox_branching_extra\nfrom .netbox_branching import x\napps.is_installed('netbox_branching')\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_netbox_branching_imports(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

@@ -7,18 +7,22 @@ They skip when netbox-branching is not installed. The CI leg that installs it se
 """
 
 import os
+import subprocess
+import sys
 from unittest import skipUnless
 
 from dcim.models import Interface
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, connections, router
 from django.test import SimpleTestCase, TransactionTestCase
 
+from netbox_interface_name_rules.branching import check_version
 from netbox_interface_name_rules.tests.helpers import make_device, make_device_type, make_manufacturer
 
 BRANCHING_INSTALLED = apps.is_installed("netbox_branching")
-REQUIRES_BRANCHING = "netbox-branching is not installed"
+BRANCHING_SKIP_REASON = "netbox-branching is not installed"
 
 
 def schema_exists(schema_name):
@@ -37,13 +41,44 @@ class BranchingDetectionTest(SimpleTestCase):
         self.assertTrue(BRANCHING_INSTALLED)
 
 
+class VersionGateTest(SimpleTestCase):
+    """The plugin supports netbox-branching 1.2.x only."""
+
+    def test_a_1_2_release_is_accepted(self):
+        for version in ("1.2.0", "1.2.1", "1.2.10", "1.2.0rc1", "1.2.1.dev3"):
+            with self.subTest(version=version):
+                check_version(version)
+
+    def test_any_other_release_is_refused(self):
+        for version in ("1.1.3", "1.3.0", "1.3.0rc1", "1.20.0", "2.2.0"):
+            with self.subTest(version=version), self.assertRaisesMessage(ImproperlyConfigured, f"is {version}."):
+                check_version(version)
+
+
+@skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
+class VersionGateStartupTest(SimpleTestCase):
+    """The plugin checks the installed netbox-branching when NetBox starts."""
+
+    def test_an_unsupported_version_stops_startup(self):
+        probe = "import django, netbox_branching\nnetbox_branching.AppConfig.version = '1.3.0'\ndjango.setup()\n"
+        environment = {**os.environ, "PYTHONPATH": os.pathsep.join(entry for entry in sys.path if entry)}
+
+        completed = subprocess.run(  # noqa: S603 - Run a fixed probe in a child interpreter.
+            [sys.executable, "-c", probe], env=environment, capture_output=True, text=True, check=False
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("ImproperlyConfigured: ", completed.stderr)
+        self.assertIn("is 1.3.0.", completed.stderr)
+
+
 def remove_branch(branch):
     """Close the connection of *branch*, then drop its schema."""
     connections[branch.connection_name].close()
     branch.deprovision()
 
 
-@skipUnless(BRANCHING_INSTALLED, REQUIRES_BRANCHING)
+@skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
 class BranchTestCase(TransactionTestCase):
     """Provision real branches. Each branch is removed when its test ends, because ``--reuse-db`` keeps schemas."""
 
