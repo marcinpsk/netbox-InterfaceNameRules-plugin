@@ -25,9 +25,11 @@ from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import (
     apply_device_interface_rules,
     apply_rule_to_existing,
+    find_matching_rule,
     supports_channelization,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.rule_selection import pinned_rule_cache
 from netbox_interface_name_rules.tests.helpers import (
     activate,
     interface_signal,
@@ -197,6 +199,47 @@ class TwoAliasAtomicityTest(_PlainModuleCase):
             self.assertEqual(names_of(self.module), ["0"])
         self.assertEqual(ObjectChange.objects.using(self.alias).filter(changed_object_id=self.interface.pk).count(), 0)
         self.assertFalse(self.change_diffs().exists())
+
+
+class RuleCacheInABranchTest(_PlainModuleCase):
+    PREFIX = "BrCache"
+
+    def build(self):
+        super().build()
+        self.rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type, name_template="et-0/0/{bay_position}"
+        )
+
+    def _select(self):
+        return find_matching_rule(self.module_type, None, self.device_type)
+
+    def test_each_alias_gets_its_own_rule_instance(self):
+        on_main = self._select()
+        with self.in_branch():
+            in_branch = self._select()
+
+        self.assertEqual((on_main.pk, on_main._state.db), (self.rule.pk, "default"))
+        self.assertEqual((in_branch.pk, in_branch._state.db), (self.rule.pk, self.alias))
+
+    def test_a_pinned_cache_does_not_serve_main_in_the_branch(self):
+        with pinned_rule_cache():
+            self._select()
+            with self.in_branch():
+                self.assertEqual(self._select()._state.db, self.alias)
+
+    def test_a_rule_changed_in_the_branch_only_changes_the_selection_in_the_branch_only(self):
+        self._select()
+        with self.in_branch():
+            self._select()
+            rule = InterfaceNameRule.objects.get(pk=self.rule.pk)
+            rule.snapshot()
+            rule.name_template = "xe-0/0/{bay_position}"
+            rule.save()
+            in_branch = self._select()
+        on_main = self._select()
+
+        self.assertEqual((in_branch.name_template, in_branch._state.db), ("xe-0/0/{bay_position}", self.alias))
+        self.assertEqual((on_main.name_template, on_main._state.db), ("et-0/0/{bay_position}", "default"))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

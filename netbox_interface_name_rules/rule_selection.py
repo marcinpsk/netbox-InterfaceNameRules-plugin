@@ -13,7 +13,7 @@ from .regex_safety import compile_module_type_pattern
 
 # Publish each loaded rule set as one new dictionary. Concurrent readers then see
 # one complete version rather than a mixture of cache entries from two versions.
-_RULE_CACHE = {"version": None, "exact": (), "regex": (), "memo": {}}
+_RULE_CACHE = {"alias": None, "version": None, "exact": (), "regex": (), "memo": {}}
 
 # Bound the number of module and scope contexts retained for one rule-set version.
 _MEMO_MAX = 4096
@@ -28,8 +28,9 @@ def pinned_rule_cache():
     """Pin one enabled-rule snapshot for all selections inside the block.
 
     The first selection loads and fingerprints the rule set. Later selections in
-    the same thread skip the fingerprint query. Nested blocks share the snapshot.
-    The pin is thread-local, and an empty block does not load rules.
+    the same thread and from the same read alias skip the fingerprint query.
+    Nested blocks share the snapshot. The pin is thread-local, and an empty block
+    does not load rules.
     """
     depth = getattr(_pin, "depth", 0)
     _pin.depth = depth + 1
@@ -41,7 +42,7 @@ def pinned_rule_cache():
         _pin.depth -= 1
         if _pin.depth == 0:
             _pin.primed = False
-            for attr in ("exact", "regex", "memo"):
+            for attr in ("alias", "exact", "regex", "memo"):
                 _pin.__dict__.pop(attr, None)
 
 
@@ -125,8 +126,8 @@ def _version_row_signature():
 _ROW_SIGNATURE = _version_row_signature()
 
 
-def _enabled_rules_version():
-    """Return a deterministic content fingerprint of all enabled rules.
+def _enabled_rules_version(alias):
+    """Return a deterministic content fingerprint of all enabled rules on *alias*.
 
     PostgreSQL hashes the matching and output columns in primary-key order. Each
     value is length-prefixed, so arbitrary text cannot create field or row boundary
@@ -134,16 +135,20 @@ def _enabled_rules_version():
     """
     from .models import InterfaceNameRule
 
-    return InterfaceNameRule.objects.filter(enabled=True).aggregate(
-        fingerprint=Coalesce(
-            _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
-            Value("", output_field=TextField()),
-        )
-    )["fingerprint"]
+    return (
+        InterfaceNameRule.objects.using(alias)
+        .filter(enabled=True)
+        .aggregate(
+            fingerprint=Coalesce(
+                _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
+                Value("", output_field=TextField()),
+            )
+        )["fingerprint"]
+    )
 
 
 def _get_enabled_rules():
-    """Return the exact rules, regex rules, and memo for the current version.
+    """Return the exact rules, regex rules, and memo for the current version on the read alias.
 
     Exact rules retain model ordering, which reduces to primary-key order for one
     module type. Regex rules are compiled once and ordered by decreasing pattern
@@ -153,26 +158,29 @@ def _get_enabled_rules():
     # One module-level cache, replaced atomically.
     global _RULE_CACHE  # noqa: PLW0603
 
+    # A branch can hold other rules than main, so a snapshot belongs to the alias it was read from.
+    alias = _enabled_module_rules().db
     pinned = getattr(_pin, "depth", 0) > 0
-    if pinned and getattr(_pin, "primed", False):
+    if pinned and getattr(_pin, "primed", False) and _pin.alias == alias:
         # Return the thread's snapshot. Another thread can replace the shared cache.
         return _pin.exact, _pin.regex, _pin.memo
 
     cache = _RULE_CACHE
-    version = _enabled_rules_version()
-    if cache["version"] != version:
-        rules = list(_enabled_module_rules().order_by("module_type__model", "pk"))
+    version = _enabled_rules_version(alias)
+    if (cache["alias"], cache["version"]) != (alias, version):
+        rules = list(_enabled_module_rules().using(alias).order_by("module_type__model", "pk"))
         exact = tuple(rule for rule in rules if not rule.module_type_is_regex)
         regex_rules = sorted(
             (rule for rule in rules if rule.module_type_is_regex),
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
         regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
-        cache = {"version": version, "exact": exact, "regex": regex, "memo": {}}
+        cache = {"alias": alias, "version": version, "exact": exact, "regex": regex, "memo": {}}
         _RULE_CACHE = cache
 
     if pinned:
         # Keep a private memo so another thread cannot clear this batch's entries.
+        _pin.alias = alias
         _pin.exact = cache["exact"]
         _pin.regex = cache["regex"]
         _pin.memo = dict(cache["memo"])

@@ -17,6 +17,7 @@ from dcim.models import (
     ModuleType,
     Platform,
 )
+from django.db import DEFAULT_DB_ALIAS
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import (
@@ -303,10 +304,10 @@ class FindMatchingRuleCachingTest(TestCase):
         # and a stale snapshot from a prior method can't be reused for a same-content rule set.
         from netbox_interface_name_rules import rule_selection
 
-        rule_selection._RULE_CACHE.update({"version": None, "exact": (), "regex": (), "memo": {}})
+        rule_selection._RULE_CACHE.update({"alias": None, "version": None, "exact": (), "regex": (), "memo": {}})
         rule_selection._pin.depth = 0
         rule_selection._pin.primed = False
-        for attr in ("exact", "regex", "memo"):
+        for attr in ("alias", "exact", "regex", "memo"):
             rule_selection._pin.__dict__.pop(attr, None)
 
     def test_repeated_calls_do_not_re_query_rules(self):
@@ -439,12 +440,12 @@ class FindMatchingRuleCachingTest(TestCase):
         rule_a = InterfaceNameRule.objects.create(module_type=mt_a, device_type=dt_x, name_template="a{bay_position}")
         rule_b = InterfaceNameRule.objects.create(module_type=mt_b, device_type=dt_y, name_template="b{bay_position}")
 
-        before = rule_selection._enabled_rules_version()
+        before = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
         # Swap device_type between the two rules via bulk .update(): SUM(device_type) is unchanged
         # (x+y == y+x), count unchanged, last_updated unbumped. Only the per-rule pairing differs.
         InterfaceNameRule.objects.filter(pk=rule_a.pk).update(device_type=dt_y)
         InterfaceNameRule.objects.filter(pk=rule_b.pk).update(device_type=dt_x)
-        after = rule_selection._enabled_rules_version()
+        after = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
 
         self.assertNotEqual(before, after, "fingerprint collided on a compensating FK swap (Sum-aggregate weakness)")
 
@@ -730,7 +731,7 @@ class FindMatchingRuleCachingTest(TestCase):
         r2 = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, module_type_pattern="p2", name_template="b"
         )
-        fp_two_rules = rule_selection._enabled_rules_version()
+        fp_two_rules = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
 
         # Forge a one-rule set whose name_template embeds r1's trailing columns, a row separator, and
         # r2's columns up to its name_template. Column order: id, module_type_id, is_regex, pattern,
@@ -740,7 +741,7 @@ class FindMatchingRuleCachingTest(TestCase):
         forged_name_template = field_sep.join(["a", "0", "0", "true"]) + row_sep + r2_cells_through_name
         InterfaceNameRule.objects.filter(pk=r2.pk).delete()
         InterfaceNameRule.objects.filter(pk=r1.pk).update(name_template=forged_name_template)
-        fp_forged_one_rule = rule_selection._enabled_rules_version()
+        fp_forged_one_rule = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
 
         self.assertNotEqual(
             fp_two_rules,
