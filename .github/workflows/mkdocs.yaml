@@ -59,7 +59,7 @@ jobs:
           fi
 
       - name: Deploy documentation
-        run: uv run --no-sync mkdocs gh-deploy --force --strict
+        run: uv run --no-sync --no-build mkdocs gh-deploy --force --strict
 
       - name: Restore coverage report
         if: always()
