@@ -934,9 +934,10 @@ class SignalPathPerformanceTest(TransactionTestCase):
         target = ModuleBay.objects.get(device=device, position="4")
         with transaction.atomic():
             module = Module.objects.create(device=device, module_bay=source, module_type=module_type)
-        for bay in ModuleBay.objects.filter(module=module).order_by("position"):
-            with transaction.atomic():
-                nested.append(Module.objects.create(device=device, module_bay=bay, module_type=optic_type))
+        if kind == "nested_4":
+            for bay in ModuleBay.objects.filter(module=module).order_by("position"):
+                with transaction.atomic():
+                    nested.append(Module.objects.create(device=device, module_bay=bay, module_type=optic_type))
 
         def move():
             module.module_bay = target
@@ -1066,6 +1067,22 @@ class SignalPathPerformanceTest(TransactionTestCase):
                 prepared.operation()
 
         self.assertEqual(triggers, {False: [True], True: [True]})
+
+    def test_a_plain_move_builds_no_nested_modules(self):
+        """Build nested modules only for the nested scenario, also when the plain module type has a bay."""
+        real = self._plain_module_type
+
+        def with_bay(manufacturer, model, name="{module}"):
+            module_type = real(manufacturer, model, name)
+            ModuleBayTemplate.objects.create(module_type=module_type, name="Port 1", position="1")
+            return module_type
+
+        with patch.object(self, "_plain_module_type", with_bay):
+            prepared = self._prepare_move("PerfMovePlainBay", "plain_rename", direct=False)
+        prepared.operation()
+
+        self.assertEqual(prepared.work_units, 1)
+        self.assertEqual(prepared.verify()["interface_names"], ["et-0/0/4"])
 
     def test_direct_module_fixture_includes_the_measured_rule(self):
         """Record fixture counts after direct-callback setup is complete."""
