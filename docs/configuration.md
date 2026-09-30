@@ -274,6 +274,11 @@ the change log. A job that has no user fails before it changes a row. A save
 outside a request, for example from the shell, writes no record, as for any
 other change in NetBox.
 
+NetBox event rules (webhooks, scripts and notifications) get the same changes.
+A family that the plugin cannot finish keeps none of its changes, and it sends
+no event. The same applies to the conversions that the Apply page runs and
+rolls back to show each verdict.
+
 ### Apply Rules and the Applicable Column
 
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed
