@@ -6,9 +6,9 @@ import logging
 
 from dcim.models import Interface
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
-from ..transactions import atomic_with_events
+from ..transactions import atomic_with_events, on_commit
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def reconcile_after_parent_cascade(parent_before, parent_after, channels):
     """Schedule restoration of the channel names NetBox's deferred parent cascade will overwrite.
 
     *channels* carries ``(child_pk, channel_id, final_name)`` for every channel the caller settled.
-    Registration happens on the caller's open transaction so the callback runs after NetBox's own.
+    The callback runs after the open transactions commit on both connections, so after NetBox's cascade.
     """
     if parent_after == parent_before:
         return
@@ -98,4 +98,4 @@ def reconcile_after_parent_cascade(parent_before, parent_after, channels):
     )
     if not reconciliations:
         return
-    transaction.on_commit(lambda: restore_deferred_channel_names(reconciliations))
+    on_commit(lambda: restore_deferred_channel_names(reconciliations))

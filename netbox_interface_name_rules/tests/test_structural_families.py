@@ -39,6 +39,7 @@ from netbox_interface_name_rules.tests.test_channelization import (
     ChannelizationTestCase,
     _build_device,
 )
+from netbox_interface_name_rules.transactions import write_scope
 
 REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
 
@@ -141,7 +142,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_the_intended_name_is_restored_after_the_cascade(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
 
@@ -152,7 +153,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_parent_that_kept_its_name_registers_no_callback(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "et-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         self.assertEqual(callbacks, [])
@@ -160,7 +161,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_channel_the_cascade_will_not_touch_registers_no_callback(self):
         child = self._interface("ge-0/0/3-1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "ge-0/0/3-1"),))
 
         self.assertEqual(callbacks, [])
@@ -168,7 +169,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_channel_the_cascade_left_alone_keeps_its_intended_name(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True):
+        with self.captureOnCommitCallbacks(execute=True), write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         child.refresh_from_db()
@@ -178,7 +179,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            with self.captureOnCommitCallbacks(execute=True):
+            with self.captureOnCommitCallbacks(execute=True), write_scope():
                 family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
                 self._cascade(child, "someone-else-renamed-it")
 
@@ -189,7 +190,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_name_taken_since_the_cascade_is_not_reclaimed(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.assertLogs(PLUGIN_LOGGER, level="ERROR"), self.captureOnCommitCallbacks(execute=True):
+        with self.assertLogs(PLUGIN_LOGGER, level="ERROR"), self.captureOnCommitCallbacks(execute=True), write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
             occupant = self._interface("et-0/0/3:1")

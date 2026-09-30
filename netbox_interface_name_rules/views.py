@@ -30,7 +30,7 @@ from .models import InterfaceNameRule, csv_export_entry
 from .name_template import NamingContext, variables_for_context
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
-from .transactions import atomic_with_events
+from .transactions import atomic_with_events, write_scope
 
 logger = logging.getLogger(__name__)
 
@@ -551,7 +551,8 @@ class RuleApplyDetailView(generic.ObjectView):
         # A conversion-scan failure must not blank the unrelated apply preview above.
         try:
             # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
-            preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+            with write_scope():
+                preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
             logger.exception("Failed to compute the conversion preview for rule %s", rule)
             messages.error(request, f"Failed to compute the conversion preview: {exc}")
@@ -613,7 +614,8 @@ class RuleApplyDetailView(generic.ObjectView):
             )
             return
         try:
-            outcome = convert_flat_families(rule, convert_ids)
+            with write_scope():
+                outcome = convert_flat_families(rule, convert_ids)
         except Exception as e:
             logger.exception("Failed to convert families for rule %s", rule)
             messages.error(request, f"Failed to convert families: {type(e).__name__}")
@@ -649,7 +651,8 @@ class RuleApplyDetailView(generic.ObjectView):
                 if not interface_ids:
                     messages.warning(request, "No interfaces selected; nothing was applied.")
                 else:
-                    outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
+                    with write_scope():
+                        outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
                     messages.success(request, f"Applied rule: {outcome.changed_count} interface(s) renamed.")
                     if outcome.skipped_members:
                         messages.warning(

@@ -180,3 +180,30 @@ def queued_webhook_jobs(event_rule) -> list:
 def queued_webhooks(event_rule) -> list[tuple[str, str]]:
     """Return the event type and object name of each webhook that *event_rule* queued, sorted."""
     return sorted((job.kwargs["event_type"], job.kwargs["data"]["name"]) for job in queued_webhook_jobs(event_rule))
+
+
+@contextlib.contextmanager
+def row_lock_in_another_session(alias):
+    """Yield a function that locks one interface row on *alias* from a second session until the block ends."""
+    other = connections.create_connection(alias)
+    try:
+        other.set_autocommit(False)
+
+        def lock(pk):
+            with other.cursor() as cursor:
+                cursor.execute("SELECT id FROM dcim_interface WHERE id = %s FOR UPDATE", [pk])
+
+        yield lock
+    finally:
+        other.rollback()
+        other.close()
+
+
+@contextlib.contextmanager
+def interface_signal(signal, receiver):
+    """Connect *receiver* to the model *signal* of Interface while the block runs."""
+    signal.connect(receiver, sender=Interface, weak=False)
+    try:
+        yield
+    finally:
+        signal.disconnect(receiver, sender=Interface)

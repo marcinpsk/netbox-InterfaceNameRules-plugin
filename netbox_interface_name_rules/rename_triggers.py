@@ -32,7 +32,7 @@ import math
 import weakref
 from typing import TYPE_CHECKING, NamedTuple
 
-from django.db import transaction
+from django.db import DEFAULT_DB_ALIAS, transaction
 from netbox.context import current_request
 
 from .naming import bay_naming_values, chassis_position
@@ -676,7 +676,7 @@ def after_save(sender, instance, created):
     if trigger is None:
         return
     trigger.author = _request_user()
-    connection = transaction.get_connection()
+    connection = transaction.get_connection(DEFAULT_DB_ALIAS)
     entries = connection.run_on_commit if connection.in_atomic_block else ()
     plan = (
         next(
@@ -691,7 +691,7 @@ def after_save(sender, instance, created):
     )
     plan.triggers.append(trigger)
     # Django drops the callbacks of a rolled-back savepoint from run_on_commit, so a dropped trigger is not kept.
-    transaction.on_commit(trigger)
+    transaction.on_commit(trigger, using=DEFAULT_DB_ALIAS)
     plan.runner = PlanRunner(plan)
     if connection.in_atomic_block:
         # Without a savepoint tag no rollback but the transaction's drops the runner; it runs after every trigger.
