@@ -59,12 +59,17 @@ def _check_model(table: dict, model: type[BaseModel], path: str, unknown: list[s
         if nested is None:
             continue
         if is_mapping:
-            # The keys name the entries, so the values are what the model describes.
-            for entry, entry_table in value.items():
-                if isinstance(entry_table, dict):
-                    _check_model(entry_table, nested, f"{where}.{entry}", unknown)
+            _check_model_mapping(value, nested, where, unknown)
         else:
             _check_model(value, nested, where, unknown)
+
+
+def _check_model_mapping(table: dict, model: type[BaseModel], path: str, unknown: list[str]) -> None:
+    """Check each entry table of *table* against *model*."""
+    # The keys name the entries, so the values are what the model describes.
+    for entry, entry_table in table.items():
+        if isinstance(entry_table, dict):
+            _check_model(entry_table, model, f"{path}.{entry}", unknown)
 
 
 def _check_parser_options(table: dict, parser_name: str, unknown: list[str]) -> None:
