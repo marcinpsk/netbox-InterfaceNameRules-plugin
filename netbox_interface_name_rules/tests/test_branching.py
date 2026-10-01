@@ -8,6 +8,7 @@ They skip when netbox-branching is not installed. The CI leg that installs it se
 
 import ast
 import collections
+import hashlib
 import inspect
 import os
 import subprocess
@@ -135,6 +136,33 @@ REPLAY_ENTRIES = {
 }
 # The calls that name an attribute by a string.
 NAMING_CALLS = frozenset({"getattr", "setattr", "hasattr"})
+# The nodes that open a scope.
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+# The fingerprint of each scope that the allow-lists name, in netbox-branching 1.2.1; see fingerprint.
+REVIEWED_FINGERPRINTS = {
+    ("jobs.py", "MergeBranchJob.run"): "d039282f2832f890",
+    ("jobs.py", "RevertBranchJob.run"): "e0be2037fbdbaca7",
+    ("merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "42aa32ddbda92a55",
+    ("merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "882b00bb19bab80d",
+    ("merge_strategies/squash.py", "SquashMergeStrategy.merge"): "c57d4abe51355d00",
+    ("merge_strategies/squash.py", "SquashMergeStrategy.revert"): "257f571c7d9201bb",
+    ("models/branches.py", "Branch"): "5c1032613ea2f2a4",
+    ("models/branches.py", "Branch._apply_sync_update"): "7e235e9385c13ac4",
+    ("models/branches.py", "Branch._handle_sync_delete"): "ff0d26c6de4ae7df",
+    ("models/branches.py", "Branch.merge"): "3e0ad757b725963d",
+    ("models/branches.py", "Branch.revert"): "c736016e1ddc2011",
+    ("models/branches.py", "Branch.sync"): "395aa970f1eeb7fd",
+    ("models/changes.py", "<module>"): "6ed9b80466510e19",
+    ("models/changes.py", "ObjectChange"): "b449c0c1b1db6de6",
+    ("models/changes.py", "ObjectChange.apply"): "6b9f955fbd2370cf",
+    ("models/changes.py", "ObjectChange.migrate"): "c1927873bbc41a6d",
+    ("models/changes.py", "ObjectChange.undo"): "24e38af98d10d67c",
+}
+# The message of a changed reviewed scope.
+RE_REVIEW = (
+    "A reviewed scope of netbox-branching changed. A change in it can defer a replay past the wrapper without a new "
+    "reference. Read the scope again, then update its fingerprint and the allow-lists together."
+)
 
 
 def _references(node, names):
@@ -154,6 +182,22 @@ def _references(node, names):
             yield attribute.value, f"{node.func.id}({ast.unparse(node.args[0])})"
 
 
+def _scoped_nodes(node, scope=()):
+    """Yield ``(scope, node)`` for each node under *node*; a function, a class and a lambda open a scope."""
+    for child in ast.iter_child_nodes(node):
+        inner = (*scope, getattr(child, "name", "<lambda>")) if isinstance(child, SCOPES) else scope
+        yield inner, child
+        yield from _scoped_nodes(child, inner)
+
+
+def _modules(package):
+    """Yield ``(module, tree)`` for each module of *package*, its tests excluded."""
+    for path in sorted(package.rglob("*.py")):
+        module = path.relative_to(package).as_posix()
+        if not module.startswith("tests/"):
+            yield module, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
 def replay_references(package, names):
     """Count each reference to one of *names* in *package*, its tests excluded, by ``(name, receiver, module, scope)``.
 
@@ -162,21 +206,37 @@ def replay_references(package, names):
     lambda each open a scope, so a deferred call is a site of its own.
     """
     sites = collections.Counter()
-
-    def visit(node, scope, module):
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-                visit(child, (*scope, getattr(child, "name", "<lambda>")), module)
-                continue
-            for name, receiver in _references(child, names):
+    for module, tree in _modules(package):
+        for scope, node in _scoped_nodes(tree):
+            for name, receiver in _references(node, names):
                 sites[(name, receiver, module, ".".join(scope) or "<module>")] += 1
-            visit(child, scope, module)
-
-    for path in sorted(package.rglob("*.py")):
-        module = path.relative_to(package).as_posix()
-        if not module.startswith("tests/"):
-            visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)), (), module)
     return sites
+
+
+def fingerprint(node):
+    """Hash the source of a function, or of the statements of a class or module outside its nested scopes."""
+    own = (
+        [node]
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        else [s for s in node.body if not isinstance(s, SCOPES)]
+    )
+    return hashlib.sha256(ast.unparse(ast.Module(own, [])).encode()).hexdigest()[:16]
+
+
+def scope_fingerprints(package, scopes):
+    """Return the fingerprint of each ``(module, scope)`` of *scopes* that *package* has, scopes named as above."""
+    found = {}
+    for module, tree in _modules(package):
+        scope_nodes = [(("<module>",), tree)] + [(s, n) for s, n in _scoped_nodes(tree) if isinstance(n, SCOPES)]
+        for scope, node in scope_nodes:
+            if (key := (module, ".".join(scope))) in scopes:
+                found[key] = fingerprint(node)
+    return found
+
+
+def reviewed_scopes():
+    """Return each ``(module, scope)`` that the allow-lists name."""
+    return {(module, scope) for _, _, module, scope in (*REPLAY_SAVES, *REPLAY_ENTRIES)}
 
 
 def reviewed(allowed):
@@ -202,6 +262,14 @@ class ReplayCallSiteContractTest(SimpleTestCase):
 
     def test_each_replay_starts_in_a_wrapped_method(self):
         self.assert_reviewed(REPLAY_ENTRIES)
+
+    def test_each_reviewed_scope_is_unchanged(self):
+        import netbox_branching
+
+        found = scope_fingerprints(Path(netbox_branching.__file__).parent, reviewed_scopes())
+
+        self.assertEqual(set(REVIEWED_FINGERPRINTS), reviewed_scopes())
+        self.assertDictEqual(found, REVIEWED_FINGERPRINTS, RE_REVIEW)
 
 
 class ReplayCallSiteScanTest(SimpleTestCase):
@@ -258,6 +326,36 @@ class ReplayCallSiteScanTest(SimpleTestCase):
             self.scan(source, {"merge"}),
             {("merge", "branch", "added.py", "Job.run"): 1, ("merge", "strategy", "added.py", "Job.run"): 2},
         )
+
+    def reviewed_state(self, source):
+        """Return the references and the fingerprint of ``Strategy.merge`` in a package whose ``added.py`` is *source*."""
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            (package / "added.py").write_text(source, encoding="utf-8")
+            return replay_references(package, {"apply"}), scope_fingerprints(package, {("added.py", "Strategy.merge")})
+
+    def test_a_deferral_inside_a_reviewed_function_changes_its_fingerprint(self):
+        reviewed_source = (
+            "class Strategy:\n    def merge(self, branch, changes):\n"
+            "        for change in changes:\n            change.apply(branch)\n"
+        )
+        deferrals = {
+            "a stored reference called later": (
+                "class Strategy:\n    def merge(self, branch, changes):\n        for change in changes:\n"
+                "            replay = change.apply\n            on_commit(lambda: replay(branch))\n"
+            ),
+            "a generator": (
+                "class Strategy:\n    def merge(self, branch, changes):\n"
+                "        return (change.apply(branch) for change in changes)\n"
+            ),
+        }
+        references, fingerprints = self.reviewed_state(reviewed_source)
+        for deferral, source in deferrals.items():
+            with self.subTest(deferral=deferral):
+                deferred_references, deferred_fingerprints = self.reviewed_state(source)
+
+                self.assertEqual(deferred_references, references)
+                self.assertNotEqual(deferred_fingerprints, fingerprints)
 
     def test_a_lambda_is_a_scope_of_its_own(self):
         source = "class Branch:\n    def merge(self, strategy):\n        on_commit(lambda: strategy.merge(self))\n"
