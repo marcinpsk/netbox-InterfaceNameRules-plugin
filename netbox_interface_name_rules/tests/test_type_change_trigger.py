@@ -23,24 +23,24 @@ from netbox_interface_name_rules.engine import supports_vc_position_token
 from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
-from netbox_interface_name_rules.tests.test_bay_edit_trigger import BayEditTestCase, _flat_rule
-from netbox_interface_name_rules.tests.test_module_move_trigger import (
+from netbox_interface_name_rules.tests.helpers import PLAIN_TYPE, REQUIRES_VC_POSITION_TOKEN
+from netbox_interface_name_rules.tests.trigger_cases import (
     FLAT,
     NAMING_READ,
     NO_RULE,
-    PLAIN_TYPE,
     REQUIRES_SUBTREE_MOVES,
     TAKEN,
     UNAVAILABLE,
-    _journal,
-    _MoveFixture,
-    _reapplied,
+    BayEditTestCase,
+    MoveFixture,
+    flat_rule,
+    journal,
+    reapplied,
+    reject_reads_of,
 )
-from netbox_interface_name_rules.tests.test_rename_triggers import _reject_reads_of
-from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
 
 
-class _CardFixture(_MoveFixture):
+class _CardFixture(MoveFixture):
     """Two card types with two ports each, and an optic whose rule each card type scopes as its parent."""
 
     @classmethod
@@ -102,7 +102,7 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self.second_card_type)
 
         self.assertEqual(self._names(optic), ["b-0/1"])
-        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+        self.assertEqual((journal(card), journal(optic)), ([], []))
 
     def test_a_nested_module_whose_rule_does_not_change_keeps_its_names_and_is_not_reported(self):
         card, second_port, optic = self._card_with_optic()
@@ -113,7 +113,7 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self.second_card_type)
 
         self.assertEqual((self._names(optic), self._names(fixed)), (["b-0/1"], ["et-1/0/2", "operator-name"]))
-        self.assertEqual((_journal(card), _journal(optic), _journal(fixed)), ([], [], []))
+        self.assertEqual((journal(card), journal(optic), journal(fixed)), ([], [], []))
 
     def test_a_module_two_levels_down_keeps_its_names_and_is_not_reported(self):
         card, second_port, optic = self._card_with_optic()
@@ -129,7 +129,7 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self.second_card_type)
 
         self.assertEqual((self._names(optic), self._names(deep)), (["b-0/1"], ["g-3", "operator-name"]))
-        self.assertEqual((_journal(card), _journal(sub_card), _journal(deep)), ([], [], []))
+        self.assertEqual((journal(card), journal(sub_card), journal(deep)), ([], [], []))
 
     def test_a_nested_module_left_without_a_rule_keeps_the_names_the_old_rule_gave_and_is_reported(self):
         card, _second_port, optic = self._card_with_optic()
@@ -137,14 +137,14 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self._two_port_card("Bare Card"))
 
         self.assertEqual(self._names(optic), ["a-0/1"])
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`a-0/1`: {NO_RULE}", entry.comments)
-        self.assertEqual(_journal(optic), [])
+        self.assertEqual(journal(optic), [])
 
     def test_a_nested_flat_breakout_family_keeps_its_names_and_is_reported(self):
         flat_optic_type = self._module_type("Flat Optic", "{module}")
-        _flat_rule(flat_optic_type, "x-{slot}/{bay_position}:{channel}", parent_module_type=self.first_card_type)
+        flat_rule(flat_optic_type, "x-{slot}/{bay_position}:{channel}", parent_module_type=self.first_card_type)
         InterfaceNameRule.objects.create(
             module_type=flat_optic_type,
             parent_module_type=self.second_card_type,
@@ -157,11 +157,11 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self.second_card_type)
 
         self.assertEqual(self._names(optic), ["x-0/1:0", "x-0/1:1"])
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         for name in ("x-0/1:0", "x-0/1:1"):
             self.assertIn(f"`{name}`: {FLAT}", entry.comments)
-        self.assertEqual(_journal(optic), [])
+        self.assertEqual(journal(optic), [])
 
     def test_the_subtree_reports_in_one_journal_entry_on_the_module_whose_type_changed(self):
         card, second_port, optic = self._card_with_optic()
@@ -172,11 +172,11 @@ class NestedTypeChangeTest(TypeChangeTestCase):
         self._change_type(card, self.second_card_type)
 
         self.assertEqual((self._names(optic), self._names(other_optic)), (["a-0/1"], ["a-0/2"]))
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`a-0/1` to `b-0/1`: {TAKEN}", entry.comments)
         self.assertIn(f"`a-0/2` to `b-0/2`: {TAKEN}", entry.comments)
-        self.assertEqual((_journal(optic), _journal(other_optic)), ([], []))
+        self.assertEqual((journal(optic), journal(other_optic)), ([], []))
 
 
 class TypeChangeTransactionTest(TypeChangeTestCase):
@@ -191,7 +191,7 @@ class TypeChangeTransactionTest(TypeChangeTestCase):
             self._save_edit(bay, position="2")
 
         self.assertEqual(self._names(optic), ["b-2/1"])
-        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+        self.assertEqual((journal(card), journal(optic)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
     def test_a_type_change_then_a_move_rename_the_nested_module_from_the_names_before_the_type_change(self):
@@ -202,7 +202,7 @@ class TypeChangeTransactionTest(TypeChangeTestCase):
             self._save_move(card, self._bay(self.device, "Bay 2"))
 
         self.assertEqual(self._names(optic), ["b-2/1"])
-        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+        self.assertEqual((journal(card), journal(optic)), ([], []))
 
 
 class ChassisPositionTypeChangeTest(TypeChangeTestCase):
@@ -245,8 +245,8 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
         reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first)
 
         self.assertEqual((self._names(optic), self._names(other)), (["y30/1"], ["et-3/0/10"]))
-        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
-        self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
+        self.assertEqual(reapplied(reapplies), sorted((card.pk, optic.pk, other.pk)))
+        self.assertEqual((journal(card), journal(optic), journal(self.device)), ([], [], []))
 
     def test_a_type_change_then_a_chassis_position_change_rename_the_nested_module_once(self):
         self._assert_the_nested_module_is_renamed_once(chassis_first=False)
@@ -262,8 +262,8 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
         reapplies = self._retype_with_the_chassis_change(card, self.second_card_type, chassis_first)
 
         self.assertEqual((self._names(optic), self._names(fixed)), (["b-0/1"], ["et-3/0/2"]))
-        self.assertEqual(_reapplied(reapplies), sorted((card.pk, optic.pk, fixed.pk)))
-        self.assertEqual((_journal(card), _journal(fixed), _journal(self.device)), ([], [], []))
+        self.assertEqual(reapplied(reapplies), sorted((card.pk, optic.pk, fixed.pk)))
+        self.assertEqual((journal(card), journal(fixed), journal(self.device)), ([], [], []))
 
     def test_a_type_change_then_a_chassis_position_change_rename_a_nested_module_whose_rule_does_not_change(self):
         self._assert_an_unchanged_nested_rule_is_left_to_the_chassis_position_change(chassis_first=False)
@@ -280,9 +280,9 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
         )
 
         self.assertEqual((self._names(module), self._names(other)), (["et-1/0/0"], ["et-1/0/10"]))
-        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
-        (module_entry,) = _journal(module)
-        (device_entry,) = _journal(self.device)
+        self.assertEqual(reapplied(reapplies), sorted((module.pk, other.pk)))
+        (module_entry,) = journal(module)
+        (device_entry,) = journal(self.device)
         self.assertEqual(module_entry.comments.count(f"`et-1/0/0`: {UNAVAILABLE}"), 1)
         self.assertIn(f"`et-1/0/10`: {UNAVAILABLE}", device_entry.comments)
         self.assertNotIn("`et-1/0/0`", device_entry.comments)
@@ -299,8 +299,8 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
 
         reapplies = self._retype_with_the_chassis_change(module, self.adjacent_type, chassis_first)
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["ge-3/0"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["ge-3/0"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_type_change_then_a_chassis_position_change_rename_a_raw_name_with_adjacent_tokens(self):
@@ -316,10 +316,10 @@ class ChassisPositionTypeChangeTest(TypeChangeTestCase):
 
         reapplies = self._retype_with_the_chassis_change(module, self.other_plain_type, chassis_first)
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
-        (entry,) = _journal(module)
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
+        (entry,) = journal(module)
         self.assertEqual(entry.comments.count(f"`et-1/0/0` to `ge-3/0/0`: {TAKEN}"), 1)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
 
     def test_a_type_change_then_a_chassis_position_change_report_a_collision_once(self):
         self._assert_a_collision_is_reported_once(chassis_first=False)
@@ -340,18 +340,18 @@ class TypeChangeFailureTest(TypeChangeTestCase):
         failure = f"injected {InterfaceNameRule._meta.db_table} read failure"
 
         with (
-            connection.execute_wrapper(_reject_reads_of(InterfaceNameRule._meta.db_table)),
+            connection.execute_wrapper(reject_reads_of(InterfaceNameRule._meta.db_table)),
             self.assertLogs("netbox_interface_name_rules", "ERROR"),
         ):
             run_the_reapply(callbacks)
 
-        (card_entry,) = _journal(card)
+        (card_entry,) = journal(card)
         self.assertEqual(card_entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertEqual(card_entry.comments.count(failure), 2)
-        (other_entry,) = _journal(other)
+        (other_entry,) = journal(other)
         self.assertEqual(other_entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertEqual(other_entry.comments.count(failure), 1)
-        self.assertEqual((self._names(optic), self._names(other), _journal(optic)), (["a-0/1"], ["et-1/0/1"], []))
+        self.assertEqual((self._names(optic), self._names(other), journal(optic)), (["a-0/1"], ["et-1/0/1"], []))
 
 
 class TypeChangeCostTest(TypeChangeTestCase):
@@ -378,7 +378,7 @@ class TypeChangeCostTest(TypeChangeTestCase):
 
         self.assertEqual(reads, (0, 1))
         self.assertEqual(self._names(optic), ["u-0/1"])
-        self.assertEqual(_journal(card), [])
+        self.assertEqual(journal(card), [])
 
     def test_a_type_change_reads_the_nested_naming_when_an_enabled_rule_is_scoped_to_the_new_type(self):
         card, _second_port, optic = self._card_with_optic()
@@ -418,4 +418,4 @@ class TypeChangeAPITest(_CardFixture, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.assertEqual(self._names(optic), ["b-0/1"])
-        self.assertEqual(_journal(card), [])
+        self.assertEqual(journal(card), [])

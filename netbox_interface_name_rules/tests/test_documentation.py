@@ -22,6 +22,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from netbox_interface_name_rules import template_variable_reference
+from netbox_interface_name_rules.branching import SUPPORTED_SERIES
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import (
     TEMPLATE_VARIABLES,
@@ -43,6 +44,12 @@ from netbox_interface_name_rules.template_variable_reference import (
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _normalised_doc(*path):
+    """Return the text of the project file at *path* with each run of whitespace collapsed to one space."""
+    return " ".join(_PROJECT_ROOT.joinpath(*path).read_text(encoding="utf-8").split())
+
 
 _RE2_AUDIT = importlib.import_module("netbox_interface_name_rules.migrations.0014_validate_re2_patterns")
 
@@ -318,7 +325,7 @@ class BaseVariableDocumentationTest(unittest.TestCase):
     """Keep each module-family base path explicit outside the generated reference."""
 
     def test_each_module_family_base_path_is_documented(self):
-        guide = (_PROJECT_ROOT / "docs" / "template-variables.md").read_text(encoding="utf-8")
+        guide = _normalised_doc("docs", "template-variables.md")
 
         for statement in (
             "In a module rule, `{base}` is the raw template name of the interface the rule renames:",
@@ -344,7 +351,7 @@ class BaseVariableDocumentationTest(unittest.TestCase):
             "In a device interface rule, `{base}` is the interface's current name.",
         ):
             with self.subTest(statement=statement):
-                self.assertIn(statement, " ".join(guide.split()))
+                self.assertIn(statement, guide)
 
 
 class PerformanceDocumentationTest(unittest.TestCase):
@@ -415,7 +422,7 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
                 )
 
     def test_configuration_states_that_a_save_outside_a_request_has_no_journal_author(self):
-        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+        guide = _normalised_doc("docs", "configuration.md")
 
         self.assertIn(
             "The author is the user of the request that saved the change. "
@@ -423,12 +430,51 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_puts_a_script_install_in_a_transaction_on_the_interface_write_alias(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn("wrap the install in `transaction.atomic(using=router.db_for_write(Interface))`.", guide)
+        self.assertNotIn("wrap the install in `transaction.atomic()`", guide)
+
     def test_configuration_states_whom_the_change_log_of_a_job_names(self):
-        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+        guide = _normalised_doc("docs", "configuration.md")
 
         self.assertIn(
             "**Run as Background Job** and **Convert as Background Job** record each change as the user who "
             "started the job. The request ID of these records is the job ID,",
+            guide,
+        )
+
+    def test_the_guides_name_the_netbox_branching_series_that_the_version_gate_accepts(self):
+        statements = {
+            ("docs", "configuration.md"): (
+                f"(https://github.com/netboxlabs/netbox-branching) {SUPPORTED_SERIES} on NetBox 4.7."
+            ),
+            ("docs", "installation.md"): f"Optional: netbox-branching {SUPPORTED_SERIES}, on NetBox 4.7.",
+            ("README.md",): f"(netbox-branching {SUPPORTED_SERIES} on NetBox 4.7).",
+            ("docs", "index.md"): f"(netbox-branching {SUPPORTED_SERIES} on NetBox 4.7).",
+        }
+
+        for path, statement in statements.items():
+            with self.subTest(path="/".join(path)):
+                self.assertIn(statement, _normalised_doc(*path))
+
+    def test_configuration_states_that_a_replay_is_not_a_rename_trigger_and_can_rename_a_kept_channel(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn("so the rename triggers do nothing while netbox-branching replays them.", guide)
+        self.assertIn(
+            "A merge, a revert or a sync replays the rename of the parent, so NetBox renames the channels again "
+            "when the replay commits, and the plugin does not act.",
+            guide,
+        )
+
+    def test_upgrade_guide_says_to_let_the_queued_plugin_jobs_finish(self):
+        guide = _normalised_doc("docs", "installation.md")
+
+        self.assertIn(
+            "Let the queued **Run as Background Job** and **Convert as Background Job** jobs finish before you "
+            "upgrade the plugin.",
             guide,
         )
 

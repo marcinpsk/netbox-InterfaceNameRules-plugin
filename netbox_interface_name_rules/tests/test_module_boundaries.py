@@ -58,12 +58,40 @@ BULK_WRITE_PERMITS = {
     ): _MIGRATION_BULK_WRITE,
 }
 BULK_WRITE_METHODS = frozenset({"bulk_create", "bulk_update"})
-# The one module that opens atomic blocks: each block there keeps its NetBox events only when it commits.
+# The one module that uses Django's transaction and connection state: its blocks span every alias of the scope.
 TRANSACTIONS_MODULE = PACKAGE / "transactions.py"
-TRANSACTION_BLOCK_NAMES = frozenset({"atomic", "savepoint", "savepoint_commit", "savepoint_rollback"})
+TRANSACTION_STATE_NAMES = frozenset(
+    {
+        "atomic",
+        "savepoint",
+        "savepoint_commit",
+        "savepoint_rollback",
+        "clean_savepoints",
+        "set_rollback",
+        "get_rollback",
+        "on_commit",
+        "get_connection",
+        "mark_for_rollback_on_error",
+    }
+)
+CONNECTION_NAMES = frozenset({"connection", "connections", "router"})
+# The django.db names that production code outside transactions.py must not reach: the transaction module too.
+DJANGO_DB_NAMES = CONNECTION_NAMES | {"transaction"}
+TRANSACTION_MODULE = "django.db.transaction"
+# The position of the alias argument of each call that takes one.
+ALIAS_ARGUMENT_POSITIONS = {"on_commit": 1, "get_connection": 0}
+# The named exceptions of the design (docs/design/netbox-branching.md, "Guards"), by module.
+TRANSACTION_STATE_PERMITS = {
+    "rename_triggers.py": {
+        "explicit_alias_calls": frozenset({"on_commit", "get_connection"}),
+        "permitted_imports": frozenset({"transaction"}),
+    },
+    "models.py": {"permitted_imports": frozenset({"router"})},
+}
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 BRANCHING_MODULE = PACKAGE / "branching.py"
+TESTS_PACKAGE = f"{PLUGIN_PACKAGE}.tests"
 
 
 def _family_submodules() -> set[str]:
@@ -182,15 +210,81 @@ def _bulk_writes(path: pathlib.Path) -> list[str]:
     ]
 
 
-def _transaction_blocks(path: pathlib.Path) -> list[str]:
-    """Return the source of each use of Django's atomic block or savepoint API, as an attribute or an import."""
+def _module_spellings(records, module: str) -> set[str]:
+    """Return each dotted name that spells *module* in code whose imports are *records*."""
+    spellings = set()
+    for record in records:
+        if record.level:
+            continue
+        if record.name is None and not record.asname:
+            # `import a.b` binds `a`, so every module below `a` is spelled in full.
+            if module == record.bound or module.startswith(f"{record.bound}."):
+                spellings.add(module)
+            continue
+        imported = record.module if record.name is None else f"{record.module}.{record.name}"
+        if module == imported or module.startswith(f"{imported}."):
+            spellings.add(record.bound + module[len(imported) :])
+    return spellings
+
+
+def _imports_from(record, module: str) -> bool:
+    """Return whether *record* imports *module*, a module below it, or a name from it."""
+    return not record.level and (record.module == module or record.module.startswith(f"{module}."))
+
+
+def _passes_an_alias(call: ast.Call) -> bool:
+    """Return whether *call*, of a function in ``ALIAS_ARGUMENT_POSITIONS``, names its alias.
+
+    ``None`` names no alias: Django reads it as ``default``.
+    """
+    position = ALIAS_ARGUMENT_POSITIONS[call.func.attr]
+    aliases = [*call.args[position : position + 1], *(k.value for k in call.keywords if k.arg == "using")]
+    return any(not (isinstance(alias, ast.Constant) and alias.value is None) for alias in aliases)
+
+
+def _transaction_state_uses(
+    path: pathlib.Path, explicit_alias_calls=frozenset(), permitted_imports=frozenset()
+) -> list[str]:
+    """Return the source of each use of Django's transaction or connection state, as an attribute or an import.
+
+    Each import of the ``django.db.transaction`` module counts, whatever it imports. A call in
+    *explicit_alias_calls* that names its alias, and a ``django.db`` name in *permitted_imports*, are
+    the named exceptions of a module.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imports = {r.statement for r in import_records(ast.walk(tree)) if r.name in TRANSACTION_BLOCK_NAMES}
-    return [
-        ast.unparse(node)
+    records = import_records(ast.walk(tree))
+    transaction_modules = _module_spellings(records, TRANSACTION_MODULE)
+    db_modules = _module_spellings(records, "django.db")
+    permitted_calls = {
+        id(node.func)
         for node in ast.walk(tree)
-        if (isinstance(node, ast.Attribute) and node.attr in TRANSACTION_BLOCK_NAMES) or node in imports
-    ]
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in explicit_alias_calls
+        and _passes_an_alias(node)
+    }
+    db_names = DJANGO_DB_NAMES - permitted_imports
+    imports = {
+        record.statement
+        for record in records
+        if not record.level
+        and (
+            (record.module == TRANSACTION_MODULE and record.name in TRANSACTION_STATE_NAMES)
+            or (record.module == "django.db" and record.name in db_names)
+            or ("transaction" in db_names and _imports_from(record, TRANSACTION_MODULE))
+        )
+    }
+    uses = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and id(node) not in permitted_calls:
+            owner = ast.unparse(node.value)
+            if (node.attr in TRANSACTION_STATE_NAMES and owner in transaction_modules) or (
+                node.attr in db_names and owner in db_modules
+            ):
+                uses.append(ast.unparse(node))
+        elif node in imports:
+            uses.append(ast.unparse(node))
+    return uses
 
 
 def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
@@ -204,6 +298,35 @@ def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
             if not r.level and (r.module == "netbox_branching" or r.module.startswith("netbox_branching."))
         )
     ]
+
+
+def _imports_a_test_module(record, package: str) -> bool:
+    """Return whether *record*, read in *package*, imports a ``test_*`` module or name, or ``*``, from the test package."""
+    module = record.absolute(package)
+    if record.name == "*":
+        return module == TESTS_PACKAGE or module.startswith(f"{TESTS_PACKAGE}.")
+    target = module if record.name is None else f"{module}.{record.name}"
+    inside = target.removeprefix(f"{TESTS_PACKAGE}.")
+    return inside != target and any(part.startswith("test_") for part in inside.split("."))
+
+
+def _test_module_imports(path: pathlib.Path, package: str = TESTS_PACKAGE) -> list[str]:
+    """Return the source of each import statement in *path*, a module of *package*, that imports a test module."""
+    records = import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
+    return [
+        ast.unparse(statement)
+        for statement in import_statements(r for r in records if _imports_a_test_module(r, package))
+    ]
+
+
+def _test_package_violations(tests_root: pathlib.Path) -> set[tuple[str, str]]:
+    """Return ``(path, statement)`` for each import of a test module in any module of the test package at *tests_root*."""
+    violations = set()
+    for path in sorted(tests_root.rglob("*.py")):
+        relative = path.relative_to(tests_root)
+        package = ".".join((TESTS_PACKAGE, *relative.parent.parts))
+        violations.update((relative.as_posix(), statement) for statement in _test_module_imports(path, package))
+    return violations
 
 
 def _production_bulk_writes() -> Counter:
@@ -708,49 +831,182 @@ class ChangeLoggedBulkWriteTest(SimpleTestCase):
 
 
 class TransactionBlockTest(SimpleTestCase):
-    """Production code opens an atomic block only through ``transactions.atomic_with_events()``.
+    """Only ``transactions.py`` uses Django's transaction and connection state.
 
-    A bare block that rolls back while the work around it continues leaves its NetBox events in the
-    request's queue, and NetBox then sends them for changes that the database never kept.
+    A block there opens every alias of the write scope, and keeps its NetBox events only when it
+    commits. A bare block opens one alias: in a netbox-branching branch its rollback leaves the writes
+    of the other connection, and its events stay queued for changes that the database never kept.
     """
 
-    def test_only_the_transactions_module_opens_an_atomic_block(self):
+    def _write(self, directory, source):
+        path = pathlib.Path(directory) / "sample.py"
+        path.write_text(source, encoding="utf-8")
+        return path
+
+    def test_only_the_transactions_module_uses_transaction_and_connection_state(self):
         violations = {
-            (str(path.relative_to(PACKAGE)), block)
+            (str(path.relative_to(PACKAGE)), use)
             for path in _production_modules()
             if path != TRANSACTIONS_MODULE
-            for block in _transaction_blocks(path)
+            for use in _transaction_state_uses(
+                path, **TRANSACTION_STATE_PERMITS.get(str(path.relative_to(PACKAGE)), {})
+            )
         }
 
         self.assertEqual(violations, set())
 
-    def test_the_transactions_module_opens_one_atomic_block(self):
-        self.assertEqual(_transaction_blocks(TRANSACTIONS_MODULE), ["transaction.atomic"])
+    def test_every_named_exception_is_still_used(self):
+        for name, permit in TRANSACTION_STATE_PERMITS.items():
+            for key in permit:
+                with self.subTest(module=name, exception=key):
+                    path = PACKAGE / name
+                    without = {other: value for other, value in permit.items() if other != key}
+                    self.assertNotEqual(
+                        _transaction_state_uses(path, **without), _transaction_state_uses(path, **permit)
+                    )
+
+    def test_the_transactions_module_opens_one_atomic_block_per_alias(self):
+        atomic = [use for use in _transaction_state_uses(TRANSACTIONS_MODULE) if use.endswith(".atomic")]
+
+        self.assertEqual(atomic, ["transaction.atomic"])
 
     def test_the_detector_reports_every_spelling(self):
+        imported = "from django.db import transaction"
         spellings = {
-            "with transaction.atomic():\n    pass\n": ["transaction.atomic"],
-            "@transaction.atomic\ndef write():\n    pass\n": ["transaction.atomic"],
+            f"{imported}\nwith transaction.atomic():\n    pass\n": [imported, "transaction.atomic"],
+            f"{imported}\n@transaction.atomic\ndef write():\n    pass\n": [imported, "transaction.atomic"],
             "from django.db.transaction import atomic\n": ["from django.db.transaction import atomic"],
-            "from django.db import transaction as tx\ntx.atomic(using='default')\n": ["tx.atomic"],
-            "sid = transaction.savepoint()\n": ["transaction.savepoint"],
+            "from django.db import transaction as tx\ntx.atomic(using='default')\n": [
+                "from django.db import transaction as tx",
+                "tx.atomic",
+            ],
+            f"{imported}\nsid = transaction.savepoint()\n": [imported, "transaction.savepoint"],
+            f"{imported}\ntransaction.savepoint_rollback(sid)\n": [imported, "transaction.savepoint_rollback"],
+            f"{imported}\ntransaction.clean_savepoints()\n": [imported, "transaction.clean_savepoints"],
+            f"{imported}\ntransaction.set_rollback(True)\n": [imported, "transaction.set_rollback"],
+            f"{imported}\ntransaction.get_rollback()\n": [imported, "transaction.get_rollback"],
+            f"{imported}\ntransaction.on_commit(f)\n": [imported, "transaction.on_commit"],
+            f"{imported}\ntransaction.get_connection()\n": [imported, "transaction.get_connection"],
+            f"{imported}\nwith transaction.mark_for_rollback_on_error():\n    pass\n": [
+                imported,
+                "transaction.mark_for_rollback_on_error",
+            ],
+            "import django.db.transaction as tx\ntx.on_commit(f)\n": [
+                "import django.db.transaction as tx",
+                "tx.on_commit",
+            ],
+            "from django import db\ndb.transaction.on_commit(f)\n": ["db.transaction.on_commit", "db.transaction"],
+            "import django.db.models.deletion\ndjango.db.transaction.on_commit(f)\n": [
+                "django.db.transaction.on_commit",
+                "django.db.transaction",
+            ],
+            "from django.db.transaction import on_commit as later\n": [
+                "from django.db.transaction import on_commit as later"
+            ],
+            "from django.db import connection\n": ["from django.db import connection"],
+            "from django.db import IntegrityError, connections\n": [
+                "from django.db import IntegrityError, connections"
+            ],
+            "from django.db import router as db_router\n": ["from django.db import router as db_router"],
+            "import django.db\ndjango.db.connections['default']\n": ["django.db.connections"],
+            "from django import db\ndb.router.db_for_write(Model)\n": ["db.router"],
         }
         with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "sample.py"
             for source, expected in spellings.items():
                 with self.subTest(source=source):
-                    path.write_text(source, encoding="utf-8")
-                    self.assertEqual(_transaction_blocks(path), expected)
+                    self.assertEqual(_transaction_state_uses(self._write(directory, source)), expected)
 
-    def test_the_helper_and_the_other_transaction_calls_are_not_reported(self):
+    def test_the_detector_reports_every_import_of_the_transaction_module(self):
+        spellings = {
+            "from django.db import transaction\n": ["from django.db import transaction"],
+            "from django.db import IntegrityError, transaction as tx\n": [
+                "from django.db import IntegrityError, transaction as tx"
+            ],
+            "import django.db.transaction\n": ["import django.db.transaction"],
+            "import django.db.transaction as tx\n": ["import django.db.transaction as tx"],
+            "def f():\n    import django.db.transaction\n": ["import django.db.transaction"],
+            "from django.db.transaction import TransactionManagementError\n": [
+                "from django.db.transaction import TransactionManagementError"
+            ],
+            "import django.db\nmodule = django.db.transaction\n": ["django.db.transaction"],
+            "from django import db\nmodule = db.transaction\n": ["db.transaction"],
+        }
         with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "sample.py"
-            path.write_text(
-                "with atomic_with_events():\n    transaction.set_rollback(True)\ntransaction.on_commit(f)\n",
-                encoding="utf-8",
-            )
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    self.assertEqual(_transaction_state_uses(self._write(directory, source)), expected)
 
-            self.assertEqual(_transaction_blocks(path), [])
+    def test_a_similar_module_and_the_transaction_of_another_object_are_not_reported(self):
+        source = (
+            "import django.db.models.deletion\n"
+            "from django.db import DEFAULT_DB_ALIAS, IntegrityError, models\n"
+            "from . import transactions\n"
+            "from .transactions import atomic_with_events\n"
+            "import transaction_log\n"
+            "entry = plan.transaction\n"
+            "entry = transactions.on_commit\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(_transaction_state_uses(self._write(directory, source)), [])
+
+    def test_the_trigger_module_may_import_the_transaction_module(self):
+        permit = TRANSACTION_STATE_PERMITS["rename_triggers.py"]
+        cases = {
+            "from django.db import DEFAULT_DB_ALIAS, transaction\n": [],
+            "from django.db import connection, transaction\n": ["from django.db import connection, transaction"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for source, expected in cases.items():
+                with self.subTest(source=source):
+                    self.assertEqual(_transaction_state_uses(self._write(directory, source), **permit), expected)
+
+    def test_the_helpers_and_other_objects_are_not_reported(self):
+        source = (
+            "from django.db import IntegrityError, models\n"
+            "from .transactions import atomic_with_events, on_commit, write_scope\n"
+            "with write_scope(), atomic_with_events() as block:\n"
+            "    block.set_rollback()\n"
+            "on_commit(f)\n"
+            "connection = plan.connection\n"
+            "connection.run_on_commit.append(entry)\n"
+            "router = NetBoxRouter()\n"
+            "router.register('rules', View)\n"
+            "cache.atomic\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(_transaction_state_uses(self._write(directory, source)), [])
+
+    def test_a_call_that_names_its_alias_is_a_named_exception(self):
+        cases = {
+            "transaction.on_commit(f, using=alias)\n": [],
+            "transaction.on_commit(f, alias)\n": [],
+            "transaction.get_connection(alias)\n": [],
+            "transaction.get_connection(using=alias)\n": [],
+            "transaction.on_commit(f)\n": ["transaction.on_commit"],
+            "transaction.get_connection()\n": ["transaction.get_connection"],
+            "transaction.on_commit(f, using=None)\n": ["transaction.on_commit"],
+            "transaction.get_connection(None)\n": ["transaction.get_connection"],
+            "transaction.set_rollback(True, using=alias)\n": ["transaction.set_rollback"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for body, expected in cases.items():
+                with self.subTest(source=body):
+                    path = self._write(directory, "from django.db import transaction\n" + body)
+                    found = _transaction_state_uses(path, **TRANSACTION_STATE_PERMITS["rename_triggers.py"])
+                    self.assertEqual(found, expected)
+
+    def test_a_permitted_import_is_a_named_exception_of_its_name_only(self):
+        cases = {
+            "from django.db import models, router\n": [],
+            "from django.db import connections, router\n": ["from django.db import connections, router"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for source, expected in cases.items():
+                with self.subTest(source=source):
+                    found = _transaction_state_uses(
+                        self._write(directory, source), **TRANSACTION_STATE_PERMITS["models.py"]
+                    )
+                    self.assertEqual(found, expected)
 
 
 class NetboxBranchingImportTest(SimpleTestCase):
@@ -793,6 +1049,99 @@ class NetboxBranchingImportTest(SimpleTestCase):
             )
 
             self.assertEqual(_netbox_branching_imports(path), [])
+
+
+class TestModuleImportTest(SimpleTestCase):
+    """No module of the test package imports a ``test_*`` module: helpers.py, trigger_cases.py and branch_cases.py share.
+
+    A ``test_*`` name imported from a shared module is refused too: pytest would collect a test function there. A ``*``
+    import from the test package is refused, because ``__all__`` can name a test module.
+    """
+
+    def test_no_module_of_the_test_package_imports_a_test_module(self):
+        self.assertEqual(_test_package_violations(PACKAGE / "tests"), set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "import netbox_interface_name_rules.tests.test_views\n": [
+                "import netbox_interface_name_rules.tests.test_views"
+            ],
+            "import os, netbox_interface_name_rules.tests.test_views as views\n": [
+                "import os, netbox_interface_name_rules.tests.test_views as views"
+            ],
+            "import netbox_interface_name_rules.tests.sub.test_views as views\n": [
+                "import netbox_interface_name_rules.tests.sub.test_views as views"
+            ],
+            "from netbox_interface_name_rules.tests.test_views import ViewTest\n": [
+                "from netbox_interface_name_rules.tests.test_views import ViewTest"
+            ],
+            "from netbox_interface_name_rules.tests import helpers, test_views\n": [
+                "from netbox_interface_name_rules.tests import helpers, test_views"
+            ],
+            "from netbox_interface_name_rules.tests.sub import test_views\n": [
+                "from netbox_interface_name_rules.tests.sub import test_views"
+            ],
+            "from netbox_interface_name_rules.tests.helpers import test_password\n": [
+                "from netbox_interface_name_rules.tests.helpers import test_password"
+            ],
+            "from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+            "from . import test_views\n": ["from . import test_views"],
+            "from . import *\n": ["from . import *"],
+            "from .helpers import *\n": ["from .helpers import *"],
+            "from netbox_interface_name_rules.tests import *\n": ["from netbox_interface_name_rules.tests import *"],
+            "def f():\n    from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_test_module_imports(path), expected)
+
+    def test_a_relative_import_resolves_against_the_package_of_its_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("from .test_views import ViewTest\nfrom ..test_views import ViewTest\n", encoding="utf-8")
+
+            reported = _test_module_imports(path, f"{TESTS_PACKAGE}.sub")
+
+        self.assertEqual(reported, ["from .test_views import ViewTest", "from ..test_views import ViewTest"])
+
+    def test_the_guard_reads_every_module_of_the_test_package_and_its_subpackages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "sub").mkdir()
+            (root / "__init__.py").write_text("from .test_views import ViewTest\n", encoding="utf-8")
+            (root / "sub" / "__init__.py").write_text("from . import test_views\n", encoding="utf-8")
+            (root / "sub" / "shared.py").write_text("from ..test_views import ViewTest\n", encoding="utf-8")
+            (root / "helpers.py").write_text("from .sub import shared\n", encoding="utf-8")
+
+            violations = _test_package_violations(root)
+
+        self.assertEqual(
+            violations,
+            {
+                ("__init__.py", "from .test_views import ViewTest"),
+                ("sub/__init__.py", "from . import test_views"),
+                ("sub/shared.py", "from ..test_views import ViewTest"),
+            },
+        )
+
+    def test_a_shared_module_a_similar_name_and_a_dotted_path_string_are_not_reported(self):
+        source = (
+            "from .helpers import PLAIN_TYPE\n"
+            "from netbox_interface_name_rules.tests import helpers\n"
+            "from ..engine import test_rule\n"
+            "import netbox_interface_name_rules.tests_extra.test_views\n"
+            "from netbox.settings import *\n"
+            "from netbox_interface_name_rules.tests_extra import *\n"
+            "MIDDLEWARE = ('netbox_interface_name_rules.tests.test_views._route',)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_test_module_imports(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

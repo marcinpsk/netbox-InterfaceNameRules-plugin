@@ -17,7 +17,7 @@ from core.models import Job, ObjectChange
 from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection
+from django.db import DatabaseError, connection
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
@@ -26,9 +26,10 @@ from netbox.registry import registry
 
 from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
-from netbox_interface_name_rules.jobs import ApplyRuleJob, run_as_job_user
+from netbox_interface_name_rules.jobs import ApplyRuleJob, rule_job_kwargs, run_as_job_user
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
+    PLAIN_TYPE,
     empty_the_webhook_queue,
     make_device,
     make_device_type,
@@ -42,7 +43,6 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 
 User = get_user_model()
-PLAIN_TYPE = "10gbase-x-sfpp"
 UPDATE = ObjectChangeActionChoices.ACTION_UPDATE
 
 
@@ -203,7 +203,9 @@ class DeprecatedTagChangeLogTest(TestCase):
         copy = InterfaceNameRule.objects.get(pk=self.rule.pk)
         InterfaceNameRule.objects.filter(pk=self.rule.pk).update(description="edited after the read")
 
-        run_as_job_user(make_job("ChgLogFlag"), lambda: engine._flag_rule_potentially_deprecated(copy))
+        run_as_job_user(
+            make_job("ChgLogFlag"), lambda: engine._flag_rule_potentially_deprecated(copy), branch_schema_id=None
+        )
 
         change = updates_of(self.rule).get()
         descriptions = (change.prechange_data["description"], change.postchange_data["description"])
@@ -225,7 +227,7 @@ class ApplyRuleJobChangeLogTest(_ModuleFixture, TestCase):
 
     def _run_the_job(self):
         job = make_job("ChgLogJob", self.user)
-        ApplyRuleJob.handle(job, rule_id=self.rule.pk)
+        ApplyRuleJob.handle(job, **rule_job_kwargs(self.rule.pk))
         job.refresh_from_db()
         self.assertEqual(job.status, JobStatusChoices.STATUS_COMPLETED)
         return job
@@ -246,11 +248,48 @@ class ApplyRuleJobChangeLogTest(_ModuleFixture, TestCase):
         """The change log cannot name who made a change, so the job makes none."""
         job = Job.objects.create(name="Apply rule (test)", job_id=uuid.uuid4())
 
-        ApplyRuleJob.handle(job, rule_id=self.rule.pk)
+        ApplyRuleJob.handle(job, **rule_job_kwargs(self.rule.pk))
 
         job.refresh_from_db()
         self.assertEqual(job.status, JobStatusChoices.STATUS_ERRORED)
         self.assertIn("has no user", job.error)
+        self.assertEqual(Interface.objects.get(module=self.module).name, "0")
+
+    def test_a_job_enqueued_before_the_upgrade_fails_before_it_renames_anything(self):
+        """Its kwargs name no branch and no write alias, and no compatibility path guesses them."""
+        job = make_job("ChgLogJob", self.user)
+
+        ApplyRuleJob.handle(job, rule_id=self.rule.pk)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, JobStatusChoices.STATUS_ERRORED)
+        self.assertIn("arguments: 'branch_schema_id' and 'expected_alias'", job.error)
+        self.assertEqual(Interface.objects.get(module=self.module).name, "0")
+
+    def test_a_job_of_a_branch_that_cannot_be_activated_fails_before_it_renames_anything(self):
+        """The branch is gone, or netbox-branching is not installed: the job must not run on main instead."""
+        job = make_job("ChgLogJob", self.user)
+
+        ApplyRuleJob.handle(
+            job, rule_id=self.rule.pk, branch_schema_id="gone0001", expected_alias="schema_branch_gone0001"
+        )
+
+        job.refresh_from_db()
+        alias_error = RuntimeError("The write alias is 'default', but the operation expects 'schema_branch_gone0001'.")
+        self.assertEqual((job.status, job.error), (JobStatusChoices.STATUS_ERRORED, repr(alias_error)))
+        self.assertEqual(Interface.objects.get(module=self.module).name, "0")
+
+    def test_a_request_processor_that_fails_to_enter_fails_the_job_before_it_renames_anything(self):
+        """NetBox only warns and goes on without it, so a job whose branch activation fails would run on main."""
+        job = make_job("ChgLogJob", self.user)
+
+        with request_processors(*registry["request_processors"], branch_activation_that_fails):
+            ApplyRuleJob.handle(job, **rule_job_kwargs(self.rule.pk))
+
+        job.refresh_from_db()
+        self.assertEqual(
+            (job.status, job.error), (JobStatusChoices.STATUS_ERRORED, repr(DatabaseError(ACTIVATION_FAILURE)))
+        )
         self.assertEqual(Interface.objects.get(module=self.module).name, "0")
 
 
@@ -273,7 +312,7 @@ class JobEventRuleTest(_ModuleFixture, TestCase):
 
         # django-rq enqueues the webhook when the transaction commits.
         with self.captureOnCommitCallbacks(execute=True):
-            ApplyRuleJob.handle(job, rule_id=self.rule.pk)
+            ApplyRuleJob.handle(job, **rule_job_kwargs(self.rule.pk))
 
         job.refresh_from_db()
         self.assertEqual((job.status, job.error), (JobStatusChoices.STATUS_COMPLETED, ""))
@@ -310,6 +349,14 @@ def event_tracking_without_finally(request):
     netbox_context.events_queue.set({})
 
 
+ACTIVATION_FAILURE = "the branch could not be activated"
+
+
+def branch_activation_that_fails(request):
+    """A request processor that cannot enter, as netbox-branching's when its query for the branch fails."""
+    raise DatabaseError(ACTIVATION_FAILURE)
+
+
 @contextmanager
 def request_processors(*processors):
     """Register only *processors* while the block runs."""
@@ -333,7 +380,7 @@ class JobRequestContextTest(TestCase):
 
     def _handle(self, rule):
         job = make_job("ChgLogCtx")
-        left_set = run_in_a_fresh_context(ApplyRuleJob.handle, job, rule_id=rule.pk)
+        left_set = run_in_a_fresh_context(ApplyRuleJob.handle, job, **rule_job_kwargs(rule.pk))
         job.refresh_from_db()
         return job.status, left_set
 

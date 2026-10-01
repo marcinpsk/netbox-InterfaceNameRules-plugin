@@ -37,18 +37,18 @@ from netbox_interface_name_rules.family import (
     resolved_template_names,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
     CHANNEL_TYPE,
+    CHANNELIZED,
     PLAIN_TYPE,
     REQUIRES_CHANNELIZATION,
+    REQUIRES_NO_CHANNELIZATION,
     ChannelizationTestCase,
-    _build_device,
-    _channelized_module_type,
+    build_device,
+    channelized_module_type,
+    plain_module_type,
 )
-
-REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 
 def _projection(plan):
@@ -146,8 +146,8 @@ class ProspectiveFlatPlanTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspFlat", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspFlat-QSFP")
+        manufacturer, cls.device = build_device("ProspFlat", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ProspFlat-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -225,8 +225,8 @@ class ProspectiveUnsupportedTopologyTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspUnsup", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspUnsup-QSFP")
+        manufacturer, cls.device = build_device("ProspUnsup", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspUnsup-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -258,8 +258,8 @@ class ProspectivePlansAreNotExecutableTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspExec", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspExec-QSFP")
+        manufacturer, cls.device = build_device("ProspExec", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspExec-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -292,11 +292,11 @@ class ProspectiveChannelizedPlanTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspChan", ["3", "5", "8", "9"])
-        cls.breakout_type = _channelized_module_type(manufacturer, "ProspChan-BRK")
-        cls.incomplete_type = _channelized_module_type(manufacturer, "ProspChan-INC", child_channel_ids=(1, 2, 3))
-        cls.mismatch_type = _channelized_module_type(manufacturer, "ProspChan-MM", channels=8)
-        cls.simple_type = _channelized_module_type(
+        manufacturer, cls.device = build_device("ProspChan", ["3", "5", "8", "9"])
+        cls.breakout_type = channelized_module_type(manufacturer, "ProspChan-BRK")
+        cls.incomplete_type = channelized_module_type(manufacturer, "ProspChan-INC", child_channel_ids=(1, 2, 3))
+        cls.mismatch_type = channelized_module_type(manufacturer, "ProspChan-MM", channels=8)
+        cls.simple_type = channelized_module_type(
             manufacturer,
             "ProspChan-SMP",
             child_names={1: "{module}:1", 2: "{module}:2", 3: "{module}:3", 4: "mgmt-chan"},
@@ -370,9 +370,9 @@ class ProspectiveStructuralPlanTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspStruct", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspStruct-QSFP")
-        cls.collision_type = _plain_module_type(manufacturer, "ProspStruct-COL")
+        manufacturer, cls.device = build_device("ProspStruct", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ProspStruct-QSFP")
+        cls.collision_type = plain_module_type(manufacturer, "ProspStruct-COL")
         InterfaceTemplate.objects.create(module_type=cls.collision_type, name="et-0/0/{module}", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -424,9 +424,9 @@ class ProspectiveMatchesInstalledPlanningTest(ProspectivePlanTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspSame", ["3", "5"])
-        cls.breakout_type = _channelized_module_type(manufacturer, "ProspSame-BRK")
-        cls.mismatch_type = _channelized_module_type(manufacturer, "ProspSame-MM", channels=8)
+        manufacturer, cls.device = build_device("ProspSame", ["3", "5"])
+        cls.breakout_type = channelized_module_type(manufacturer, "ProspSame-BRK")
+        cls.mismatch_type = channelized_module_type(manufacturer, "ProspSame-MM", channels=8)
         for module_type in (cls.breakout_type, cls.mismatch_type):
             InterfaceNameRule.objects.create(
                 module_type=module_type,
@@ -474,8 +474,8 @@ class ProspectivePreviewIsNotAppliedTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspReplan", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspReplan-QSFP")
+        manufacturer, cls.device = build_device("ProspReplan", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspReplan-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="et-0/0/{bay_position}",
@@ -508,8 +508,8 @@ class ProspectivePlanningIsReadOnlyTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspRead", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspRead-QSFP")
+        manufacturer, cls.device = build_device("ProspRead", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspRead-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -539,8 +539,8 @@ class PreviewComesFromTheFamilyPlanTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspPrev", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspPrev-QSFP")
+        manufacturer, cls.device = build_device("ProspPrev", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspPrev-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -581,8 +581,8 @@ class PreviewFollowsTheApplyClassificationTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspClass", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ProspClass-QSFP")
+        manufacturer, cls.device = build_device("ProspClass", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ProspClass-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="et-0/0/{bay_position}",
@@ -621,8 +621,8 @@ class PreviewReadsNoTemplatesForDerivableSuffixesTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ProspQuery", ["3"])
-        cls.module_type = _channelized_module_type(manufacturer, "ProspQuery-QSFP")
+        manufacturer, cls.device = build_device("ProspQuery", ["3"])
+        cls.module_type = channelized_module_type(manufacturer, "ProspQuery-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="et-0/0/{bay_position}",

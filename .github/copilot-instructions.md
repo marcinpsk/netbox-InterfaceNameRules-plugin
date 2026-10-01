@@ -11,8 +11,10 @@ Requires NetBox ≥ 4.3.0 and Python ≥ 3.12. Licensed under Apache-2.0 (REUSE-
 This follows the standard [NetBox plugin pattern](https://netboxlabs.com/docs/netbox/en/stable/plugins/development/):
 
 - **`models.py`**: Defines `InterfaceNameRule`. A rule can select an exact module type or a regex pattern, add parent, device, and platform scopes, and describe flat or channelized breakout output.
-- **`signals.py`**: Connects `pre_save` and `post_save` for `dcim.Module` and `dcim.Device` and passes each save to `rename_triggers.py`. The receivers hold no state and make no decision. It intentionally does not connect to `dcim.Interface` because NetBox creates module interfaces with `bulk_create()`. It also connects the optional LibreNMS prediction signal when that plugin is installed.
-- **`rename_triggers.py`**: Owns the rename-trigger lifecycle. It reads the previous state before a save and lets a read error fail the save. After the save it decides whether the save is a rename trigger and schedules one reapply per module or device per transaction with `transaction.on_commit()`. The reapply compares the earliest previous state with the committed row, and it catches and logs failures at that boundary.
+- **`signals.py`**: Connects `pre_save` and `post_save` for `dcim.Module`, `dcim.ModuleBay` and `dcim.Device` and passes each save to `rename_triggers.py` with the alias of the save, which must be the write alias. The receivers hold no state and make no decision. It intentionally does not connect to `dcim.Interface` because NetBox creates module interfaces with `bulk_create()`. It also connects the optional LibreNMS prediction signal when that plugin is installed.
+- **`rename_triggers.py`**: Owns the rename-trigger lifecycle. It reads the previous state before a save and lets a read error fail the save. After the save it decides whether the save is a rename trigger and schedules one reapply per module or device per transaction with `transaction.on_commit()` on the connection of the save, so the plan runs after that connection commits. The reapply compares the earliest previous state with the committed row, and it catches and logs failures at that boundary.
+- **`transactions.py`**: The one owner of database connections and transaction state. Each plugin write runs in a write scope on `default`, and in a netbox-branching branch also on the branch connection.
+- **`branching.py`**: The one module that imports netbox-branching. It checks its version at startup, gives a job the identity of its branch, and marks each merge, revert and sync so that the rename triggers do nothing while it replays changes.
 - **`rule_selection.py`**: Loads and fingerprints enabled rules, separates exact and regex candidates, applies scope priority, and pins one cached snapshot across batch work.
 - **`name_template.py`**: Owns the name-template language, its template-variable catalogue, and evaluation.
 - **`naming.py`**: Builds template-variable values from the module-bay hierarchy.
@@ -78,7 +80,7 @@ netbox-test netbox_interface_name_rules/tests/test_views.py::TestClassName::test
 TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=redis pytest netbox_interface_name_rules
 ```
 
-`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`.
+`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`. A local run prints coverage but does not fail on it: the 97% gate runs in CI on the combined data of two legs.
 
 ## REUSE/SPDX compliance
 

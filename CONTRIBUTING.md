@@ -55,6 +55,9 @@ with `test_`, and set `TEST_REDIS_HOST` to the Redis server that the tests can u
 TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=localhost pytest netbox_interface_name_rules
 ```
 
+A local run prints coverage but does not fail on it. The 97% gate runs in CI on the combined
+coverage data of the NetBox v4.5.3 leg and the netbox-branching leg.
+
 ### Commits
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):

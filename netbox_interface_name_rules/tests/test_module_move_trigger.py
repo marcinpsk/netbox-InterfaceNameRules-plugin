@@ -14,15 +14,10 @@ alone: the interfaces keep their raw names, and nested bays keep their parent, p
 import functools
 import os
 import re
-from contextlib import contextmanager
-from typing import NamedTuple
 from unittest import skipIf, skipUnless
-from unittest.mock import patch
 
-from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay, ModuleBayTemplate, Platform, VirtualChassis
-from django.contrib.contenttypes.models import ContentType
-from django.db import DataError, IntegrityError, connection, transaction
-from django.test import TestCase
+from dcim.models import Interface, InterfaceTemplate, Module, ModuleBay, ModuleBayTemplate
+from django.db import DataError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from extras.choices import JournalEntryKindChoices
@@ -30,7 +25,6 @@ from extras.models import JournalEntry
 from rest_framework import status
 from utilities.testing import APITestCase
 
-from netbox_interface_name_rules import engine
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import supports_channelization, supports_vc_position_token
 from netbox_interface_name_rules.family import supports_module_moves
@@ -38,219 +32,44 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import PlanRunner
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
-    make_device,
-    make_device_type,
-    make_manufacturer,
+    PLAIN_TYPE,
+    REQUIRES_CHANNELIZATION,
+    REQUIRES_VC_POSITION_TOKEN,
+    channelized_module_type,
     make_module_type,
-    make_placement,
-    slug_for,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import REQUIRES_CHANNELIZATION, _channelized_module_type
-from netbox_interface_name_rules.tests.test_rename_triggers import _give_the_next_module_id, _reject_reads_of
-from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
+from netbox_interface_name_rules.tests.trigger_cases import (
+    CHASSIS_RULES,
+    FLAT,
+    NO_RULE,
+    REQUIRES_SUBTREE_MOVES,
+    TAKEN,
+    UNAVAILABLE,
+    ModuleMoveTestCase,
+    MoveFixture,
+    fail_the_naming_read,
+    give_the_next_module_id,
+    journal,
+    module_reapplies,
+    naming_reads,
+    reapplied,
+    reject_interface_updates,
+    reject_reads_of,
+)
 
-PLAIN_TYPE = "10gbase-x-sfpp"
-BAYS = (("Bay 0", "0"), ("Bay 1", "1"), ("Bay 2", "2"), ("Bay 10", "10"))
-REQUIRES_SUBTREE_MOVES = "requires a NetBox that moves a module's nested bays with it (4.7+)"
 REQUIRES_DEVICE_MOVES = "requires a NetBox that moves a module's interfaces to its new device (4.7+)"
 REQUIRES_MOVE_RENAMES = "requires a NetBox that renames a moved module's raw interface names (4.7+)"
 UNCLAIMED = "no single interface template claims"
-FLAT = "a flat breakout family is not renamed after a move, a bay edit or a parent module type change"
 NOT_RENAMED = "the module is not renamed while one of its interfaces is unclaimed"
-NO_RULE = "no rule matches the module after the change"
 ELSEWHERE = "the interface is not on the device of its module"
 STALE_BAY = "the module bay still has the parent bay it had before its module moved"
-TAKEN = "target name is already in use"
-UNAVAILABLE = "{vc_position} is not available on this device"
 WRITE = re.compile(r'\s*(INSERT INTO|UPDATE|DELETE FROM) "(\w+)"')
-NAMING_READ = re.compile(r'SELECT .* FROM "dcim_module" .*"dcim_platform"')
 
 
 def _writes(queries):
     """Return ``(statement, table)`` for each write among *queries*."""
     return [match.groups() for query in queries if (match := WRITE.match(query["sql"]))]
-
-
-def _reject_interface_updates(execute, sql, params, many, context):
-    if sql.lstrip().startswith('UPDATE "dcim_interface"'):
-        raise IntegrityError("injected reapply failure")
-    return execute(sql, params, many, context)
-
-
-def _fail_the_naming_read(execute, sql, params, many, context):
-    if NAMING_READ.match(sql):
-        return execute("SELECT 1/0", None, many, context)
-    return execute(sql, params, many, context)
-
-
-def _journal(instance):
-    """Return the journal entries on *instance*, oldest first."""
-    return list(
-        JournalEntry.objects.filter(
-            assigned_object_type=ContentType.objects.get_for_model(instance), assigned_object_id=instance.pk
-        ).order_by("pk")
-    )
-
-
-@contextmanager
-def _module_reapplies():
-    """Count the module reapplies; each call still runs the real function."""
-    with patch.object(engine, "module_rule_outcomes", wraps=engine.module_rule_outcomes) as spy:
-        yield spy
-
-
-def _reapplied(spy):
-    """Return the primary key of the module of each reapply that *spy* recorded, sorted."""
-    return sorted(call.args[0].pk for call in spy.call_args_list)
-
-
-class ChassisRule(NamedTuple):
-    """One rule shape that the tests of a chassis change with a module change cover."""
-
-    model: str
-    name_template: str
-
-
-# A plain rule, a rule that reads {base}, and a rule with the virtual-chassis position in arithmetic.
-CHASSIS_RULES = (
-    ChassisRule("Plain", "et-{vc_position}/{slot}/{bay_position}"),
-    ChassisRule("Base", "p{base}-{vc_position}/{slot}"),
-    ChassisRule("Arithmetic", "x{{vc_position} * 10 + {slot_num}}/{bay_position}"),
-)
-
-
-@contextmanager
-def _naming_reads():
-    """Record the queries and the result of each subtree naming read; each call still runs the real function."""
-    reads = []
-    real = engine.read_subtree_naming
-
-    def read(module_pk):
-        with CaptureQueriesContext(connection) as queries:
-            naming = real(module_pk)
-        reads.append((queries.captured_queries, naming))
-        return naming
-
-    with patch.object(engine, "read_subtree_naming", read):
-        yield reads
-
-
-class _MoveFixture:
-    """Two device types with the same bays, and three devices in two virtual chassis.
-
-    ``device`` and ``peer`` are virtual-chassis positions 1 and 2 of one chassis; ``remote`` has
-    another device type and platform, at position 5 of another chassis.
-    """
-
-    @classmethod
-    def build(cls, prefix):
-        """Create the fixture objects and return them as class attributes of *cls*."""
-        cls.prefix = prefix
-        cls.manufacturer = make_manufacturer(prefix)
-        cls.device_type = make_device_type(cls.manufacturer, prefix)
-        cls.other_device_type = make_device_type(cls.manufacturer, f"{prefix} Other")
-        for device_type in (cls.device_type, cls.other_device_type):
-            for name, position in BAYS:
-                ModuleBayTemplate.objects.create(device_type=device_type, name=name, position=position)
-        cls.platform = Platform.objects.create(name=f"{prefix} OS", slug=slug_for(prefix, "os"))
-        cls.other_platform = Platform.objects.create(name=f"{prefix} Other OS", slug=slug_for(prefix, "other-os"))
-        placement = make_placement(prefix)
-        chassis = VirtualChassis.objects.create(name=f"{prefix} VC")
-        remote_chassis = VirtualChassis.objects.create(name=f"{prefix} Remote VC")
-        cls.device = cls._device(placement, "01", cls.device_type, cls.platform, chassis, 1)
-        cls.peer = cls._device(placement, "02", cls.device_type, cls.other_platform, chassis, 2)
-        cls.remote = cls._device(placement, "03", cls.other_device_type, cls.other_platform, remote_chassis, 5)
-
-    @classmethod
-    def _device(cls, placement, suffix, device_type, platform, chassis, position):
-        return make_device(
-            cls.prefix,
-            device_type,
-            placement,
-            name=slug_for(cls.prefix, suffix),
-            platform=platform,
-            virtual_chassis=chassis,
-            vc_position=position,
-        )
-
-    @classmethod
-    def _module_type(cls, model, *templates):
-        module_type = make_module_type(cls.manufacturer, model, model=f"{cls.prefix} {model}")
-        for template in templates:
-            InterfaceTemplate.objects.create(module_type=module_type, name=template, type=PLAIN_TYPE)
-        return module_type
-
-    @classmethod
-    def _card_type(cls, model, bay_position):
-        """Return a module type that holds one nested bay at *bay_position*, and no interfaces."""
-        card_type = make_module_type(cls.manufacturer, model, model=f"{cls.prefix} {model}")
-        ModuleBayTemplate.objects.create(module_type=card_type, name="Port", position=bay_position)
-        return card_type
-
-    @staticmethod
-    def _bay(device, name="Bay 0"):
-        return ModuleBay.objects.get(device=device, module__isnull=True, name=name)
-
-    @staticmethod
-    def _names(module):
-        return sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
-
-
-class ModuleMoveTestCase(_MoveFixture, TestCase):
-    """Install and move modules through real saves, with the committed callbacks run."""
-
-    @classmethod
-    def setUpTestData(cls):
-        cls.build(cls.__name__)
-
-    def _install(self, module_type, bay):
-        with self.captureOnCommitCallbacks(execute=True):
-            return Module.objects.create(device=bay.device, module_bay=bay, module_type=module_type)
-
-    @staticmethod
-    def _save_move(module, bay):
-        module.device = bay.device
-        module.module_bay = bay
-        module.save()
-
-    def _move(self, module, bay):
-        with self.captureOnCommitCallbacks(execute=True):
-            self._save_move(module, bay)
-
-    def _install_card(self, card_type, bay):
-        """Install *card_type* in *bay* and return it with its nested bay."""
-        card = self._install(card_type, bay)
-        return card, ModuleBay.objects.get(module=card)
-
-    def _change_the_chassis_position(self, position=3):
-        self.device.vc_position = position
-        self.device.save()
-
-    def _leave_the_chassis(self):
-        self.device.virtual_chassis = None
-        self.device.vc_position = None
-        self.device.save()
-
-    def _join_the_chassis(self, chassis):
-        self.device.virtual_chassis = chassis
-        self.device.vc_position = 3
-        self.device.save()
-
-    def _save_in_one_transaction(self, *saves):
-        """Run each of *saves* in order in one transaction; return the spy of the module reapplies."""
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
-            for save in saves:
-                save()
-        return reapplies
-
-    def _save_with_a_device_change(self, device_change, save, device_first, before=()):
-        """Run *device_change* and *save* in one transaction, *device_change* first when *device_first*.
-
-        The saves in *before* run first in the same transaction.
-        """
-        ordered = (device_change, save) if device_first else (save, device_change)
-        return self._save_in_one_transaction(*before, *ordered)
 
 
 class ModuleMoveTest(ModuleMoveTestCase):
@@ -271,7 +90,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-1/0/1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
     @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_module_moved_to_another_device_in_the_chassis_is_renamed_for_its_position(self):
@@ -300,7 +119,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channelized_family_is_renamed_for_the_new_bay(self):
-        module_type = _channelized_module_type(
+        module_type = channelized_module_type(
             self.manufacturer, f"{self.prefix} Channelized", channels=2, child_channel_ids=(1, 2)
         )
         InterfaceNameRule.objects.create(
@@ -320,7 +139,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channelized_family_whose_parent_keeps_its_raw_name_is_renamed_for_the_new_bay(self):
-        module_type = _channelized_module_type(
+        module_type = channelized_module_type(
             self.manufacturer, f"{self.prefix} Kept Parent", channels=2, child_channel_ids=(1, 2)
         )
         InterfaceNameRule.objects.create(
@@ -339,7 +158,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_an_unclaimed_interface_beside_a_channelized_family_keeps_every_name(self):
-        module_type = _channelized_module_type(
+        module_type = channelized_module_type(
             self.manufacturer, f"{self.prefix} Beside", channels=2, child_channel_ids=(1, 2)
         )
         InterfaceNameRule.objects.create(
@@ -359,7 +178,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
             callback()
 
         self.assertEqual(self._names(module), saved)
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
         for name in saved:
             if name != "operator-name":
@@ -378,7 +197,7 @@ class ModuleMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-1/0/0.100", "et-1/0/1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
 
 @skipUnless(supports_module_moves(), REQUIRES_SUBTREE_MOVES)
@@ -435,7 +254,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
             self._save_move(card, self._bay(self.device, "Bay 2"))
 
         self.assertEqual((self._names(card), self._names(optic)), (["p0-1"], ["et-1/2/1"]))
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertIn(f"`p0-1`: {UNCLAIMED}", entry.comments)
 
     def test_a_move_rolled_back_in_a_savepoint_leaves_the_pending_reapply_as_it_was(self):
@@ -472,7 +291,7 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         self._move(card, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual((self._names(card), self._names(optic)), (["a-0:0", "a-0:1"], ["et-5/1/1"]))
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         for name in ("a-0:0", "a-0:1"):
             self.assertIn(f"`{name}`: {FLAT}", entry.comments)
@@ -489,16 +308,16 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._save_move(card, self._bay(self.remote, "Bay 1"))
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs("netbox_interface_name_rules"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn(f"`et-1/0/1` to `et-5/1/1`: {TAKEN}", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
         self.assertEqual((self._names(blocked), self._names(failed)), (["et-1/0/1"], ["et-1/0/2"]))
-        self.assertEqual((_journal(blocked), _journal(failed)), ([], []))
+        self.assertEqual((journal(blocked), journal(failed)), ([], []))
 
     def test_the_subtree_reports_in_one_journal_entry_on_the_moved_module(self):
         card, port = self._install_card(self.card_type, self._bay(self.device))
@@ -512,10 +331,10 @@ class NestedModuleMoveTest(ModuleMoveTestCase):
             callback()
 
         self.assertEqual(self._names(optic), ["et-1/0/1"])
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`et-1/0/1` to `et-5/1/1`: {TAKEN}", entry.comments)
-        self.assertEqual(_journal(optic), [])
+        self.assertEqual(journal(optic), [])
 
 
 class RuleWinnerMoveTest(ModuleMoveTestCase):
@@ -598,7 +417,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["a0", "operator-name"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`a0`: {NO_RULE}", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
@@ -619,7 +438,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["b-1:0", "b-1:1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
     @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
     def test_a_move_into_a_flat_rule_builds_no_family_while_an_interface_is_unclaimed(self):
@@ -637,13 +456,13 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["a-0", "a-0:1"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn(f"`a-0`: {NOT_RENAMED}", entry.comments)
         self.assertIn(f"`a-0:1`: {UNCLAIMED}", entry.comments)
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_without_a_rule_after_the_move_the_channels_renamed_with_their_parent_are_reported(self):
-        module_type = _channelized_module_type(
+        module_type = channelized_module_type(
             self.manufacturer, f"{self.prefix} Lockstep", channels=2, child_channel_ids=(1, 2)
         )
         self._rule("et-{bay_position}", module_type=module_type, device_type=self.device_type)
@@ -653,7 +472,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-0", "et-0:1", "et-0:2"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         for name in ("et-0", "et-0:1", "et-0:2"):
             self.assertIn(f"`{name}`: {NO_RULE}", entry.comments)
 
@@ -675,7 +494,7 @@ class RuleWinnerMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-0", "et-0:1", "et-0:2"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         for name in ("et-0", "et-0:1", "et-0:2"):
             self.assertIn(f"`{name}`: {NO_RULE}", entry.comments)
 
@@ -700,7 +519,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["p0-1", "p1-1"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn(f"`p0-1`: {UNCLAIMED}", entry.comments)
         self.assertIn(f"`p1-1`: {UNCLAIMED}", entry.comments)
 
@@ -712,7 +531,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 10"))
 
         self.assertEqual(self._names(module), ["operator-name", "x10"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn(f"`x10`: {UNCLAIMED}", entry.comments)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
 
@@ -725,7 +544,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["operator-name"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
 
     def test_an_interface_no_template_matches_keeps_its_name_and_is_reported(self):
@@ -735,14 +554,14 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["operator-name"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`operator-name`: {UNCLAIMED}", entry.comments)
 
     def test_a_move_writes_only_the_module_the_rename_and_the_search_cache(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
-        with _naming_reads() as reads, CaptureQueriesContext(connection) as queries:
+        with naming_reads() as reads, CaptureQueriesContext(connection) as queries:
             self._move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(self._names(module), ["et-1/0/1"])
@@ -761,7 +580,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         module = self._install(self.plain_type, self._bay(self.device))
         other_type = self._module_type("Other", "{module}")
 
-        with _naming_reads() as reads, self.captureOnCommitCallbacks(execute=True):
+        with naming_reads() as reads, self.captureOnCommitCallbacks(execute=True):
             module.description = "unrelated edit"
             module.save()
             module.module_type = other_type
@@ -774,7 +593,7 @@ class MoveRecognitionTest(ModuleMoveTestCase):
         module = self._install(self.plain_type, self._bay(self.device))
 
         with (
-            connection.execute_wrapper(_fail_the_naming_read),
+            connection.execute_wrapper(fail_the_naming_read),
             self.assertRaisesMessage(DataError, "division by zero"),
             transaction.atomic(),
         ):
@@ -812,7 +631,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
 
     def _assert_kept_and_reported(self, module, names):
         self.assertEqual(self._names(module), names)
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         for name in names:
             self.assertIn(f"`{name}`: {FLAT}", entry.comments)
@@ -851,7 +670,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
         self._move(module, self._bay(self.remote, "Bay 2"))
 
         self.assertEqual(self._names(module), ["p1:0", "p1:1"])
-        entry = _journal(module)[-1]
+        entry = journal(module)[-1]
         self.assertIn(f"`p1:0`: {NOT_RENAMED}", entry.comments)
         self.assertIn(f"`p1:1`: {UNCLAIMED}", entry.comments)
 
@@ -866,7 +685,7 @@ class FlatBreakoutMoveTest(ModuleMoveTestCase):
             self._save_move(module, self._bay(self.device, "Bay 2"))
 
         self.assertEqual(self._names(module), ["f-2:0", "f-2:1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
@@ -896,7 +715,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
     def test_a_move_in_a_rolled_back_savepoint_causes_no_reapply_and_a_later_move_reapplies_once(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             with self.assertRaises(RuntimeError), transaction.atomic():
                 self._save_move(module, self._bay(self.device, "Bay 1"))
                 raise RuntimeError("roll back the savepoint")
@@ -909,7 +728,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
     def test_a_move_rolled_back_after_an_earlier_move_keeps_the_earlier_reapply(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             self._save_move(module, self._bay(self.device, "Bay 2"))
             with self.assertRaises(RuntimeError), transaction.atomic():
                 self._save_move(module, self._bay(self.device, "Bay 1"))
@@ -922,7 +741,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
     def test_two_moves_in_one_transaction_reapply_once_from_the_state_before_it(self):
         module = self._install(self.plain_type, self._bay(self.device))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             self._save_move(module, self._bay(self.device, "Bay 1"))
             self._save_move(module, self._bay(self.peer, "Bay 2"))
 
@@ -934,7 +753,7 @@ class MoveTransactionTest(ModuleMoveTestCase):
         rename_out_of_band(Interface.objects.get(module=returned), "operator-name")
         moved = self._install(self.plain_type, self._bay(self.device, "Bay 1"))
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             self._save_move(returned, self._bay(self.device, "Bay 2"))
             self._save_move(returned, self._bay(self.device))
             self._save_move(moved, self._bay(self.device, "Bay 10"))
@@ -946,14 +765,14 @@ class MoveTransactionTest(ModuleMoveTestCase):
         module = self._install(self.plain_type, self._bay(self.device))
         bay = self._bay(self.device)
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             bay.position = "5"
             bay.save()
             self._save_move(module, self._bay(self.device, "Bay 1"))
 
         self.assertEqual(reapplies.call_count, 1)
         self.assertEqual(self._names(module), ["et-1/0/1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
 
 class ChassisPositionMoveTest(ModuleMoveTestCase):
@@ -1023,8 +842,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         reapplies = self._save_with_a_device_change(device_change, move_all, device_first)
 
-        self.assertEqual(_reapplied(reapplies), sorted(module.pk for module in (*modules, other)))
-        self.assertEqual([_journal(module) for module in modules], [[], [], []])
+        self.assertEqual(reapplied(reapplies), sorted(module.pk for module in (*modules, other)))
+        self.assertEqual([journal(module) for module in modules], [[], [], []])
         return [self._names(module) for module in modules], self._names(other)
 
     def _device_bays(self):
@@ -1037,7 +856,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         moved, other = self._move_all(targets, self._change_the_chassis_position, chassis_first)
 
         self.assertEqual((moved, other), (names, ["et-3/10/10"]))
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
 
     def test_moves_then_a_chassis_position_change_rename_each_module_once(self):
         self._assert_moved_with_a_position_change(self._device_bays(), False, [["et-3/5/5"], ["p6-3/6"], ["x37/7"]])
@@ -1068,14 +887,14 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         reapplies = self._save_in_one_transaction(self._change_the_chassis_position, move_all)
 
         self.assertEqual([self._names(module) for module in modules], [["et-3/5/5"], ["p6-3/6"], ["x37/7"]])
-        self.assertEqual(_reapplied(reapplies), sorted(module.pk for module in modules))
-        self.assertEqual([_journal(module) for module in (*modules, self.device)], [[], [], [], []])
+        self.assertEqual(reapplied(reapplies), sorted(module.pk for module in modules))
+        self.assertEqual([journal(module) for module in (*modules, self.device)], [[], [], [], []])
 
     def _assert_moved_out_with_a_leave(self, leave_first):
         moved, other = self._move_all(self._peer_bays(), self._leave_the_chassis, leave_first)
 
         self.assertEqual((moved, other), ([["et-2/0/0"], ["p1-2/1"], ["x22/2"]], ["et-1/10/10"]))
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn(f"`et-1/10/10`: {UNAVAILABLE}", entry.comments)
 
     @skipUnless(supports_module_moves(), REQUIRES_DEVICE_MOVES)
@@ -1100,8 +919,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         reapplies = self._save_in_one_transaction(*saves)
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["et-3/0/0"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
         # Only the module unit passes the naming points of the moves.
         moves = [point.move for call in reapplies.call_args_list for point in call.kwargs.get("naming_points", ())]
         self.assertEqual(any(moves), change_at == 1 and supports_module_moves())
@@ -1131,7 +950,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         )
 
         self.assertEqual((self._names(module), self._names(other)), (["et-3/5/5"], ["et-3/10/10"]))
-        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
+        self.assertEqual(reapplied(reapplies), sorted((module.pk, other.pk)))
         self.assertEqual(JournalEntry.objects.count(), entries)
 
     def test_a_move_then_joining_a_chassis_rename_each_module_once(self):
@@ -1149,8 +968,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             self._change_the_chassis_position, functools.partial(self._save_move, module, port), chassis_first
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_move_into_a_rule_then_a_chassis_position_change_rename_a_raw_name_that_reads_the_position(self):
@@ -1169,8 +988,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, port), self._change_the_chassis_position
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies).count(module.pk)), (["et-3/1/1"], 1))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_off_a_chassis_then_a_join_recognise_the_name_netbox_gave_at_the_move(self):
@@ -1185,8 +1004,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, port), functools.partial(self._join_the_chassis, chassis)
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-3/1/2"], 1))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies).count(module.pk)), (["et-3/1/2"], 1))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_card_moved_to_another_device_then_its_position_change_recognise_the_nested_name(self):
@@ -1202,8 +1021,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, card, self._bay(self.peer, "Bay 2")), renumber_the_peer
         )
 
-        self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["et-4/2/1"], 1))
-        self.assertEqual((_journal(card), _journal(optic), _journal(self.peer)), ([], [], []))
+        self.assertEqual((self._names(optic), reapplied(reapplies).count(optic.pk)), (["et-4/2/1"], 1))
+        self.assertEqual((journal(card), journal(optic), journal(self.peer)), ([], [], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_into_a_bay_whose_position_is_the_token_then_its_position_change_recognise_the_name(self):
@@ -1217,8 +1036,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
 
         reapplies = self._save_in_one_transaction(functools.partial(self._save_move, module, bay), renumber_the_peer)
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["et-4/7"], 1))
-        self.assertEqual((_journal(module), _journal(self.peer)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies).count(module.pk)), (["et-4/7"], 1))
+        self.assertEqual((journal(module), journal(self.peer)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_two_moves_around_a_chassis_position_change_recognise_the_name_of_the_first_move(self):
@@ -1233,8 +1052,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, self._bay(self.device, "Bay 2")),
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/2"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["et-3/2"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     def _install_a_raw_module_with_a_base_rule(self):
         """Install a module whose raw name reads the position in Bay 0, then enable a {base} rule for it."""
@@ -1254,8 +1073,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, self._bay(self.device)),
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p3/0"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["p3/0"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     def _install_a_raw_optic_in_a_card_with_a_base_rule(self):
         """Install a card whose port position is the card's bay, a raw optic in it, and a {base} rule for the optic."""
@@ -1276,8 +1095,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, card, self._bay(self.device)),
         )
 
-        self.assertEqual((self._names(optic), _reapplied(reapplies).count(optic.pk)), (["p3/0"], 1))
-        self.assertEqual((_journal(card), _journal(optic), _journal(self.device)), ([], [], []))
+        self.assertEqual((self._names(optic), reapplied(reapplies).count(optic.pk)), (["p3/0"], 1))
+        self.assertEqual((journal(card), journal(optic), journal(self.device)), ([], [], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_card_moved_out_and_back_around_a_port_edit_that_is_undone_recognise_the_nested_name(self):
@@ -1295,8 +1114,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(edit_the_port, "0"),
         )
 
-        self.assertEqual((self._names(optic), _reapplied(reapplies)), (["p1/0"], [optic.pk]))
-        self.assertEqual((_journal(card), _journal(optic)), ([], []))
+        self.assertEqual((self._names(optic), reapplied(reapplies)), (["p1/0"], [optic.pk]))
+        self.assertEqual((journal(card), journal(optic)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_position_change_of_a_device_the_module_left_before_its_return_recognise_the_name_given_there(self):
@@ -1313,8 +1132,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, self._bay(self.device)),
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device), _journal(self.peer)), ([], [], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["p1/0"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device), journal(self.peer)), ([], [], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_out_an_edit_of_the_new_bay_and_a_move_back_recognise_the_name_of_the_move_out(self):
@@ -1332,8 +1151,8 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             functools.partial(self._save_move, module, self._bay(self.device)),
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["p1/0"], [module.pk]))
-        self.assertEqual(_journal(module), [])
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["p1/0"], [module.pk]))
+        self.assertEqual(journal(module), [])
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_move_with_a_position_change_undone_ends_as_the_move_alone(self):
@@ -1344,7 +1163,7 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
         for device_changes in ((), undone):
             module = self._install(self.adjacent_type, self._bay(self.device))
             self._save_in_one_transaction(functools.partial(self._save_move, module, port), *device_changes)
-            outcomes.append((self._names(module), [entry.comments for entry in _journal(module)]))
+            outcomes.append((self._names(module), [entry.comments for entry in journal(module)]))
             module.delete()
 
         self.assertEqual(outcomes, [(["et-1/1/1"], []), (["et-1/1/1"], [])])
@@ -1359,10 +1178,10 @@ class ChassisPositionMoveTest(ModuleMoveTestCase):
             chassis_first,
         )
 
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
-        (entry,) = _journal(module)
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["et-1/0/0"], [module.pk]))
+        (entry,) = journal(module)
         self.assertEqual(entry.comments.count(f"`et-1/0/0` to `et-3/5/5`: {TAKEN}"), 1)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
 
     def test_a_move_then_a_chassis_position_change_report_a_collision_once(self):
         self._assert_a_collision_is_reported_once(chassis_first=False)
@@ -1413,8 +1232,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         module, other, reapplies = self._install_with_the_chassis_change(chassis_first, self.adjacent_type, bay)
 
         self.assertEqual((self._names(module), self._names(other)), (names, ["et-3/10/10"]))
-        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk, *(card.pk for card in cards))))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual(reapplied(reapplies), sorted((module.pk, other.pk, *(card.pk for card in cards))))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_an_install_then_a_chassis_position_change_recognise_the_raw_name_at_the_position_of_the_install(self):
@@ -1441,8 +1260,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         reapplies = self._save_in_one_transaction(install, functools.partial(self._join_the_chassis, chassis))
 
         (module,) = installed
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["pxe-3"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["pxe-3"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     def test_an_install_without_templates_then_a_chassis_position_change_rename_its_interface(self):
         bare_type = self._module_type("Bare")
@@ -1457,8 +1276,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         reapplies = self._save_in_one_transaction(install, self._change_the_chassis_position)
 
         (module,) = installed
-        self.assertEqual((self._names(module), _reapplied(reapplies)), (["et-3/0"], [module.pk]))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(module), reapplied(reapplies)), (["et-3/0"], [module.pk]))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     @skipUnless(supports_module_moves(), REQUIRES_MOVE_RENAMES)
     def test_a_replacement_under_the_key_of_a_moved_module_is_recognised_at_the_position_of_its_install(self):
@@ -1471,7 +1290,7 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
             module.delete()
 
         def install_a_replacement():
-            _give_the_next_module_id(keys[0])
+            give_the_next_module_id(keys[0])
             installed.append(
                 Module.objects.create(
                     device=self.device, module_bay=self._bay(self.device), module_type=self.adjacent_type
@@ -1487,8 +1306,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
 
         (replacement,) = installed
         self.assertEqual(replacement.pk, keys[0])
-        self.assertEqual((self._names(replacement), _reapplied(reapplies)), (["et-5/0"], [replacement.pk]))
-        self.assertEqual((_journal(replacement), _journal(self.device)), ([], []))
+        self.assertEqual((self._names(replacement), reapplied(reapplies)), (["et-5/0"], [replacement.pk]))
+        self.assertEqual((journal(replacement), journal(self.device)), ([], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_two_templates_that_claim_one_name_at_different_naming_points_rename_nothing(self):
@@ -1506,7 +1325,7 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
 
         (module,) = installed
         self.assertEqual(self._names(module), ["1/0", "3/0"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual((entry.comments.count("`1/0`"), entry.comments.count("`3/0`")), (1, 1))
 
     def test_a_failed_install_reapply_is_reported_on_each_module_and_not_by_the_device(self):
@@ -1521,16 +1340,16 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         failure = f"injected {InterfaceTemplate._meta.db_table} read failure"
 
         with (
-            connection.execute_wrapper(_reject_reads_of(InterfaceTemplate._meta.db_table)),
+            connection.execute_wrapper(reject_reads_of(InterfaceTemplate._meta.db_table)),
             self.assertLogs("netbox_interface_name_rules", "ERROR"),
         ):
             run_the_reapply(callbacks)
 
         for module in (first, second):
-            (entry,) = _journal(module)
+            (entry,) = journal(module)
             self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
             self.assertEqual(entry.comments.count(failure), 1)
-        self.assertEqual((self._names(first), self._names(second), _journal(self.device)), (["0"], ["1"], []))
+        self.assertEqual((self._names(first), self._names(second), journal(self.device)), (["0"], ["1"], []))
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_an_install_in_a_card_then_a_chassis_position_change_recognise_the_nested_raw_name(self):
@@ -1542,8 +1361,8 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
         module, other, reapplies = self._install_with_the_chassis_change(chassis_first)
 
         self.assertEqual((self._names(module), self._names(other)), (["et-3/0/0"], ["et-3/10/10"]))
-        self.assertEqual(_reapplied(reapplies), sorted((module.pk, other.pk)))
-        self.assertEqual((_journal(module), _journal(self.device)), ([], []))
+        self.assertEqual(reapplied(reapplies), sorted((module.pk, other.pk)))
+        self.assertEqual((journal(module), journal(self.device)), ([], []))
 
     def test_an_install_then_a_chassis_position_change_name_the_module_once(self):
         self._assert_an_install_is_named_once(chassis_first=False)
@@ -1556,10 +1375,10 @@ class ChassisPositionInstallTest(ModuleMoveTestCase):
 
         module, _other, reapplies = self._install_with_the_chassis_change(chassis_first)
 
-        self.assertEqual((self._names(module), _reapplied(reapplies).count(module.pk)), (["0"], 1))
-        (entry,) = _journal(module)
+        self.assertEqual((self._names(module), reapplied(reapplies).count(module.pk)), (["0"], 1))
+        (entry,) = journal(module)
         self.assertEqual(entry.comments.count(f"`0` to `et-3/0/0`: {TAKEN}"), 1)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
 
     def test_an_install_then_a_chassis_position_change_report_a_collision_once(self):
         self._assert_a_collision_is_reported_once(chassis_first=False)
@@ -1650,7 +1469,7 @@ class InstallPositionInvariantTest(ModuleMoveTestCase):
 
         self._save_in_one_transaction(install, *device_changes)
         (module,) = installed
-        outcome = (self._names(module), [entry.comments for entry in _journal(module)])
+        outcome = (self._names(module), [entry.comments for entry in journal(module)])
         module.delete()
         return outcome
 
@@ -1664,11 +1483,11 @@ class InstallPositionInvariantTest(ModuleMoveTestCase):
                 alone = self._install_outcome(module_type, bay, hand_added)
                 self.assertEqual(alone, (names, []))
                 self.assertEqual(self._install_outcome(module_type, bay, hand_added, *undone), alone)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channelized_install_with_a_position_change_undone_ends_as_the_install_alone(self):
-        module_type = _channelized_module_type(
+        module_type = channelized_module_type(
             self.manufacturer, f"{self.prefix} Channelized", channels=2, child_channel_ids=(1, 2)
         )
         InterfaceNameRule.objects.create(
@@ -1740,7 +1559,7 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
             callback()
 
         self.assertEqual((self._names(card), self._names(optic)), (["ge-1/2"], ["et-1/0/1"]))
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertIn(f"`et-1/0/1`: {STALE_BAY}", entry.comments)
         self.assertNotIn("ge-1/2", entry.comments)
 
@@ -1763,7 +1582,7 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
         self._move(card, self._bay(self.device, "Bay 2"))
 
         self.assertEqual(self._names(optic), ["a-1"])
-        (entry,) = _journal(card)
+        (entry,) = journal(card)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`a-1`: {STALE_BAY}", entry.comments)
 
@@ -1777,7 +1596,7 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
             self.device.save()
 
         self.assertEqual(self._names(optic), ["a-1"])
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn(f"`a-1`: {STALE_BAY}", entry.comments)
 
     def test_a_move_to_another_device_renames_nothing_while_the_interfaces_stay_on_the_old_device(self):
@@ -1788,7 +1607,7 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
 
         interface = Interface.objects.get(module=module)
         self.assertEqual((interface.device, interface.name), (self.device, "et-1/0/0"))
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn(f"`et-1/0/0`: {ELSEWHERE}", entry.comments)
 
@@ -1802,11 +1621,11 @@ class ModuleRowMoveTest(ModuleMoveTestCase):
 
         interface = Interface.objects.get(module=module)
         self.assertEqual((interface.device, interface.name), (self.device, "et-1/0/0"))
-        (entry,) = _journal(self.peer)
+        (entry,) = journal(self.peer)
         self.assertIn(f"`et-1/0/0`: {ELSEWHERE}", entry.comments)
 
 
-class ModuleMoveAPITest(_MoveFixture, APITestCase):
+class ModuleMoveAPITest(MoveFixture, APITestCase):
     """A REST API move reaches the rename trigger through NetBox's own write path."""
 
     model = Module
@@ -1832,4 +1651,4 @@ class ModuleMoveAPITest(_MoveFixture, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.assertEqual(self._names(module), ["et-1/0/1"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])

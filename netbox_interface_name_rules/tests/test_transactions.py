@@ -3,8 +3,7 @@
 """An atomic block keeps the NetBox events it queued only when it commits, coalesced as NetBox does."""
 
 import contextvars
-import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from itertools import product
 from unittest import skipUnless
 
@@ -12,15 +11,16 @@ from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
 from dcim.models import Interface, Site
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, connection, transaction
-from django.http import HttpRequest
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from extras import events as netbox_events
 from extras.events import serialize_for_event
 from extras.models import Tag
-from netbox.context import current_request, events_queue
+from netbox.context import events_queue
 
 from netbox_interface_name_rules.jobs import run_as_job_user
 from netbox_interface_name_rules.tests.helpers import (
+    WriteInterfacesTo,
     empty_the_webhook_queue,
     make_device,
     make_device_type,
@@ -29,8 +29,9 @@ from netbox_interface_name_rules.tests.helpers import (
     make_manufacturer,
     queued_webhook_jobs,
     queued_webhooks,
+    request_context,
 )
-from netbox_interface_name_rules.transactions import atomic_with_events
+from netbox_interface_name_rules.transactions import atomic_with_events, on_commit, write_scope
 
 
 def _describe(interface, description):
@@ -54,7 +55,7 @@ class AtomicWithEventsTest(TestCase):
     def _run_as_a_request(self, body):
         # django-rq enqueues a webhook when the transaction commits.
         with self.captureOnCommitCallbacks(execute=True):
-            run_as_job_user(make_job("TxEvents"), body)
+            run_as_job_user(make_job("TxEvents"), body, branch_schema_id=None)
 
     def test_a_change_before_and_inside_a_committed_block_is_one_event(self):
         def body():
@@ -167,10 +168,10 @@ class AtomicWithEventsTest(TestCase):
 
         def body():
             interface.delete()
-            with atomic_with_events():
+            with atomic_with_events() as block:
                 interface.pk = pk
                 interface.save()
-                transaction.set_rollback(True)
+                block.set_rollback()
 
         self._run_as_a_request(body)
 
@@ -189,19 +190,19 @@ class AtomicWithEventsTest(TestCase):
             _describe(self.interface, "before the block")
             with connection.cursor() as cursor:
                 cursor.execute('DELETE FROM "dcim_interface" WHERE id = %s', [pk])
-            with atomic_with_events():
+            with atomic_with_events() as block:
                 # Django inserts the row again when the update finds none.
                 _describe(self.interface, "inside the block")
-                transaction.set_rollback(True)
+                block.set_rollback()
 
         with self.assertRaisesMessage(RuntimeError, f"dcim.Interface {pk} has a queued event but no row"):
-            run_as_job_user(make_job("TxEventsGone"), body)
+            run_as_job_user(make_job("TxEventsGone"), body, branch_schema_id=None)
 
     def test_a_block_that_sets_rollback_drops_its_events(self):
         def body():
-            with atomic_with_events():
+            with atomic_with_events() as block:
                 _describe(self.interface, "inside the block")
-                transaction.set_rollback(True)
+                block.set_rollback()
 
         self._run_as_a_request(body)
 
@@ -222,12 +223,12 @@ class _BlockRollbackError(Exception):
     """Raised inside a block to roll it back; the level around the block catches it."""
 
 
-def _finish(outcome):
-    """End a block as *outcome* says: return, raise, or mark it for rollback."""
+def _finish(outcome, block):
+    """End *block* as *outcome* says: return, raise, or mark it for rollback."""
     if outcome == "raises":
         raise _BlockRollbackError
     if outcome == "sets rollback":
-        transaction.set_rollback(True)
+        block.set_rollback()
 
 
 # Each step changes the row the case starts from, through the same instance or a second one, or creates a row.
@@ -245,21 +246,6 @@ def generated_cases():
                 if "delete" in operations[:-1] and operations[operations.index("delete") + 1 :] != ["create"]:
                     continue
                 yield event_before, levels
-
-
-@contextmanager
-def request_context(user):
-    """Set the request and the event queue as NetBox's event_tracking does, without its flush."""
-    request = HttpRequest()
-    request.user = user
-    request.id = uuid.uuid4()
-    request_token = current_request.set(request)
-    queue_token = events_queue.set({})
-    try:
-        yield
-    finally:
-        events_queue.reset(queue_token)
-        current_request.reset(request_token)
 
 
 def _event_key(pk):
@@ -334,12 +320,12 @@ class CommitOutcomeTest(TransactionTestCase):
         _describe(existing, "before the block")
         new_pk = None
         try:
-            with atomic_with_events():
+            with atomic_with_events() as block:
                 _describe(existing, "inside the block")
                 new_pk = Interface.objects.create(
                     device=self.device, name=f"txoutcome-new-{number}", type="1000base-t"
                 ).pk
-                self._end(number, ending, callbacks)
+                self._end(number, ending, callbacks, block)
         except (_BlockRollbackError, IntegrityError):
             return new_pk
         except _CallbackError:
@@ -347,11 +333,11 @@ class CommitOutcomeTest(TransactionTestCase):
         return new_pk
 
     @staticmethod
-    def _end(number, ending, callbacks):
+    def _end(number, ending, callbacks, block):
         if ending == "raises":
             raise _BlockRollbackError
         if ending == "sets rollback":
-            transaction.set_rollback(True)
+            block.set_rollback()
         elif ending == "fails at COMMIT":
             # No tenant has this ID; PostgreSQL checks the deferred foreign key at COMMIT.
             Site.objects.create(
@@ -413,11 +399,11 @@ class _SequenceCases:
     def _run_level(self, levels, depth, row, created):
         (operation, instance), outcome = levels[depth]
         try:
-            with atomic_with_events():
+            with atomic_with_events() as block:
                 self._apply(operation, row if instance == "same instance" else None, row.pk, depth, created)
                 if depth + 1 < len(levels):
                     self._run_level(levels, depth + 1, row, created)
-                _finish(outcome)
+                _finish(outcome, block)
         except _BlockRollbackError:
             return
 
@@ -466,3 +452,60 @@ class GeneratedCaseCountTest(SimpleTestCase):
     def test_the_generator_yields_every_valid_combination(self):
         """42 cases of one block, and 666 of two: 882 minus 216 that change the row after its delete."""
         self.assertEqual(len(list(generated_cases())), 708)
+
+
+class WriteScopeOnMainTest(TestCase):
+    """On main a write scope holds ``default`` alone, and the scope and its blocks add no query."""
+
+    def test_the_scope_pins_default_and_runs_no_query(self):
+        with self.assertNumQueries(0), write_scope() as aliases:
+            self.assertEqual(aliases, ("default",))
+
+    def test_an_unexpected_write_alias_raises_before_any_query(self):
+        with self.assertNumQueries(0), self.assertRaisesMessage(RuntimeError, "'default'") as raised:
+            with write_scope(expected_alias="schema_elsewhere"):
+                self.fail("the scope opened")
+
+        self.assertIn("'schema_elsewhere'", str(raised.exception))
+
+    def test_a_nested_scope_joins_the_open_scope(self):
+        with write_scope() as outer, write_scope(expected_alias="default") as inner:
+            self.assertIs(inner, outer)
+
+    def test_a_nested_scope_on_another_write_alias_raises_before_any_query(self):
+        with write_scope(), override_settings(DATABASE_ROUTERS=[WriteInterfacesTo("schema_elsewhere")]):
+            with self.assertNumQueries(0), self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+                with write_scope():
+                    self.fail("the nested scope opened")
+
+    def test_on_commit_outside_a_scope_raises(self):
+        with self.assertRaisesMessage(RuntimeError, "write scope"):
+            on_commit(lambda: None)
+
+    def test_on_commit_registers_the_callback_itself_once(self):
+        def callback():
+            pass
+
+        with self.captureOnCommitCallbacks() as callbacks, write_scope():
+            on_commit(callback)
+
+        self.assertEqual(callbacks, [callback])
+
+    def test_a_block_marked_for_rollback_writes_nothing(self):
+        with atomic_with_events() as block:
+            self.assertEqual(block.aliases, ("default",))
+            site = Site.objects.create(name="TxScope rollback", slug="txscope-rollback")
+            block.set_rollback()
+
+        self.assertFalse(Site.objects.filter(pk=site.pk).exists())
+
+    def test_a_block_runs_the_statements_of_one_atomic_block(self):
+        with CaptureQueriesContext(connection) as plain, transaction.atomic():
+            Site.objects.create(name="TxScope plain", slug="txscope-plain")
+        with CaptureQueriesContext(connection) as block, atomic_with_events():
+            Site.objects.create(name="TxScope block", slug="txscope-block")
+
+        def verbs(queries):
+            return [query["sql"].split()[0] for query in queries.captured_queries]
+
+        self.assertEqual(verbs(block), verbs(plain))

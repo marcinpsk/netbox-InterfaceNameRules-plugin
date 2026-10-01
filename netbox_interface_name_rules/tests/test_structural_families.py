@@ -29,18 +29,19 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.helpers import make_device
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNELIZED,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
+    REQUIRES_NO_CHANNELIZATION,
     ChannelizationTestCase,
-    _build_device,
+    build_device,
+    make_device,
+    plain_module_type,
 )
-
-REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
+from netbox_interface_name_rules.transactions import write_scope
 
 
 class StructuralFamilyTestCase(ChannelizationTestCase):
@@ -51,8 +52,8 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(cls.PREFIX, ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, f"{cls.PREFIX}-QSFP")
+        manufacturer, cls.device = build_device(cls.PREFIX, ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, f"{cls.PREFIX}-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template=cls.NAME_TEMPLATE,
@@ -141,7 +142,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_the_intended_name_is_restored_after_the_cascade(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
 
@@ -152,7 +153,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_parent_that_kept_its_name_registers_no_callback(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "et-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         self.assertEqual(callbacks, [])
@@ -160,7 +161,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_channel_the_cascade_will_not_touch_registers_no_callback(self):
         child = self._interface("ge-0/0/3-1")
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True) as callbacks, write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "ge-0/0/3-1"),))
 
         self.assertEqual(callbacks, [])
@@ -168,7 +169,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_channel_the_cascade_left_alone_keeps_its_intended_name(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.captureOnCommitCallbacks(execute=True):
+        with self.captureOnCommitCallbacks(execute=True), write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
 
         child.refresh_from_db()
@@ -178,7 +179,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         child = self._interface("et-0/0/3:1")
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
-            with self.captureOnCommitCallbacks(execute=True):
+            with self.captureOnCommitCallbacks(execute=True), write_scope():
                 family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
                 self._cascade(child, "someone-else-renamed-it")
 
@@ -189,7 +190,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
     def test_a_name_taken_since_the_cascade_is_not_reclaimed(self):
         child = self._interface("et-0/0/3:1")
 
-        with self.assertLogs(PLUGIN_LOGGER, level="ERROR"), self.captureOnCommitCallbacks(execute=True):
+        with self.assertLogs(PLUGIN_LOGGER, level="ERROR"), self.captureOnCommitCallbacks(execute=True), write_scope():
             family_names.reconcile_after_parent_cascade("et-0/0/3", "xe-0/0/3", ((child.pk, 1, "et-0/0/3:1"),))
             self._cascade(child, "xe-0/0/3:1")
             occupant = self._interface("et-0/0/3:1")
@@ -215,7 +216,7 @@ class DeferredChannelNameReconciliationTest(TestCase):
         self.assertNotIn("dcim_device", locking[0].split("FOR UPDATE")[1])
         self.assertIn('ORDER BY "dcim_interface"."id" ASC', locking[0])
 
-    def test_an_unrelated_integrity_failure_propagates(self):
+    def test_an_unrelated_integrity_failure_names_the_channel_and_its_kept_name(self):
         interface = self._interface("cascade-name")
 
         def reject_interface_update(execute, sql, params, many, context):
@@ -224,10 +225,14 @@ class DeferredChannelNameReconciliationTest(TestCase):
             return execute(sql, params, many, context)
 
         with connection.execute_wrapper(reject_interface_update):
-            with self.assertRaisesMessage(IntegrityError, "injected deferred database failure"):
+            with self.assertRaisesMessage(
+                family_names.ChannelReconciliationError, "`cascade-name` to `final-name`"
+            ) as raised:
                 family_names.restore_deferred_channel_names(
                     ((interface.pk, "final-name", "cascade-name"),),
                 )
+
+        self.assertEqual(str(raised.exception.__cause__), "injected deferred database failure")
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

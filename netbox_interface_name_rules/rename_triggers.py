@@ -2,15 +2,18 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Rename triggers: read the previous state, decide, and reapply the rules after commit.
 
-The receivers in ``signals.py`` pass every module, module bay and device save here. ``before_save``
-reads the previous state; ``after_save`` compares it with the saved values and, when the save is a
-rename trigger, adds the trigger to the reapply plan of the transaction. Each trigger is a committed
-callback, which runs only when its savepoint commits. Each trigger also appends a runner of the plan
-that no savepoint rollback drops, and only the newest runner runs the plan, after every trigger. So
-the plan acts on the triggers that committed, and it moves no committed callback. The plan reapplies
-each module and each device at most once, from the earliest previous state of the transaction, so
-it acts on the net change. A reapply that leaves an interface unrenamed, or fails, writes one journal
-entry. A reapply that cannot read the committed rows is logged only.
+The receivers in ``signals.py`` pass every module, module bay and device save here, with the alias of
+the save, which must be the write alias. ``before_save`` reads the previous state; ``after_save``
+compares it with the saved values and, when the save is a rename trigger, adds the trigger to the
+reapply plan of the transaction on the connection of the save. Each trigger is a committed callback
+of that connection, which runs only when its savepoint commits. Each trigger also appends a runner
+of the plan that no savepoint rollback drops, and only the newest runner runs the plan, after every
+trigger. So the plan acts on the triggers that committed, and it moves no committed callback. In a
+netbox-branching branch the plan therefore runs after the branch transaction commits, when a new
+module has its interfaces. The plan runs in a write scope on its alias. It reapplies each module and
+each device at most once, from the earliest previous state of the transaction, so it acts on the net
+change. A reapply that leaves an interface unrenamed, or fails, writes one journal entry. A reapply
+that cannot read the committed rows is logged only.
 
 A save that moves a module, or that changes what the names in an occupied bay are built from, also
 reads before the save what named the interfaces of that module and of every module nested in it.
@@ -35,10 +38,11 @@ from typing import TYPE_CHECKING, NamedTuple
 from django.db import transaction
 from netbox.context import current_request
 
+from .branching import replay_in_progress
 from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 from .rule_selection import parent_type_scopes_a_rule
-from .transactions import atomic_with_events
+from .transactions import atomic_with_events, write_alias, write_scope
 
 if TYPE_CHECKING:
     from .engine import ModuleNaming
@@ -139,8 +143,9 @@ class DeviceTrigger(_Trigger):
 
 @dataclasses.dataclass(eq=False)
 class ReapplyPlan:
-    """What the rename triggers of one transaction ask for, in save order, and the newest runner."""
+    """What the rename triggers of one transaction on *alias* ask for, in save order, and the newest runner."""
 
+    alias: str
     triggers: list = dataclasses.field(default_factory=list)
     runner: "PlanRunner | None" = None
     started: bool = dataclasses.field(default=False, init=False)  # captureOnCommitCallbacks keeps run callbacks
@@ -153,11 +158,15 @@ class PlanRunner:
     plan: ReapplyPlan
 
     def __call__(self):
-        """Reapply the rules for the triggers whose savepoints committed, when this is the newest runner."""
+        """Reapply the rules for the triggers whose savepoints committed, when this is the newest runner.
+
+        The reapply runs in a write scope on the plan's alias. The scope raises when the write alias differs.
+        """
         if self.plan.runner is not self or self.plan.started:
             return
         self.plan.started = True
-        reapply([trigger for trigger in self.plan.triggers if trigger.kept])
+        with write_scope(expected_alias=self.plan.alias):
+            reapply([trigger for trigger in self.plan.triggers if trigger.kept])
 
 
 def reapply(triggers):
@@ -653,8 +662,22 @@ _TRIGGERS = {
 _previous_states = {}
 
 
-def before_save(sender, instance):
-    """Read the previous state of *instance* and hold it for its post_save. A read error propagates."""
+def _check_write_alias(using):
+    """Raise when a save writes through *using*, which is not the alias that the plugin writes to."""
+    alias = write_alias()
+    if using != alias:
+        raise RuntimeError(f"A rename trigger save writes to {using!r}, but the write alias is {alias!r}.")
+
+
+def before_save(sender, instance, using):
+    """Read the previous state of *instance*, saved through *using*, and hold it for its post_save.
+
+    A read error propagates, and so does a save through another alias than the write alias. A save that
+    netbox-branching replays returns before the write-alias check: a merge writes ``default`` while a branch is active.
+    """
+    if replay_in_progress():
+        return
+    _check_write_alias(using)
     read, _ = _TRIGGERS[sender._meta.label]
     previous = None if instance.pk is None else read(instance)
     key = id(instance)
@@ -667,8 +690,14 @@ def before_save(sender, instance):
     _previous_states[key] = (weakref.ref(instance, forget), previous)
 
 
-def after_save(sender, instance, created):
-    """Add the save of *instance* to the reapply plan of the transaction when it is a rename trigger."""
+def after_save(sender, instance, created, using):
+    """Add the save of *instance* through *using* to the reapply plan of that connection when it is a rename trigger.
+
+    A save that netbox-branching replays returns before the write-alias check, as in ``before_save``.
+    """
+    if replay_in_progress():
+        return
+    _check_write_alias(using)
     _, trigger_of = _TRIGGERS[sender._meta.label]
     # No entry: NetBox sent this post_save by hand, without a model save.
     _, previous = _previous_states.pop(id(instance), (None, None))
@@ -676,22 +705,15 @@ def after_save(sender, instance, created):
     if trigger is None:
         return
     trigger.author = _request_user()
-    connection = transaction.get_connection()
+    connection = transaction.get_connection(using)
     entries = connection.run_on_commit if connection.in_atomic_block else ()
-    plan = (
-        next(
-            (
-                callback.plan
-                for _, callback, _ in entries
-                if isinstance(callback, PlanRunner) and not callback.plan.started
-            ),
-            None,
-        )
-        or ReapplyPlan()
-    )
+    plan = next(
+        (callback.plan for _, callback, _ in entries if isinstance(callback, PlanRunner) and not callback.plan.started),
+        None,
+    ) or ReapplyPlan(using)
     plan.triggers.append(trigger)
     # Django drops the callbacks of a rolled-back savepoint from run_on_commit, so a dropped trigger is not kept.
-    transaction.on_commit(trigger)
+    transaction.on_commit(trigger, using=using)
     plan.runner = PlanRunner(plan)
     if connection.in_atomic_block:
         # Without a savepoint tag no rollback but the transaction's drops the runner; it runs after every trigger.

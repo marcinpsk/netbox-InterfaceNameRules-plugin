@@ -30,7 +30,7 @@ from .models import InterfaceNameRule, csv_export_entry
 from .name_template import NamingContext, variables_for_context
 from .tables import InterfaceNameRuleTable
 from .template_variable_reference import naming_context_reference, rule_tester_variable_rows, variable_reference_rows
-from .transactions import atomic_with_events
+from .transactions import atomic_with_events, write_scope
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,13 @@ try:
     APPLY_BATCH_LIMIT = max(1, int(_plugins_config.get("netbox_interface_name_rules", {}).get("apply_batch_limit", 50)))
 except (ValueError, TypeError):
     APPLY_BATCH_LIMIT = 50
+
+
+def _failure_text(error):
+    """Return what the operator reads about *error*: each channel to rename back, or else the error type."""
+    from .family import ChannelReconciliationError
+
+    return str(error) if isinstance(error, ChannelReconciliationError) else type(error).__name__
 
 
 @dataclasses.dataclass
@@ -551,7 +558,8 @@ class RuleApplyDetailView(generic.ObjectView):
         # A conversion-scan failure must not blank the unrelated apply preview above.
         try:
             # Each family scanned costs a dry-run conversion, so the scan takes the same batch cap.
-            preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
+            with write_scope():
+                preview_conversions = find_convertible_families(rule, limit=APPLY_BATCH_LIMIT)
         except (re.error, ValueError) as exc:
             logger.exception("Failed to compute the conversion preview for rule %s", rule)
             messages.error(request, f"Failed to compute the conversion preview: {exc}")
@@ -580,16 +588,13 @@ class RuleApplyDetailView(generic.ObjectView):
         )
 
     def _enqueue(self, request, rule, job_class, name):
-        """Enqueue *job_class* against *rule* and report the outcome to the operator."""
+        """Enqueue *job_class* against *rule* in the branch of *request*, and report the outcome to the operator."""
+        from .jobs import rule_job_kwargs
+
+        kwargs = rule_job_kwargs(rule.pk)
         try:
-            job = job_class.enqueue(
-                # instance is intentionally omitted: InterfaceNameRule does not
-                # inherit JobsMixin, so passing instance= would fail full_clean().
-                # The job is still named and findable in Core → Jobs.
-                name=name,
-                user=request.user,
-                rule_id=rule.pk,
-            )
+            # No instance=: the rule has no JobsMixin, so Job.full_clean() would refuse it.
+            job = job_class.enqueue(name=name, user=request.user, **kwargs)
             messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
         except Exception as e:
             logger.exception("Failed to enqueue background job for rule %s", rule)
@@ -613,10 +618,11 @@ class RuleApplyDetailView(generic.ObjectView):
             )
             return
         try:
-            outcome = convert_flat_families(rule, convert_ids)
+            with write_scope():
+                outcome = convert_flat_families(rule, convert_ids)
         except Exception as e:
             logger.exception("Failed to convert families for rule %s", rule)
-            messages.error(request, f"Failed to convert families: {type(e).__name__}")
+            messages.error(request, f"Failed to convert families: {_failure_text(e)}")
             return
         converted = len(outcome.changed_families)
         messages.success(request, f"Converted {converted} interface family(ies) to the channelized topology.")
@@ -649,7 +655,8 @@ class RuleApplyDetailView(generic.ObjectView):
                 if not interface_ids:
                     messages.warning(request, "No interfaces selected; nothing was applied.")
                 else:
-                    outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
+                    with write_scope():
+                        outcome = apply_rule_to_existing(rule, limit=APPLY_BATCH_LIMIT, interface_ids=interface_ids)
                     messages.success(request, f"Applied rule: {outcome.changed_count} interface(s) renamed.")
                     if outcome.skipped_members:
                         messages.warning(
@@ -658,7 +665,7 @@ class RuleApplyDetailView(generic.ObjectView):
                         )
             except Exception as e:
                 logger.exception("Failed to apply rule %s", rule)
-                messages.error(request, f"Failed to apply rule {rule}: {type(e).__name__}")
+                messages.error(request, f"Failed to apply rule {rule}: {_failure_text(e)}")
 
         return redirect("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", pk=rule.pk)
 

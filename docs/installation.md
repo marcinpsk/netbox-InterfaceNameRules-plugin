@@ -4,6 +4,8 @@
 
 - NetBox ≥ 4.3.0
 - Python ≥ 3.12
+- Optional: netbox-branching 1.2.x, on NetBox 4.7. See
+  [netbox-branching](configuration.md#netbox-branching).
 
 ## Install from PyPI
 
@@ -18,6 +20,20 @@ Add to your NetBox `configuration.py`:
 ```python
 PLUGINS = ["netbox_interface_name_rules"]
 ```
+
+## Before You Upgrade
+
+Let the queued **Run as Background Job** and **Convert as Background Job** jobs
+finish before you upgrade the plugin. A release can change the data that a job
+stores, and a job that an earlier release queued then fails after the upgrade.
+The release that adds netbox-branching support stores the branch of each job.
+Start a failed job again after the upgrade.
+
+With netbox-branching, a script can call an engine function, such as
+`apply_device_interface_rules`, inside a transaction that the script holds. The
+commit callbacks of the plugin then run when that transaction commits, with the
+earlier `lock_timeout` of the session. Set `lock_timeout` for these callbacks in
+your script. See [netbox-branching](configuration.md#netbox-branching).
 
 ## Run Database Migrations
 

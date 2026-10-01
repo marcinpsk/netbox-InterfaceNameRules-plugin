@@ -4,8 +4,9 @@
 
 import re
 from html.parser import HTMLParser
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import patch
 
+from core.models import Job
 from dcim.models import (
     DeviceType,
     Interface,
@@ -20,18 +21,18 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import path, re_path, reverse
 from rest_framework.test import APIClient
 
+from netbox_interface_name_rules.jobs import ApplyRuleJob, ConvertFlatFamiliesJob
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext, variables_for_context
 from netbox_interface_name_rules.template_variable_reference import (
     rule_tester_variable_rows,
     variable_reference_rows,
 )
-from netbox_interface_name_rules.tests.helpers import make_device
+from netbox_interface_name_rules.tests.helpers import TEST_PASSWORD, make_device, queued_job
 from netbox_interface_name_rules.views import RuleTestView
 
 User = get_user_model()
 
-TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 # The preview variables and override fields the conftest guard is expected to know about.
 _VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base", "vc_position"})
@@ -1429,17 +1430,19 @@ class RuleApplyDetailViewConvertPostTest(ViewTestBase2):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(any(m.level == ERROR for m in get_messages(response.wsgi_request)))
 
-    def test_convert_background_enqueues_the_conversion_job(self):
-        """The batch runs on the worker, the same way a large apply does."""
-        mock_job = MagicMock()
-        mock_job.pk = 43
-        with patch(
-            "netbox_interface_name_rules.jobs.ConvertFlatFamiliesJob.enqueue", return_value=mock_job
-        ) as mock_enqueue:
+    def test_convert_background_enqueues_the_conversion_job_on_main(self):
+        """The batch runs on the worker, the same way a large apply does, on main when no branch is active."""
+        with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(self._url(), {"action": "convert_background"})
 
         self.assertEqual(response.status_code, 302)
-        mock_enqueue.assert_called_once_with(name=ANY, user=self.superuser, rule_id=self.rule.pk)
+        job = Job.objects.get(name=f"Convert flat families: {self.rule}", user=self.superuser)
+        queued = queued_job(self, job)
+        self.assertEqual(queued.func, ConvertFlatFamiliesJob.handle)
+        self.assertEqual(
+            queued.kwargs,
+            {"job": job, "rule_id": self.rule.pk, "branch_schema_id": None, "expected_alias": "default"},
+        )
 
 
 class RuleToggleNoPermissionNonAjaxTest(ViewTestBase2):
@@ -1619,28 +1622,29 @@ class RuleApplyDetailViewGetReErrorTest(ViewTestBase2):
 class RuleApplyDetailViewBackgroundJobSuccessTest(ViewTestBase2):
     """Test RuleApplyDetailView.post with background action that succeeds."""
 
-    def test_post_background_success_shows_success_message(self):
-        """POST background action with successful enqueue shows success message (line 400).
-
-        Asserts ApplyRuleJob.enqueue is called once and the success message
-        contains the job pk (42) confirming the enqueued job id is reported.
-        """
-        from django.contrib.messages import SUCCESS, get_messages
+    def test_post_background_enqueues_the_job_on_main_and_reports_its_id(self):
+        """The job stores the rule, no branch and the write alias of main, and the operator gets its ID."""
+        from django.contrib.messages import get_messages
 
         url = reverse(
             "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail",
             kwargs={"pk": self.rule.pk},
         )
-        mock_job = MagicMock()
-        mock_job.pk = 42
-        with patch("netbox_interface_name_rules.jobs.ApplyRuleJob.enqueue", return_value=mock_job) as mock_enq:
+        with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(url, {"action": "background"})
+
         self.assertEqual(response.status_code, 302)
-        mock_enq.assert_called_once_with(name=ANY, user=self.superuser, rule_id=self.rule.pk)
-        msgs = list(get_messages(response.wsgi_request))
-        success_msgs = [m for m in msgs if m.level == SUCCESS]
-        self.assertTrue(success_msgs, "Expected a success-level message but none found")
-        self.assertTrue(any("42" in str(m) for m in success_msgs))
+        job = Job.objects.get(name=f"Apply rule: {self.rule}", user=self.superuser)
+        queued = queued_job(self, job)
+        self.assertEqual(queued.func, ApplyRuleJob.handle)
+        self.assertEqual(
+            queued.kwargs,
+            {"job": job, "rule_id": self.rule.pk, "branch_schema_id": None, "expected_alias": "default"},
+        )
+        self.assertEqual(
+            [(message.level_tag, str(message)) for message in get_messages(response.wsgi_request)],
+            [("success", f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")],
+        )
 
 
 # ---------------------------------------------------------------------------

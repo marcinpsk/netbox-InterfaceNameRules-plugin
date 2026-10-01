@@ -14,19 +14,10 @@ instantiation, so the parent/child links under test are the ones NetBox creates 
 import os
 from unittest import skipUnless
 
-from dcim.choices import InterfaceTypeChoices
 from dcim.models import (
-    Device,
-    DeviceRole,
-    DeviceType,
     Interface,
     InterfaceTemplate,
-    Manufacturer,
-    Module,
-    ModuleBay,
-    ModuleBayTemplate,
     ModuleType,
-    Site,
     VirtualChassis,
 )
 from django.test import TestCase
@@ -43,94 +34,17 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.family import FamilyStatus, execute_installed_plan_set, plan_installed_families
 from netbox_interface_name_rules.models import InterfaceNameRule
-
-# Resolved defensively so this module still imports on NetBox releases without channelization.
-CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
-PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
-PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
-
-REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces (4.7+)"
-PLUGIN_LOGGER = "netbox_interface_name_rules"
-
-
-def _build_device(prefix, bay_positions=(), **device_kwargs):
-    """Create a manufacturer, a device type with module bays at *bay_positions*, and one device."""
-    slug = prefix.lower()
-    manufacturer = Manufacturer.objects.create(name=f"{prefix}Mfg", slug=f"{slug}-mfg")
-    device_type = DeviceType.objects.create(manufacturer=manufacturer, model=f"{prefix}-Dev", slug=f"{slug}-dev")
-    for position in bay_positions:
-        ModuleBayTemplate.objects.create(device_type=device_type, name=f"Bay {position}", position=position)
-    role = DeviceRole.objects.create(name=f"{prefix}Role", slug=f"{slug}-role")
-    site = Site.objects.create(name=f"{prefix}Site", slug=f"{slug}-site")
-    device = Device.objects.create(name=f"{slug}-sw1", device_type=device_type, role=role, site=site, **device_kwargs)
-    return manufacturer, device
-
-
-def _channelized_family(module_type, parent_name, child_names, channels=4):
-    """Add one channelized parent template plus its channel templates to *module_type*.
-
-    *child_names* maps a channel_id to the template name that channel takes.
-    """
-    parent = InterfaceTemplate.objects.create(
-        module_type=module_type, name=parent_name, type=PARENT_TYPE, channels=channels
-    )
-    for channel_id, name in child_names.items():
-        InterfaceTemplate.objects.create(
-            module_type=module_type,
-            name=name,
-            type=CHANNEL_TYPE,
-            parent=parent,
-            channel_id=channel_id,
-        )
-    return parent
-
-
-def _channelized_module_type(manufacturer, model, channels=4, child_channel_ids=(1, 2, 3, 4), child_names=None):
-    """Create a ModuleType whose interface templates form a channelized family.
-
-    The parent template is ``{module}`` with *channels* set; each entry in *child_channel_ids* adds a
-    channel-type template bound to it.  *child_names* maps a channel_id to a template name, defaulting
-    to the upstream ``<parent>:<channel_id>`` convention.
-    """
-    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
-    names = child_names or {channel_id: f"{{module}}:{channel_id}" for channel_id in child_channel_ids}
-    _channelized_family(
-        module_type, "{module}", {channel_id: names[channel_id] for channel_id in child_channel_ids}, channels=channels
-    )
-    return module_type
-
-
-class ChannelizationTestCase(TestCase):
-    """Install helpers shared by the channelized module-install test cases."""
-
-    def _install(self, module_type, position, run_rules=True):
-        """Install a module into the bay at *position*; run the post-commit rename unless told not to.
-
-        ``run_rules=False`` leaves the freshly instantiated (raw-named) family in place so a test can
-        call the engine directly and assert its return value.
-        """
-        bay = ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
-        if run_rules:
-            with self.captureOnCommitCallbacks(execute=True):
-                module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
-        else:
-            module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
-        return module, bay
-
-    @staticmethod
-    def _names(module):
-        """Return the sorted interface names of *module*."""
-        return sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
-
-    @staticmethod
-    def _parent(module):
-        """Return the channelized parent interface of *module*."""
-        return Interface.objects.get(module=module, channels__isnull=False)
-
-    @staticmethod
-    def _child(module, channel_id):
-        """Return the channel subinterface of *module* bound to *channel_id*."""
-        return Interface.objects.get(module=module, channel_id=channel_id)
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNEL_TYPE,
+    PARENT_TYPE,
+    PLAIN_TYPE,
+    PLUGIN_LOGGER,
+    REQUIRES_CHANNELIZATION,
+    ChannelizationTestCase,
+    build_device,
+    channelized_family,
+    channelized_module_type,
+)
 
 
 class LiteralBaseInstallTest(ChannelizationTestCase):
@@ -138,7 +52,7 @@ class LiteralBaseInstallTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("LiteralBase", ["3"])
+        manufacturer, cls.device = build_device("LiteralBase", ["3"])
         cls.module_type = ModuleType.objects.create(manufacturer=manufacturer, model="LiteralBase-SFP")
 
     def test_install_and_reapply_preserve_arithmetic_braces_in_base(self):
@@ -172,10 +86,10 @@ class ChannelizedSimpleRuleTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanSimple", ["3", "f4"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanSimple-QSFP")
+        manufacturer, cls.device = build_device("ChanSimple", ["3", "f4"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanSimple-QSFP")
         # One child carries a free-form name that shares no prefix with the parent template.
-        cls.free_form_type = _channelized_module_type(
+        cls.free_form_type = channelized_module_type(
             manufacturer,
             "ChanSimple-QSFP-FF",
             child_names={1: "{module}:1", 2: "{module}:2", 3: "{module}:3", 4: "mgmt-chan"},
@@ -250,8 +164,8 @@ class ChannelizedCollisionTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanCol", ["3"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanCol-QSFP")
+        manufacturer, cls.device = build_device("ChanCol", ["3"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanCol-QSFP")
         cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="et-0/0/{bay_position}")
 
     def _occupy(self, name):
@@ -309,12 +223,12 @@ class ChannelizedBreakoutRuleTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanBrk", ["3", "b4", "e5", "p6", "m8"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanBrk-QSFP")
-        cls.base_type = _channelized_module_type(manufacturer, "ChanBrk-QSFP-BASE")
-        cls.empty_type = _channelized_module_type(manufacturer, "ChanBrk-QSFP-EMPTY", child_channel_ids=())
-        cls.partial_type = _channelized_module_type(manufacturer, "ChanBrk-QSFP-PART", child_channel_ids=(1, 2))
-        cls.mismatch_type = _channelized_module_type(manufacturer, "ChanBrk-QSFP-MM", channels=8)
+        manufacturer, cls.device = build_device("ChanBrk", ["3", "b4", "e5", "p6", "m8"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanBrk-QSFP")
+        cls.base_type = channelized_module_type(manufacturer, "ChanBrk-QSFP-BASE")
+        cls.empty_type = channelized_module_type(manufacturer, "ChanBrk-QSFP-EMPTY", child_channel_ids=())
+        cls.partial_type = channelized_module_type(manufacturer, "ChanBrk-QSFP-PART", child_channel_ids=(1, 2))
+        cls.mismatch_type = channelized_module_type(manufacturer, "ChanBrk-QSFP-MM", channels=8)
         for module_type in (cls.module_type, cls.empty_type, cls.partial_type, cls.mismatch_type):
             InterfaceNameRule.objects.create(
                 module_type=module_type,
@@ -403,15 +317,15 @@ class ChannelizedEnumerationTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanEnum", ["3", "9"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanEnum-QSFP")
+        manufacturer, cls.device = build_device("ChanEnum", ["3", "9"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanEnum-QSFP")
         # A standalone interface alongside the family, so "families counted once" stays distinguishable
         # from "interfaces not counted at all".
         InterfaceTemplate.objects.create(module_type=cls.module_type, name="{module}-mgmt", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="et-{base}")
         # A second family whose template does not feed the current name back in, so "already correctly
         # named" is a state the rule can actually reach (an "et-{base}" rule renames on every pass).
-        cls.stable_type = _channelized_module_type(manufacturer, "ChanEnum-QSFP-STABLE")
+        cls.stable_type = channelized_module_type(manufacturer, "ChanEnum-QSFP-STABLE")
         cls.stable_rule = InterfaceNameRule.objects.create(
             module_type=cls.stable_type, name_template="et-0/0/{bay_position}"
         )
@@ -501,7 +415,7 @@ class ChannelizedDeviceRuleTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         vc = VirtualChassis.objects.create(name="chanvc-vc")
-        _, cls.device = _build_device("ChanVC", virtual_chassis=vc, vc_position=1)
+        _, cls.device = build_device("ChanVC", virtual_chassis=vc, vc_position=1)
         cls.device_type = cls.device.device_type
         cls.parent = Interface.objects.create(device=cls.device, name="et0", type=PARENT_TYPE, channels=4, module=None)
         for channel_id in range(1, 5):
@@ -576,8 +490,8 @@ class ChannelizedBreakoutStandaloneTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanMixed", ["7"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanMixed-QSFP")
+        manufacturer, cls.device = build_device("ChanMixed", ["7"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanMixed-QSFP")
         InterfaceTemplate.objects.create(module_type=cls.module_type, name="{module}-mgmt", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -622,14 +536,14 @@ class ChannelizedPredictionTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanPred", ["3", "5", "8"])
-        cls.breakout_type = _channelized_module_type(manufacturer, "ChanPred-QSFP-BRK")
-        cls.simple_type = _channelized_module_type(
+        manufacturer, cls.device = build_device("ChanPred", ["3", "5", "8"])
+        cls.breakout_type = channelized_module_type(manufacturer, "ChanPred-QSFP-BRK")
+        cls.simple_type = channelized_module_type(
             manufacturer,
             "ChanPred-QSFP-SMP",
             child_names={1: "{module}:1", 2: "{module}:2", 3: "{module}:3", 4: "mgmt-chan"},
         )
-        cls.mismatch_type = _channelized_module_type(manufacturer, "ChanPred-QSFP-MM", channels=8)
+        cls.mismatch_type = channelized_module_type(manufacturer, "ChanPred-QSFP-MM", channels=8)
         InterfaceNameRule.objects.create(
             module_type=cls.breakout_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -692,8 +606,8 @@ class ChannelizedBreakoutTemplateErrorTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanErr", ["4"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanErr-QSFP")
+        manufacturer, cls.device = build_device("ChanErr", ["4"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanErr-QSFP")
         InterfaceTemplate.objects.create(
             module_type=cls.module_type,
             name="mgmt-{module}",
@@ -731,18 +645,18 @@ class ChannelizedSuffixRecoveryTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanRec", ["1", "2"])
+        manufacturer, cls.device = build_device("ChanRec", ["1", "2"])
         # Two families on one module type, each with its own suffix convention for the same channel_id.
         cls.two_family_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="ChanRec-QSFP-2F", part_number="ChanRec-QSFP-2F"
         )
-        _channelized_family(
+        channelized_family(
             cls.two_family_type, "{module}a", {channel_id: f"{{module}}a:{channel_id}" for channel_id in range(1, 5)}
         )
-        _channelized_family(
+        channelized_family(
             cls.two_family_type, "{module}b", {channel_id: f"{{module}}b.{channel_id}" for channel_id in range(1, 5)}
         )
-        cls.single_family_type = _channelized_module_type(manufacturer, "ChanRec-QSFP-1F")
+        cls.single_family_type = channelized_module_type(manufacturer, "ChanRec-QSFP-1F")
         for module_type in (cls.two_family_type, cls.single_family_type):
             InterfaceNameRule.objects.create(module_type=module_type, name_template="{base}-x")
 

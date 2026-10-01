@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-from django.apps import apps
 from netbox.plugins import PluginConfig
 
 __version__ = "1.7.0"
@@ -23,14 +22,11 @@ class InterfaceNameRulesConfig(PluginConfig):
     author_email = "marcinpsk@gmail.com"
 
     def ready(self):
-        """Connect signal handlers after all apps are loaded, and check netbox-branching when it is installed."""
+        """Connect signal handlers after all apps are loaded, and prepare for netbox-branching when it is installed."""
         super().ready()
-        from . import signals  # registers the post_save handler
+        from . import branching, signals  # signals registers the post_save handler
 
-        if apps.is_installed("netbox_branching"):
-            from . import branching
-
-            branching.check_installed_version()
+        branching.ready()
 
 
 config = InterfaceNameRulesConfig

@@ -286,12 +286,102 @@ refuses another member, and sends an event for each one that it kept.
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed
 after a matching rule is active are renamed automatically at install time.
 The web UI, the REST API and bulk import install modules inside a transaction.
-A script or shell that creates a module outside a transaction gets no rename:
-run Apply Rules after it, or wrap the install in `transaction.atomic()`.
+A script or shell that creates a module outside a transaction on the interface
+write connection gets no rename: run Apply Rules after it, or wrap the install in
+`transaction.atomic(using=router.db_for_write(Interface))`. In a netbox-branching
+branch, `transaction.atomic()` alone opens a transaction on `default`, not on the
+branch connection, so the rename runs before NetBox creates the interfaces.
 
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where
 all matching interfaces are already correctly named show `—`.
+
+## netbox-branching
+
+The plugin supports [netbox-branching](https://github.com/netboxlabs/netbox-branching)
+1.2.x on NetBox 4.7. When netbox-branching is installed, NetBox does not start
+with another release of it, and the error names the installed version. Without
+netbox-branching, the plugin supports NetBox 4.3 to 4.7 and works as this guide
+describes.
+
+### In a branch
+
+While a branch is active, the plugin reads and writes in that branch only:
+
+- A rename trigger in the branch renames the interfaces in the branch, after
+  NetBox commits the change. Each rename has a change record in the branch, so a
+  merge applies it to main.
+- **Apply Rules** and the flat-to-channelized conversion change the interfaces
+  of the branch. A rule that exists only in the branch applies only there.
+- **Run as Background Job** and **Convert as Background Job** run in the branch
+  that was active when you started the job. When that branch is not ready when
+  the job starts, for example because it was merged, the job fails and changes
+  nothing.
+- A script or the shell must install a module in a transaction on the interface
+  write connection, as [Apply Rules and the Applicable Column](#apply-rules-and-the-applicable-column)
+  describes.
+
+In a branch, each plugin operation sets the PostgreSQL `lock_timeout` to 10
+seconds on the connection of the branch and on the connection of main. When the
+operation ends, the plugin sets the earlier values again. A request in a branch
+holds two PostgreSQL sessions, and PostgreSQL does not find a lock cycle through
+the two sessions of one request. An operation that waits longer for a lock stops
+with an error. A script can call an engine function, such as
+`apply_device_interface_rules`, inside a transaction that the script holds. The
+commit callbacks of the plugin then run when that transaction commits, with the
+earlier `lock_timeout` of the session. Set `lock_timeout` for these callbacks in
+your script.
+
+### Merge, revert and sync
+
+netbox-branching merges, reverts and syncs a branch: it replays the changes that
+NetBox logged. The replayed changes already hold the interface names, so the
+rename triggers do nothing while netbox-branching replays them.
+
+- A merge gives main the interface names of the branch, except a kept channel
+  (see [Limits in a branch](#limits-in-a-branch)). On main, it writes only the
+  replayed changes.
+- A revert of the merge gives main the names from before the merge.
+- A sync gives the branch the names of main, except a kept channel, and writes no
+  rename without a change record. A rule that exists only in the branch does not rename the interfaces
+  that the sync brought. Run **Apply Rules** in the branch after the sync to
+  apply it.
+
+After a merge, a revert or a sync that fails or stops early, for example a dry
+run or a merge of a branch without changes, the next change is a rename trigger
+again.
+
+### Limits in a branch
+
+- **A replay can rename a kept channel.** When the name that a rule gives a
+  channel subinterface is in use, the plugin keeps the old name of the channel
+  and renames its parent. NetBox renames the channels of a renamed parent when
+  the change commits, and the plugin then gives the kept channel its old name
+  again. A merge, a revert or a sync replays the rename of the parent, so
+  NetBox renames the channels again when the replay commits, and the plugin does
+  not act. After a merge, the kept channel on main then has the name from NetBox,
+  for example `et-0/0/1:2`, while the channel in the branch keeps `1:2`. After a
+  sync, the kept channel in the branch has the name from NetBox. A revert of the
+  merge gives the channel its name from before the merge. Rename such a channel
+  by hand when you want the name from the other side.
+- **A background REST request runs on main.** NetBox runs a bulk REST request
+  with `background=true` as a background job, and that job does not keep the
+  active branch. The REST API of the rules refuses such a request while a branch
+  is active, before it writes. The other NetBox endpoints run it on main. For
+  example, modules that you install with such a request are installed on main,
+  and the plugin renames their interfaces on main.
+- **A failed branch activation runs the request on main.** When NetBox cannot
+  activate the branch of a request, it continues the request on main. This
+  applies to all changes of the request, not only to the plugin.
+- **No atomicity across the two connections.** netbox-branching records each
+  change of a branch on the connection of main. The plugin commits the connection
+  of the branch first and the connection of main second, as NetBox scripts and
+  netbox-branching do. When the second commit fails, or a NetBox callback fails
+  after the first commit, the branch keeps the renames, but the list of branch
+  changes in netbox-branching does not show them. A merge still applies them.
+- **Connection pooling in transaction mode is not supported**, for example
+  PgBouncer with `pool_mode = transaction`. A session setting such as
+  `lock_timeout` does not stay with the session of such a pool.
 
 ## Bulk Import
 

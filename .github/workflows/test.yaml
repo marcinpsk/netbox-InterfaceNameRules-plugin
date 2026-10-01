@@ -34,15 +34,16 @@ jobs:
             netbox-version: "v4.3.7"
           - python-version: "3.13"
             netbox-version: "v4.5.3"
-            # The one cell that reports coverage. Every coverage step below reads this flag, so the
-            # release that owns the report is named here and nowhere else.
-            coverage: true
+            # A coverage leg: the value names its data artifact, which the combine job downloads.
+            coverage: "netbox-v4.5.3"
           - python-version: "3.14"
             netbox-version: "v4.7.0"
           # The same release with netbox-branching, so the branch tests run against a real provisioned branch.
           - python-version: "3.14"
             netbox-version: "v4.7.0"
             netbox-branching: "1.2.1"
+            # The second coverage leg: only this cell runs the netbox-branching code paths.
+            coverage: "netbox-v4.7.0-branching"
           # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
           # for reasons that are not ours, so this must not gate a PR.
           - python-version: "3.13"
@@ -164,13 +165,72 @@ jobs:
           # instead of baseline drift. Bumping the top version means editing the matrix above, this
           # condition, and tests/query_counts.json together. The branch leg records too: netbox-branching adds queries.
           UPDATE_QUERY_COUNTS: ${{ (matrix.netbox-version != 'v4.7.0' || matrix.netbox-branching) && '1' || '' }}
-          # `addopts` turns coverage on for every invocation, but only one cell reports it.
+          # `addopts` collects coverage without the gate; the combine job enforces `fail_under`.
           COVERAGE_OPTION: ${{ !matrix.coverage && '--no-cov' || '' }}
         run: |
           pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox $COVERAGE_OPTION
 
-      - name: Generate coverage report
+      - name: Upload coverage data
         if: matrix.coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.coverage }}
+          path: netbox-InterfaceNameRules-plugin/.coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # The 97% gate applies to the union of the coverage legs, because some code runs only with netbox-branching.
+  coverage:
+    needs: test-netbox
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # The same path as in the test job, so the absolute paths in the data files resolve here.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: netbox-InterfaceNameRules-plugin
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+
+      # One download per leg by exact name, so a missing leg fails this step.
+      - name: Download coverage data of NetBox v4.5.3
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: coverage-data-netbox-v4.5.3
+          path: coverage-data/netbox-v4.5.3
+
+      - name: Download coverage data of NetBox v4.7.0 with netbox-branching
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: coverage-data-netbox-v4.7.0-branching
+          path: coverage-data/netbox-v4.7.0-branching
+
+      - name: Install coverage
+        working-directory: netbox-InterfaceNameRules-plugin
+        run: |
+          uv pip install --system --only-binary=:all: --group ci-tests
+
+      # `coverage report` enforces `fail_under` from pyproject.toml on the combined data.
+      - name: Combine and check coverage
+        working-directory: netbox-InterfaceNameRules-plugin
+        env:
+          COVERAGE_RCFILE: pyproject.toml
+        run: |
+          coverage combine ../coverage-data/netbox-v4.5.3/.coverage ../coverage-data/netbox-v4.7.0-branching/.coverage
+          coverage report
+
+      - name: Generate coverage report
         working-directory: netbox-InterfaceNameRules-plugin
         env:
           COVERAGE_RCFILE: pyproject.toml
@@ -181,7 +241,6 @@ jobs:
           coverage xml -o ../coverage-report/coverage.xml
 
       - name: Upload coverage report
-        if: matrix.coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-report
@@ -189,7 +248,6 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
-        if: matrix.coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           files: coverage-report/coverage.xml

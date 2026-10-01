@@ -6,6 +6,7 @@ Each probe below runs the same code object under another module name, so the gua
 plugin code, of NetBox code or of test code exactly as it sees the real ones.
 """
 
+import functools
 import types
 
 from dcim.choices import InterfaceModeChoices
@@ -245,17 +246,24 @@ class SnapshotGuardM2MTest(SnapshotGuardTestCase):
     def test_a_tag_change_in_the_request_that_created_the_row_joins_the_create_record(self):
         site = Site(name="Guard Created", slug="guard-created")
 
-        run_as_job_user(make_job("GuardOne"), lambda: (plugin_save(site), plugin_add_tags(site, self.tag)))
+        run_as_job_user(
+            make_job("GuardOne"),
+            lambda: (plugin_save(site), plugin_add_tags(site, self.tag)),
+            branch_schema_id=None,
+        )
 
         self.assertEqual(snapshot_guard.take_violations(), [])
 
     def test_a_tag_change_in_a_later_request_needs_a_snapshot(self):
         """NetBox merges an M2M change only into a record of the same request, so the later one needs a before-state."""
         site = Site(name="Guard Created", slug="guard-created")
-        run_as_job_user(make_job("GuardFirst"), lambda: plugin_save(site))
+        run_as_job_user(make_job("GuardFirst"), lambda: plugin_save(site), branch_schema_id=None)
 
         self.assert_refused(
-            NO_SNAPSHOT, run_as_job_user, make_job("GuardSecond"), lambda: plugin_add_tags(site, self.tag)
+            NO_SNAPSHOT,
+            functools.partial(run_as_job_user, branch_schema_id=None),
+            make_job("GuardSecond"),
+            lambda: plugin_add_tags(site, self.tag),
         )
 
     def test_a_tag_change_of_a_row_that_a_test_created_needs_a_snapshot(self):

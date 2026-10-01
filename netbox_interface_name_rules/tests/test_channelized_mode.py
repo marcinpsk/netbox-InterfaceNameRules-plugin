@@ -37,21 +37,19 @@ from netbox_interface_name_rules.family import (
 from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES, NamingContext
-from netbox_interface_name_rules.tests.test_breakout_mode import (
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNEL_TYPE,
     CHANNELIZED,
     FLAT,
-    TEST_PASSWORD,
-    _plain_module_type,
-)
-from netbox_interface_name_rules.tests.test_channelization import (
-    CHANNEL_TYPE,
     PARENT_TYPE,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
+    TEST_PASSWORD,
     ChannelizationTestCase,
-    _build_device,
-    _channelized_module_type,
+    build_device,
+    channelized_module_type,
+    plain_module_type,
 )
 
 User = get_user_model()
@@ -63,13 +61,13 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanMode", ["3", "4", "5", "6", "7", "8"])
-        cls.named_type = _plain_module_type(manufacturer, "ChanMode-QSFP")
-        cls.bare_type = _plain_module_type(manufacturer, "ChanMode-QSFP-BARE")
-        cls.offset_type = _plain_module_type(manufacturer, "ChanMode-QSFP-OFF")
-        cls.vars_type = _plain_module_type(manufacturer, "ChanMode-QSFP-VARS")
-        cls.base_type = _plain_module_type(manufacturer, "ChanMode-QSFP-BASE")
-        cls.conventional_type = _plain_module_type(manufacturer, "ChanMode-QSFP-CONVENTIONAL")
+        manufacturer, cls.device = build_device("ChanMode", ["3", "4", "5", "6", "7", "8"])
+        cls.named_type = plain_module_type(manufacturer, "ChanMode-QSFP")
+        cls.bare_type = plain_module_type(manufacturer, "ChanMode-QSFP-BARE")
+        cls.offset_type = plain_module_type(manufacturer, "ChanMode-QSFP-OFF")
+        cls.vars_type = plain_module_type(manufacturer, "ChanMode-QSFP-VARS")
+        cls.base_type = plain_module_type(manufacturer, "ChanMode-QSFP-BASE")
+        cls.conventional_type = plain_module_type(manufacturer, "ChanMode-QSFP-CONVENTIONAL")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.named_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -228,8 +226,8 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanPre", ["3", "4", "5"])
-        cls.module_type = _plain_module_type(manufacturer, "ChanPre-QSFP")
+        manufacturer, cls.device = build_device("ChanPre", ["3", "4", "5"])
+        cls.module_type = plain_module_type(manufacturer, "ChanPre-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -326,8 +324,8 @@ class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanFlat", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ChanFlat-QSFP")
+        manufacturer, cls.device = build_device("ChanFlat", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ChanFlat-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{base}:{channel}",
@@ -411,8 +409,8 @@ class ChannelizedModeRetemplatedFlatFamilyTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanReTpl", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ChanReTpl-QSFP")
+        manufacturer, cls.device = build_device("ChanReTpl", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ChanReTpl-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -485,9 +483,9 @@ class ChannelizedModeExistingFamilyTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanExist", ["3", "4"])
-        cls.channelized_type = _channelized_module_type(manufacturer, "ChanExist-QSFP-CH")
-        cls.flat_type = _channelized_module_type(manufacturer, "ChanExist-QSFP-FL")
+        manufacturer, cls.device = build_device("ChanExist", ["3", "4"])
+        cls.channelized_type = channelized_module_type(manufacturer, "ChanExist-QSFP-CH")
+        cls.flat_type = channelized_module_type(manufacturer, "ChanExist-QSFP-FL")
         InterfaceNameRule.objects.create(
             module_type=cls.channelized_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -571,8 +569,8 @@ class ChannelizedModeClaimedPlainInterfaceTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanPlain", ["3"])
-        cls.module_type = _channelized_module_type(manufacturer, "ChanPlain-QSFP")
+        manufacturer, cls.device = build_device("ChanPlain", ["3"])
+        cls.module_type = channelized_module_type(manufacturer, "ChanPlain-QSFP")
         InterfaceTemplate.objects.create(module_type=cls.module_type, name="mgmt{module}", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -607,8 +605,8 @@ class ChannelizedModePreviewTest(ChannelizationTestCase):
         cls.superuser = User.objects.create_superuser(
             username="chanmodeview", password=TEST_PASSWORD, email="chanmodeview@example.com"
         )
-        manufacturer, cls.device = _build_device("ChanPrev", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ChanPrev-QSFP")
+        manufacturer, cls.device = build_device("ChanPrev", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ChanPrev-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -699,11 +697,11 @@ class ChannelizedModePredictionTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanPredMode", ["3", "4", "5", "6"])
-        cls.named_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP")
-        cls.bare_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP-BARE")
-        cls.family_type = _channelized_module_type(manufacturer, "ChanPredMode-QSFP-FAM")
-        cls.installed_type = _plain_module_type(manufacturer, "ChanPredMode-QSFP-FLAT")
+        manufacturer, cls.device = build_device("ChanPredMode", ["3", "4", "5", "6"])
+        cls.named_type = plain_module_type(manufacturer, "ChanPredMode-QSFP")
+        cls.bare_type = plain_module_type(manufacturer, "ChanPredMode-QSFP-BARE")
+        cls.family_type = channelized_module_type(manufacturer, "ChanPredMode-QSFP-FAM")
+        cls.installed_type = plain_module_type(manufacturer, "ChanPredMode-QSFP-FLAT")
         cls.installed_rule = InterfaceNameRule.objects.create(
             module_type=cls.installed_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -798,8 +796,8 @@ class ChannelizedJuniperE2ETest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ChanJnpr", ["5"])
-        cls.module_type = _plain_module_type(manufacturer, "QSFP-4X10G-LR-CHAN")
+        manufacturer, cls.device = build_device("ChanJnpr", ["5"])
+        cls.module_type = plain_module_type(manufacturer, "QSFP-4X10G-LR-CHAN")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             device_type=cls.device.device_type,

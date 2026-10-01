@@ -263,6 +263,45 @@ class RuleValidationAgreementTest(TestCase):
 
         self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-0/{bay_position}")
 
+    def test_a_targeted_save_through_an_alias_other_than_the_write_alias_is_refused(self):
+        """A rule save writes through the write alias alone; on main that is ``default``."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+            rule.save(using="schema_elsewhere", update_fields=["name_template"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_full_save_through_an_alias_other_than_the_write_alias_is_refused(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+            rule.save(using="schema_elsewhere")
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_save_of_an_unrelated_field_through_an_alias_other_than_the_write_alias_is_refused(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+            rule.save(using="schema_elsewhere", update_fields=["description"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "")
+
+    def test_a_targeted_save_whose_routed_alias_is_outside_the_write_scope_is_refused(self):
+        """The router may send a rule where the write scope of an interface write does not reach."""
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with override_settings(DATABASE_ROUTERS=[WriteRulesTo("schema_elsewhere")]):
+            with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere', outside the write scope ('default',)"):
+                rule.save(update_fields=["name_template"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
     def test_a_deferred_save_keeps_a_concurrent_change_to_a_field_it_did_not_load(self):
         """Validation must not load the deferred fields, which Django then writes back over a concurrent change."""
         rule = InterfaceNameRule.objects.create(
@@ -458,6 +497,16 @@ class WriteToDefaultDatabase:
 
     def db_for_write(self, model, **hints):
         return "default"
+
+
+class WriteRulesTo:
+    """A database router that sends each write of a rule to one alias."""
+
+    def __init__(self, alias):
+        self.alias = alias
+
+    def db_for_write(self, model, **hints):
+        return self.alias if model is InterfaceNameRule else None
 
 
 class RefuseImplicitMigrationDatabase:
