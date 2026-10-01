@@ -182,7 +182,8 @@ version check.
 - Version gate: raise `ImproperlyConfigured` unless the installed netbox-branching is 1.2.x.
 - Replay suppression: wrap `Branch.merge`, `Branch.revert` and `Branch.sync` once (idempotent,
   `functools.wraps`). Each wrapper sets a ContextVar token and resets it in `finally`.
-  `replay_in_progress() -> bool`.
+  `replay_in_progress() -> bool`. `InterfaceNameRule.save()` skips its write-alias check while it is
+  true: a merge or revert started in an active branch replays a rule update on `default`.
 - Job identity: `branch_identity() -> str | None` (the active branch's schema id) and
   `activate_on(request, identity)`, which sets BR's branch cookie on a synthetic request.
 

@@ -226,6 +226,38 @@ class ReplayInTheActiveBranchTest(_ReplayCase):
         self.assertEqual((merged, self.position_on_main()), (2, 1))
 
 
+class RuleReplayInTheActiveBranchTest(_ReplayCase):
+    """A merge and a revert, started from a shell in which the branch is active, replay a rule update."""
+
+    PREFIX = "BrRuleReplayActive"
+
+    def build(self):
+        module_type = make_module_type(make_manufacturer(self.PREFIX), self.PREFIX)
+        self.rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="xe-{bay_position}")
+
+    def template_on_main(self):
+        return InterfaceNameRule.objects.get(pk=self.rule.pk).name_template
+
+    def test_a_merge_and_a_revert_started_in_the_branch_replay_a_rule_update_without_an_error(self):
+        response = self.client.patch(
+            reverse(
+                "plugins-api:netbox_interface_name_rules-api:interfacenamerule-detail", kwargs={"pk": self.rule.pk}
+            ),
+            {"name_template": "xe-0/{bay_position}", "description": "branch"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.branch.refresh_from_db()
+
+        with self.in_branch():
+            self.branch.merge(user=self.user)
+        merged = self.template_on_main()
+        with self.in_branch():
+            self.branch.revert(user=self.user)
+
+        self.assertEqual((merged, self.template_on_main()), ("xe-0/{bay_position}", "xe-{bay_position}"))
+
+
 class MergeExitTest(_InstallAndMoveCase):
     """A merge that returns early or fails leaves the next save on main a rename trigger.
 
