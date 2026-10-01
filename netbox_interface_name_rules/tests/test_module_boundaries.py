@@ -91,6 +91,7 @@ TRANSACTION_STATE_PERMITS = {
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 BRANCHING_MODULE = PACKAGE / "branching.py"
+TESTS_PACKAGE = f"{PLUGIN_PACKAGE}.tests"
 
 
 def _family_submodules() -> set[str]:
@@ -297,6 +298,35 @@ def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
             if not r.level and (r.module == "netbox_branching" or r.module.startswith("netbox_branching."))
         )
     ]
+
+
+def _imports_a_test_module(record, package: str) -> bool:
+    """Return whether *record*, read in *package*, imports a ``test_*`` module or name, or ``*``, from the test package."""
+    module = record.absolute(package)
+    if record.name == "*":
+        return module == TESTS_PACKAGE or module.startswith(f"{TESTS_PACKAGE}.")
+    target = module if record.name is None else f"{module}.{record.name}"
+    inside = target.removeprefix(f"{TESTS_PACKAGE}.")
+    return inside != target and any(part.startswith("test_") for part in inside.split("."))
+
+
+def _test_module_imports(path: pathlib.Path, package: str = TESTS_PACKAGE) -> list[str]:
+    """Return the source of each import statement in *path*, a module of *package*, that imports a test module."""
+    records = import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
+    return [
+        ast.unparse(statement)
+        for statement in import_statements(r for r in records if _imports_a_test_module(r, package))
+    ]
+
+
+def _test_package_violations(tests_root: pathlib.Path) -> set[tuple[str, str]]:
+    """Return ``(path, statement)`` for each import of a test module in any module of the test package at *tests_root*."""
+    violations = set()
+    for path in sorted(tests_root.rglob("*.py")):
+        relative = path.relative_to(tests_root)
+        package = ".".join((TESTS_PACKAGE, *relative.parent.parts))
+        violations.update((relative.as_posix(), statement) for statement in _test_module_imports(path, package))
+    return violations
 
 
 def _production_bulk_writes() -> Counter:
@@ -1019,6 +1049,99 @@ class NetboxBranchingImportTest(SimpleTestCase):
             )
 
             self.assertEqual(_netbox_branching_imports(path), [])
+
+
+class TestModuleImportTest(SimpleTestCase):
+    """No module of the test package imports a ``test_*`` module: helpers.py, trigger_cases.py and branch_cases.py share.
+
+    A ``test_*`` name imported from a shared module is refused too: pytest would collect a test function there. A ``*``
+    import from the test package is refused, because ``__all__`` can name a test module.
+    """
+
+    def test_no_module_of_the_test_package_imports_a_test_module(self):
+        self.assertEqual(_test_package_violations(PACKAGE / "tests"), set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "import netbox_interface_name_rules.tests.test_views\n": [
+                "import netbox_interface_name_rules.tests.test_views"
+            ],
+            "import os, netbox_interface_name_rules.tests.test_views as views\n": [
+                "import os, netbox_interface_name_rules.tests.test_views as views"
+            ],
+            "import netbox_interface_name_rules.tests.sub.test_views as views\n": [
+                "import netbox_interface_name_rules.tests.sub.test_views as views"
+            ],
+            "from netbox_interface_name_rules.tests.test_views import ViewTest\n": [
+                "from netbox_interface_name_rules.tests.test_views import ViewTest"
+            ],
+            "from netbox_interface_name_rules.tests import helpers, test_views\n": [
+                "from netbox_interface_name_rules.tests import helpers, test_views"
+            ],
+            "from netbox_interface_name_rules.tests.sub import test_views\n": [
+                "from netbox_interface_name_rules.tests.sub import test_views"
+            ],
+            "from netbox_interface_name_rules.tests.helpers import test_password\n": [
+                "from netbox_interface_name_rules.tests.helpers import test_password"
+            ],
+            "from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+            "from . import test_views\n": ["from . import test_views"],
+            "from . import *\n": ["from . import *"],
+            "from .helpers import *\n": ["from .helpers import *"],
+            "from netbox_interface_name_rules.tests import *\n": ["from netbox_interface_name_rules.tests import *"],
+            "def f():\n    from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_test_module_imports(path), expected)
+
+    def test_a_relative_import_resolves_against_the_package_of_its_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text("from .test_views import ViewTest\nfrom ..test_views import ViewTest\n", encoding="utf-8")
+
+            reported = _test_module_imports(path, f"{TESTS_PACKAGE}.sub")
+
+        self.assertEqual(reported, ["from .test_views import ViewTest", "from ..test_views import ViewTest"])
+
+    def test_the_guard_reads_every_module_of_the_test_package_and_its_subpackages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "sub").mkdir()
+            (root / "__init__.py").write_text("from .test_views import ViewTest\n", encoding="utf-8")
+            (root / "sub" / "__init__.py").write_text("from . import test_views\n", encoding="utf-8")
+            (root / "sub" / "shared.py").write_text("from ..test_views import ViewTest\n", encoding="utf-8")
+            (root / "helpers.py").write_text("from .sub import shared\n", encoding="utf-8")
+
+            violations = _test_package_violations(root)
+
+        self.assertEqual(
+            violations,
+            {
+                ("__init__.py", "from .test_views import ViewTest"),
+                ("sub/__init__.py", "from . import test_views"),
+                ("sub/shared.py", "from ..test_views import ViewTest"),
+            },
+        )
+
+    def test_a_shared_module_a_similar_name_and_a_dotted_path_string_are_not_reported(self):
+        source = (
+            "from .helpers import PLAIN_TYPE\n"
+            "from netbox_interface_name_rules.tests import helpers\n"
+            "from ..engine import test_rule\n"
+            "import netbox_interface_name_rules.tests_extra.test_views\n"
+            "from netbox.settings import *\n"
+            "from netbox_interface_name_rules.tests_extra import *\n"
+            "MIDDLEWARE = ('netbox_interface_name_rules.tests.test_views._route',)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_test_module_imports(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):

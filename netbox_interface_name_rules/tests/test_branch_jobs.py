@@ -14,26 +14,21 @@ from django.urls import reverse
 
 from netbox_interface_name_rules.api.views import BACKGROUND_IN_A_BRANCH
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.branch_cases import FLAT_NAMES, BranchWriteCase, ConversionCase, PlainModuleCase
 from netbox_interface_name_rules.tests.helpers import (
     branch_cookie,
     make_manufacturer,
     make_module_type,
+    names_of,
     queued_job,
     register_a_worker,
-)
-from netbox_interface_name_rules.tests.test_branch_writes import (
-    FLAT_NAMES,
-    _BranchWriteCase,
-    _ConversionCase,
-    _PlainModuleCase,
-    names_of,
 )
 
 COMPLETED = JobStatusChoices.STATUS_COMPLETED
 ERRORED = JobStatusChoices.STATUS_ERRORED
 
 
-class _JobCase(_BranchWriteCase):
+class _JobCase(BranchWriteCase):
     """Enqueue a job through the Apply page in the branch, and run it from the queue as a worker does."""
 
     def enqueue(self, action):
@@ -64,7 +59,7 @@ class _JobCase(_BranchWriteCase):
         return repr(RuntimeError(f"The write alias is 'default', but the operation expects {self.alias!r}."))
 
 
-class ApplyJobInABranchTest(_JobCase, _PlainModuleCase):
+class ApplyJobInABranchTest(_JobCase, PlainModuleCase):
     PREFIX = "BrJobApply"
 
     def build(self):
@@ -113,7 +108,7 @@ class ApplyJobInABranchTest(_JobCase, _PlainModuleCase):
         self.assertFalse(self.change_diffs().exists())
 
 
-class StartCheckBeforeTheRuleReadTest(_JobCase, _PlainModuleCase):
+class StartCheckBeforeTheRuleReadTest(_JobCase, PlainModuleCase):
     """The rule exists in the branch only, so a job that read it on main would find no rule and complete."""
 
     PREFIX = "BrJobRuleRead"
@@ -136,7 +131,7 @@ class StartCheckBeforeTheRuleReadTest(_JobCase, _PlainModuleCase):
             self.assertEqual(names_of(self.module), ["0"])
 
 
-class ConvertJobInABranchTest(_JobCase, _ConversionCase):
+class ConvertJobInABranchTest(_JobCase, ConversionCase):
     PREFIX = "BrJobConvert"
 
     def test_the_job_converts_in_the_branch_only(self):
@@ -159,7 +154,7 @@ class ConvertJobInABranchTest(_JobCase, _ConversionCase):
         self.assertEqual(names_of(self.module), list(FLAT_NAMES))
 
 
-class BackgroundRuleRequestTest(_BranchWriteCase):
+class BackgroundRuleRequestTest(BranchWriteCase):
     """NetBox runs a background REST request on main, so the rule endpoints refuse one in a branch."""
 
     PREFIX = "BrBackground"

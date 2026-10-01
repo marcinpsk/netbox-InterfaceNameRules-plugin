@@ -13,15 +13,15 @@ from extras.models import SavedFilter, Webhook
 from netbox.context import events_queue
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.branch_cases import BRANCH_BEFORE, DEFAULT_BEFORE, SERVER_DEFAULT, BranchTestCase
 from netbox_interface_name_rules.tests.helpers import (
     activate,
     lock_timeout,
     make_manufacturer,
     make_module_type,
+    request_context,
     set_lock_timeout,
 )
-from netbox_interface_name_rules.tests.test_branching import BranchTestCase
-from netbox_interface_name_rules.tests.test_transactions import request_context
 from netbox_interface_name_rules.transactions import (
     LOCK_TIMEOUT,
     SET_LOCK_TIMEOUT,
@@ -31,11 +31,6 @@ from netbox_interface_name_rules.transactions import (
 )
 
 User = get_user_model()
-# Each connection starts from its own value, so a test can tell which value came back where.
-DEFAULT_BEFORE = "3s"
-BRANCH_BEFORE = "4s"
-# The value that PostgreSQL gives a new session.
-SERVER_DEFAULT = "0"
 
 
 def abort_the_transaction(alias):
@@ -299,6 +294,28 @@ class RuleSaveInABranchTest(_ScopeCase):
                 rule.save(using="default", update_fields=["name_template"])
 
         self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_full_save_through_default_in_a_branch_is_refused_before_any_query(self):
+        module_type = make_module_type(make_manufacturer("BrRuleFull"), "BrRuleFull")
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with activate(self.branch), self.assertNumQueries(0), self.assertNumQueries(0, using=self.alias):
+            with self.assertRaisesMessage(RuntimeError, f"'{self.alias}'"):
+                rule.save(using="default")
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_description_save_through_default_in_a_branch_is_refused_before_any_query(self):
+        module_type = make_module_type(make_manufacturer("BrRuleDesc"), "BrRuleDesc")
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with activate(self.branch), self.assertNumQueries(0), self.assertNumQueries(0, using=self.alias):
+            with self.assertRaisesMessage(RuntimeError, f"'{self.alias}'"):
+                rule.save(using="default", update_fields=["description"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "")
 
 
 class ExemptRuleModelInABranchTest(_ScopeCase):

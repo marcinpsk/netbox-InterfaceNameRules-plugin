@@ -273,6 +273,24 @@ class RuleValidationAgreementTest(TestCase):
 
         self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
 
+    def test_a_full_save_through_an_alias_other_than_the_write_alias_is_refused(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+            rule.save(using="schema_elsewhere")
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_save_of_an_unrelated_field_through_an_alias_other_than_the_write_alias_is_refused(self):
+        rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with self.assertRaisesMessage(RuntimeError, "'schema_elsewhere'"):
+            rule.save(using="schema_elsewhere", update_fields=["description"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "")
+
     def test_a_targeted_save_whose_routed_alias_is_outside_the_write_scope_is_refused(self):
         """The router may send a rule where the write scope of an interface write does not reach."""
         rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template="xe-{bay_position}")

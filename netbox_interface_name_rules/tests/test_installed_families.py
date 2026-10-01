@@ -39,13 +39,14 @@ from netbox_interface_name_rules.family import (
 from netbox_interface_name_rules.family.execution import _lock_family
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import evaluate_name_template
-from netbox_interface_name_rules.tests.helpers import make_placement
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNEL_TYPE,
+    PARENT_TYPE,
+    PLAIN_TYPE,
+    REQUIRES_CHANNELIZATION,
+    make_placement,
+)
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-
-CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
-PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
-PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
-REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces"
 
 
 class RejectNthInterfaceUpdate:

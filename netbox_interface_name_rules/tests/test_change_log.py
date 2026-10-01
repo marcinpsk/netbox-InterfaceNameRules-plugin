@@ -29,6 +29,7 @@ from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.jobs import ApplyRuleJob, rule_job_kwargs, run_as_job_user
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
+    PLAIN_TYPE,
     empty_the_webhook_queue,
     make_device,
     make_device_type,
@@ -42,7 +43,6 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 
 User = get_user_model()
-PLAIN_TYPE = "10gbase-x-sfpp"
 UPDATE = ObjectChangeActionChoices.ACTION_UPDATE
 
 

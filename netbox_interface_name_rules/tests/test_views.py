@@ -28,12 +28,11 @@ from netbox_interface_name_rules.template_variable_reference import (
     rule_tester_variable_rows,
     variable_reference_rows,
 )
-from netbox_interface_name_rules.tests.helpers import make_device, queued_job
+from netbox_interface_name_rules.tests.helpers import TEST_PASSWORD, make_device, queued_job
 from netbox_interface_name_rules.views import RuleTestView
 
 User = get_user_model()
 
-TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 
 # The preview variables and override fields the conftest guard is expected to know about.
 _VAR_FIELDS = frozenset({"slot", "bay_position", "parent_bay_position", "base", "vc_position"})

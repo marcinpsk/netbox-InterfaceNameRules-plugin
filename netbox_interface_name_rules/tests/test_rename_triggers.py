@@ -17,7 +17,6 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
-from django.contrib.contenttypes.models import ContentType
 from django.core import serializers
 from django.core.management import call_command
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, DataError, IntegrityError, connection, transaction
@@ -37,6 +36,12 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_outcomes import OutcomeKind
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
+    PARENT_TYPE,
+    PLAIN_TYPE,
+    PLUGIN_LOGGER,
+    REQUIRES_CHANNELIZATION,
+    WriteInterfacesTo,
+    channelized_module_type,
     interface_signal,
     lock_timeout,
     make_device,
@@ -48,15 +53,15 @@ from netbox_interface_name_rules.tests.helpers import (
     set_lock_timeout,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import (
-    PARENT_TYPE,
-    REQUIRES_CHANNELIZATION,
-    _channelized_module_type,
+from netbox_interface_name_rules.tests.trigger_cases import (
+    give_the_next_module_id,
+    journal,
+    module_reapplies,
+    previous_state_read_fails,
+    reject_interface_updates,
+    reject_reads_of,
 )
-from netbox_interface_name_rules.tests.test_transactions import WriteInterfacesTo
 
-PLUGIN_LOGGER = "netbox_interface_name_rules"
-PLAIN_TYPE = "10gbase-x-sfpp"
 VIRTUAL_TYPE = "virtual"
 MODULE_STATE_READ = re.compile(
     r'SELECT "dcim_module"\."module_type_id"(?: AS "module_type_id")?, '
@@ -76,31 +81,8 @@ def _counting(entry_point):
         yield spy
 
 
-def _module_reapplies():
-    return _counting("module_rule_outcomes")
-
-
 def _device_reapplies():
     return _counting("device_module_rule_outcomes")
-
-
-def _journal(instance):
-    """Return the journal entries on *instance*, oldest first."""
-    return list(
-        JournalEntry.objects.filter(
-            assigned_object_type=ContentType.objects.get_for_model(instance), assigned_object_id=instance.pk
-        ).order_by("pk")
-    )
-
-
-def _give_the_next_module_id(pk):
-    """Make the database assign *pk* to the next module that NetBox creates."""
-    # NetBox before 4.7 creates no components for a module saved with an explicit pk.
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT setval(pg_get_serial_sequence(%s, %s), %s, false)",
-            [Module._meta.db_table, Module._meta.pk.column, pk],
-        )
 
 
 class _RenameTriggerFixture:
@@ -216,7 +198,7 @@ class RenameTriggerTest(RenameTriggerTestCase):
         module = self._install()
 
         with (
-            _module_reapplies() as module_reapplies,
+            module_reapplies() as module_calls,
             _device_reapplies() as device_reapplies,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -228,10 +210,10 @@ class RenameTriggerTest(RenameTriggerTestCase):
                 f"{self.prefix} New", self.device.device_type, virtual_chassis=self.virtual_chassis, vc_position=4
             )
 
-        self.assertEqual((module_reapplies.call_count, device_reapplies.call_count), (0, 0))
+        self.assertEqual((module_calls.call_count, device_reapplies.call_count), (0, 0))
 
     def test_a_module_deleted_before_commit_is_skipped(self):
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
             module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=self.type_a)
             module.delete()
 
@@ -317,23 +299,8 @@ class RenameTriggerAPITest(_RenameTriggerFixture, APITestCase):
 
         self._patch(self.module, {"module_type": self.type_b.pk})
 
-        (entry,) = _journal(self.module)
+        (entry,) = journal(self.module)
         self.assertEqual(entry.created_by, self.user)
-
-
-@contextmanager
-def _previous_state_read_fails(statement):
-    """Replace the previous-state read that *statement* matches by SQL that PostgreSQL rejects."""
-    replaced = []
-
-    def divide_by_zero(execute, sql, params, many, context):
-        if statement.match(sql):
-            replaced.append(sql)
-            return execute("SELECT 1/0", None, many, context)
-        return execute(sql, params, many, context)
-
-    with connection.execute_wrapper(divide_by_zero):
-        yield replaced
 
 
 class PreviousStateReadFailureTest(RenameTriggerTestCase):
@@ -343,7 +310,7 @@ class PreviousStateReadFailureTest(RenameTriggerTestCase):
         module = self._install()
 
         with (
-            _previous_state_read_fails(MODULE_STATE_READ) as replaced,
+            previous_state_read_fails(MODULE_STATE_READ) as replaced,
             self.assertRaisesMessage(DataError, "division by zero"),
             transaction.atomic(),
         ):
@@ -354,7 +321,7 @@ class PreviousStateReadFailureTest(RenameTriggerTestCase):
 
     def test_a_device_save_fails_with_the_read_error(self):
         with (
-            _previous_state_read_fails(DEVICE_STATE_READ) as replaced,
+            previous_state_read_fails(DEVICE_STATE_READ) as replaced,
             self.assertRaisesMessage(DataError, "division by zero"),
             transaction.atomic(),
         ):
@@ -370,7 +337,7 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
     def test_two_module_type_changes_reapply_once_with_the_final_rule(self):
         module = self._install()
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             self._change_type(module, self.type_b)
             self._change_type(module, self.type_c)
 
@@ -378,7 +345,7 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
         self.assertEqual(self._names(module), ["ge-1/0/0"])
 
     def test_an_install_and_a_type_change_reapply_once_with_force(self):
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=self.type_a)
             self._change_type(module, self.type_b)
 
@@ -389,7 +356,7 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
         module = self._install()
         rename_out_of_band(Interface.objects.get(module=module), "operator-name")
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True), transaction.atomic():
             self._change_type(module, self.type_b)
             self._change_type(module, self.type_a)
 
@@ -403,7 +370,7 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
             self._change_type(module, self.type_b)
             pk = module.pk
             module.delete()
-            _give_the_next_module_id(pk)
+            give_the_next_module_id(pk)
             module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=self.type_a)
 
         self.assertEqual(module.pk, pk)
@@ -470,12 +437,6 @@ class CoalescedTriggerTest(RenameTriggerTestCase):
         self.assertEqual(self._names(module), ["et-2/0/0"])
 
 
-def _reject_interface_updates(execute, sql, params, many, context):
-    if sql.lstrip().startswith('UPDATE "dcim_interface"'):
-        raise IntegrityError("injected reapply failure")
-    return execute(sql, params, many, context)
-
-
 def _reject_device_updates(execute, sql, params, many, context):
     if sql.lstrip().startswith('UPDATE "dcim_device"'):
         raise IntegrityError("injected device save failure")
@@ -513,7 +474,7 @@ class PreviousStateHandoffTest(RenameTriggerTestCase):
         moved = Module.objects.get(pk=module.pk)
         moved.module_type = self.type_b
 
-        with _module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
+        with module_reapplies() as reapplies, self.captureOnCommitCallbacks(execute=True):
             post_save.send(sender=Module, instance=moved, created=False, raw=False, using="default", update_fields=None)
 
         self.assertEqual(reapplies.call_count, 0)
@@ -550,7 +511,7 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
             for callback in callbacks:
                 callback()
 
@@ -567,7 +528,7 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs:
             for callback in callbacks:
                 callback()
 
@@ -582,7 +543,7 @@ class ReapplyFailureTest(RenameTriggerTestCase):
             self._change_type(module, self.type_b)
 
         with (
-            connection.execute_wrapper(_reject_reads_of("dcim_module")),
+            connection.execute_wrapper(reject_reads_of("dcim_module")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
             run_the_reapply(callbacks)
@@ -597,7 +558,7 @@ class ReapplyFailureTest(RenameTriggerTestCase):
             self._change_type(module, self.type_b)
 
         with (
-            connection.execute_wrapper(_reject_reads_of("dcim_moduletype")),
+            connection.execute_wrapper(reject_reads_of("dcim_moduletype")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
             run_the_reapply(callbacks)
@@ -613,7 +574,7 @@ class ReapplyFailureTest(RenameTriggerTestCase):
             self._move_to_position(2)
 
         with (
-            connection.execute_wrapper(_reject_reads_of("dcim_device")),
+            connection.execute_wrapper(reject_reads_of("dcim_device")),
             self.assertLogs(PLUGIN_LOGGER, "ERROR") as logs,
         ):
             run_the_reapply(callbacks)
@@ -621,17 +582,6 @@ class ReapplyFailureTest(RenameTriggerTestCase):
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected dcim_device read failure"])
         self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 2)
         self.assertEqual(self._names(module), ["et-1/0/0"])
-
-
-def _reject_reads_of(table):
-    """Return an execute wrapper that fails every read of *table*."""
-
-    def reject(execute, sql, params, many, context):
-        if sql.lstrip().startswith("SELECT") and (f'FROM "{table}"' in sql or f'JOIN "{table}"' in sql):
-            raise DatabaseError(f"injected {table} read failure")
-        return execute(sql, params, many, context)
-
-    return reject
 
 
 def _reject_journal_writes(execute, sql, params, many, context):
@@ -674,12 +624,12 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self._change_type(module, self.type_b)
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`et-1/0/0` to `xe-1/0/0`", entry.comments)
         self.assertIn("already in use", entry.comments)
         self.assertIsNone(entry.created_by)
-        self.assertEqual(_journal(self.device), [])
+        self.assertEqual(journal(self.device), [])
         self.assertEqual(self._names(module), ["et-1/0/0"])
 
     def test_the_entry_names_only_the_interfaces_left_unrenamed(self):
@@ -689,7 +639,7 @@ class RenameJournalTest(RenameTriggerTestCase):
         module = self._install(module_type)
 
         self.assertEqual(self._names(module), ["a0.1", "b0"])
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn("`b0` to `b0.1`", entry.comments)
         self.assertNotIn("a0", entry.comments)
 
@@ -700,7 +650,7 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self._change_type(module, claiming_type)
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`et-1/0/0`", entry.comments)
         self.assertIn("no single interface template claims", entry.comments)
@@ -731,7 +681,7 @@ class RenameJournalTest(RenameTriggerTestCase):
         return module, renamed.name
 
     def _assert_reports_each_unclaimed_top_level_interface(self, module, renamed):
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         for name in (renamed, "mgmt-extra"):
             with self.subTest(name=name):
@@ -759,7 +709,7 @@ class RenameJournalTest(RenameTriggerTestCase):
                 module_type=self.type_a,
             )
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`0`", entry.comments)
         self.assertIn("{vc_position} is not available", entry.comments)
@@ -783,7 +733,7 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         module = self._install(module_type)
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("`0`", entry.comments)
         self.assertIn("Invalid arithmetic expression", entry.comments)
@@ -795,11 +745,11 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._change_type(module, self.type_b)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("injected reapply failure", entry.comments)
 
@@ -812,14 +762,14 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertEqual(entry.comments.count("injected reapply failure"), 2)
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
 
     def test_leaving_the_virtual_chassis_renames_nothing_and_reports_the_skip(self):
         module = self._install()
@@ -835,14 +785,14 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self._leave()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`et-1/0/0`", entry.comments)
         self.assertIn("`mgmt0`", entry.comments)
         self.assertIn("{vc_position} is not available", entry.comments)
         self.assertNotIn("eth0", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
         self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
         self.assertEqual(
             sorted(Interface.objects.filter(device=self.device, module=None).values_list("name", flat=True)),
@@ -856,7 +806,7 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             self._move_to_position(None)
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn("`et-1/0/0`", entry.comments)
         self.assertNotIn("operator-name", entry.comments)
         self.assertEqual((self._names(module), self._names(by_hand)), (["et-1/0/0"], ["operator-name"]))
@@ -878,7 +828,7 @@ class RenameJournalTest(RenameTriggerTestCase):
                 module_type=flat_type,
             )
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn("`0`: {vc_position} is not available", entry.comments)
         self.assertEqual(self._names(module), ["0"])
 
@@ -901,7 +851,7 @@ class RenameJournalTest(RenameTriggerTestCase):
             # No template claims "0:5", so the install scope leaves it out of every plan.
             Interface.objects.create(device=standalone, module=module, name="0:5", type=PLAIN_TYPE)
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertIn("`0`: {vc_position} is not available", entry.comments)
         self.assertNotIn("0:5", entry.comments)
         self.assertEqual(self._names(module), ["0", "0:5"])
@@ -943,7 +893,7 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self._leave()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn("`et-1/0:0`", entry.comments)
         self.assertIn("`et-1/0:1`", entry.comments)
         self.assertEqual(self._names(module), ["et-1/0:0", "et-1/0:1"])
@@ -963,14 +913,14 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self._leave()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn("`xe-1/0/0:0`", entry.comments)
         self.assertIn("`xe-1/0/0:1`", entry.comments)
         self.assertNotIn("`0`", entry.comments)
 
     def _install_channelized_family(self, model, **rule_fields):
         """Install a module whose templates form a two-channel family, under a rule with *rule_fields*."""
-        module_type = _channelized_module_type(self.type_a.manufacturer, model, channels=2, child_channel_ids=(1, 2))
+        module_type = channelized_module_type(self.type_a.manufacturer, model, channels=2, child_channel_ids=(1, 2))
         InterfaceNameRule.objects.create(module_type=module_type, **rule_fields)
         return self._install(module_type)
 
@@ -981,7 +931,7 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self._leave()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         for name in ("et-1/0", "et-1/0:1", "et-1/0:2"):
             self.assertIn(f"`{name}`", entry.comments)
 
@@ -997,7 +947,7 @@ class RenameJournalTest(RenameTriggerTestCase):
 
         self._leave()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn("`xe-1/0/0:0`", entry.comments)
         self.assertNotIn("`0`", entry.comments)
 
@@ -1016,7 +966,7 @@ class RenameJournalTest(RenameTriggerTestCase):
             self._move_to_position(2)
 
         self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("`mgmt0`", entry.comments)
 
@@ -1040,7 +990,7 @@ class RenameJournalTest(RenameTriggerTestCase):
             self._move_to_position(2)
 
         self.assertTrue(Interface.objects.filter(device=self.device, name="oob-2").exists())
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertIn("`eth0` to `lan-2`", entry.comments)
         self.assertNotIn("mgmt0", entry.comments)
 
@@ -1052,11 +1002,11 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("`et-1/0/0` to `et-2/0/0`", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
@@ -1076,11 +1026,11 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             self._move_to_position(2)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(self.device)
+        (entry,) = journal(self.device)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("`mgmt0` to `mgmt-2`", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
@@ -1095,11 +1045,11 @@ class RenameJournalTest(RenameTriggerTestCase):
         with self.captureOnCommitCallbacks() as callbacks:
             module = Module.objects.create(device=self.device, module_bay=self._bay(), module_type=module_type)
 
-        with connection.execute_wrapper(_reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
+        with connection.execute_wrapper(reject_interface_updates), self.assertLogs(PLUGIN_LOGGER, "ERROR"):
             for callback in callbacks:
                 callback()
 
-        (entry,) = _journal(module)
+        (entry,) = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("`a0` to `a0.1`", entry.comments)
         self.assertIn("injected reapply failure", entry.comments)
@@ -1136,7 +1086,7 @@ class RenameJournalTest(RenameTriggerTestCase):
                 callback()
 
         self.assertEqual([str(record.exc_info[1]) for record in logs.records], ["injected journal write failure"])
-        self.assertEqual(_journal(module), [])
+        self.assertEqual(journal(module), [])
         self.assertEqual(Module.objects.get(pk=module.pk).module_type, self.type_b)
 
 
@@ -1200,7 +1150,7 @@ class ReconciliationFailureJournalTest(TransactionTestCase):
         device_type = make_device_type(manufacturer, "ReconJournal")
         make_module_bay_templates(device_type, ("Bay 0", "Bay 1"))
         self.device = make_device("ReconJournal", device_type)
-        self.module_type = _channelized_module_type(manufacturer, "ReconJournal-QSFP")
+        self.module_type = channelized_module_type(manufacturer, "ReconJournal-QSFP")
         InterfaceNameRule.objects.create(
             module_type=self.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -1228,7 +1178,7 @@ class ReconciliationFailureJournalTest(TransactionTestCase):
             with interface_signal(post_save, lock_after_the_cascade), transaction.atomic():
                 module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
 
-        [entry] = _journal(module)
+        [entry] = journal(module)
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
         self.assertIn("Rename each channel back: `et-0/0/1:2` to `1:2`", entry.comments)
         self.assertEqual(

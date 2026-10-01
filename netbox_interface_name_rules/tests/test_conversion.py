@@ -47,31 +47,26 @@ from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.tests.helpers import (
-    empty_the_webhook_queue,
-    make_interface_webhook_rule,
-    make_job,
-    queued_webhooks,
-)
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_breakout_mode import (
+    CHANNEL_TYPE,
     CHANNELIZED,
     FLAT,
-    TEST_PASSWORD,
-    _plain_module_type,
-)
-from netbox_interface_name_rules.tests.test_channelization import (
-    CHANNEL_TYPE,
     PARENT_TYPE,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
+    REQUIRES_NO_CHANNELIZATION,
+    TEST_PASSWORD,
     ChannelizationTestCase,
-    _build_device,
+    build_device,
+    empty_the_webhook_queue,
+    make_interface_webhook_rule,
+    make_job,
+    plain_module_type,
+    queued_webhooks,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 User = get_user_model()
-
-REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
 
 
 class ConversionTestCase(ChannelizationTestCase):
@@ -137,8 +132,8 @@ class ConversionVerdictTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvVerdict", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvVerdict-QSFP")
+        manufacturer, cls.device = build_device("ConvVerdict", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ConvVerdict-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -294,8 +289,8 @@ class ConversionTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvApply", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvApply-QSFP")
+        manufacturer, cls.device = build_device("ConvApply", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ConvApply-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -450,8 +445,8 @@ class Ch0MetadataSplitTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvMeta", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvMeta-QSFP")
+        manufacturer, cls.device = build_device("ConvMeta", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ConvMeta-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
         cls.custom_field = CustomField.objects.create(name="conv_note", type="text")
         cls.custom_field.object_types.set([ObjectType.objects.get_for_model(Interface)])
@@ -546,8 +541,8 @@ class ConversionPreflightTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvBlock", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvBlock-QSFP")
+        manufacturer, cls.device = build_device("ConvBlock", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ConvBlock-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -743,8 +738,8 @@ class ConversionApplyViewTest(ConversionTestCase):
         cls.superuser = User.objects.create_superuser(
             username="convview", password=TEST_PASSWORD, email="convview@example.com"
         )
-        manufacturer, cls.device = _build_device("ConvView", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvView-QSFP")
+        manufacturer, cls.device = build_device("ConvView", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ConvView-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -894,8 +889,8 @@ class ConversionBatchLimitViewTest(ConversionTestCase):
         cls.superuser = User.objects.create_superuser(
             username="convlimit", password=TEST_PASSWORD, email="convlimit@example.com"
         )
-        manufacturer, cls.device = _build_device("ConvLimitView", ["3", "4", "5"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvLimitView-QSFP")
+        manufacturer, cls.device = build_device("ConvLimitView", ["3", "4", "5"])
+        cls.module_type = plain_module_type(manufacturer, "ConvLimitView-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -1008,8 +1003,8 @@ class ConversionScanCostTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvCost", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvCost-QSFP")
+        manufacturer, cls.device = build_device("ConvCost", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ConvCost-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -1053,8 +1048,8 @@ class ConversionScanLimitTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvLimit", ["3", "4", "5"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvLimit-QSFP")
+        manufacturer, cls.device = build_device("ConvLimit", ["3", "4", "5"])
+        cls.module_type = plain_module_type(manufacturer, "ConvLimit-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):
@@ -1144,8 +1139,8 @@ class ConversionChangelogTest(ConversionTestCase):
         cls.superuser = User.objects.create_superuser(
             username="convlog", password=TEST_PASSWORD, email="convlog@example.com"
         )
-        manufacturer, cls.device = _build_device("ConvLog", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvLog-QSFP")
+        manufacturer, cls.device = build_device("ConvLog", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ConvLog-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
         cls.fhrp_group = FHRPGroup.objects.create(group_id=81, protocol="vrrp2")
 
@@ -1225,8 +1220,8 @@ class ConversionJobTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvJob", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvJob-QSFP")
+        manufacturer, cls.device = build_device("ConvJob", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ConvJob-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
         cls.operator = User.objects.create_user(username="convjob-operator")
 
@@ -1300,8 +1295,8 @@ class ConversionEventTest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvEvent", ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvEvent-QSFP")
+        manufacturer, cls.device = build_device("ConvEvent", ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, "ConvEvent-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
         cls.event_rule = make_interface_webhook_rule("ConvEvent")
         cls.operator = User.objects.create_user(username="convevent-operator", is_superuser=True)
@@ -1363,8 +1358,8 @@ class FlatToChannelizedJuniperE2ETest(ConversionTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("ConvJnpr", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "QSFP-4X10G-LR-CONV")
+        manufacturer, cls.device = build_device("ConvJnpr", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "QSFP-4X10G-LR-CONV")
         cls.rule = cls._flat_rule(cls.module_type, device_type=cls.device.device_type)
         cls.tag = Tag.objects.create(name="ConvJnprTag", slug="convjnpr-tag")
 
@@ -1456,8 +1451,8 @@ class ConversionWithoutSupportTest(ConversionTestCase):
         cls.superuser = User.objects.create_superuser(
             username="convnosup", password=TEST_PASSWORD, email="convnosup@example.com"
         )
-        manufacturer, cls.device = _build_device("ConvNoSup", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "ConvNoSup-QSFP")
+        manufacturer, cls.device = build_device("ConvNoSup", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "ConvNoSup-QSFP")
         cls.rule = cls._flat_rule(cls.module_type)
 
     def setUp(self):

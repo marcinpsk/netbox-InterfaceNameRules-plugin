@@ -9,6 +9,7 @@ from django.urls import reverse
 from netbox.models import NetBoxModel
 from taggit.managers import TaggableManager
 
+from .branching import replay_in_progress
 from .choices import BreakoutModeChoices
 from .name_template import validate_rule
 from .regex_safety import compile_module_type_pattern
@@ -347,6 +348,9 @@ class InterfaceNameRule(NetBoxModel):
     def save(self, **kwargs):
         """Normalise the mode fields and validate topology and templates before a plain ORM write."""
         using = kwargs.get("using") or router.db_for_write(self.__class__, instance=self)
+        # A merge started in an active branch replays its changes on default.
+        if not replay_in_progress() and using != (routed := router.db_for_write(self.__class__)):
+            raise RuntimeError(f"A rule save writes to {using!r}, but the router gives {routed!r} for a rule.")
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             # Django accepts any iterable. Reading a generator here would leave Django an empty
@@ -364,8 +368,6 @@ class InterfaceNameRule(NetBoxModel):
         if written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
             # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
             kwargs["using"] = using
-            if using != (routed := router.db_for_write(self.__class__)):
-                raise RuntimeError(f"A rule save writes to {using!r}, but the router gives {routed!r} for a rule.")
             with atomic_with_events() as block:
                 # netbox-branching routes an exempted rule model to default, which is an alias of every scope.
                 if using not in block.aliases:

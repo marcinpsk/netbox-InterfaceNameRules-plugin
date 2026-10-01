@@ -27,8 +27,17 @@ from netbox.registry import registry
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import PlanRunner
+from netbox_interface_name_rules.tests.branch_cases import (
+    BRANCH_BEFORE,
+    DEFAULT_BEFORE,
+    SERVER_DEFAULT,
+    BranchWriteCase,
+    ChannelCase,
+)
 from netbox_interface_name_rules.tests.helpers import (
+    PLAIN_TYPE,
     branch_cookie,
+    install_form,
     interface_signal,
     lock_timeout,
     make_device,
@@ -37,29 +46,16 @@ from netbox_interface_name_rules.tests.helpers import (
     make_manufacturer,
     make_module_bay_templates,
     make_module_type,
+    names_of,
     set_lock_timeout,
 )
-from netbox_interface_name_rules.tests.test_branch_transactions import BRANCH_BEFORE, DEFAULT_BEFORE, SERVER_DEFAULT
-from netbox_interface_name_rules.tests.test_branch_writes import _BranchWriteCase, _ChannelCase, names_of
-from netbox_interface_name_rules.tests.test_channelization import PLAIN_TYPE
 from netbox_interface_name_rules.transactions import LOCK_TIMEOUT
 
 # The caller's transactions at the save, outermost first, when the branch connection holds one.
 NESTINGS = (("branch",), ("default", "branch"), ("branch", "default"))
 
 
-def install_form(bay, module_type):
-    """Return the form data of NetBox's module edit view that installs *module_type* in *bay*."""
-    return {
-        "device": bay.device_id,
-        "module_bay": bay.pk,
-        "module_type": module_type.pk,
-        "status": "active",
-        "replicate_components": "on",
-    }
-
-
-class _InstallCase(_BranchWriteCase):
+class _InstallCase(BranchWriteCase):
     """A device with empty module bays, and a module type whose rule appends ``.br`` to NetBox's names.
 
     NetBox names the two interfaces of a module in the bay at position ``n`` ``an`` and ``bn``.
@@ -241,7 +237,7 @@ class TriggerTransactionsInABranchTest(_InstallCase):
         self.assertEqual(Device.objects.get(pk=self.device.pk).name, self.device.name)
 
 
-class _RuledChannelCase(_ChannelCase):
+class _RuledChannelCase(ChannelCase):
     """The channelized case with its rule on main, so an install in the branch is a rename trigger."""
 
     def build(self):
