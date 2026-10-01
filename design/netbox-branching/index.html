@@ -1030,13 +1030,16 @@ the queue-level proofs in rounds 5 and 6. The record marks each of them "execute
   on the branch connection (INR transactions.py:29-43).</li>
 <li>Invariant: INR writes only through an alias of the open scope.</li>
 </ul>
-<p><strong><code>branching.py</code></strong> is the one module that imports <code>netbox_branching</code>, loaded only when it is
-installed. <code>AppConfig.ready()</code> calls it.</p>
+<p><strong><code>branching.py</code></strong> is the one module that imports <code>netbox_branching</code>; an AST test enforces it. The
+plugin imports <code>branching.py</code> on every install, and <code>branching.py</code> imports <code>netbox_branching</code> only
+inside a function that runs when netbox-branching is installed. <code>AppConfig.ready()</code> calls its
+version check.</p>
 <ul>
 <li>Version gate: raise <code>ImproperlyConfigured</code> unless the installed netbox-branching is 1.2.x.</li>
 <li>Replay suppression: wrap <code>Branch.merge</code>, <code>Branch.revert</code> and <code>Branch.sync</code> once (idempotent,
   <code>functools.wraps</code>). Each wrapper sets a ContextVar token and resets it in <code>finally</code>.
-  <code>replay_in_progress() -&gt; bool</code>.</li>
+  <code>replay_in_progress() -&gt; bool</code>. <code>InterfaceNameRule.save()</code> skips its write-alias check while it is
+  true: a merge or revert started in an active branch replays a rule update on <code>default</code>.</li>
 <li>Job identity: <code>branch_identity() -&gt; str | None</code> (the active branch's schema id) and
   <code>activate_on(request, identity)</code>, which sets BR's branch cookie on a synthetic request.</li>
 </ul>

@@ -527,6 +527,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#netbox-branching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        netbox-branching
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="netbox-branching">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-a-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In a branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#merge-revert-and-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge, revert and sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits-in-a-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits in a branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#bulk-import" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -834,6 +884,56 @@
     <span class="md-ellipsis">
       
         Apply Rules and the Applicable Column
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#netbox-branching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        netbox-branching
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="netbox-branching">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-a-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In a branch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#merge-revert-and-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge, revert and sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits-in-a-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits in a branch
       
     </span>
   </a>
@@ -1231,11 +1331,95 @@ refuses another member, and sends an event for each one that it kept.</p>
 <p><strong>Apply Rules</strong> is designed for <strong>retroactive renames</strong>.  Interfaces installed
 after a matching rule is active are renamed automatically at install time.
 The web UI, the REST API and bulk import install modules inside a transaction.
-A script or shell that creates a module outside a transaction gets no rename:
-run Apply Rules after it, or wrap the install in <code>transaction.atomic()</code>.</p>
+A script or shell that creates a module outside a transaction on the interface
+write connection gets no rename: run Apply Rules after it, or wrap the install in
+<code>transaction.atomic(using=router.db_for_write(Interface))</code>. In a netbox-branching
+branch, <code>transaction.atomic()</code> alone opens a transaction on <code>default</code>, not on the
+branch connection, so the rename runs before NetBox creates the interfaces.</p>
 <p>The <strong>Applicable</strong> column shows ✓ only when at least one currently-installed
 interface <strong>would actually change name</strong> if the rule were applied.  Rules where
 all matching interfaces are already correctly named show <code>—</code>.</p>
+<h2 id="netbox-branching">netbox-branching</h2>
+<p>The plugin supports <a href="https://github.com/netboxlabs/netbox-branching">netbox-branching</a>
+1.2.x on NetBox 4.7. When netbox-branching is installed, NetBox does not start
+with another release of it, and the error names the installed version. Without
+netbox-branching, the plugin supports NetBox 4.3 to 4.7 and works as this guide
+describes.</p>
+<h3 id="in-a-branch">In a branch</h3>
+<p>While a branch is active, the plugin reads and writes in that branch only:</p>
+<ul>
+<li>A rename trigger in the branch renames the interfaces in the branch, after
+  NetBox commits the change. Each rename has a change record in the branch, so a
+  merge applies it to main.</li>
+<li><strong>Apply Rules</strong> and the flat-to-channelized conversion change the interfaces
+  of the branch. A rule that exists only in the branch applies only there.</li>
+<li><strong>Run as Background Job</strong> and <strong>Convert as Background Job</strong> run in the branch
+  that was active when you started the job. When that branch is not ready when
+  the job starts, for example because it was merged, the job fails and changes
+  nothing.</li>
+<li>A script or the shell must install a module in a transaction on the interface
+  write connection, as <a href="#apply-rules-and-the-applicable-column">Apply Rules and the Applicable Column</a>
+  describes.</li>
+</ul>
+<p>In a branch, each plugin operation sets the PostgreSQL <code>lock_timeout</code> to 10
+seconds on the connection of the branch and on the connection of main. When the
+operation ends, the plugin sets the earlier values again. A request in a branch
+holds two PostgreSQL sessions, and PostgreSQL does not find a lock cycle through
+the two sessions of one request. An operation that waits longer for a lock stops
+with an error. A script can call an engine function, such as
+<code>apply_device_interface_rules</code>, inside a transaction that the script holds. The
+commit callbacks of the plugin then run when that transaction commits, with the
+earlier <code>lock_timeout</code> of the session. Set <code>lock_timeout</code> for these callbacks in
+your script.</p>
+<h3 id="merge-revert-and-sync">Merge, revert and sync</h3>
+<p>netbox-branching merges, reverts and syncs a branch: it replays the changes that
+NetBox logged. The replayed changes already hold the interface names, so the
+rename triggers do nothing while netbox-branching replays them.</p>
+<ul>
+<li>A merge gives main the interface names of the branch, except a kept channel
+  (see <a href="#limits-in-a-branch">Limits in a branch</a>). On main, it writes only the
+  replayed changes.</li>
+<li>A revert of the merge gives main the names from before the merge.</li>
+<li>A sync gives the branch the names of main, except a kept channel, and writes no
+  rename without a change record. A rule that exists only in the branch does not rename the interfaces
+  that the sync brought. Run <strong>Apply Rules</strong> in the branch after the sync to
+  apply it.</li>
+</ul>
+<p>After a merge, a revert or a sync that fails or stops early, for example a dry
+run or a merge of a branch without changes, the next change is a rename trigger
+again.</p>
+<h3 id="limits-in-a-branch">Limits in a branch</h3>
+<ul>
+<li><strong>A replay can rename a kept channel.</strong> When the name that a rule gives a
+  channel subinterface is in use, the plugin keeps the old name of the channel
+  and renames its parent. NetBox renames the channels of a renamed parent when
+  the change commits, and the plugin then gives the kept channel its old name
+  again. A merge, a revert or a sync replays the rename of the parent, so
+  NetBox renames the channels again when the replay commits, and the plugin does
+  not act. After a merge, the kept channel on main then has the name from NetBox,
+  for example <code>et-0/0/1:2</code>, while the channel in the branch keeps <code>1:2</code>. After a
+  sync, the kept channel in the branch has the name from NetBox. A revert of the
+  merge gives the channel its name from before the merge. Rename such a channel
+  by hand when you want the name from the other side.</li>
+<li><strong>A background REST request runs on main.</strong> NetBox runs a bulk REST request
+  with <code>background=true</code> as a background job, and that job does not keep the
+  active branch. The REST API of the rules refuses such a request while a branch
+  is active, before it writes. The other NetBox endpoints run it on main. For
+  example, modules that you install with such a request are installed on main,
+  and the plugin renames their interfaces on main.</li>
+<li><strong>A failed branch activation runs the request on main.</strong> When NetBox cannot
+  activate the branch of a request, it continues the request on main. This
+  applies to all changes of the request, not only to the plugin.</li>
+<li><strong>No atomicity across the two connections.</strong> netbox-branching records each
+  change of a branch on the connection of main. The plugin commits the connection
+  of the branch first and the connection of main second, as NetBox scripts and
+  netbox-branching do. When the second commit fails, or a NetBox callback fails
+  after the first commit, the branch keeps the renames, but the list of branch
+  changes in netbox-branching does not show them. A merge still applies them.</li>
+<li><strong>Connection pooling in transaction mode is not supported</strong>, for example
+  PgBouncer with <code>pool_mode = transaction</code>. A session setting such as
+  <code>lock_timeout</code> does not stay with the session of such a pool.</li>
+</ul>
 <h2 id="bulk-import">Bulk Import</h2>
 <p>Export existing rules or import new ones via <strong>Interface Name Rules → Import</strong>.
 The YAML format matches the files in the <code>contrib/</code> directory.</p>

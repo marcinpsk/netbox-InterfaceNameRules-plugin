@@ -378,6 +378,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#before-you-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before You Upgrade
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-database-migrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -613,6 +624,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#before-you-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Before You Upgrade
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#run-database-migrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -670,6 +692,8 @@
 <ul>
 <li>NetBox ≥ 4.3.0</li>
 <li>Python ≥ 3.12</li>
+<li>Optional: netbox-branching 1.2.x, on NetBox 4.7. See
+  <a href="../configuration/#netbox-branching">netbox-branching</a>.</li>
 </ul>
 <h2 id="install-from-pypi">Install from PyPI</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>netbox-interface-name-rules
@@ -678,6 +702,17 @@
 <p>Add to your NetBox <code>configuration.py</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">PLUGINS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"netbox_interface_name_rules"</span><span class="p">]</span>
 </code></pre></div>
+<h2 id="before-you-upgrade">Before You Upgrade</h2>
+<p>Let the queued <strong>Run as Background Job</strong> and <strong>Convert as Background Job</strong> jobs
+finish before you upgrade the plugin. A release can change the data that a job
+stores, and a job that an earlier release queued then fails after the upgrade.
+The release that adds netbox-branching support stores the branch of each job.
+Start a failed job again after the upgrade.</p>
+<p>With netbox-branching, a script can call an engine function, such as
+<code>apply_device_interface_rules</code>, inside a transaction that the script holds. The
+commit callbacks of the plugin then run when that transaction commits, with the
+earlier <code>lock_timeout</code> of the session. Set <code>lock_timeout</code> for these callbacks in
+your script. See <a href="../configuration/#netbox-branching">netbox-branching</a>.</p>
 <h2 id="run-database-migrations">Run Database Migrations</h2>
 <p>The migration audits every existing nonempty <strong>Module Type Pattern</strong> used by a
 regex module-type rule or a device-interface rule before the plugin starts

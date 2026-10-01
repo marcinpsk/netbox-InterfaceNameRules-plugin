@@ -1547,7 +1547,11 @@ is evaluated at rename time using a safe AST-based evaluator (no <code>eval()</c
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">for</span> <span class="n">dev</span> <span class="ow">in</span> <span class="n">Device</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">virtual_chassis__isnull</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">apply_device_interface_rules</span><span class="p">(</span><span class="n">dev</span><span class="p">)</span>
-</code></pre></div></p>
+</code></pre></div>
+In a netbox-branching branch, the function sets a <code>lock_timeout</code> of 10 seconds
+while it runs. When you call it inside a transaction that you hold, its commit
+callbacks run when your transaction commits, with the earlier <code>lock_timeout</code> of
+the session. Set <code>lock_timeout</code> for these callbacks in your script.</p>
 </div>
 <hr />
 <ul>
