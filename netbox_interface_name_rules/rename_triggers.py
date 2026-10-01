@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from django.db import transaction
 from netbox.context import current_request
 
+from .branching import replay_in_progress
 from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
 from .rule_selection import parent_type_scopes_a_rule
@@ -671,8 +672,11 @@ def _check_write_alias(using):
 def before_save(sender, instance, using):
     """Read the previous state of *instance*, saved through *using*, and hold it for its post_save.
 
-    A read error propagates, and so does a save through another alias than the write alias.
+    A read error propagates, and so does a save through another alias than the write alias. A save that
+    netbox-branching replays returns before the write-alias check: a merge writes ``default`` while a branch is active.
     """
+    if replay_in_progress():
+        return
     _check_write_alias(using)
     read, _ = _TRIGGERS[sender._meta.label]
     previous = None if instance.pk is None else read(instance)
@@ -687,7 +691,12 @@ def before_save(sender, instance, using):
 
 
 def after_save(sender, instance, created, using):
-    """Add the save of *instance* through *using* to the reapply plan of that connection when it is a rename trigger."""
+    """Add the save of *instance* through *using* to the reapply plan of that connection when it is a rename trigger.
+
+    A save that netbox-branching replays returns before the write-alias check, as in ``before_save``.
+    """
+    if replay_in_progress():
+        return
     _check_write_alias(using)
     _, trigger_of = _TRIGGERS[sender._meta.label]
     # No entry: NetBox sent this post_save by hand, without a model save.

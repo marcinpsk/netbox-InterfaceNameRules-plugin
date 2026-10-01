@@ -109,11 +109,15 @@ class _BranchWriteCase(BranchTestCase):
     def bay(self, position):
         return ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
 
+    def interfaces_at(self, position):
+        """Return ``(pk, name)`` of each interface of the module in the bay at *position*, on the active branch or main."""
+        interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
+        return list(interfaces.values_list("pk", "name"))
+
     def interfaces_in_branch(self, position):
         """Return ``(pk, name)`` of each interface in the branch of the module in the bay at *position*."""
         with self.in_branch():
-            interfaces = Interface.objects.filter(device=self.device, module__module_bay__name=f"Bay {position}")
-            return list(interfaces.values_list("pk", "name"))
+            return self.interfaces_at(position)
 
     def names_in_branch(self, position):
         """Return the sorted interface names in the branch of the module in the bay at *position*."""

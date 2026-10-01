@@ -6,6 +6,7 @@ They skip when netbox-branching is not installed. The CI leg that installs it se
 ``EXPECT_NETBOX_BRANCHING=1``, and there a missing netbox-branching fails the guard test instead.
 """
 
+import inspect
 import os
 import subprocess
 import sys
@@ -18,7 +19,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, connections, router
 from django.test import SimpleTestCase, TransactionTestCase
 
-from netbox_interface_name_rules.branching import check_version
+from netbox_interface_name_rules import branching
+from netbox_interface_name_rules.branching import REPLAY_MARK, REPLAYING_METHODS, check_version
 from netbox_interface_name_rules.tests.helpers import activate, make_device, make_device_type, make_manufacturer
 
 BRANCHING_INSTALLED = apps.is_installed("netbox_branching")
@@ -70,6 +72,33 @@ class VersionGateStartupTest(SimpleTestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("ImproperlyConfigured: ", completed.stderr)
         self.assertIn("is 1.3.0.", completed.stderr)
+
+
+@skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
+class ReplayWrapperContractTest(SimpleTestCase):
+    """The plugin wraps each method of netbox-branching's Branch that replays changes, once, as it was reviewed."""
+
+    def replaying_methods(self):
+        from netbox_branching.models import Branch
+
+        return {name: getattr(Branch, name) for name in REPLAYING_METHODS}
+
+    def test_each_replaying_method_is_wrapped_once_and_keeps_its_signature_and_attributes(self):
+        for name, method in self.replaying_methods().items():
+            with self.subTest(method=name):
+                original = method.__wrapped__
+
+                self.assertFalse(getattr(original, REPLAY_MARK, False))
+                self.assertEqual(str(inspect.signature(original)), "(self, user, commit=True)")
+                self.assertEqual(inspect.signature(method), inspect.signature(original))
+                self.assertEqual((method.__name__, method.alters_data), (name, True))
+
+    def test_a_second_start_wraps_nothing_again(self):
+        wrapped = self.replaying_methods()
+
+        branching.ready()
+
+        self.assertEqual(self.replaying_methods(), wrapped)
 
 
 def remove_branch(branch):
