@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 from netbox.plugins import PluginConfig
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 
 class InterfaceNameRulesConfig(PluginConfig):

@@ -6,6 +6,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.8.0 (2026-10-01)
+
+### Bug Fixes
+
+- **models**: Check the write alias on every rule save
+  ([`e7e5b58`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e7e5b58032df5dfeeedf82779d516afe435b0a9e))
+
+- **models**: Leave a replayed rule save to netbox-branching
+  ([`660895e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/660895eb38290ff5fe5db42e96344e1cf98aedba))
+
+### Build System
+
+- Make the coverage gate exact and run it only on the combined data
+  ([`86f16f1`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/86f16f17629e573b1df7a1958d82fb41def4ff40))
+
+### Chores
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([`abe1ba8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/abe1ba8cf69412c2268e7458d55f42c08086b53a))
+
+- **deps**: Bump urllib3
+  ([`f2b1473`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f2b14730e407e3244a856aae256bd1a0e4290fc1))
+
+- **deps**: Bump virtualenv
+  ([`a28c47b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a28c47ba9443e5a824a9292ed1358ec17db2b83d))
+
+- **deps-dev**: Bump build from 1.4.0 to 1.6.1
+  ([`3ed011f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/3ed011fa134fd01dbe3276f21d2f4de657cb4a4b))
+
+- **deps-dev**: Bump python-semantic-release from 10.6.2 to 10.7.0
+  ([`234fa8c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/234fa8c46578603a4ed2ad99a45e3e5bed7ea169))
+
+- **deps-dev**: Bump ruff from 0.16.0 to 0.16.8
+  ([`300409c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/300409c1acd84ccc874fb979df598ea42c06298d))
+
+### Continuous Integration
+
+- Enforce the coverage gate on the combined data of two legs
+  ([`d4b21f6`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d4b21f651fad24ac4901202595db7248ad231063))
+
+### Documentation
+
+- Name the transaction and branching modules in the agent instructions
+  ([`a22ef3d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a22ef3d7938fcafc2004a6f0a23fbfdec4bab246))
+
+- State the alias and the commit that the rename triggers use
+  ([`7443728`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/74437284f748f1c03b3aed50b39c328973a74c8b))
+
+- **configuration**: Describe netbox-branching support and its limits
+  ([`148fa23`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/148fa2379b3288853bd5cfc3912193fcfa961e3d))
+
+- **configuration**: Put a script install in a transaction on the interface write alias
+  ([`05535b8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/05535b89744c150a01cd2a9a06db97c607a5323d))
+
+### Features
+
+- **api**: Refuse a background rule request in a netbox-branching branch
+  ([`2b972b7`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2b972b755267a2f37cdddc78b43732f019bf73b1))
+
+- **jobs**: Run Apply Rules and Convert jobs in the branch they were enqueued from
+  ([`5598d35`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5598d350a38cc8c603f317cddfcb5fec6fd4022e))
+
+- **triggers**: Do nothing while netbox-branching merges, reverts or syncs
+  ([`d98ce48`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d98ce48d512382ab7d2496e6788f1d0992bda962))
+
+- **triggers**: Run the rename triggers on the connection of the save
+  ([`2e46e98`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2e46e98e5104466b0471ddfd61adcbac0708a311))
+
+### Refactoring
+
+- **branching**: Ask in one module whether netbox-branching is installed
+  ([`cb9f40b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/cb9f40b86375033766e0bd7a44d3a027eba1c3f0))
+
+- **tests**: Define the shared test fixtures once, outside the test modules
+  ([`c12a9e4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c12a9e44d855c40612e263587c3a0f796024cae1))
+
+- **tests**: Share the bay and interface helpers of the branch cases
+  ([`620407e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/620407e2ec6e78abb8a9c9af7f3dde1c638a4a02))
+
+- **tests**: Split the channel rows of the branch write tests
+  ([`8cc2c2f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8cc2c2f286baf3f8031a13cceb7d98074a6bccc1))
+
+### Testing
+
+- **boundaries**: Read the whole test package, subpackages and __init__.py included
+  ([`2af2bb0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2af2bb0d118674167bb92ca748571f9bfb7f9c7e))
+
+- **boundaries**: Refuse a wildcard import from the test package
+  ([`6414a1c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6414a1c701e580c133626f228ca7b4092a3159af))
+
+- **boundaries**: Refuse an import of a test module inside the test package
+  ([`a27508d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a27508dcf1520d99767360eab643807ac81dd644))
+
+- **branch**: Check the ObjectChange of every rename in a branch install
+  ([`6ff7c58`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6ff7c581d3d60658b89b57625eda968871a29c2d))
+
+- **branch**: Move a module in a branch
+  ([`d436135`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d436135591da7fa5fb1b5120b205d2d423294f35))
+
+- **branching**: Count every replay reference with its receiver and scope
+  ([`12c10b4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/12c10b467d2b55e146d163890a6675f0c1881fa1))
+
+- **branching**: Fingerprint each reviewed scope of netbox-branching
+  ([`22a7430`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/22a7430534151655cc9e6f8534203336a6200239))
+
+- **branching**: Pin each replay call site of netbox-branching
+  ([`204eb91`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/204eb91137cba24160c6b2c56e79b647761054ca))
+
+- **branching**: Pin the reviewed netbox-branching release
+  ([`1e66e42`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1e66e42b948d707c5fc6d96410bbf5b9b0855072))
+
+- **guard**: Count a None alias as no alias in a named exception
+  ([`adfdd59`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/adfdd59cfcbf5170b3ab3a7849a4db14f6f30dd6))
+
+
 ## v1.7.0 (2026-09-30)
 
 ### Bug Fixes
