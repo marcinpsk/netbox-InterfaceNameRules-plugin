@@ -6,10 +6,13 @@ They skip when netbox-branching is not installed. The CI leg that installs it se
 ``EXPECT_NETBOX_BRANCHING=1``, and there a missing netbox-branching fails the guard test instead.
 """
 
+import ast
 import inspect
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from unittest import skipUnless
 
 from dcim.models import Interface
@@ -99,6 +102,100 @@ class ReplayWrapperContractTest(SimpleTestCase):
         branching.ready()
 
         self.assertEqual(self.replaying_methods(), wrapped)
+
+
+# The calls that save a replayed object, each with the wrapped Branch method that reaches it (netbox-branching 1.2.1).
+REPLAY_SAVES = {
+    ("apply", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "Branch.merge",
+    ("undo", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "Branch.revert",
+    ("apply", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): "Branch.merge",
+    ("undo", "merge_strategies/squash.py", "SquashMergeStrategy.revert"): "Branch.revert",
+    ("apply", "models/branches.py", "Branch._apply_sync_update"): "Branch.sync",
+    ("apply", "models/branches.py", "Branch._handle_sync_delete"): "Branch.sync",
+    ("deserialize_object", "models/changes.py", "ObjectChange.apply"): "each apply above",
+    ("update_object", "models/changes.py", "ObjectChange.apply"): "each apply above",
+    ("deserialize_object", "models/changes.py", "ObjectChange.undo"): "each undo above",
+    ("update_object", "models/changes.py", "ObjectChange.undo"): "each undo above",
+}
+# The calls that start a replay: a merge strategy or a sync helper, or a job that calls a wrapped method.
+REPLAY_ENTRIES = {
+    ("merge", "models/branches.py", "Branch.merge"): "the strategy, inside the wrapped Branch.merge",
+    ("revert", "models/branches.py", "Branch.revert"): "the strategy, inside the wrapped Branch.revert",
+    ("_apply_sync_update", "models/branches.py", "Branch.sync"): "inside the wrapped Branch.sync",
+    ("_handle_sync_delete", "models/branches.py", "Branch.sync"): "inside the wrapped Branch.sync",
+    ("merge", "jobs.py", "MergeBranchJob.run"): "the wrapped Branch.merge",
+    ("revert", "jobs.py", "RevertBranchJob.run"): "the wrapped Branch.revert",
+}
+
+
+def replay_call_sites(package, names):
+    """Return ``(callee, module, enclosing qualname)`` of each call of one of *names* in *package*, its tests excluded."""
+    sites = set()
+
+    def visit(node, scope, module):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                visit(child, (*scope, child.name), module)
+                continue
+            if isinstance(child, ast.Call):
+                callee = getattr(child.func, "attr", getattr(child.func, "id", None))
+                if callee in names:
+                    sites.add((callee, module, ".".join(scope) or "<module>"))
+            visit(child, scope, module)
+
+    for path in sorted(package.rglob("*.py")):
+        module = path.relative_to(package).as_posix()
+        if not module.startswith("tests/"):
+            visit(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)), (), module)
+    return sites
+
+
+def replay_names(sites):
+    """Return the callee of each of the ``(callee, module, qualname)`` *sites*."""
+    return {callee for callee, _, _ in sites}
+
+
+@skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
+class ReplayCallSiteContractTest(SimpleTestCase):
+    """Each replay of the installed netbox-branching runs inside a wrapped method, as in the reviewed release."""
+
+    def installed_sites(self, allowed):
+        import netbox_branching
+
+        return replay_call_sites(Path(netbox_branching.__file__).parent, replay_names(allowed))
+
+    def test_each_save_of_a_replayed_object_is_a_reviewed_call_site(self):
+        self.assertEqual(self.installed_sites(REPLAY_SAVES), set(REPLAY_SAVES))
+
+    def test_each_replay_starts_in_a_wrapped_method(self):
+        self.assertEqual(self.installed_sites(REPLAY_ENTRIES), set(REPLAY_ENTRIES))
+
+
+class ReplayCallSiteScanTest(SimpleTestCase):
+    """The scan finds a replay call wherever a release adds one."""
+
+    def test_the_scan_reports_each_call_with_its_enclosing_function(self):
+        source = (
+            "class Strategy:\n    def merge(self, change):\n        change.apply(self)\n"
+            "def helper(instance, data):\n    def nested():\n        update_object(instance, data, using=None)\n"
+            "change.undo(None)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            (package / "added.py").write_text(source, encoding="utf-8")
+            (package / "tests").mkdir()
+            (package / "tests" / "test_added.py").write_text("change.apply(None)\n", encoding="utf-8")
+
+            sites = replay_call_sites(package, replay_names(REPLAY_SAVES))
+
+        self.assertEqual(
+            sites,
+            {
+                ("apply", "added.py", "Strategy.merge"),
+                ("update_object", "added.py", "helper.nested"),
+                ("undo", "added.py", "<module>"),
+            },
+        )
 
 
 def remove_branch(branch):
