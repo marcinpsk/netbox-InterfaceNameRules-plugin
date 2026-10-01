@@ -295,6 +295,28 @@ class RuleSaveInABranchTest(_ScopeCase):
 
         self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
 
+    def test_a_full_save_through_default_in_a_branch_is_refused_before_any_query(self):
+        module_type = make_module_type(make_manufacturer("BrRuleFull"), "BrRuleFull")
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="xe-{bay_position}")
+        rule.name_template = "xe-0/{bay_position}"
+
+        with activate(self.branch), self.assertNumQueries(0), self.assertNumQueries(0, using=self.alias):
+            with self.assertRaisesMessage(RuntimeError, f"'{self.alias}'"):
+                rule.save(using="default")
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).name_template, "xe-{bay_position}")
+
+    def test_a_description_save_through_default_in_a_branch_is_refused_before_any_query(self):
+        module_type = make_module_type(make_manufacturer("BrRuleDesc"), "BrRuleDesc")
+        rule = InterfaceNameRule.objects.create(module_type=module_type, name_template="xe-{bay_position}")
+        rule.description = "after"
+
+        with activate(self.branch), self.assertNumQueries(0), self.assertNumQueries(0, using=self.alias):
+            with self.assertRaisesMessage(RuntimeError, f"'{self.alias}'"):
+                rule.save(using="default", update_fields=["description"])
+
+        self.assertEqual(InterfaceNameRule.objects.get(pk=rule.pk).description, "")
+
 
 class ExemptRuleModelInABranchTest(_ScopeCase):
     """An operator can exempt the plugin's models from netbox-branching; a rule then lives on ``default`` alone."""
