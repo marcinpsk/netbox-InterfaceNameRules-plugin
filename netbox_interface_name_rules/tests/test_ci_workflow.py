@@ -2,6 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the coverage wiring of the CI test workflow."""
 
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,9 @@ class CoverageCombineWorkflowTest(unittest.TestCase):
         self.test_job = self.jobs["test-netbox"]
         self.coverage_job = self.jobs["coverage"]
 
+    def _combine_run(self):
+        return next(step["run"] for step in self.coverage_job["steps"] if step["name"] == "Combine and check coverage")
+
     def test_the_combine_job_downloads_the_data_of_every_coverage_leg(self):
         legs = [cell["coverage"] for cell in self.test_job["strategy"]["matrix"]["include"] if cell.get("coverage")]
         downloads = [step["with"]["name"] for step in _steps_using(self.coverage_job, "actions/download-artifact")]
@@ -42,9 +46,7 @@ class CoverageCombineWorkflowTest(unittest.TestCase):
         self.assertEqual(uploads[0]["if-no-files-found"], "error")
 
     def test_the_combine_step_reads_every_downloaded_file(self):
-        combine = next(
-            step["run"] for step in self.coverage_job["steps"] if step["name"] == "Combine and check coverage"
-        )
+        combine = self._combine_run()
 
         for step in _steps_using(self.coverage_job, "actions/download-artifact"):
             with self.subTest(artifact=step["with"]["name"]):
@@ -54,3 +56,13 @@ class CoverageCombineWorkflowTest(unittest.TestCase):
         uploads = {name: len(_steps_using(job, "codecov/codecov-action")) for name, job in self.jobs.items()}
 
         self.assertEqual({name: count for name, count in uploads.items() if count}, {"coverage": 1})
+
+    def test_only_the_combined_report_enforces_the_exact_gate(self):
+        pyproject = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        combine = self._combine_run()
+
+        self.assertEqual(pyproject["tool"]["coverage"]["report"]["fail_under"], 97)
+        self.assertEqual(pyproject["tool"]["coverage"]["report"]["precision"], 2)
+        self.assertIn("--cov-fail-under=0", pyproject["tool"]["pytest"]["ini_options"]["addopts"].split())
+        self.assertIn("coverage report\n", combine)
+        self.assertNotIn("--fail-under", combine)

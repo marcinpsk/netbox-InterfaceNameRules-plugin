@@ -165,9 +165,8 @@ jobs:
           # instead of baseline drift. Bumping the top version means editing the matrix above, this
           # condition, and tests/query_counts.json together. The branch leg records too: netbox-branching adds queries.
           UPDATE_QUERY_COUNTS: ${{ (matrix.netbox-version != 'v4.7.0' || matrix.netbox-branching) && '1' || '' }}
-          # `addopts` turns coverage on for every invocation. A coverage leg holds only part of the
-          # data, so the combine job enforces `fail_under`, and the leg does not.
-          COVERAGE_OPTION: ${{ matrix.coverage && '--cov-fail-under=0' || '--no-cov' }}
+          # `addopts` collects coverage without the gate; the combine job enforces `fail_under`.
+          COVERAGE_OPTION: ${{ !matrix.coverage && '--no-cov' || '' }}
         run: |
           pytest -n auto netbox_interface_name_rules -o pythonpath=../netbox/netbox $COVERAGE_OPTION
 
