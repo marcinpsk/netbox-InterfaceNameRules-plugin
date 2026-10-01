@@ -78,7 +78,7 @@ netbox-test netbox_interface_name_rules/tests/test_views.py::TestClassName::test
 TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=redis pytest netbox_interface_name_rules
 ```
 
-`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`.
+`pyproject.toml` adds `-n auto` and coverage options. Do not pass your own `-n`. A local run prints coverage but does not fail on it: the 97% gate runs in CI on the combined data of two legs.
 
 ## REUSE/SPDX compliance
 
