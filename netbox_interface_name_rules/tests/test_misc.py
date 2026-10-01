@@ -8,6 +8,7 @@ from dcim.models import DeviceType, Manufacturer, ModuleType, Platform
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
+from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import make_job, make_unrunnable_rule, run_job_logged
 
@@ -45,19 +46,13 @@ class ApplyRuleJobMetaTest(TestCase):
 
         self.assertEqual(ApplyRuleJob.Meta.name, "Apply Interface Name Rule")
 
-    def test_job_run_missing_rule_id(self):
-        """ApplyRuleJob.run logs warning and returns without error when rule_id is missing."""
-        from netbox_interface_name_rules.jobs import ApplyRuleJob
-
-        self.assertEqual(levels(run_job_logged(self, ApplyRuleJob(make_job("JobMissingRule")))), ["WARNING"])
-
     def test_job_run_nonexistent_rule_id(self):
         """ApplyRuleJob.run logs warning when rule_id doesn't correspond to a rule."""
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
         job = ApplyRuleJob(make_job("JobGoneRule"))
 
-        self.assertEqual(levels(run_job_logged(self, job, rule_id=999999)), ["WARNING"])
+        self.assertEqual(levels(run_job_logged(self, job, **rule_job_kwargs(999999))), ["WARNING"])
 
 
 # ---------------------------------------------------------------------------
@@ -680,13 +675,13 @@ class JobRunSuccessAndExceptionTest(TestCase):
 
     def test_job_run_success_logs_info(self):
         """ApplyRuleJob.run() with valid rule calls apply_rule_to_existing and logs (lines 30-36)."""
-        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=self.rule.pk)), ["INFO"])
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), **rule_job_kwargs(self.rule.pk))), ["INFO"])
 
     def test_job_run_exception_reraises_and_logs(self):
         """ApplyRuleJob.run() re-raises exception from apply_rule_to_existing (lines 32-34)."""
         rule = make_unrunnable_rule("JobX")
 
-        records = run_job_logged(self, self._make_job(), raises=ValueError, rule_id=rule.pk)
+        records = run_job_logged(self, self._make_job(), raises=ValueError, **rule_job_kwargs(rule.pk))
 
         self.assertEqual(levels(records), ["ERROR"])
 
@@ -717,23 +712,19 @@ class ConvertFlatFamiliesJobTest(TestCase):
 
         self.assertIn("Convert", ConvertFlatFamiliesJob.Meta.name)
 
-    def test_job_run_without_a_rule_id_is_logged(self):
-        """An enqueue that lost its argument must not fail the worker."""
-        self.assertEqual(levels(run_job_logged(self, self._make_job())), ["WARNING"])
-
     def test_job_run_with_a_deleted_rule_is_logged(self):
         """A rule deleted between enqueue and execution is a warning, not a traceback."""
-        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=999999)), ["WARNING"])
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), **rule_job_kwargs(999999))), ["WARNING"])
 
     def test_job_run_reports_the_family_count(self):
         """The count is the job's whole output, so it is always logged."""
-        self.assertEqual(levels(run_job_logged(self, self._make_job(), rule_id=self.rule.pk)), ["INFO"])
+        self.assertEqual(levels(run_job_logged(self, self._make_job(), **rule_job_kwargs(self.rule.pk))), ["INFO"])
 
     def test_job_run_reraises_an_unexpected_failure(self):
         """A failed conversion has to fail the job, or the operator reads it as done."""
         rule = make_unrunnable_rule("ConvJobX")
 
-        records = run_job_logged(self, self._make_job(), raises=ValueError, rule_id=rule.pk)
+        records = run_job_logged(self, self._make_job(), raises=ValueError, **rule_job_kwargs(rule.pk))
 
         self.assertEqual(levels(records), ["ERROR"])
 

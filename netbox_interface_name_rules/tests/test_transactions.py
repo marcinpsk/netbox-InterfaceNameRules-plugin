@@ -55,7 +55,7 @@ class AtomicWithEventsTest(TestCase):
     def _run_as_a_request(self, body):
         # django-rq enqueues a webhook when the transaction commits.
         with self.captureOnCommitCallbacks(execute=True):
-            run_as_job_user(make_job("TxEvents"), body)
+            run_as_job_user(make_job("TxEvents"), body, branch_schema_id=None)
 
     def test_a_change_before_and_inside_a_committed_block_is_one_event(self):
         def body():
@@ -196,7 +196,7 @@ class AtomicWithEventsTest(TestCase):
                 block.set_rollback()
 
         with self.assertRaisesMessage(RuntimeError, f"dcim.Interface {pk} has a queued event but no row"):
-            run_as_job_user(make_job("TxEventsGone"), body)
+            run_as_job_user(make_job("TxEventsGone"), body, branch_schema_id=None)
 
     def test_a_block_that_sets_rollback_drops_its_events(self):
         def body():

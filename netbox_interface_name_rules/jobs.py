@@ -12,20 +12,29 @@ from django.http import HttpRequest
 from netbox.jobs import JobRunner
 from netbox.registry import registry
 
+from . import branching
+from .transactions import write_alias, write_scope
+
+
+def rule_job_kwargs(rule_id):
+    """Return the kwargs of a job on the rule *rule_id* in the branch of the current request, derived on the server."""
+    return {"rule_id": rule_id, "branch_schema_id": branching.branch_identity(), "expected_alias": write_alias()}
+
 
 def _run_under_request_processors(request, body):
-    """Call *body* inside every registered request processor, the way NetBox runs a script job."""
+    """Call *body* inside every registered request processor; unlike NetBox, a processor that fails to enter raises."""
     with ExitStack() as stack:
         for request_processor in registry["request_processors"]:
             stack.enter_context(request_processor(request))
         return body()
 
 
-def run_as_job_user(job, body):
+def run_as_job_user(job, body, *, branch_schema_id):
     """Call *body*, which takes no arguments, as a request of the user who enqueued *job*.
 
     NetBox writes a change log only while a request is current, and a worker has none. The request
-    carries the job ID, so the change log lists the changes of one job under one request ID.
+    carries the job ID, so the change log lists the changes of one job under one request ID. The
+    request is in the branch *branch_schema_id*, or on main for None.
     """
     if job.user is None:
         raise ValueError(f"Job {job.pk} has no user, and the change log must name the user of each change.")
@@ -34,12 +43,16 @@ def run_as_job_user(job, body):
     request.method = "POST"
     request.user = job.user
     request.id = job.job_id
+    branching.activate_on(request, branch_schema_id)
     # The copy discards what the processors set; before NetBox 4.7, event_tracking keeps it when the body raises.
     return contextvars.copy_context().run(_run_under_request_processors, request, body)
 
 
 class RuleJobRunner(JobRunner):
-    """A background job over the rule named by rule_id, run as a request of the user who enqueued it."""
+    """A background job over the rule named by rule_id, run as a request of the user who enqueued it.
+
+    Its kwargs are those of ``rule_job_kwargs``. A job enqueued without them fails.
+    """
 
     def __init__(self, job):
         super().__init__(job)
@@ -47,25 +60,28 @@ class RuleJobRunner(JobRunner):
         if not hasattr(self, "logger"):
             self.logger = logging.getLogger(f"netbox.jobs.{type(self).__name__}")
 
-    def run(self, *args, **kwargs):
-        """Run the job on the rule named by rule_id in kwargs; a missing rule is a warning, not an error."""
-        run_as_job_user(self.job, functools.partial(self._run_on_rule_id, kwargs.get("rule_id")))
+    def run(self, *, rule_id, branch_schema_id, expected_alias):
+        """Run the job on the rule *rule_id* in the branch it was enqueued from; a missing rule is a warning."""
+        run_as_job_user(
+            self.job,
+            functools.partial(self._run_on_rule_id, rule_id, expected_alias),
+            branch_schema_id=branch_schema_id,
+        )
 
-    def _run_on_rule_id(self, rule_id):
+    def _run_on_rule_id(self, rule_id, expected_alias):
         from .models import InterfaceNameRule
 
-        if not rule_id:
-            self.logger.warning("%s called without rule_id; skipping.", type(self).__name__)
-            return
-        rule = InterfaceNameRule.objects.filter(pk=rule_id).first()
-        if rule is None:
-            self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
-            return
-        try:
-            self.run_on_rule(rule)
-        except Exception:
-            self.logger.exception("%s failed on rule '%s'", self.name, rule_id)
-            raise
+        # A branch that is not ready does not activate, so the scope raises before a read on main.
+        with write_scope(expected_alias=expected_alias):
+            rule = InterfaceNameRule.objects.filter(pk=rule_id).first()
+            if rule is None:
+                self.logger.warning("InterfaceNameRule with pk=%s does not exist; skipping.", rule_id)
+                return
+            try:
+                self.run_on_rule(rule)
+            except Exception:
+                self.logger.exception("%s failed on rule '%s'", self.name, rule_id)
+                raise
 
     @abstractmethod
     def run_on_rule(self, rule):

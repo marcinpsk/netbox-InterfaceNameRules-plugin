@@ -588,16 +588,13 @@ class RuleApplyDetailView(generic.ObjectView):
         )
 
     def _enqueue(self, request, rule, job_class, name):
-        """Enqueue *job_class* against *rule* and report the outcome to the operator."""
+        """Enqueue *job_class* against *rule* in the branch of *request*, and report the outcome to the operator."""
+        from .jobs import rule_job_kwargs
+
+        kwargs = rule_job_kwargs(rule.pk)
         try:
-            job = job_class.enqueue(
-                # instance is intentionally omitted: InterfaceNameRule does not
-                # inherit JobsMixin, so passing instance= would fail full_clean().
-                # The job is still named and findable in Core → Jobs.
-                name=name,
-                user=request.user,
-                rule_id=rule.pk,
-            )
+            # No instance=: the rule has no JobsMixin, so Job.full_clean() would refuse it.
+            job = job_class.enqueue(name=name, user=request.user, **kwargs)
             messages.success(request, f"Background job enqueued (job #{job.pk}). Check Core → Jobs for status.")
         except Exception as e:
             logger.exception("Failed to enqueue background job for rule %s", rule)
