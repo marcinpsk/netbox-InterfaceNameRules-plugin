@@ -7,6 +7,7 @@ They skip when netbox-branching is not installed. The CI leg that installs it se
 """
 
 import ast
+import collections
 import inspect
 import os
 import subprocess
@@ -101,43 +102,74 @@ class ReplayWrapperContractTest(SimpleTestCase):
         self.assertEqual(self.replaying_methods(), wrapped)
 
 
-# The calls that save a replayed object, each with the wrapped Branch method that reaches it (netbox-branching 1.2.1).
+# Each (name, receiver, module, scope) reference to a name that saves a replayed object in 1.2.1: count, what reaches it.
 REPLAY_SAVES = {
-    ("apply", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "Branch.merge",
-    ("undo", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "Branch.revert",
-    ("apply", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): "Branch.merge",
-    ("undo", "merge_strategies/squash.py", "SquashMergeStrategy.revert"): "Branch.revert",
-    ("apply", "models/branches.py", "Branch._apply_sync_update"): "Branch.sync",
-    ("apply", "models/branches.py", "Branch._handle_sync_delete"): "Branch.sync",
-    ("deserialize_object", "models/changes.py", "ObjectChange.apply"): "each apply above",
-    ("update_object", "models/changes.py", "ObjectChange.apply"): "each apply above",
-    ("deserialize_object", "models/changes.py", "ObjectChange.undo"): "each undo above",
-    ("update_object", "models/changes.py", "ObjectChange.undo"): "each undo above",
+    ("apply", "change", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): (1, "Branch.merge"),
+    ("undo", "change", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): (1, "Branch.revert"),
+    ("apply", "dummy_change", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): (1, "Branch.merge"),
+    ("undo", "dummy_change", "merge_strategies/squash.py", "SquashMergeStrategy.revert"): (1, "Branch.revert"),
+    ("apply", "change", "models/branches.py", "Branch._apply_sync_update"): (3, "Branch.sync"),
+    ("apply", "change", "models/branches.py", "Branch._handle_sync_delete"): (1, "Branch.sync"),
+    ("apply", "", "models/changes.py", "ObjectChange"): (1, "apply.alters_data, no call"),
+    ("undo", "", "models/changes.py", "ObjectChange"): (1, "undo.alters_data, no call"),
+    ("deserialize_object", "from utilities.serialization", "models/changes.py", "<module>"): (1, "the import"),
+    ("update_object", "from netbox_branching.utilities", "models/changes.py", "<module>"): (1, "the import"),
+    ("deserialize_object", "hasattr(model)", "models/changes.py", "ObjectChange.apply"): (1, "each apply above"),
+    ("deserialize_object", "model", "models/changes.py", "ObjectChange.apply"): (1, "each apply above"),
+    ("deserialize_object", "", "models/changes.py", "ObjectChange.apply"): (1, "each apply above"),
+    ("update_object", "", "models/changes.py", "ObjectChange.apply"): (1, "each apply above"),
+    ("deserialize_object", "", "models/changes.py", "ObjectChange.undo"): (1, "each undo above"),
+    ("update_object", "", "models/changes.py", "ObjectChange.undo"): (1, "each undo above"),
 }
-# The calls that start a replay: a merge strategy or a sync helper, or a job that calls a wrapped method.
+# Each reference to a name that starts a replay: a merge strategy, a sync helper, or a wrapped method.
 REPLAY_ENTRIES = {
-    ("merge", "models/branches.py", "Branch.merge"): "the strategy, inside the wrapped Branch.merge",
-    ("revert", "models/branches.py", "Branch.revert"): "the strategy, inside the wrapped Branch.revert",
-    ("_apply_sync_update", "models/branches.py", "Branch.sync"): "inside the wrapped Branch.sync",
-    ("_handle_sync_delete", "models/branches.py", "Branch.sync"): "inside the wrapped Branch.sync",
-    ("merge", "jobs.py", "MergeBranchJob.run"): "the wrapped Branch.merge",
-    ("revert", "jobs.py", "RevertBranchJob.run"): "the wrapped Branch.revert",
+    ("merge", "strategy_class()", "models/branches.py", "Branch.merge"): (1, "inside the wrapped Branch.merge"),
+    ("revert", "strategy_class()", "models/branches.py", "Branch.revert"): (1, "inside the wrapped Branch.revert"),
+    ("_apply_sync_update", "self", "models/branches.py", "Branch.sync"): (1, "inside the wrapped Branch.sync"),
+    ("_handle_sync_delete", "self", "models/branches.py", "Branch.sync"): (1, "inside the wrapped Branch.sync"),
+    ("merge", "branch", "jobs.py", "MergeBranchJob.run"): (1, "the wrapped Branch.merge"),
+    ("revert", "branch", "jobs.py", "RevertBranchJob.run"): (1, "the wrapped Branch.revert"),
+    ("merge", "", "models/branches.py", "Branch"): (1, "merge.alters_data, no call"),
+    ("revert", "", "models/branches.py", "Branch"): (1, "revert.alters_data, no call"),
+    ("revert", "", "models/changes.py", "ObjectChange.migrate"): (1, "its revert flag, not a method"),
 }
+# The calls that name an attribute by a string.
+NAMING_CALLS = frozenset({"getattr", "setattr", "hasattr"})
 
 
-def replay_call_sites(package, names):
-    """Return ``(callee, module, enclosing qualname)`` of each call of one of *names* in *package*, its tests excluded."""
-    sites = set()
+def _references(node, names):
+    """Yield ``(name, receiver)`` for each reference that *node* itself makes to one of *names*."""
+    if isinstance(node, ast.Attribute) and node.attr in names:
+        yield node.attr, ast.unparse(node.value)
+    elif isinstance(node, ast.Name) and node.id in names:
+        yield node.id, ""
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        source = f"from {'.' * node.level}{node.module or ''}" if isinstance(node, ast.ImportFrom) else "import"
+        for alias in node.names:
+            if (name := alias.name.rsplit(".", 1)[-1]) in names:
+                yield name, source
+    elif isinstance(node, ast.Call) and getattr(node.func, "id", None) in NAMING_CALLS and len(node.args) > 1:
+        attribute = node.args[1]
+        if isinstance(attribute, ast.Constant) and attribute.value in names:
+            yield attribute.value, f"{node.func.id}({ast.unparse(node.args[0])})"
+
+
+def replay_references(package, names):
+    """Count each reference to one of *names* in *package*, its tests excluded, by ``(name, receiver, module, scope)``.
+
+    A reference is an attribute, a name, an imported name, or the string of a getattr, setattr or hasattr call. The
+    receiver is the object of the attribute or the call, the source of the import, or empty. A function, a class and a
+    lambda each open a scope, so a deferred call is a site of its own.
+    """
+    sites = collections.Counter()
 
     def visit(node, scope, module):
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                visit(child, (*scope, child.name), module)
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                visit(child, (*scope, getattr(child, "name", "<lambda>")), module)
                 continue
-            if isinstance(child, ast.Call):
-                callee = getattr(child.func, "attr", getattr(child.func, "id", None))
-                if callee in names:
-                    sites.add((callee, module, ".".join(scope) or "<module>"))
+            for name, receiver in _references(child, names):
+                sites[(name, receiver, module, ".".join(scope) or "<module>")] += 1
             visit(child, scope, module)
 
     for path in sorted(package.rglob("*.py")):
@@ -147,52 +179,90 @@ def replay_call_sites(package, names):
     return sites
 
 
-def replay_names(sites):
-    """Return the callee of each of the ``(callee, module, qualname)`` *sites*."""
-    return {callee for callee, _, _ in sites}
+def reviewed(allowed):
+    """Return the reviewed count of each site of *allowed*."""
+    return collections.Counter({site: count for site, (count, _) in allowed.items()})
 
 
 @skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
 class ReplayCallSiteContractTest(SimpleTestCase):
     """Each replay of the installed netbox-branching runs inside a wrapped method, as in the reviewed release."""
 
-    def installed_sites(self, allowed):
+    maxDiff = None
+
+    def assert_reviewed(self, allowed):
+        """Assert that the installed netbox-branching makes the references of *allowed*, each as often, and no other."""
         import netbox_branching
 
-        return replay_call_sites(Path(netbox_branching.__file__).parent, replay_names(allowed))
+        found = replay_references(Path(netbox_branching.__file__).parent, {name for name, *_ in allowed})
+        self.assertDictEqual(dict(found), dict(reviewed(allowed)))
 
-    def test_each_save_of_a_replayed_object_is_a_reviewed_call_site(self):
-        self.assertEqual(self.installed_sites(REPLAY_SAVES), set(REPLAY_SAVES))
+    def test_each_reference_that_saves_a_replayed_object_is_reviewed(self):
+        self.assert_reviewed(REPLAY_SAVES)
 
     def test_each_replay_starts_in_a_wrapped_method(self):
-        self.assertEqual(self.installed_sites(REPLAY_ENTRIES), set(REPLAY_ENTRIES))
+        self.assert_reviewed(REPLAY_ENTRIES)
 
 
 class ReplayCallSiteScanTest(SimpleTestCase):
-    """The scan finds a replay call wherever a release adds one."""
+    """The scan finds a replay reference wherever a release adds one."""
 
-    def test_the_scan_reports_each_call_with_its_enclosing_function(self):
-        source = (
-            "class Strategy:\n    def merge(self, change):\n        change.apply(self)\n"
-            "def helper(instance, data):\n    def nested():\n        update_object(instance, data, using=None)\n"
-            "change.undo(None)\n"
-        )
+    def scan(self, source, names):
+        """Return the sites that the scan finds in a package whose module ``added.py`` holds *source*."""
         with tempfile.TemporaryDirectory() as directory:
             package = Path(directory)
             (package / "added.py").write_text(source, encoding="utf-8")
             (package / "tests").mkdir()
             (package / "tests" / "test_added.py").write_text("change.apply(None)\n", encoding="utf-8")
+            return replay_references(package, names)
 
-            sites = replay_call_sites(package, replay_names(REPLAY_SAVES))
+    def test_the_scan_reports_each_call_with_its_receiver_and_scope(self):
+        source = (
+            "class Strategy:\n    def merge(self, change):\n        change.apply(self)\n"
+            "def helper(instance, data):\n    def nested():\n        update_object(instance, data, using=None)\n"
+            "change.undo(None)\n"
+        )
 
         self.assertEqual(
-            sites,
+            self.scan(source, {"apply", "undo", "update_object"}),
             {
-                ("apply", "added.py", "Strategy.merge"),
-                ("update_object", "added.py", "helper.nested"),
-                ("undo", "added.py", "<module>"),
+                ("apply", "change", "added.py", "Strategy.merge"): 1,
+                ("update_object", "", "added.py", "helper.nested"): 1,
+                ("undo", "change", "added.py", "<module>"): 1,
             },
         )
+
+    def test_an_indirect_reference_is_reported(self):
+        source = (
+            "def indirect(change, branch):\n    replay = change.apply\n    replay(branch)\n"
+            "def by_name(change, branch):\n    getattr(change, 'apply')(branch)\n"
+            "from .utilities import update_object as u\n"
+        )
+
+        self.assertEqual(
+            self.scan(source, {"apply", "update_object"}),
+            {
+                ("apply", "change", "added.py", "indirect"): 1,
+                ("apply", "getattr(change)", "added.py", "by_name"): 1,
+                ("update_object", "from .utilities", "added.py", "<module>"): 1,
+            },
+        )
+
+    def test_a_second_receiver_and_a_second_call_in_one_scope_are_reported(self):
+        source = (
+            "class Job:\n    def run(self, branch, strategy):\n"
+            "        branch.merge(None)\n        strategy.merge(None)\n        strategy.merge(None)\n"
+        )
+
+        self.assertEqual(
+            self.scan(source, {"merge"}),
+            {("merge", "branch", "added.py", "Job.run"): 1, ("merge", "strategy", "added.py", "Job.run"): 2},
+        )
+
+    def test_a_lambda_is_a_scope_of_its_own(self):
+        source = "class Branch:\n    def merge(self, strategy):\n        on_commit(lambda: strategy.merge(self))\n"
+
+        self.assertEqual(self.scan(source, {"merge"}), {("merge", "strategy", "added.py", "Branch.merge.<lambda>"): 1})
 
 
 class BranchProvisioningTest(BranchTestCase):
