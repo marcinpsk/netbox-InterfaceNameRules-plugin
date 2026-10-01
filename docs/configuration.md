@@ -286,8 +286,11 @@ refuses another member, and sends an event for each one that it kept.
 **Apply Rules** is designed for **retroactive renames**.  Interfaces installed
 after a matching rule is active are renamed automatically at install time.
 The web UI, the REST API and bulk import install modules inside a transaction.
-A script or shell that creates a module outside a transaction gets no rename:
-run Apply Rules after it, or wrap the install in `transaction.atomic()`.
+A script or shell that creates a module outside a transaction on the interface
+write connection gets no rename: run Apply Rules after it, or wrap the install in
+`transaction.atomic(using=router.db_for_write(Interface))`. In a netbox-branching
+branch, `transaction.atomic()` alone opens a transaction on `default`, not on the
+branch connection, so the rename runs before NetBox creates the interfaces.
 
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where

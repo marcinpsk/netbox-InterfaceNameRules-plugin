@@ -232,9 +232,13 @@ def _imports_from(record, module: str) -> bool:
 
 
 def _passes_an_alias(call: ast.Call) -> bool:
-    """Return whether *call*, of a function in ``ALIAS_ARGUMENT_POSITIONS``, names its alias."""
+    """Return whether *call*, of a function in ``ALIAS_ARGUMENT_POSITIONS``, names its alias.
+
+    ``None`` names no alias: Django reads it as ``default``.
+    """
     position = ALIAS_ARGUMENT_POSITIONS[call.func.attr]
-    return len(call.args) > position or any(keyword.arg == "using" for keyword in call.keywords)
+    aliases = [*call.args[position : position + 1], *(k.value for k in call.keywords if k.arg == "using")]
+    return any(not (isinstance(alias, ast.Constant) and alias.value is None) for alias in aliases)
 
 
 def _transaction_state_uses(
@@ -950,6 +954,8 @@ class TransactionBlockTest(SimpleTestCase):
             "transaction.get_connection(using=alias)\n": [],
             "transaction.on_commit(f)\n": ["transaction.on_commit"],
             "transaction.get_connection()\n": ["transaction.get_connection"],
+            "transaction.on_commit(f, using=None)\n": ["transaction.on_commit"],
+            "transaction.get_connection(None)\n": ["transaction.get_connection"],
             "transaction.set_rollback(True, using=alias)\n": ["transaction.set_rollback"],
         }
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Django receivers: module, module bay and device saves go to the rename-trigger lifecycle."""
+"""Django receivers: module, module bay and device saves go to the rename-trigger lifecycle with their alias.
+
+The receivers do not read ``raw``: a raw save, such as a fixture load, is a rename trigger too.
+"""
 
 import logging
 
@@ -15,39 +18,39 @@ logger = logging.getLogger("netbox_interface_name_rules")
 
 
 @receiver(pre_save, sender="dcim.Module", dispatch_uid="interface_name_rules_pre_save_module")
-def on_module_pre_save(sender, instance, **kwargs):
+def on_module_pre_save(sender, instance, using, **kwargs):
     """Pass a module save to the rename-trigger lifecycle before the row is written."""
-    rename_triggers.before_save(sender, instance)
+    rename_triggers.before_save(sender, instance, using)
 
 
 @receiver(post_save, sender="dcim.Module", dispatch_uid="interface_name_rules_post_save_module")
-def on_module_saved(sender, instance, created, **kwargs):
+def on_module_saved(sender, instance, created, using, **kwargs):
     """Pass a module save to the rename-trigger lifecycle after the row is written."""
-    rename_triggers.after_save(sender, instance, created)
+    rename_triggers.after_save(sender, instance, created, using)
 
 
 @receiver(pre_save, sender="dcim.ModuleBay", dispatch_uid="interface_name_rules_pre_save_module_bay")
-def on_module_bay_pre_save(sender, instance, **kwargs):
+def on_module_bay_pre_save(sender, instance, using, **kwargs):
     """Pass a module bay save to the rename-trigger lifecycle before the row is written."""
-    rename_triggers.before_save(sender, instance)
+    rename_triggers.before_save(sender, instance, using)
 
 
 @receiver(post_save, sender="dcim.ModuleBay", dispatch_uid="interface_name_rules_post_save_module_bay")
-def on_module_bay_saved(sender, instance, created, **kwargs):
+def on_module_bay_saved(sender, instance, created, using, **kwargs):
     """Pass a module bay save to the rename-trigger lifecycle after the row is written."""
-    rename_triggers.after_save(sender, instance, created)
+    rename_triggers.after_save(sender, instance, created, using)
 
 
 @receiver(pre_save, sender="dcim.Device", dispatch_uid="interface_name_rules_pre_save_device")
-def on_device_pre_save(sender, instance, **kwargs):
+def on_device_pre_save(sender, instance, using, **kwargs):
     """Pass a device save to the rename-trigger lifecycle before the row is written."""
-    rename_triggers.before_save(sender, instance)
+    rename_triggers.before_save(sender, instance, using)
 
 
 @receiver(post_save, sender="dcim.Device", dispatch_uid="interface_name_rules_post_save_device")
-def on_device_saved(sender, instance, created, **kwargs):
+def on_device_saved(sender, instance, created, using, **kwargs):
     """Pass a device save to the rename-trigger lifecycle after the row is written."""
-    rename_triggers.after_save(sender, instance, created)
+    rename_triggers.after_save(sender, instance, created, using)
 
 
 # ---------------------------------------------------------------------------

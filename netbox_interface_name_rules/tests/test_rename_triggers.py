@@ -8,7 +8,9 @@ committed callbacks, and reads the interface names back.
 """
 
 import gc
+import pathlib
 import re
+import tempfile
 from contextlib import contextmanager
 from functools import partial
 from unittest import skipUnless
@@ -16,9 +18,11 @@ from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
 from django.contrib.contenttypes.models import ContentType
+from django.core import serializers
+from django.core.management import call_command
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, DataError, IntegrityError, connection, transaction
 from django.db.models.signals import post_save
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.choices import JournalEntryKindChoices
 from extras.models import JournalEntry
@@ -49,6 +53,7 @@ from netbox_interface_name_rules.tests.test_channelization import (
     REQUIRES_CHANNELIZATION,
     _channelized_module_type,
 )
+from netbox_interface_name_rules.tests.test_transactions import WriteInterfacesTo
 
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 PLAIN_TYPE = "10gbase-x-sfpp"
@@ -512,6 +517,29 @@ class PreviousStateHandoffTest(RenameTriggerTestCase):
             post_save.send(sender=Module, instance=moved, created=False, raw=False, using="default", update_fields=None)
 
         self.assertEqual(reapplies.call_count, 0)
+
+
+class WriteAliasTest(RenameTriggerTestCase):
+    """A save through another alias than the write alias is unexpected state, so the trigger raises."""
+
+    def test_a_save_through_another_alias_raises_before_the_row_is_written(self):
+        self.device.vc_position = 2
+
+        with override_settings(DATABASE_ROUTERS=[WriteInterfacesTo("schema_elsewhere")]):
+            with self.assertRaisesMessage(RuntimeError, "to 'default', but the write alias is 'schema_elsewhere'"):
+                self.device.save()
+
+        self.assertEqual(Device.objects.get(pk=self.device.pk).vc_position, 1)
+
+    def test_a_post_save_sent_through_another_alias_raises(self):
+        """NetBox sends some post_save signals by hand, without the pre_save of a model save."""
+        module = self._install()
+
+        with override_settings(DATABASE_ROUTERS=[WriteInterfacesTo("schema_elsewhere")]):
+            with self.assertRaisesMessage(RuntimeError, "to 'default', but the write alias is 'schema_elsewhere'"):
+                post_save.send(
+                    sender=Module, instance=module, created=True, raw=False, using="default", update_fields=None
+                )
 
 
 class ReapplyFailureTest(RenameTriggerTestCase):
@@ -1134,6 +1162,20 @@ class CommittedRenameTriggerTest(_RenameTriggerFixture, TransactionTestCase):
         self.module.save(update_fields=["module_type"])
 
         self.assertEqual(self._names(self.module), ["xe-1/0/0"])
+
+    def test_a_fixture_load_of_a_module_reapplies_as_an_install(self):
+        """Django's loaddata saves each row raw, and a raw save is a rename trigger too."""
+        interface = rename_out_of_band(Interface.objects.get(module=self.module), "0")
+        fixture = serializers.serialize("json", [self.module, interface])
+        pk = self.module.pk
+        self.module.delete()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "module.json"
+            path.write_text(fixture, encoding="utf-8")
+            call_command("loaddata", str(path), verbosity=0)
+
+        self.assertEqual(self._names(Module.objects.get(pk=pk)), ["et-1/0/0"])
 
     def test_a_rolled_back_transaction_does_not_suppress_the_next_trigger(self):
         with self.assertRaises(RuntimeError), transaction.atomic():
