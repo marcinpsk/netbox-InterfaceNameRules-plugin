@@ -91,6 +91,7 @@ TRANSACTION_STATE_PERMITS = {
 LANGUAGE_MODULE = PACKAGE / "name_template.py"
 PYPROJECT = PACKAGE.parent / "pyproject.toml"
 BRANCHING_MODULE = PACKAGE / "branching.py"
+TESTS_PACKAGE = f"{PLUGIN_PACKAGE}.tests"
 
 
 def _family_submodules() -> set[str]:
@@ -297,6 +298,21 @@ def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
             if not r.level and (r.module == "netbox_branching" or r.module.startswith("netbox_branching."))
         )
     ]
+
+
+def _imports_a_test_module(record) -> bool:
+    """Return whether *record*, read in the test package, imports one of its ``test_*`` modules."""
+    module = record.absolute(TESTS_PACKAGE)
+    if module == TESTS_PACKAGE and record.name is not None:
+        module = f"{module}.{record.name}"
+    child = module.removeprefix(f"{TESTS_PACKAGE}.")
+    return child != module and child.split(".", 1)[0].startswith("test_")
+
+
+def _test_module_imports(path: pathlib.Path) -> list[str]:
+    """Return the source of each import statement in *path* that imports a ``test_*`` module of the test package."""
+    records = import_records(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
+    return [ast.unparse(statement) for statement in import_statements(r for r in records if _imports_a_test_module(r))]
 
 
 def _production_bulk_writes() -> Counter:
@@ -1019,6 +1035,55 @@ class NetboxBranchingImportTest(SimpleTestCase):
             )
 
             self.assertEqual(_netbox_branching_imports(path), [])
+
+
+class TestModuleImportTest(SimpleTestCase):
+    """No module of the test package imports a ``test_*`` module: helpers.py, trigger_cases.py and branch_cases.py share."""
+
+    def test_no_module_of_the_test_package_imports_a_test_module(self):
+        violations = {(path.name, statement) for path in _test_modules() for statement in _test_module_imports(path)}
+
+        self.assertEqual(violations, set())
+
+    def test_the_detector_reports_every_spelling(self):
+        spellings = {
+            "import netbox_interface_name_rules.tests.test_views\n": [
+                "import netbox_interface_name_rules.tests.test_views"
+            ],
+            "import os, netbox_interface_name_rules.tests.test_views as views\n": [
+                "import os, netbox_interface_name_rules.tests.test_views as views"
+            ],
+            "from netbox_interface_name_rules.tests.test_views import ViewTest\n": [
+                "from netbox_interface_name_rules.tests.test_views import ViewTest"
+            ],
+            "from netbox_interface_name_rules.tests import helpers, test_views\n": [
+                "from netbox_interface_name_rules.tests import helpers, test_views"
+            ],
+            "from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+            "from . import test_views\n": ["from . import test_views"],
+            "def f():\n    from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            for source, expected in spellings.items():
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertEqual(_test_module_imports(path), expected)
+
+    def test_a_shared_module_a_similar_name_and_a_dotted_path_string_are_not_reported(self):
+        source = (
+            "from .helpers import PLAIN_TYPE\n"
+            "from netbox_interface_name_rules.tests import helpers\n"
+            "from netbox_interface_name_rules.tests.helpers import test_password\n"
+            "from ..engine import test_rule\n"
+            "import netbox_interface_name_rules.tests_extra.test_views\n"
+            "MIDDLEWARE = ('netbox_interface_name_rules.tests.test_views._route',)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "sample.py"
+            path.write_text(source, encoding="utf-8")
+
+            self.assertEqual(_test_module_imports(path), [])
 
 
 class UnisolatedReverseTest(SimpleTestCase):
