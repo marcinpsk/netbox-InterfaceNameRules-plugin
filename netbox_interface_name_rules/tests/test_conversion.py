@@ -43,6 +43,7 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.family import FamilyStatus, execute_conversion, plan_module_conversions
 from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS
+from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.tests.helpers import (
@@ -1235,12 +1236,12 @@ class ConversionJobTest(ConversionTestCase):
         self.other_module, self.other_bay = self._install(self.module_type, "4")
         self._switch_to_channelized()
 
-    def _run_job(self, **kwargs):
+    def _run_job(self):
         """Run the conversion job against a real Job row, the way the worker does."""
         from netbox_interface_name_rules.jobs import ConvertFlatFamiliesJob
 
         job = Job.objects.create(name="Convert flat families (test)", job_id=uuid.uuid4(), user=self.operator)
-        ConvertFlatFamiliesJob(job).run(rule_id=self.rule.pk, **kwargs)
+        ConvertFlatFamiliesJob(job).run(**rule_job_kwargs(self.rule.pk))
         return job
 
     def test_the_job_converts_every_convertible_family_of_the_rule(self):
@@ -1280,7 +1281,7 @@ class ConversionJobTest(ConversionTestCase):
         rule_id = self.rule.pk
         self.rule.delete()
 
-        ConvertFlatFamiliesJob(job).run(rule_id=rule_id)
+        ConvertFlatFamiliesJob(job).run(**rule_job_kwargs(rule_id))
 
         self._assert_still_flat(self.module, "3")
 
@@ -1326,7 +1327,7 @@ class ConversionEventTest(ConversionTestCase):
 
         # django-rq enqueues a webhook when the transaction commits.
         with self.captureOnCommitCallbacks(execute=True):
-            ConvertFlatFamiliesJob.handle(make_job("ConvEvent", self.operator), rule_id=self.rule.pk)
+            ConvertFlatFamiliesJob.handle(make_job("ConvEvent", self.operator), **rule_job_kwargs(self.rule.pk))
 
         self._assert_only_the_converted_family_sent_events()
 

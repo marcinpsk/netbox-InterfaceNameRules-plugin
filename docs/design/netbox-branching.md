@@ -174,8 +174,10 @@ Changes from r1 (round 1), carried into r2:
   on the branch connection (INR transactions.py:29-43).
 - Invariant: INR writes only through an alias of the open scope.
 
-**`branching.py`** is the one module that imports `netbox_branching`, loaded only when it is
-installed. `AppConfig.ready()` calls it.
+**`branching.py`** is the one module that imports `netbox_branching`; an AST test enforces it. The
+plugin imports `branching.py` on every install, and `branching.py` imports `netbox_branching` only
+inside a function that runs when netbox-branching is installed. `AppConfig.ready()` calls its
+version check.
 
 - Version gate: raise `ImproperlyConfigured` unless the installed netbox-branching is 1.2.x.
 - Replay suppression: wrap `Branch.merge`, `Branch.revert` and `Branch.sync` once (idempotent,

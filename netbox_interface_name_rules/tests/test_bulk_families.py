@@ -47,6 +47,7 @@ from netbox_interface_name_rules.family import (
     template_names,
 )
 from netbox_interface_name_rules.family.names import COLLISION_REASON
+from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import make_job, run_job_logged
@@ -790,7 +791,7 @@ class BulkApplyReportsSkipsToItsCallersTest(BulkTestCase):
     def test_the_background_job_warns_about_what_it_skipped(self):
         from netbox_interface_name_rules.jobs import ApplyRuleJob
 
-        records = run_job_logged(self, ApplyRuleJob(make_job("BulkJob")), rule_id=self.rule.pk)
+        records = run_job_logged(self, ApplyRuleJob(make_job("BulkJob")), **rule_job_kwargs(self.rule.pk))
 
         self.assertEqual([record.levelname for record in records], ["INFO", "WARNING"])
         self.assertEqual(records[1].args, (4,))

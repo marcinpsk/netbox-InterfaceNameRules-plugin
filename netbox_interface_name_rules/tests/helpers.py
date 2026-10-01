@@ -28,6 +28,8 @@ from django.contrib.auth import get_user_model
 from django.db import connections
 from extras.choices import EventRuleActionChoices
 from extras.models import EventRule, Webhook
+from rq import Worker
+from rq.job import Job as RQJob
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.transactions import READ_LOCK_TIMEOUT, SET_LOCK_TIMEOUT
@@ -130,6 +132,13 @@ def activate(branch):
     return activate_branch(branch)
 
 
+def branch_cookie() -> str:
+    """Return the name of netbox-branching's branch cookie."""
+    from netbox_branching.constants import COOKIE_NAME
+
+    return COOKIE_NAME
+
+
 def lock_timeout(alias: str) -> str:
     """Return the ``lock_timeout`` of the session of *alias*, read as the write scope reads it."""
     with connections[alias].cursor() as cursor:
@@ -141,6 +150,20 @@ def set_lock_timeout(alias: str, value: str) -> None:
     """Set the ``lock_timeout`` of the session of *alias*, as the write scope sets it."""
     with connections[alias].cursor() as cursor:
         cursor.execute(SET_LOCK_TIMEOUT, [value])
+
+
+def register_a_worker(test_case):
+    """Register an RQ worker of the default queue until *test_case* ends, so NetBox accepts work; no process runs it."""
+    worker = Worker(["default"], connection=django_rq.get_connection())
+    worker.register_birth()
+    test_case.addCleanup(worker.register_death)
+
+
+def queued_job(test_case, job):
+    """Return the queue's record of *job*, which a worker reads from Redis, and delete it when *test_case* ends."""
+    queued = RQJob.fetch(str(job.job_id), connection=django_rq.get_connection())
+    test_case.addCleanup(queued.delete)
+    return queued
 
 
 def run_job_logged(test_case, runner, raises=None, **kwargs):

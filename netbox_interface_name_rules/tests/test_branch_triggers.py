@@ -28,6 +28,7 @@ from netbox.registry import registry
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_triggers import PlanRunner
 from netbox_interface_name_rules.tests.helpers import (
+    branch_cookie,
     interface_signal,
     lock_timeout,
     make_device,
@@ -105,7 +106,7 @@ class InstallInABranchTest(_InstallCase):
         self.assert_nothing_on_main()
 
     def test_a_module_installed_through_the_rest_api_gets_its_names_in_the_branch(self):
-        del self.client.cookies["active_branch"]
+        del self.client.cookies[branch_cookie()]
         data = {"device": self.device.pk, "module_bay": self.bay(0).pk, "module_type": self.module_type.pk}
 
         response = self.client.post(
@@ -185,7 +186,7 @@ class MoveInABranchTest(_InstallCase):
             self.module = self.install(0)
 
     def test_a_module_moved_through_the_rest_api_gets_the_names_of_its_new_bay_in_the_branch(self):
-        del self.client.cookies["active_branch"]
+        del self.client.cookies[branch_cookie()]
 
         response = self.client.patch(
             reverse("dcim-api:module-detail", kwargs={"pk": self.module.pk}),
@@ -288,7 +289,7 @@ class ScriptTriggerInABranchTest(_RuledChannelCase):
         request = RequestFactory().get("/")
         request.user = self.user
         request.id = uuid.uuid4()
-        request.COOKIES["active_branch"] = self.branch.schema_id
+        request.COOKIES[branch_cookie()] = self.branch.schema_id
         with ExitStack() as processors:
             for processor in registry["request_processors"]:
                 processors.enter_context(processor(request))

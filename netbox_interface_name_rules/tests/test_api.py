@@ -2,11 +2,17 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the REST API endpoints."""
 
+from unittest import skipUnless
+
+from core.choices import JobStatusChoices
+from core.models import Job
 from dcim.models import DeviceType, Manufacturer, ModuleType
+from netbox import jobs as netbox_jobs
 from rest_framework import status
 from utilities.testing import APITestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.helpers import make_manufacturer, make_module_type, register_a_worker
 
 
 class InterfaceNameRuleAPITest(APITestCase):
@@ -176,3 +182,28 @@ class InterfaceNameRuleAPITest(APITestCase):
         rule.refresh_from_db()
         self.assertTrue(rule.module_type_is_regex)
         self.assertEqual(rule.module_type_pattern, "QSFP-.*")
+
+
+@skipUnless(hasattr(netbox_jobs, "AsyncAPIJob"), "NetBox before 4.7 runs no REST request in the background")
+class BackgroundRuleRequestOnMainTest(APITestCase):
+    """The rule endpoints refuse a background request only in a branch; on main NetBox enqueues it."""
+
+    model = InterfaceNameRule
+    view_namespace = "plugins-api:netbox_interface_name_rules"
+    user_permissions = ("netbox_interface_name_rules.change_interfacenamerule",)
+
+    def setUp(self):
+        super().setUp()
+        register_a_worker(self)
+
+    def test_a_background_rule_request_on_main_is_enqueued(self):
+        rule = InterfaceNameRule.objects.create(
+            module_type=make_module_type(make_manufacturer("APIBackground"), "APIBackground"),
+            name_template="et-0/0/{bay_position}",
+        )
+        payload = [{"id": rule.pk, "name_template": "xe-0/0/{bay_position}"}]
+
+        response = self.client.patch(f"{self._get_list_url()}?background=true", payload, format="json", **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED, response.content)
+        self.assertEqual(Job.objects.get(pk=response.data["job"]["id"]).status, JobStatusChoices.STATUS_PENDING)

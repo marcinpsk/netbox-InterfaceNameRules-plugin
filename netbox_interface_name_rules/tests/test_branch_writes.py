@@ -32,6 +32,7 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rule_selection import pinned_rule_cache
 from netbox_interface_name_rules.tests.helpers import (
     activate,
+    branch_cookie,
     interface_signal,
     make_device,
     make_device_type,
@@ -55,6 +56,8 @@ from netbox_interface_name_rules.tests.test_channelization import (
 User = get_user_model()
 FLAT = BreakoutModeChoices.FLAT
 CHANNELIZED = BreakoutModeChoices.CHANNELIZED
+# The names of the flat family that each _ConversionCase builds in bay 3.
+FLAT_NAMES = ("xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3")
 
 
 def names_of(module):
@@ -94,7 +97,7 @@ class _BranchWriteCase(BranchTestCase):
         self.branch = self.provision_branch(self.PREFIX, self.user)
         self.alias = self.branch.connection_name
         self.client.force_login(self.user)
-        self.client.cookies["active_branch"] = self.branch.schema_id
+        self.client.cookies[branch_cookie()] = self.branch.schema_id
 
     def build(self):
         """Create the rows on main that the branch copies."""
@@ -284,7 +287,6 @@ class _ConversionCase(_BranchWriteCase):
 
 class ForegroundConvertInABranchTest(_ConversionCase):
     PREFIX = "BrConvert"
-    FLAT_NAMES = ("xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3")
 
     def test_the_conversion_rewrites_the_family_in_the_branch_only(self):
         response = self.client.post(
@@ -295,15 +297,15 @@ class ForegroundConvertInABranchTest(_ConversionCase):
             messages_of(response), [("success", "Converted 1 interface family(ies) to the channelized topology.")]
         )
         with self.in_branch():
-            self.assertEqual(names_of(self.module), ["et-0/0/3", *self.FLAT_NAMES])
-        self.assertEqual(names_of(self.module), list(self.FLAT_NAMES))
+            self.assertEqual(names_of(self.module), ["et-0/0/3", *FLAT_NAMES])
+        self.assertEqual(names_of(self.module), list(FLAT_NAMES))
 
     def test_the_conversion_preview_writes_nothing_on_either_connection(self):
         response = self.client.get(self.apply_url(self.rule))
 
         self.assertEqual([verdict.current_name for verdict in response.context["conversions"]], ["xe-0/0/3:0"])
         with self.in_branch():
-            self.assertEqual(names_of(self.module), list(self.FLAT_NAMES))
+            self.assertEqual(names_of(self.module), list(FLAT_NAMES))
             self.assertFalse(Interface.objects.filter(module=self.module, channels__isnull=False).exists())
         self.assertFalse(ObjectChange.objects.using(self.alias).exists())
         self.assertFalse(self.change_diffs().exists())

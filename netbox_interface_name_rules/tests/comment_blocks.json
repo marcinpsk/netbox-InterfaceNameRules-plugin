@@ -267,10 +267,6 @@
     [
       "# Skip duplicate detection when the user lacks view permission — we cannot\n# query existing rules without it, so add-only users always land on the\n# create form (potentially allowing duplicates).",
       1
-    ],
-    [
-      "# instance is intentionally omitted: InterfaceNameRule does not\n# inherit JobsMixin, so passing instance= would fail full_clean().\n# The job is still named and findable in Core → Jobs.",
-      1
     ]
   ]
 }
