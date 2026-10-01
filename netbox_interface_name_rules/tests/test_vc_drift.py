@@ -48,7 +48,6 @@ from django.contrib.contenttypes.models import ContentType
 from extras.models import JournalEntry
 
 from netbox_interface_name_rules import engine
-from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
     apply_rule_to_existing,
@@ -63,32 +62,22 @@ from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATION
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import build_variables
 from netbox_interface_name_rules.rename_triggers import ModuleTrigger, reapply
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
     CHANNEL_TYPE,
+    CHANNELIZED,
+    FLAT,
     PARENT_TYPE,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
-    ChannelizationTestCase,
-    _build_device,
+    REQUIRES_VC_POSITION_TOKEN,
+    VcDriftTestCase,
+    build_device,
+    token_module_type,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
-FLAT = BreakoutModeChoices.FLAT
-CHANNELIZED = BreakoutModeChoices.CHANNELIZED
 CLAIM_LOGGER = "netbox_interface_name_rules.family.raw_bases"
-
-# Every fixture spelling a name NetBox resolved from the token needs the release that resolves it:
-# on 4.5 and older the token stays literal in the interface name and the drift cannot even occur.
-REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.
-
-
-def _token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TYPE):
-    """Create a ModuleType whose interface templates are named *template_names*, in order."""
-    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
-    for name in template_names:
-        InterfaceTemplate.objects.create(module_type=module_type, name=name, type=iface_type)
-    return module_type
 
 
 def _raw_name_patterns(module):
@@ -120,36 +109,6 @@ def _without_vc_position_re():
     return mock.patch.dict(sys.modules, {"dcim.constants": _ConstantsWithoutVcToken(dcim.constants)})
 
 
-class VcDriftTestCase(ChannelizationTestCase):
-    """VC transitions go through a real ``Device.save()`` so the plugin's signals do the scheduling."""
-
-    def _save_vc_state(self, device, virtual_chassis, position):
-        with self.captureOnCommitCallbacks(execute=True):
-            device.virtual_chassis = virtual_chassis
-            device.vc_position = position
-            device.save()
-
-    def _join(self, vc, position, device=None):
-        """Add *device* to *vc* at *position* — the join direction (fallback → position)."""
-        self._save_vc_state(device or self.device, vc, position)
-
-    def _renumber(self, position, device=None):
-        """Move *device* to another position inside its VC — the renumber direction (P → Q)."""
-        device = device or self.device
-        self._save_vc_state(device, device.virtual_chassis, position)
-
-    def _leave(self, device=None):
-        """Remove *device* from its VC — the leave direction (position → fallback)."""
-        self._save_vc_state(device or self.device, None, None)
-
-    def _install_on(self, device, module_type, position):
-        """Install a module of *module_type* into *device*'s bay at *position*, rules and all."""
-        bay = ModuleBay.objects.get(device=device, name=f"Bay {position}")
-        with self.captureOnCommitCallbacks(execute=True):
-            module = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
-        return module, bay
-
-
 # ---------------------------------------------------------------------------
 # Join: the device was standalone when NetBox named the interfaces
 # ---------------------------------------------------------------------------
@@ -161,8 +120,8 @@ class VcPositionJoinDriftTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("VcJoin", ["3", "4"])
-        cls.module_type = _token_module_type(manufacturer, "VcJoin-QSFP", "xe-{vc_position:0}/0/{module}")
+        manufacturer, cls.device = build_device("VcJoin", ["3", "4"])
+        cls.module_type = token_module_type(manufacturer, "VcJoin-QSFP", "xe-{vc_position:0}/0/{module}")
 
     def test_joining_a_vc_renames_a_flat_channel_family_named_with_the_fallback(self):
         """The worst case from the issue: under force, a breakout rule matches its family by raw name."""
@@ -206,11 +165,11 @@ class VcPositionRenumberDriftTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcRenum", ["3", "5"], virtual_chassis=VirtualChassis.objects.create(name="vcrenum-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(manufacturer, "VcRenum-QSFP", "xe-{vc_position:0}/0/{module}")
-        cls.simple_type = _token_module_type(manufacturer, "VcRenum-SFP", "xe-{vc_position:0}/0/{module}")
+        cls.module_type = token_module_type(manufacturer, "VcRenum-QSFP", "xe-{vc_position:0}/0/{module}")
+        cls.simple_type = token_module_type(manufacturer, "VcRenum-SFP", "xe-{vc_position:0}/0/{module}")
 
     def test_renumbering_renames_a_family_named_at_an_earlier_position(self):
         """The token sits in a middle path segment, so the drifted name is structural, not a suffix."""
@@ -248,10 +207,10 @@ class VcPositionForceBaseMatchingTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcForm", ["5", "7"], virtual_chassis=VirtualChassis.objects.create(name="vcform-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(manufacturer, "VcForm-QSFP", "{vc_position}-{module}")
+        cls.module_type = token_module_type(manufacturer, "VcForm-QSFP", "{vc_position}-{module}")
 
     def _breakout_rule(self, name_template):
         return InterfaceNameRule.objects.create(
@@ -289,10 +248,10 @@ class VcPositionLeaveDriftTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcLeave", ["3", "4", "5"], virtual_chassis=VirtualChassis.objects.create(name="vcleave-vc"), vc_position=2
         )
-        cls.module_type = _token_module_type(manufacturer, "VcLeave-SFP", "xe-{vc_position:0}/0/{module}")
+        cls.module_type = token_module_type(manufacturer, "VcLeave-SFP", "xe-{vc_position:0}/0/{module}")
 
     def test_leaving_a_vc_renames_nothing(self):
         """Deliberate: what the interfaces are called off a VC is an operator decision, even for a rule
@@ -334,16 +293,14 @@ class VcPositionAmbiguityTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcAmb", ["3", "4"], virtual_chassis=VirtualChassis.objects.create(name="vcamb-vc"), vc_position=1
         )
         # One token template plus a plain one whose interface an earlier rename moved onto the
         # token template's fallback variant.
-        cls.decoy_type = _token_module_type(
-            manufacturer, "VcAmb-QSFP", "xe-{vc_position:0}/0/{module}", "mgmt-{module}"
-        )
+        cls.decoy_type = token_module_type(manufacturer, "VcAmb-QSFP", "xe-{vc_position:0}/0/{module}", "mgmt-{module}")
         # Two token templates whose matchers overlap on 'xe-1/0/4'.
-        cls.overlap_type = _token_module_type(
+        cls.overlap_type = token_module_type(
             manufacturer, "VcAmb-SFP", "xe-{vc_position}/0/{module}", "xe-1/{vc_position}/{module}"
         )
 
@@ -506,10 +463,10 @@ class VcPositionOneClaimPassTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcPass", ["0"], virtual_chassis=VirtualChassis.objects.create(name="vcpass-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(manufacturer, "VcPass-QSFP", "{vc_position}/{module}")
+        cls.module_type = token_module_type(manufacturer, "VcPass-QSFP", "{vc_position}/{module}")
 
     def _flat_rule(self):
         return InterfaceNameRule.objects.create(
@@ -602,11 +559,11 @@ class VcPositionAdjacentTokenTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcAdj", ["3", "4"], virtual_chassis=VirtualChassis.objects.create(name="vcadj-vc"), vc_position=1
         )
-        cls.adjacent_type = _token_module_type(manufacturer, "VcAdj-QSFP", "xe-{vc_position}{vc_position}/0/{module}")
-        cls.separated_type = _token_module_type(manufacturer, "VcAdj-SFP", "xe-{vc_position}/{vc_position}/{module}")
+        cls.adjacent_type = token_module_type(manufacturer, "VcAdj-QSFP", "xe-{vc_position}{vc_position}/0/{module}")
+        cls.separated_type = token_module_type(manufacturer, "VcAdj-SFP", "xe-{vc_position}/{vc_position}/{module}")
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_adjacent_tokens_build_no_matcher_at_all(self):
@@ -635,10 +592,10 @@ class VcPositionResolutionTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcRes", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vcres-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(
+        cls.module_type = token_module_type(
             manufacturer,
             "VcRes-QSFP",
             "xe-{vc_position}/{module}",
@@ -698,8 +655,8 @@ class VcPositionNoTokenControlTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("VcNoTok", ["3", "4"])
-        cls.module_type = _token_module_type(manufacturer, "VcNoTok-QSFP", "{module}")
+        manufacturer, cls.device = build_device("VcNoTok", ["3", "4"])
+        cls.module_type = token_module_type(manufacturer, "VcNoTok-QSFP", "{module}")
 
     @skipUnless(supports_vc_position_token(), REQUIRES_VC_POSITION_TOKEN)
     def test_a_tokenless_module_type_builds_no_matchers(self):
@@ -735,10 +692,10 @@ class VcPositionLegacyNetboxTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcLegacy", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vclegacy-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(manufacturer, "VcLegacy-SFP", "xe-{vc_position:0}/0/{module}")
+        cls.module_type = token_module_type(manufacturer, "VcLegacy-SFP", "xe-{vc_position:0}/0/{module}")
 
     def test_the_feature_check_is_false_without_the_constant(self):
         """Probed from ``dcim.constants``, lazily — an upstream removal must flip the check, not crash."""
@@ -777,14 +734,14 @@ class VcPositionNestedBayTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcNest", ["2"], virtual_chassis=VirtualChassis.objects.create(name="vcnest-vc"), vc_position=1
         )
         cls.chassis_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="VcNest-Chassis", part_number="VcNest-Chassis"
         )
         ModuleBayTemplate.objects.create(module_type=cls.chassis_type, name="LC Bay", position="1")
-        cls.leaf_type = _token_module_type(manufacturer, "VcNest-LEAF", "xe-{vc_position:0}/{module}")
+        cls.leaf_type = token_module_type(manufacturer, "VcNest-LEAF", "xe-{vc_position:0}/{module}")
 
     def _install_leaf(self):
         """Install the chassis in the device bay and a leaf module in the chassis' own bay."""
@@ -833,10 +790,10 @@ class VcPositionPredictionTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcPred", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vcpred-vc"), vc_position=2
         )
-        cls.module_type = _token_module_type(manufacturer, "VcPred-SFP", "xe-{vc_position:0}/0/{module}")
+        cls.module_type = token_module_type(manufacturer, "VcPred-SFP", "xe-{vc_position:0}/0/{module}")
 
     def test_names_resolved_at_call_time_still_predict_correctly(self):
         """The documented precondition: the caller resolves the names, so same-instant input is exact."""
@@ -865,7 +822,7 @@ class VcPositionAsymmetricFamilyTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcAsym", ["3"], virtual_chassis=VirtualChassis.objects.create(name="vcasym-vc"), vc_position=1
         )
         cls.module_type = ModuleType.objects.create(
@@ -908,18 +865,18 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "VcConv",
             ["3", "4", "5", "6", "7"],
             virtual_chassis=VirtualChassis.objects.create(name="vcconv-vc"),
             vc_position=1,
         )
         cls.manufacturer = manufacturer
-        cls.wrap_type = _token_module_type(manufacturer, "VcConv-WRAP", "xe-{vc_position:0}/0/{module}")
-        cls.twice_type = _token_module_type(manufacturer, "VcConv-TWICE", "xe-{vc_position:0}/0/{module}")
-        cls.arith_type = _token_module_type(manufacturer, "VcConv-ARITH", "{vc_position}{module}")
-        cls.free_type = _token_module_type(manufacturer, "VcConv-FREE", "xe-{vc_position:0}/0/{module}")
-        cls.two_base_type = _token_module_type(
+        cls.wrap_type = token_module_type(manufacturer, "VcConv-WRAP", "xe-{vc_position:0}/0/{module}")
+        cls.twice_type = token_module_type(manufacturer, "VcConv-TWICE", "xe-{vc_position:0}/0/{module}")
+        cls.arith_type = token_module_type(manufacturer, "VcConv-ARITH", "{vc_position}{module}")
+        cls.free_type = token_module_type(manufacturer, "VcConv-FREE", "xe-{vc_position:0}/0/{module}")
+        cls.two_base_type = token_module_type(
             manufacturer, "VcConv-TWOBASE", "xe-{vc_position:0}/0/{module}", "xe-{vc_position:9}/0/{module}"
         )
 
@@ -1012,7 +969,7 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
 
     def test_an_unrelated_family_survives_overlapping_historical_claims(self):
         """A multi-base claim rejects its shared base but leaves an unrelated family available."""
-        module_type = _token_module_type(
+        module_type = token_module_type(
             self.manufacturer,
             "VcConv-OVERLAP",
             "xe-{vc_position}/0/{module}",
@@ -1044,7 +1001,7 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
 
     def test_a_family_a_current_and_a_historical_base_both_spell_is_not_offered(self):
         """The rule gives the family to one template now and to the other at position 1: neither converts it."""
-        module_type = _token_module_type(
+        module_type = token_module_type(
             self.manufacturer,
             "VcConv-CURRENT-FIRST",
             "xe-{vc_position:0}/0/{module}",
@@ -1081,7 +1038,7 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
 
     def test_a_family_a_current_and_a_historical_base_both_spell_is_not_planned(self):
         """One claim over every form: a name the rule gives two templates is neither template's."""
-        module_type = _token_module_type(
+        module_type = token_module_type(
             self.manufacturer,
             "VcConv-CURRENT-OVERLAP",
             "xe-{vc_position:0}/0/{module}",

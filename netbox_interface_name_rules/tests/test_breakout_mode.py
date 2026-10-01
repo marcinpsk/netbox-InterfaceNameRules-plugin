@@ -54,29 +54,21 @@ from netbox_interface_name_rules.forms import RuleTestForm
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import referenced_variables
 from netbox_interface_name_rules.rule_selection import _VERSION_COLUMNS
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNELIZED,
+    FLAT,
     PARENT_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
+    TEST_PASSWORD,
     ChannelizationTestCase,
-    _build_device,
+    build_device,
+    plain_module_type,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.views import RulePreview
 
-FLAT = "flat"
-CHANNELIZED = "channelized"
-
-TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
-
 User = get_user_model()
-
-
-def _plain_module_type(manufacturer, model, iface_type=PARENT_TYPE):
-    """Create a ModuleType with a single plain (non-channelized) port template."""
-    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
-    InterfaceTemplate.objects.create(module_type=module_type, name="{module}", type=iface_type)
-    return module_type
 
 
 class BreakoutModeFieldTest(TestCase):
@@ -84,8 +76,8 @@ class BreakoutModeFieldTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkField")
-        cls.module_type = _plain_module_type(manufacturer, "BrkField-QSFP")
+        manufacturer, cls.device = build_device("BrkField")
+        cls.module_type = plain_module_type(manufacturer, "BrkField-QSFP")
 
     def test_a_new_rule_defaults_to_the_flat_topology(self):
         """Nothing changes for a rule that never mentions the mode — flat is what it always did."""
@@ -138,8 +130,8 @@ class BreakoutModeValidationTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkValid")
-        cls.module_type = _plain_module_type(manufacturer, "BrkValid-QSFP")
+        manufacturer, cls.device = build_device("BrkValid")
+        cls.module_type = plain_module_type(manufacturer, "BrkValid-QSFP")
 
     def _rule(self, **kwargs):
         """Return an unsaved module rule with *kwargs* applied over sane defaults."""
@@ -278,8 +270,8 @@ class BreakoutModeExportTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkExp")
-        cls.module_type = _plain_module_type(manufacturer, "BrkExp-QSFP")
+        manufacturer, cls.device = build_device("BrkExp")
+        cls.module_type = plain_module_type(manufacturer, "BrkExp-QSFP")
         cls.channelized = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -314,7 +306,7 @@ class BreakoutModeExportTest(TestCase):
     def test_yaml_export_of_a_flat_rule_still_names_the_mode(self):
         """flat is a real value, not an absence — an importer must not have to guess it."""
         flat = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(self.module_type.manufacturer, "BrkExp-QSFP-FLAT"),
+            module_type=plain_module_type(self.module_type.manufacturer, "BrkExp-QSFP-FLAT"),
             name_template="xe-0/0/{bay_position}:{channel}",
             channel_count=4,
         )
@@ -333,9 +325,9 @@ class BreakoutModeImportTest(TestCase):
         cls.superuser = User.objects.create_superuser(
             username="brkimport", password=TEST_PASSWORD, email="brkimport@example.com"
         )
-        manufacturer, cls.device = _build_device("BrkImp")
-        cls.module_type = _plain_module_type(manufacturer, "BrkImp-QSFP")
-        cls.target_type = _plain_module_type(manufacturer, "BrkImp-QSFP-TARGET")
+        manufacturer, cls.device = build_device("BrkImp")
+        cls.module_type = plain_module_type(manufacturer, "BrkImp-QSFP")
+        cls.target_type = plain_module_type(manufacturer, "BrkImp-QSFP-TARGET")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -382,9 +374,9 @@ class BreakoutModeBulkEditTest(TestCase):
         cls.superuser = User.objects.create_superuser(
             username="brkbulk", password=TEST_PASSWORD, email="brkbulk@example.com"
         )
-        manufacturer, cls.device = _build_device("BrkBulk")
+        manufacturer, cls.device = build_device("BrkBulk")
         cls.rule = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkBulk-QSFP"),
+            module_type=plain_module_type(manufacturer, "BrkBulk-QSFP"),
             name_template="xe-0/0/{bay_position}:{channel}",
             parent_name_template="et-0/0/{bay_position}",
             breakout_mode=CHANNELIZED,
@@ -463,9 +455,9 @@ class BreakoutModeDetailViewTest(TestCase):
         cls.superuser = User.objects.create_superuser(
             username="brkdetail", password=TEST_PASSWORD, email="brkdetail@example.com"
         )
-        manufacturer, cls.device = _build_device("BrkDetail")
+        manufacturer, cls.device = build_device("BrkDetail")
         cls.rule = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkDetail-QSFP"),
+            module_type=plain_module_type(manufacturer, "BrkDetail-QSFP"),
             name_template="xe-0/0/{bay_position}:{channel}",
             parent_name_template="et-XYZZY/0/{bay_position}",
             breakout_mode=CHANNELIZED,
@@ -498,9 +490,9 @@ class BreakoutModeAPITest(APITestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkApi")
-        cls.module_type = _plain_module_type(manufacturer, "BrkApi-QSFP")
-        cls.other_type = _plain_module_type(manufacturer, "BrkApi-QSFP-2")
+        manufacturer, cls.device = build_device("BrkApi")
+        cls.module_type = plain_module_type(manufacturer, "BrkApi-QSFP")
+        cls.other_type = plain_module_type(manufacturer, "BrkApi-QSFP-2")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -571,16 +563,16 @@ class BreakoutModeGraphQLTest(APITestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkGql")
+        manufacturer, cls.device = build_device("BrkGql")
         cls.channelized = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkGql-QSFP-CH"),
+            module_type=plain_module_type(manufacturer, "BrkGql-QSFP-CH"),
             name_template="xe-0/0/{bay_position}:{channel}",
             parent_name_template="et-0/0/{bay_position}",
             breakout_mode=CHANNELIZED,
             channel_count=4,
         )
         cls.flat = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkGql-QSFP-FL"),
+            module_type=plain_module_type(manufacturer, "BrkGql-QSFP-FL"),
             name_template="xe-0/0/{bay_position}:{channel}",
             channel_count=4,
         )
@@ -630,16 +622,16 @@ class BreakoutModeFilterSetTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkFs")
+        manufacturer, cls.device = build_device("BrkFs")
         cls.match = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkFs-QSFP-A"),
+            module_type=plain_module_type(manufacturer, "BrkFs-QSFP-A"),
             name_template="xe-0/0/{bay_position}:{channel}",
             parent_name_template="et-XYZZY/0/{bay_position}",
             breakout_mode=CHANNELIZED,
             channel_count=4,
         )
         cls.other = InterfaceNameRule.objects.create(
-            module_type=_plain_module_type(manufacturer, "BrkFs-QSFP-B"),
+            module_type=plain_module_type(manufacturer, "BrkFs-QSFP-B"),
             name_template="xe-0/0/{bay_position}:{channel}",
             channel_count=4,
         )
@@ -659,8 +651,8 @@ class BreakoutModeRuleTestFormTest(TestCase):
         cls.superuser = User.objects.create_superuser(
             username="brkform", password=TEST_PASSWORD, email="brkform@example.com"
         )
-        manufacturer, cls.device = _build_device("BrkForm")
-        cls.module_type = _plain_module_type(manufacturer, "BrkForm-QSFP")
+        manufacturer, cls.device = build_device("BrkForm")
+        cls.module_type = plain_module_type(manufacturer, "BrkForm-QSFP")
 
     def setUp(self):
         """Log in before posting to the rule test view."""
@@ -967,8 +959,8 @@ class BreakoutModeFingerprintTest(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkFp")
-        cls.module_type = _plain_module_type(manufacturer, "BrkFp-QSFP")
+        manufacturer, cls.device = build_device("BrkFp")
+        cls.module_type = plain_module_type(manufacturer, "BrkFp-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -1005,9 +997,9 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkFlat", ["3", "4"])
-        cls.explicit_type = _plain_module_type(manufacturer, "BrkFlat-QSFP")
-        cls.default_type = _plain_module_type(manufacturer, "BrkFlat-QSFP-DEF")
+        manufacturer, cls.device = build_device("BrkFlat", ["3", "4"])
+        cls.explicit_type = plain_module_type(manufacturer, "BrkFlat-QSFP")
+        cls.default_type = plain_module_type(manufacturer, "BrkFlat-QSFP-DEF")
         cls.explicit_rule = InterfaceNameRule.objects.create(
             module_type=cls.explicit_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -1035,7 +1027,7 @@ class FlatBreakoutModeTest(ChannelizationTestCase):
             channel_count=4,
             channel_start=1,
         )
-        cls.second_channel_fails_type = _plain_module_type(manufacturer, "BrkFlat-DIV")
+        cls.second_channel_fails_type = plain_module_type(manufacturer, "BrkFlat-DIV")
         # The second channel divides by zero, so the rule can name no family at all.
         cls.second_channel_fails_rule = InterfaceNameRule.objects.create(
             module_type=cls.second_channel_fails_type,
@@ -1098,7 +1090,7 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "BrkGate", ["5"], virtual_chassis=VirtualChassis.objects.create(name="brkgate-vc"), vc_position=2
         )
         cls.module_type = ModuleType.objects.create(
@@ -1224,7 +1216,7 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkExec", ["5"])
+        manufacturer, cls.device = build_device("BrkExec", ["5"])
         cls.module_type = ModuleType.objects.create(
             manufacturer=manufacturer, model="BrkExec-ZERO", part_number="BrkExec-ZERO"
         )
@@ -1493,8 +1485,8 @@ class ChannelizedModeWithoutSupportTest(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("BrkNoSup", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "BrkNoSup-QSFP")
+        manufacturer, cls.device = build_device("BrkNoSup", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "BrkNoSup-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",

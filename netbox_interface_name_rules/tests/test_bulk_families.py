@@ -5,7 +5,6 @@
 from unittest import skipUnless
 from unittest.mock import MagicMock, patch
 
-from dcim.choices import InterfaceTypeChoices
 from dcim.models import (
     Device,
     DeviceRole,
@@ -50,12 +49,14 @@ from netbox_interface_name_rules.family.names import COLLISION_REASON
 from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
-from netbox_interface_name_rules.tests.helpers import make_job, run_job_logged
+from netbox_interface_name_rules.tests.helpers import (
+    PLAIN_TYPE,
+    REQUIRES_CHANNELIZATION,
+    channelized_module_type,
+    make_job,
+    run_job_logged,
+)
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_channelization import _channelized_module_type
-
-PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
-REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces"
 
 
 class BulkTestCase(TestCase):
@@ -530,7 +531,7 @@ class BulkApplyChannelizedFamiliesTest(BulkTestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.channelized_type = _channelized_module_type(cls.manufacturer, "BULK-CHANNELIZED")
+        cls.channelized_type = channelized_module_type(cls.manufacturer, "BULK-CHANNELIZED")
 
     def setUp(self):
         self.rule = self._flat_rule(self.channelized_type, name_template="xe-0/0/{bay_position}:{channel}")

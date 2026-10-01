@@ -16,8 +16,11 @@ from django.urls import reverse
 from extras.models import JournalEntry
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.branch_cases import BranchWriteCase, KeptChannelCase
 from netbox_interface_name_rules.tests.helpers import (
+    PLAIN_TYPE,
     branch_cookie,
+    install_form,
     make_device,
     make_device_type,
     make_manufacturer,
@@ -25,9 +28,6 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_type,
     queued_job,
 )
-from netbox_interface_name_rules.tests.test_branch_triggers import install_form
-from netbox_interface_name_rules.tests.test_branch_writes import _BranchWriteCase, _KeptChannelCase
-from netbox_interface_name_rules.tests.test_channelization import PLAIN_TYPE
 
 COMPLETED = JobStatusChoices.STATUS_COMPLETED
 ERRORED = JobStatusChoices.STATUS_ERRORED
@@ -46,7 +46,7 @@ def merging(strategy, commit=True):
     return {"merge_strategy": strategy, **({"commit": "on"} if commit else {})}
 
 
-class _ReplayCase(_BranchWriteCase):
+class _ReplayCase(BranchWriteCase):
     """Run netbox-branching's merge, revert and sync as an operator and a worker do."""
 
     def enqueue(self, action, **form):
@@ -285,7 +285,7 @@ class MergeExitTest(_InstallAndMoveCase):
         self.assert_an_install_on_main_gets_the_names_of_the_rule()
 
 
-class _CascadeCase(_KeptChannelCase, _ReplayCase):
+class _CascadeCase(KeptChannelCase, _ReplayCase):
     """NetBox's cascade renames a kept channel again at the commit of a replay: the documented limit.
 
     The rule keeps channel 2 at ``1:2`` while it renames the parent. A replay renames the parent before

@@ -29,19 +29,19 @@ from netbox_interface_name_rules.family import (
 )
 from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.helpers import make_device
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, _plain_module_type
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNELIZED,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
+    REQUIRES_NO_CHANNELIZATION,
     ChannelizationTestCase,
-    _build_device,
+    build_device,
+    make_device,
+    plain_module_type,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.transactions import write_scope
-
-REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
 
 
 class StructuralFamilyTestCase(ChannelizationTestCase):
@@ -52,8 +52,8 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(cls.PREFIX, ["3", "4"])
-        cls.module_type = _plain_module_type(manufacturer, f"{cls.PREFIX}-QSFP")
+        manufacturer, cls.device = build_device(cls.PREFIX, ["3", "4"])
+        cls.module_type = plain_module_type(manufacturer, f"{cls.PREFIX}-QSFP")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template=cls.NAME_TEMPLATE,

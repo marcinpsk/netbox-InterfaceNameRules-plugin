@@ -3,8 +3,7 @@
 """An atomic block keeps the NetBox events it queued only when it commits, coalesced as NetBox does."""
 
 import contextvars
-import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from itertools import product
 from unittest import skipUnless
 
@@ -12,16 +11,16 @@ from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
 from dcim.models import Interface, Site
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, connection, transaction
-from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from extras import events as netbox_events
 from extras.events import serialize_for_event
 from extras.models import Tag
-from netbox.context import current_request, events_queue
+from netbox.context import events_queue
 
 from netbox_interface_name_rules.jobs import run_as_job_user
 from netbox_interface_name_rules.tests.helpers import (
+    WriteInterfacesTo,
     empty_the_webhook_queue,
     make_device,
     make_device_type,
@@ -30,6 +29,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_manufacturer,
     queued_webhook_jobs,
     queued_webhooks,
+    request_context,
 )
 from netbox_interface_name_rules.transactions import atomic_with_events, on_commit, write_scope
 
@@ -248,21 +248,6 @@ def generated_cases():
                 yield event_before, levels
 
 
-@contextmanager
-def request_context(user):
-    """Set the request and the event queue as NetBox's event_tracking does, without its flush."""
-    request = HttpRequest()
-    request.user = user
-    request.id = uuid.uuid4()
-    request_token = current_request.set(request)
-    queue_token = events_queue.set({})
-    try:
-        yield
-    finally:
-        events_queue.reset(queue_token)
-        current_request.reset(request_token)
-
-
 def _event_key(pk):
     return f"dcim.interface:{pk}"
 
@@ -467,16 +452,6 @@ class GeneratedCaseCountTest(SimpleTestCase):
     def test_the_generator_yields_every_valid_combination(self):
         """42 cases of one block, and 666 of two: 882 minus 216 that change the row after its delete."""
         self.assertEqual(len(list(generated_cases())), 708)
-
-
-class WriteInterfacesTo:
-    """A database router that sends each write of an interface to one alias."""
-
-    def __init__(self, alias):
-        self.alias = alias
-
-    def db_for_write(self, model, **hints):
-        return self.alias if model is Interface else None
 
 
 class WriteScopeOnMainTest(TestCase):

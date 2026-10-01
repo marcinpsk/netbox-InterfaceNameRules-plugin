@@ -13,15 +13,15 @@ from extras.models import SavedFilter, Webhook
 from netbox.context import events_queue
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.branch_cases import BRANCH_BEFORE, DEFAULT_BEFORE, SERVER_DEFAULT, BranchTestCase
 from netbox_interface_name_rules.tests.helpers import (
     activate,
     lock_timeout,
     make_manufacturer,
     make_module_type,
+    request_context,
     set_lock_timeout,
 )
-from netbox_interface_name_rules.tests.test_branching import BranchTestCase
-from netbox_interface_name_rules.tests.test_transactions import request_context
 from netbox_interface_name_rules.transactions import (
     LOCK_TIMEOUT,
     SET_LOCK_TIMEOUT,
@@ -31,11 +31,6 @@ from netbox_interface_name_rules.transactions import (
 )
 
 User = get_user_model()
-# Each connection starts from its own value, so a test can tell which value came back where.
-DEFAULT_BEFORE = "3s"
-BRANCH_BEFORE = "4s"
-# The value that PostgreSQL gives a new session.
-SERVER_DEFAULT = "0"
 
 
 def abort_the_transaction(alias):

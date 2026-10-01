@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
-"""Builders for the objects the tests need, a runner for the background jobs, and a reader of their webhooks.
+"""Builders, the values and test cases that several test modules share, a job runner and a webhook reader.
 
 Every builder takes a *prefix* and derives names and slugs from it. Test classes share one database
 per worker, so a class that names its objects after itself cannot collide with another class, and a
@@ -14,25 +14,46 @@ from dataclasses import dataclass
 import django_rq
 from core.events import OBJECT_CREATED, OBJECT_DELETED, OBJECT_UPDATED
 from core.models import Job, ObjectType
+from dcim.choices import InterfaceTypeChoices
 from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
     Interface,
+    InterfaceTemplate,
     Manufacturer,
+    Module,
+    ModuleBay,
     ModuleBayTemplate,
     ModuleType,
     Site,
 )
 from django.contrib.auth import get_user_model
 from django.db import connections
+from django.http import HttpRequest
+from django.test import TestCase
 from extras.choices import EventRuleActionChoices
 from extras.models import EventRule, Webhook
+from netbox.context import current_request, events_queue
 from rq import Worker
 from rq.job import Job as RQJob
 
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.transactions import READ_LOCK_TIMEOUT, SET_LOCK_TIMEOUT
+
+# Resolved defensively so this module still imports on NetBox releases without channelization.
+CHANNEL_TYPE = getattr(InterfaceTypeChoices, "TYPE_CHANNEL", "channel")
+PARENT_TYPE = InterfaceTypeChoices.TYPE_40GE_QSFP_PLUS
+PLAIN_TYPE = InterfaceTypeChoices.TYPE_10GE_SFP_PLUS
+FLAT = BreakoutModeChoices.FLAT
+CHANNELIZED = BreakoutModeChoices.CHANNELIZED
+TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
+PLUGIN_LOGGER = "netbox_interface_name_rules"
+REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces (4.7+)"
+REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+# On NetBox 4.5 and older the token stays literal in the interface name.
+REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:
@@ -230,3 +251,169 @@ def interface_signal(signal, receiver):
         yield
     finally:
         signal.disconnect(receiver, sender=Interface)
+
+
+def build_device(prefix, bay_positions=(), **device_kwargs):
+    """Create a manufacturer, a device type with module bays at *bay_positions*, and one device."""
+    slug = prefix.lower()
+    manufacturer = Manufacturer.objects.create(name=f"{prefix}Mfg", slug=f"{slug}-mfg")
+    device_type = DeviceType.objects.create(manufacturer=manufacturer, model=f"{prefix}-Dev", slug=f"{slug}-dev")
+    for position in bay_positions:
+        ModuleBayTemplate.objects.create(device_type=device_type, name=f"Bay {position}", position=position)
+    role = DeviceRole.objects.create(name=f"{prefix}Role", slug=f"{slug}-role")
+    site = Site.objects.create(name=f"{prefix}Site", slug=f"{slug}-site")
+    device = Device.objects.create(name=f"{slug}-sw1", device_type=device_type, role=role, site=site, **device_kwargs)
+    return manufacturer, device
+
+
+def channelized_family(module_type, parent_name, child_names, channels=4):
+    """Add one channelized parent template plus its channel templates to *module_type*.
+
+    *child_names* maps a channel_id to the template name that channel takes.
+    """
+    parent = InterfaceTemplate.objects.create(
+        module_type=module_type, name=parent_name, type=PARENT_TYPE, channels=channels
+    )
+    for channel_id, name in child_names.items():
+        InterfaceTemplate.objects.create(
+            module_type=module_type,
+            name=name,
+            type=CHANNEL_TYPE,
+            parent=parent,
+            channel_id=channel_id,
+        )
+    return parent
+
+
+def channelized_module_type(manufacturer, model, channels=4, child_channel_ids=(1, 2, 3, 4), child_names=None):
+    """Create a ModuleType whose interface templates form a channelized family.
+
+    The parent template is ``{module}`` with *channels* set; each entry in *child_channel_ids* adds a
+    channel-type template bound to it.  *child_names* maps a channel_id to a template name, defaulting
+    to the upstream ``<parent>:<channel_id>`` convention.
+    """
+    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
+    names = child_names or {channel_id: f"{{module}}:{channel_id}" for channel_id in child_channel_ids}
+    channelized_family(
+        module_type, "{module}", {channel_id: names[channel_id] for channel_id in child_channel_ids}, channels=channels
+    )
+    return module_type
+
+
+def plain_module_type(manufacturer, model, iface_type=PARENT_TYPE):
+    """Create a ModuleType with a single plain (non-channelized) port template."""
+    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
+    InterfaceTemplate.objects.create(module_type=module_type, name="{module}", type=iface_type)
+    return module_type
+
+
+def token_module_type(manufacturer, model, *template_names, iface_type=PLAIN_TYPE):
+    """Create a ModuleType whose interface templates are named *template_names*, in order."""
+    module_type = ModuleType.objects.create(manufacturer=manufacturer, model=model, part_number=model)
+    for name in template_names:
+        InterfaceTemplate.objects.create(module_type=module_type, name=name, type=iface_type)
+    return module_type
+
+
+def install_form(bay, module_type):
+    """Return the form data of NetBox's module edit view that installs *module_type* in *bay*."""
+    return {
+        "device": bay.device_id,
+        "module_bay": bay.pk,
+        "module_type": module_type.pk,
+        "status": "active",
+        "replicate_components": "on",
+    }
+
+
+def names_of(module):
+    """Return the sorted interface names of *module* on the active branch."""
+    return sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+
+
+@contextlib.contextmanager
+def request_context(user):
+    """Set the request and the event queue as NetBox's event_tracking does, without its flush."""
+    request = HttpRequest()
+    request.user = user
+    request.id = uuid.uuid4()
+    request_token = current_request.set(request)
+    queue_token = events_queue.set({})
+    try:
+        yield
+    finally:
+        events_queue.reset(queue_token)
+        current_request.reset(request_token)
+
+
+class WriteInterfacesTo:
+    """A database router that sends each write of an interface to one alias."""
+
+    def __init__(self, alias):
+        self.alias = alias
+
+    def db_for_write(self, model, **hints):
+        return self.alias if model is Interface else None
+
+
+class ChannelizationTestCase(TestCase):
+    """Install helpers shared by the channelized module-install test cases."""
+
+    def _install(self, module_type, position, run_rules=True):
+        """Install a module into the bay at *position*; run the post-commit rename unless told not to.
+
+        ``run_rules=False`` leaves the freshly instantiated (raw-named) family in place so a test can
+        call the engine directly and assert its return value.
+        """
+        bay = ModuleBay.objects.get(device=self.device, name=f"Bay {position}")
+        if run_rules:
+            with self.captureOnCommitCallbacks(execute=True):
+                module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
+        else:
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=module_type)
+        return module, bay
+
+    @staticmethod
+    def _names(module):
+        """Return the sorted interface names of *module*."""
+        return sorted(Interface.objects.filter(module=module).values_list("name", flat=True))
+
+    @staticmethod
+    def _parent(module):
+        """Return the channelized parent interface of *module*."""
+        return Interface.objects.get(module=module, channels__isnull=False)
+
+    @staticmethod
+    def _child(module, channel_id):
+        """Return the channel subinterface of *module* bound to *channel_id*."""
+        return Interface.objects.get(module=module, channel_id=channel_id)
+
+
+class VcDriftTestCase(ChannelizationTestCase):
+    """VC transitions go through a real ``Device.save()`` so the plugin's signals do the scheduling."""
+
+    def _save_vc_state(self, device, virtual_chassis, position):
+        with self.captureOnCommitCallbacks(execute=True):
+            device.virtual_chassis = virtual_chassis
+            device.vc_position = position
+            device.save()
+
+    def _join(self, vc, position, device=None):
+        """Add *device* to *vc* at *position* — the join direction (fallback → position)."""
+        self._save_vc_state(device or self.device, vc, position)
+
+    def _renumber(self, position, device=None):
+        """Move *device* to another position inside its VC — the renumber direction (P → Q)."""
+        device = device or self.device
+        self._save_vc_state(device, device.virtual_chassis, position)
+
+    def _leave(self, device=None):
+        """Remove *device* from its VC — the leave direction (position → fallback)."""
+        self._save_vc_state(device or self.device, None, None)
+
+    def _install_on(self, device, module_type, position):
+        """Install a module of *module_type* into *device*'s bay at *position*, rules and all."""
+        bay = ModuleBay.objects.get(device=device, name=f"Bay {position}")
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
+        return module, bay

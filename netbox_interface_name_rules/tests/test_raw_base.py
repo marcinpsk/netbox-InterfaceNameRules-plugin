@@ -23,20 +23,20 @@ from netbox_interface_name_rules.engine import (
     supports_vc_position_token,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
-from netbox_interface_name_rules.tests.test_breakout_mode import CHANNELIZED, FLAT, _plain_module_type
-from netbox_interface_name_rules.tests.test_channelization import (
+from netbox_interface_name_rules.tests.helpers import (
+    CHANNELIZED,
+    FLAT,
     PLAIN_TYPE,
     PLUGIN_LOGGER,
     REQUIRES_CHANNELIZATION,
-    _build_device,
-    _channelized_module_type,
-)
-from netbox_interface_name_rules.tests.test_vc_drift import (
     REQUIRES_VC_POSITION_TOKEN,
     VcDriftTestCase,
-    _token_module_type,
+    build_device,
+    channelized_module_type,
+    plain_module_type,
+    token_module_type,
 )
+from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 
 
 class RawBasePlainRenameTest(VcDriftTestCase):
@@ -44,17 +44,17 @@ class RawBasePlainRenameTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "RawBase",
             ["3", "4", "5", "6", "7"],
             virtual_chassis=VirtualChassis.objects.create(name="rawbase-vc"),
             vc_position=1,
         )
-        cls.module_type = _plain_module_type(manufacturer, "RawBase-SFP", PLAIN_TYPE)
+        cls.module_type = plain_module_type(manufacturer, "RawBase-SFP", PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(module_type=cls.module_type, name_template="{base}-x")
-        cls.vc_type = _plain_module_type(manufacturer, "RawBase-VC", PLAIN_TYPE)
+        cls.vc_type = plain_module_type(manufacturer, "RawBase-VC", PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.vc_type, name_template="{base}.{vc_position}")
-        cls.fixed_type = _plain_module_type(manufacturer, "RawBase-FIXED", PLAIN_TYPE)
+        cls.fixed_type = plain_module_type(manufacturer, "RawBase-FIXED", PLAIN_TYPE)
         cls.fixed_rule = InterfaceNameRule.objects.create(
             module_type=cls.fixed_type, name_template="et-0/0/{bay_position}"
         )
@@ -66,7 +66,7 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         InterfaceTemplate.objects.create(module_type=cls.overlap_type, name="port{module}", type=PLAIN_TYPE)
         InterfaceTemplate.objects.create(module_type=cls.overlap_type, name="port{module}.2", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.overlap_type, name_template="{base}.{vc_position}")
-        cls.flat_type = _plain_module_type(manufacturer, "RawBase-FLAT", PLAIN_TYPE)
+        cls.flat_type = plain_module_type(manufacturer, "RawBase-FLAT", PLAIN_TYPE)
         cls.flat_rule = InterfaceNameRule.objects.create(
             module_type=cls.flat_type,
             name_template="{base}:{channel}",
@@ -74,17 +74,17 @@ class RawBasePlainRenameTest(VcDriftTestCase):
             channel_count=2,
             channel_start=0,
         )
-        cls.arithmetic_type = _plain_module_type(manufacturer, "RawBase-ARITH", PLAIN_TYPE)
+        cls.arithmetic_type = plain_module_type(manufacturer, "RawBase-ARITH", PLAIN_TYPE)
         InterfaceNameRule.objects.create(module_type=cls.arithmetic_type, name_template="{{base} + 100}")
-        cls.vc_arithmetic_type = _plain_module_type(manufacturer, "RawBase-VCARITH", PLAIN_TYPE)
+        cls.vc_arithmetic_type = plain_module_type(manufacturer, "RawBase-VCARITH", PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             module_type=cls.vc_arithmetic_type, name_template="{{base} + 100}.{vc_position}"
         )
-        cls.literal_marker_type = _plain_module_type(manufacturer, "RawBase-LITERAL", PLAIN_TYPE)
+        cls.literal_marker_type = plain_module_type(manufacturer, "RawBase-LITERAL", PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             module_type=cls.literal_marker_type, name_template="{base}-InrRawBaseMark0.{vc_position}"
         )
-        cls.assembled_marker_type = _plain_module_type(manufacturer, "RawBase-ASSEMBLED", PLAIN_TYPE)
+        cls.assembled_marker_type = plain_module_type(manufacturer, "RawBase-ASSEMBLED", PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             module_type=cls.assembled_marker_type, name_template="{base}-InrRawBaseMark{0}.{vc_position}"
         )
@@ -255,8 +255,8 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("RawBaseChan", ["3", "7", "8"])
-        cls.parent_type = _plain_module_type(manufacturer, "RawBaseChan-PARENT")
+        manufacturer, cls.device = build_device("RawBaseChan", ["3", "7", "8"])
+        cls.parent_type = plain_module_type(manufacturer, "RawBaseChan-PARENT")
         cls.parent_rule = InterfaceNameRule.objects.create(
             module_type=cls.parent_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -265,7 +265,7 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
             channel_count=4,
             channel_start=0,
         )
-        cls.channel_type = _plain_module_type(manufacturer, "RawBaseChan-CHANNEL")
+        cls.channel_type = plain_module_type(manufacturer, "RawBaseChan-CHANNEL")
         cls.channel_rule = InterfaceNameRule.objects.create(
             module_type=cls.channel_type,
             name_template="{base}:{channel}",
@@ -274,7 +274,7 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
             channel_count=4,
             channel_start=1,
         )
-        cls.lockstep_type = _channelized_module_type(manufacturer, "RawBaseChan-LOCKSTEP")
+        cls.lockstep_type = channelized_module_type(manufacturer, "RawBaseChan-LOCKSTEP")
         cls.lockstep_rule = InterfaceNameRule.objects.create(module_type=cls.lockstep_type, name_template="{base}-l")
 
     def _assert_reapplies_rename_nothing(self, rule, module, bay, names):
@@ -309,7 +309,7 @@ class RawBaseChannelizedFamilyTest(VcDriftTestCase):
         self.assertIn("'custom'", "\n".join(logs.output))
 
     def test_no_family_is_built_on_an_unclaimed_plain_interface(self):
-        plain_type = _plain_module_type(ModuleType.objects.get(pk=self.parent_type.pk).manufacturer, "RawBaseChan-BARE")
+        plain_type = plain_module_type(ModuleType.objects.get(pk=self.parent_type.pk).manufacturer, "RawBaseChan-BARE")
         module, _ = self._install_on(self.device, plain_type, "3")
         rename_out_of_band(Interface.objects.get(module=module), "custom")
         rule = InterfaceNameRule.objects.create(
@@ -339,10 +339,10 @@ class RawBaseBaseFreeParentTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "RawBaseFree", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbasefree-vc"), vc_position=1
         )
-        cls.module_type = _channelized_module_type(manufacturer, "RawBaseFree-QSFP")
+        cls.module_type = channelized_module_type(manufacturer, "RawBaseFree-QSFP")
         InterfaceTemplate.objects.create(module_type=cls.module_type, name="mgmt{module}", type=PLAIN_TYPE)
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
@@ -374,7 +374,7 @@ class RawBaseBaseFreeParentTest(VcDriftTestCase):
         self.assertIn("'et-1/0/3'", "\n".join(logs.output))
 
     def test_a_renumber_moves_a_built_parent_beside_another_template(self):
-        plain_type = _plain_module_type(ModuleType.objects.get(pk=self.module_type.pk).manufacturer, "RawBaseFree-SFP")
+        plain_type = plain_module_type(ModuleType.objects.get(pk=self.module_type.pk).manufacturer, "RawBaseFree-SFP")
         InterfaceTemplate.objects.create(module_type=plain_type, name="mgmt{module}", type=PLAIN_TYPE)
         InterfaceNameRule.objects.create(
             module_type=plain_type,
@@ -400,13 +400,13 @@ class RawBaseFlatFamilyPreviewTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "RawBaseFlat",
             ["3", "4"],
             virtual_chassis=VirtualChassis.objects.create(name="rawbaseflat-vc"),
             vc_position=1,
         )
-        cls.module_type = _token_module_type(manufacturer, "RawBaseFlat-QSFP", "xe-{vc_position:0}/0/{module}")
+        cls.module_type = token_module_type(manufacturer, "RawBaseFlat-QSFP", "xe-{vc_position:0}/0/{module}")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="brk-{base}:{channel}",
@@ -447,11 +447,11 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device(
+        manufacturer, cls.device = build_device(
             "RawBaseDrift", ["3"], virtual_chassis=VirtualChassis.objects.create(name="rawbasedrift-vc"), vc_position=1
         )
-        cls.module_type = _token_module_type(manufacturer, "RawBaseDrift-QSFP", "xe-{vc_position:0}/0/{module}")
-        cls.dotted_type = _channelized_module_type(
+        cls.module_type = token_module_type(manufacturer, "RawBaseDrift-QSFP", "xe-{vc_position:0}/0/{module}")
+        cls.dotted_type = channelized_module_type(
             manufacturer,
             "RawBaseDrift-DOTTED",
             channels=2,
@@ -485,7 +485,7 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
         self.assertEqual(self._names(module), ["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"])
 
     def test_a_drifted_flat_family_whose_rule_spells_a_text_sentinel_is_offered_for_conversion(self):
-        drift_type = _token_module_type(
+        drift_type = token_module_type(
             ModuleType.objects.get(pk=self.module_type.pk).manufacturer,
             "RawBaseFlat-SENT",
             "xe-{vc_position:0}/0/{module}",
@@ -517,8 +517,8 @@ class RawBaseUnusedParentTemplateTest(VcDriftTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = _build_device("RawBaseUnused", ["3"])
-        cls.module_type = _plain_module_type(manufacturer, "RawBaseUnused-SFP", PLAIN_TYPE)
+        manufacturer, cls.device = build_device("RawBaseUnused", ["3"])
+        cls.module_type = plain_module_type(manufacturer, "RawBaseUnused-SFP", PLAIN_TYPE)
 
     def _rule(self, parent_name_template):
         """Return an unsaved flat rule, as the Build Rule tester previews one."""

@@ -16,18 +16,15 @@ from pathlib import Path
 from unittest import skipUnless
 
 from dcim.models import Interface
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, connections, router
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase
 
 from netbox_interface_name_rules import branching
 from netbox_interface_name_rules.branching import REPLAY_MARK, REPLAYING_METHODS, check_version
+from netbox_interface_name_rules.tests.branch_cases import BRANCHING_INSTALLED, BRANCHING_SKIP_REASON, BranchTestCase
 from netbox_interface_name_rules.tests.helpers import activate, make_device, make_device_type, make_manufacturer
-
-BRANCHING_INSTALLED = apps.is_installed("netbox_branching")
-BRANCHING_SKIP_REASON = "netbox-branching is not installed"
 
 
 def schema_exists(schema_name):
@@ -196,29 +193,6 @@ class ReplayCallSiteScanTest(SimpleTestCase):
                 ("undo", "added.py", "<module>"),
             },
         )
-
-
-def remove_branch(branch):
-    """Close the connection of *branch*, then drop its schema."""
-    connections[branch.connection_name].close()
-    branch.deprovision()
-
-
-@skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
-class BranchTestCase(TransactionTestCase):
-    """Provision real branches. Each branch is removed when its test ends, because ``--reuse-db`` keeps schemas."""
-
-    def provision_branch(self, name, user):
-        """Return a new branch named *name*, provisioned by *user* as netbox-branching's own tests do."""
-        from netbox_branching.models import Branch
-
-        branch = Branch(name=name)
-        branch.save(provision=False)
-        self.addCleanup(remove_branch, branch)
-        branch.provision(user=user)
-        # provision() writes the status with a queryset update, which the instance does not see.
-        branch.refresh_from_db()
-        return branch
 
 
 class BranchProvisioningTest(BranchTestCase):

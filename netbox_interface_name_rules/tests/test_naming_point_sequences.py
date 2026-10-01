@@ -23,12 +23,8 @@ from netbox_interface_name_rules.engine import supports_vc_position_token
 from netbox_interface_name_rules.family import supports_module_moves
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.naming import bay_naming_values, chassis_position
-from netbox_interface_name_rules.tests.test_module_move_trigger import (
-    PLAIN_TYPE,
-    ModuleMoveTestCase,
-    _module_reapplies,
-)
-from netbox_interface_name_rules.tests.test_vc_drift import REQUIRES_VC_POSITION_TOKEN
+from netbox_interface_name_rules.tests.helpers import PLAIN_TYPE, REQUIRES_VC_POSITION_TOKEN
+from netbox_interface_name_rules.tests.trigger_cases import ModuleMoveTestCase, module_reapplies
 
 # The template name after the module's code, or None for a module type without interface templates.
 SHAPES = {
@@ -191,7 +187,7 @@ class _SequenceChecks:
             "bay edit": edit_the_bays,
             **dict.fromkeys(MOVES, move),
         }
-        with _module_reapplies() as spy:
+        with module_reapplies() as spy:
             self._save_in_one_transaction(*(saves[op] for op in sequence))
 
         reapplies = collections.Counter(call.args[0].pk for call in spy.call_args_list)
