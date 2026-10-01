@@ -15,7 +15,7 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange
 from dcim.models import Device, Interface, InterfaceTemplate, Module
 from django.contrib.contenttypes.models import ContentType
-from django.db import connections, transaction
+from django.db import connections, router, transaction
 from django.db.models.signals import post_save
 from django.test import RequestFactory
 from django.urls import reverse
@@ -159,6 +159,19 @@ class InstallInABranchTest(_InstallCase):
         self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_WARNING)
         self.assertIn("`b0` to `b0.br`", entry.comments)
         self.assert_nothing_on_main()
+
+    def test_a_script_install_in_the_transaction_of_the_configuration_guide_gets_its_names_in_the_branch(self):
+        with self.in_branch(), transaction.atomic(using=router.db_for_write(Interface)):
+            self.install(0)
+
+        self.assertEqual(self.names_in_branch(0), ["a0.br", "b0.br"])
+        self.assert_nothing_on_main()
+
+    def test_a_script_install_in_a_transaction_on_default_alone_gets_no_names_in_the_branch(self):
+        with self.in_branch(), transaction.atomic():
+            self.install(0)
+
+        self.assertEqual(self.names_in_branch(0), ["a0", "b0"])
 
 
 class MoveInABranchTest(_InstallCase):

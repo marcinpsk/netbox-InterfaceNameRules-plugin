@@ -423,6 +423,12 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_puts_a_script_install_in_a_transaction_on_the_interface_write_alias(self):
+        guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
+
+        self.assertIn("wrap the install in `transaction.atomic(using=router.db_for_write(Interface))`.", guide)
+        self.assertNotIn("wrap the install in `transaction.atomic()`", guide)
+
     def test_configuration_states_whom_the_change_log_of_a_job_names(self):
         guide = " ".join((_PROJECT_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8").split())
 
