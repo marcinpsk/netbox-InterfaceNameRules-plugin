@@ -301,8 +301,10 @@ def _netbox_branching_imports(path: pathlib.Path) -> list[str]:
 
 
 def _imports_a_test_module(record, package: str) -> bool:
-    """Return whether *record*, read in *package*, imports a ``test_*`` module or name at any depth of the test package."""
+    """Return whether *record*, read in *package*, imports a ``test_*`` module or name, or ``*``, from the test package."""
     module = record.absolute(package)
+    if record.name == "*":
+        return module == TESTS_PACKAGE or module.startswith(f"{TESTS_PACKAGE}.")
     target = module if record.name is None else f"{module}.{record.name}"
     inside = target.removeprefix(f"{TESTS_PACKAGE}.")
     return inside != target and any(part.startswith("test_") for part in inside.split("."))
@@ -1052,7 +1054,8 @@ class NetboxBranchingImportTest(SimpleTestCase):
 class TestModuleImportTest(SimpleTestCase):
     """No module of the test package imports a ``test_*`` module: helpers.py, trigger_cases.py and branch_cases.py share.
 
-    A ``test_*`` name imported from a shared module is refused too: pytest would collect a test function there.
+    A ``test_*`` name imported from a shared module is refused too: pytest would collect a test function there. A ``*``
+    import from the test package is refused, because ``__all__`` can name a test module.
     """
 
     def test_no_module_of_the_test_package_imports_a_test_module(self):
@@ -1083,6 +1086,9 @@ class TestModuleImportTest(SimpleTestCase):
             ],
             "from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
             "from . import test_views\n": ["from . import test_views"],
+            "from . import *\n": ["from . import *"],
+            "from .helpers import *\n": ["from .helpers import *"],
+            "from netbox_interface_name_rules.tests import *\n": ["from netbox_interface_name_rules.tests import *"],
             "def f():\n    from .test_views import ViewTest\n": ["from .test_views import ViewTest"],
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -1127,6 +1133,8 @@ class TestModuleImportTest(SimpleTestCase):
             "from netbox_interface_name_rules.tests import helpers\n"
             "from ..engine import test_rule\n"
             "import netbox_interface_name_rules.tests_extra.test_views\n"
+            "from netbox.settings import *\n"
+            "from netbox_interface_name_rules.tests_extra import *\n"
             "MIDDLEWARE = ('netbox_interface_name_rules.tests.test_views._route',)\n"
         )
         with tempfile.TemporaryDirectory() as directory:
