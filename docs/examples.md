@@ -410,6 +410,10 @@ Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device typ
     for dev in Device.objects.filter(virtual_chassis__isnull=False):
         apply_device_interface_rules(dev)
     ```
+    In a netbox-branching branch, the function sets a `lock_timeout` of 10 seconds
+    while it runs. When you call it inside a transaction that you hold, its commit
+    callbacks run when your transaction commits, with the earlier `lock_timeout` of
+    the session. Set `lock_timeout` for these callbacks in your script.
 
 ---
 

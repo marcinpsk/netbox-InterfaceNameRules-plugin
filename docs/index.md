@@ -23,6 +23,7 @@ automatically apply renaming rules based on configurable templates.
 - **Scoping**: rules can target specific device types, parent module types, platforms, or be universal
 - **Build Rule tester**: preview module and device-interface names before saving. Module rules also preview matching installed interfaces.
 - **Apply Rules**: batch rename existing interfaces with live preview and background job support
+- **netbox-branching**: renames run in the active branch, and a merge, revert or sync keeps the names that it replays (netbox-branching 1.2.x on NetBox 4.7). A channel that the plugin kept at its old name is the exception: see [Limits in a branch](configuration.md#limits-in-a-branch)
 
 ## Supported Scenarios
 
