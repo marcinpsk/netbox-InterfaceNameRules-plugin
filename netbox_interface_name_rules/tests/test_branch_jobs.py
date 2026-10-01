@@ -3,15 +3,24 @@
 """Plugin jobs enqueued in a real netbox-branching branch run in that branch, and only there.
 
 Each test enqueues its job through the Apply page with netbox-branching's cookie, then runs the job
-from what the queue stored, as a worker does.
+from what the queue stored, as a worker does. A background REST request for a rule in a branch is
+refused before it writes.
 """
 
 from core.choices import JobStatusChoices
-from core.models import Job
+from core.models import Job, ObjectChange
 from django.conf import settings
+from django.urls import reverse
 
+from netbox_interface_name_rules.api.views import BACKGROUND_IN_A_BRANCH
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.helpers import queued_job
+from netbox_interface_name_rules.tests.helpers import (
+    branch_cookie,
+    make_manufacturer,
+    make_module_type,
+    queued_job,
+    register_a_worker,
+)
 from netbox_interface_name_rules.tests.test_branch_writes import (
     FLAT_NAMES,
     _BranchWriteCase,
@@ -148,3 +157,50 @@ class ConvertJobInABranchTest(_JobCase, _ConversionCase):
         with self.in_branch():
             self.assertEqual(names_of(self.module), list(FLAT_NAMES))
         self.assertEqual(names_of(self.module), list(FLAT_NAMES))
+
+
+class BackgroundRuleRequestTest(_BranchWriteCase):
+    """NetBox runs a background REST request on main, so the rule endpoints refuse one in a branch."""
+
+    PREFIX = "BrBackground"
+    TEMPLATE = "et-0/0/{bay_position}"
+    EDITED = "xe-0/0/{bay_position}"
+
+    def build(self):
+        self.module_type = make_module_type(make_manufacturer(self.PREFIX), self.PREFIX)
+        self.rule = InterfaceNameRule.objects.create(module_type=self.module_type, name_template=self.TEMPLATE)
+
+    def setUp(self):
+        super().setUp()
+        del self.client.cookies[branch_cookie()]
+        # Without the refusal, NetBox would accept the request, because a worker is registered.
+        register_a_worker(self)
+
+    def background(self, method, payload, **headers):
+        url = reverse("plugins-api:netbox_interface_name_rules-api:interfacenamerule-list")
+        return getattr(self.client, method)(
+            f"{url}?background=true", payload, content_type="application/json", headers=headers
+        )
+
+    def rules(self):
+        return list(InterfaceNameRule.objects.values_list("pk", "name_template"))
+
+    def test_a_background_rule_request_in_a_branch_is_refused_and_writes_nothing_on_either_alias(self):
+        requests = {
+            "post": [{"module_type": self.module_type.pk, "name_template": self.EDITED}],
+            "put": [{"id": self.rule.pk, "module_type": self.module_type.pk, "name_template": self.EDITED}],
+            "patch": [{"id": self.rule.pk, "name_template": self.EDITED}],
+            "delete": [{"id": self.rule.pk}],
+        }
+        for method, payload in requests.items():
+            with self.subTest(method=method):
+                response = self.background(method, payload, **{"X-NetBox-Branch": self.branch.schema_id})
+
+                self.assertEqual((response.status_code, response.json()), (400, [BACKGROUND_IN_A_BRANCH]))
+
+        self.assertFalse(Job.objects.exists())
+        self.assertEqual(self.rules(), [(self.rule.pk, self.TEMPLATE)])
+        with self.in_branch():
+            self.assertEqual(self.rules(), [(self.rule.pk, self.TEMPLATE)])
+        self.assertFalse(ObjectChange.objects.using(self.alias).exists())
+        self.assertFalse(self.change_diffs().exists())
