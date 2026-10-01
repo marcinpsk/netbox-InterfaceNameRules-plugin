@@ -6,6 +6,443 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.7.0 (2026-09-30)
+
+### Bug Fixes
+
+- **change-log**: Count a block as committed only after its atomic exit
+  ([`e216f54`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e216f54eff4a1b9bf90ba0c5e2512f9ef7a5926f))
+
+- **change-log**: Keep the NetBox events of an atomic block only when it commits
+  ([`2a9c014`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2a9c014fd7efa5209f227d790cef60f789c84ac6))
+
+- **change-log**: Point each enclosing event at the saved row after a rollback
+  ([`47f1406`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/47f14063bf9b2c1de1bedb630cf4e71970085c0a))
+
+- **change-log**: Record the before-state of each row the plugin changes
+  ([`4053d27`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4053d2712935eac49ab85fd2a5e35253a2f365a7))
+
+- **change-log**: Reload an enclosing event's object after its block rolls back
+  ([`fd63f6e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/fd63f6eced5c37bb645a35567bf0c0cc55e047aa))
+
+- **change-log**: Tell a failed commit callback apart from a rollback
+  ([`5521641`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5521641117e1a308e652377fab2ad63bfceda41b))
+
+- **claims**: Build a breakout family only on a name one template claims
+  ([`8d138cc`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8d138cc1b7ec2db12acc29a0e64dc93a4fda4498))
+
+- **claims**: Build a breakout family only on a name one template claims
+  ([`80b682a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/80b682a7935f33b3e5bf6d01f21e52ad44dbd304))
+
+- **claims**: Keep a selected interface when a family takes its name
+  ([`77796fa`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/77796fa79b716d098dadc0ca8a8001054e61da71))
+
+- **claims**: Keep a selected interface when a family takes its name
+  ([`443672e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/443672e379fa1126e8ccefb89e8d7523adc8f257))
+
+- **claims**: Let only a family that builds take another interface's name
+  ([`b3b929c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b3b929cce702c8677756c5ede111343ac2f29b42))
+
+- **claims**: Let only a family that builds take another interface's name
+  ([`394fd6f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/394fd6f03aa8e2470e1e0d3b7479dc152e9aacb7))
+
+- **claims**: Read the claim of a module type without templates like any other
+  ([`8f4a633`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8f4a63303eef70b0dfde4d9ccaa305e377eada20))
+
+- **claims**: Read the claim of a module type without templates like any other
+  ([`ec18909`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ec189096bfcb77b828b1c191d4a45184ec38d778))
+
+- **claims**: Rename a refused raw name under a rule without {base}
+  ([`158c4ff`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/158c4ff2a1b5280f29ff0dac282b29297b276710))
+
+- **claims**: Rename a refused raw name under a rule without {base}
+  ([`6b52b66`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6b52b66c606f40cd6dece4a361f18b5e7cd8521f))
+
+- **claims**: Report a selected interface beside channelized families
+  ([`8a52fee`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8a52fee1d17d9fb69d30fb19f377e847c1a56202))
+
+- **claims**: Report each interface a forced breakout reapply cannot claim
+  ([`7a45df0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7a45df0c0a9ac0666deba5b7b60c6f0dee0f2f1f))
+
+- **claims**: Report each interface a forced breakout reapply cannot claim
+  ([`aec1d63`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/aec1d63aa5e485eac515ce8936599f4e29b75718))
+
+- **engine**: Lock and re-read the rule before it gets the deprecated tag
+  ([`fd4fc5d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/fd4fc5d80f6a248c18108ab4555854ce9ee94cea))
+
+- **engine**: Offer no family in the preview whose names are in use
+  ([`6047005`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/604700568190764cd58394738af49bb6aa95c1ff))
+
+- **engine**: Offer no family in the preview whose names are in use
+  ([`9b68afd`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9b68afd1cb573f03a526014fcbc683864d8b1965))
+
+- **engine**: Report only the rows a creation plan acts on
+  ([`af37a29`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/af37a296cdb5464fbf193c61cdfd9ef2502cc6a8))
+
+- **engine**: Report only the rows a creation plan acts on
+  ([`8ffc5ff`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8ffc5ff8c0f2c9645521e08b1aa29e6766ace47d))
+
+- **family**: Let a flat family keep only the rows the claim gave it
+  ([`d890e82`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d890e822476bebb7caf73506666332f0d93910cc))
+
+- **family**: Let a flat family keep only the rows the claim gave it
+  ([`8157623`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8157623f3155a3d633317ca8cac90af2ebd207f6))
+
+- **family**: Report the rows a refused flat family would adopt
+  ([`97ca250`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/97ca250ff18047548bf46e116c455f69986143e2))
+
+- **family**: Report the rows a refused flat family would adopt
+  ([`005a34e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/005a34e13b174c28e15e1103b19879616dbbdaa3))
+
+- **jobs**: Give both jobs a logger on NetBox 4.3
+  ([`5f5131e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5f5131e11bf1ded29bc8e605c39e3d15eed88183))
+
+- **jobs**: Give the job request every attribute that event rules copy
+  ([`40c4a7d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/40c4a7d92be6e59f707667f85112ec3c89581c68))
+
+- **jobs**: Record the changes of the Apply Rules and conversion jobs
+  ([`68798bd`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/68798bd078029d4e33a7e7b1c7191fe990566ed2))
+
+- **performance**: Name the scenarios without a baseline as not assessed
+  ([`19ab880`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/19ab8809e1f52ae8b9f13862a39c3058f5c23dc3))
+
+- **rename-triggers**: Append a plan runner per trigger instead of moving the plan callback
+  ([`d8ee880`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d8ee88011d530535967cce5dd90e501548182ea0))
+
+- **rename-triggers**: Build a flat family for a module installed and moved or bay-edited in one
+  transaction
+  ([`a3a9666`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a3a966617ca3c0c68df1013e36e4de8b216fc19c))
+
+- **rename-triggers**: Detect NetBox module moves with one probe that the NetBox 4.7 leg asserts
+  ([`cdf57e9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/cdf57e9538b815969c6525494d702ee23d66f5a7))
+
+- **rename-triggers**: Name a move with NetBox's move resolver and take the latest naming point
+  ([`c541c1c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c541c1c2029eb8b5436aa5bdb0cd12b1aa131d4e))
+
+- **rename-triggers**: Name an installed module from its naming when its bay chain changed back
+  ([`55c2011`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/55c20118333898f61fad4518616ebe471cafb814))
+
+- **rename-triggers**: Reapply a module once when its device also changes chassis position
+  ([`72fed0c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/72fed0c0080173d863c4410dc41c79a81a1209a3))
+
+- **rename-triggers**: Reapply a module that moves out and back with the names that its moves gave
+  ([`51ce500`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/51ce5001b42574b30c2b3045fd71b6c5f03da8a2))
+
+- **rename-triggers**: Reapply an installed module as an install that also knows the position of its
+  install
+  ([`41fb319`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/41fb319f0a6dd49f135e2342c33ab0e69367ecd5))
+
+- **rename-triggers**: Reapply each module once per transaction from one reapply plan
+  ([`c3479ca`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c3479ca0053cc3cae05b2f14514a99eabb7e1c49))
+
+- **rename-triggers**: Recognise a module installed after a chassis change from the position at its
+  install
+  ([`66d995c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/66d995c9cac60c60c2de27fb14c75e8527d79107))
+
+- **rename-triggers**: Recognise an installed module at the position of its install when no trigger
+  read its naming
+  ([`b8aedea`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b8aedea8920a2f224766faa874684fc6f2e31b8d))
+
+- **rename-triggers**: Recognise the raw names of every naming point of a module in the transaction
+  ([`b5c3c13`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b5c3c13692822e503851d4370c2fafa2772aff74))
+
+- **rename-triggers**: Recognise the raw names that NetBox gives at a move before a chassis change
+  ([`25e6145`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/25e614533dab869a45dbcc987ba731bb2095290c))
+
+- **rename-triggers**: Rename a nested module from its earliest naming when two of its bays change
+  ([`f1003f9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f1003f99deb74341af0a5ec5fa4fd41b80a4add4))
+
+- **rename-triggers**: Report a failed naming at install on its module, like a failed reapply
+  ([`1210db0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1210db055207b00c16683e1a38f4499ce44654ae))
+
+- **rename-triggers**: Report a failed rule comparison as a failure of its module
+  ([`660da4c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/660da4c137a8c2ea99c316045004b959bc62f039))
+
+- **rename-triggers**: Resolve raw template names at the chassis position before a change
+  ([`2dd302c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2dd302cfaf613ebb3afa182e47563d709db759c2))
+
+- **template-names**: Mark the chassis-position tokens with text no template name can hold
+  ([`00c83ec`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/00c83ec16908d991697a0379315c7d21cf97ac53))
+
+- **template-names**: Resolve a template name at another chassis position through NetBox's own
+  resolver
+  ([`a2b500a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a2b500ade238f730d0564fcb66be68ae8425d259))
+
+- **template-names**: Split a template name at every chassis-position token that NetBox resolves
+  ([`e92f1e6`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e92f1e6f7d3eaba29fbe5cafbed037eb058f5a1f))
+
+- **views**: Lock the rule before the enable toggle takes its snapshot
+  ([`4a68dd6`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4a68dd6165f85531623b0040ac5341afe4841e3a))
+
+### Chores
+
+- **coverage**: Measure the channelized planner on every release
+  ([`656fd48`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/656fd489ed0988406012aa098df7add2ed89ef6e))
+
+### Continuous Integration
+
+- Run the suite against a provisioned netbox-branching branch
+  ([`152a808`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/152a80801b0daa539673166bddc78b00d602a984))
+
+### Documentation
+
+- Define the naming point and state the install rule of one transaction once
+  ([`0e722d4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0e722d408a216a00b8c05c6c9524609c88f16a8e))
+
+- Describe how a module type change renames the modules nested in it
+  ([`408b710`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/408b7102ede6c053c353c6e2e382926d68913dd5))
+
+- Describe the bay edit rename trigger and drop its limit before a move
+  ([`186c8cc`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/186c8ccf33b2e9294d1416036e274dbcd35b6538))
+
+- Describe the plan runners and qualify the once-per-transaction wording
+  ([`93d2105`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/93d21054fb5be346343f09dcb9a79ed46de35ddb))
+
+- Describe the reapply plan of a transaction and its journal owner
+  ([`7edd793`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7edd793f01f46f681096fd03daf299599de700fc))
+
+- Drop the limits of a chassis-position change with a module change in one transaction
+  ([`1e75770`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/1e75770d75bdd4b541f805d157210e7c0edef9c8))
+
+- List the limit of a name that NetBox gives at a move before a chassis change
+  ([`482df4c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/482df4c58c6b07639dd2f71c123641dc51628ffc))
+
+- Qualify the bay name trigger in the feature lists
+  ([`04727cf`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/04727cf1e20b7e59c4113ec02d9cad3c76744be7))
+
+- Record the shared earliest naming and the install case of the bay edit trigger
+  ([`de05dad`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/de05dad2c988b3a436deed4d544f0c6d2c9a7200))
+
+- Split the Signal-driven feature line into short sentences
+  ([`7ceaba8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7ceaba8664bf293eeae416f7bb4539510948d66d))
+
+- Split the type-change sentences and record the scope check timing
+  ([`a4b79e8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a4b79e8b3ba57f4ce21f35428f72ea30d3126166))
+
+- State that a chassis-position change and a module trigger can reapply one module twice
+  ([`b366f7d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b366f7d101e0b363e724d9a5dc734c8abcdcf4d5))
+
+- State which chassis position a naming takes and which modules a device leaves out
+  ([`4b2bd38`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4b2bd3803bfff6311d99d8fc390ba13410080597))
+
+- **adr**: Run plugin writes and rename triggers on the write alias
+  ([`fa9fe52`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/fa9fe5202e5e7f595c403a1999b9f36099502eae))
+
+- **adr**: State one claim resolution order for every path
+  ([`5cdf874`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5cdf8743c20927d0fbbe60185e143f4bc418de25))
+
+- **adr**: State one claim resolution order for every path
+  ([`62b95dd`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/62b95ddef30a29f3bf15cae48c36fd6292f071ea))
+
+- **change-log**: Describe the change-log records of plugin writes and jobs
+  ([`5dd5ea0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5dd5ea01a684fb6e90975d6115fb4e18b324e860))
+
+- **change-log**: Say that a family the plugin cannot finish sends no event
+  ([`431b847`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/431b84709c2c04d2709482bb6a09ed4f5c5f0fde))
+
+- **change-log**: Scope the no-event sentence to changes the plugin rolls back
+  ([`9777178`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9777178ee88504dc217209c7ed992d62f216409a))
+
+- **design**: Record the netbox-branching design ratified in six review rounds
+  ([`53088ed`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/53088ed1a0123787af422e3f49400aff1e4835b1))
+
+- **design**: Separate the executed review checks from the unrun netbox-branching claims
+  ([`dbbee2a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/dbbee2a92d6536f1c103b0b40bc261ab0ebe6310))
+
+- **performance**: Keep the test database in the displayed measurement command
+  ([`3784ce3`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/3784ce30c8463156d611394e52c05c2ca263c2ad))
+
+- **performance**: Measure the module move trigger at its merge commit
+  ([`914bc58`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/914bc58d36950072b87edbf0a5e03599d73f57f6))
+
+### Features
+
+- **branching**: Refuse an unsupported netbox-branching version at startup
+  ([`ddc2ab0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ddc2ab045e4c521beef59299e314ffb4053bfbf8))
+
+- **claims**: Resolve every name form in one claim pass on every path
+  ([`8b41d39`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8b41d394283bcbd76c5360683f4549c5837a6410))
+
+- **claims**: Resolve every name form in one claim pass on every path
+  ([`4ba09aa`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4ba09aaaf8f67818b2eeb29ba92397b626acd65d))
+
+- **rename-triggers**: Recognise module names after a chassis change earlier in the transaction
+  ([`6a91c3b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6a91c3b8770197b6f6b8ea4b7021eaacad52580e))
+
+- **rename-triggers**: Rename nested modules after their parent module's type changes
+  ([`c10af98`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c10af98bd648d4b4641d24815d69be3eb09974e4))
+
+- **rename-triggers**: Rename the modules in a bay after its position or name changes
+  ([`4ce0673`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4ce06738dd5fb335a0c8b6828c1f8c17dd464b33))
+
+### Refactoring
+
+- Reduce the complexity that SonarCloud reports on develop
+  ([`a3931be`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a3931be1e01bf9bbdccf722a568a55b71edb5e41))
+
+- **ci**: Move the mapping check out of _check_model
+  ([`9543961`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9543961e8254042b6bbc3874087c1a86d7844bd0))
+
+- **claims**: Apply the run scope in the family package
+  ([`ca1f2f0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ca1f2f0f00e26292f2c12b94f4e0fcafced94996))
+
+- **claims**: Apply the run scope in the family package
+  ([`10275ca`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/10275ca74f7c8e78f807643291f7fa919097d20d))
+
+- **engine**: Derive the variables of a naming from its bay chain and chassis position
+  ([`7eca25e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7eca25edeb2e7391f36c352f24de36d07cb471d8))
+
+- **engine**: Make the rule comparison a ModuleNaming method
+  ([`61fb7b5`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/61fb7b595aeec5e554cbf975df86b5f6706bd77a))
+
+- **family**: Decide flat expansion from the rows the planner holds
+  ([`51e02d7`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/51e02d75d5ab8cbde5b3179927d8f9b8bf6c9086))
+
+- **family**: Decide flat expansion from the rows the planner holds
+  ([`ae9d838`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ae9d8381d405fb8f1165b5eed7df25680f078c92))
+
+- **family**: Move the kept-module plan out of plan_module_families
+  ([`16e6fa6`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/16e6fa6e703078eb97113b2fbf19496165d23b19))
+
+- **family**: Remove the unused live_members of the plan classes
+  ([`0f252b0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0f252b0787385dfdf13564b6a453d929282f56c6))
+
+- **family**: Remove the unused live_members of the plan classes
+  ([`24df1bb`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/24df1bb0d55bf325a6e77134b9ddb5bc054337b3))
+
+- **jobs**: Move the rule lookup and the request into RuleJobRunner
+  ([`305304e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/305304ed968bdea9dadad4df7d885d3ea038962f))
+
+- **naming**: Define the chassis position of the variables once
+  ([`bd34058`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/bd34058b05dc109836adff7910bcabdb82d69d87))
+
+- **naming**: Read the chassis membership of a device directly
+  ([`f5746ca`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f5746ca4bcd2c145e6c5814dbb8027cfca4407a0))
+
+- **rename-triggers**: Define a module type change once on ModuleState
+  ([`e34a7b4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e34a7b4ea4d29e39bdea5430873e4390116d7ede))
+
+- **rename-triggers**: Hold a bay's previous state in a frozen dataclass
+  ([`008b77f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/008b77f872e23a1691a06a99395a057156372e5e))
+
+- **rename-triggers**: Name the fields of a naming read and type the naming of a naming point
+  ([`4dde978`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/4dde978a1dc4f756d5b67e67130a47a03e7ba678))
+
+- **rename-triggers**: Split the module reapply into option, owner and run helpers
+  ([`c430512`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c430512da3fcb9d3091cffc24086fbf562dd3cbd))
+
+- **rename-triggers**: Split the triggers of a plan once
+  ([`2113b30`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2113b30233824f4865e9fdbe7f5be0aa9d8d54df))
+
+- **rule-selection**: Read enabled module rules through one queryset
+  ([`2060ab1`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2060ab1e89b5a75cee1d9702fdb603039d0f25b6))
+
+- **tests**: Read module imports through one shared helper
+  ([`39d0b6c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/39d0b6cca5d20954576e648bd9c16bda2c781f9b))
+
+- **views**: Build the preview variables in a helper
+  ([`8fc2f62`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8fc2f629ee3d3f63a7319eee0d4ebf323aaea234))
+
+### Testing
+
+- **branching**: Provision a real branch in tests
+  ([`113690a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/113690a7885596500730cf65184afe9daac8741f))
+
+- **change-log**: Cover the delete skip and gate the fail-closed test to NetBox 4.5+
+  ([`76a34a1`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/76a34a18dfd8d4bdad3cf2e277692b64de2ce4fe))
+
+- **change-log**: Exempt an M2M change after a create only in the same request
+  ([`b61110b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b61110b59dc5299a6b4bfcbeab3cdbc4aba7f3f3))
+
+- **change-log**: Fail a test when plugin code writes a row without a snapshot
+  ([`b11cc1d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b11cc1da5dc5b58cf9ec1bdc1963937a004382de))
+
+- **change-log**: Find the guard's calling frame without a fixed stack depth
+  ([`12bdf74`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/12bdf743b64d7304b17d91cf19a60f72cee98a46))
+
+- **claims**: Check each leftover beside a channelized family on every run
+  ([`8fd9d86`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8fd9d8610f5465e8a353752f92c328689301c810))
+
+- **claims**: Check the plans of every path on flat layouts
+  ([`771a85c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/771a85c9aee1ad66c1d0bfc1b82828f5ada0b51b))
+
+- **claims**: Check the plans of every path on flat layouts
+  ([`581fe7f`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/581fe7fac1775326b249df629507d60a0f1b033f))
+
+- **families**: Run the flat-expansion tests on NetBox releases before 4.7
+  ([`3da91d8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/3da91d8951c344b5e247fd3f12e2e0a3fffa631a))
+
+- **jobs**: Share the unrunnable rule and the job log runner
+  ([`09f6a1a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/09f6a1af8671792aa669946217fbf950f398b2c7))
+
+- **module-boundaries**: Key the bulk-write permits by call source
+  ([`7a6be11`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/7a6be114834c313847465dedcb5377a34d99c95f))
+
+- **module-boundaries**: Refuse an atomic block outside the transactions module
+  ([`dd4872e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/dd4872e33ed05bac8810f4cb78c252b1adfd47b6))
+
+- **module-boundaries**: Refuse bulk writes of change-logged rows
+  ([`e97e77c`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e97e77c71c54f8c11751193d2d4e242f76f631b1))
+
+- **performance**: Build nested move modules only for the nested scenario
+  ([`448d639`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/448d639be249aadd69ca70356afa39a8fb3002ba))
+
+- **performance**: Mark the direct-callback move trigger as moved
+  ([`2103e81`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/2103e814365c8fb109d816edab46935cbd858bd5))
+
+- **rename-triggers**: Add moves back to the enumerated sequences of module and chassis changes
+  ([`91b371d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/91b371d2534d066a56939c2314ec891b4230907a))
+
+- **rename-triggers**: Assert that a bay edit in a rolled-back savepoint schedules no reapply
+  ([`b9b1a3a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b9b1a3a29c99bc5c264754812c3d34c39e4c2f8a))
+
+- **rename-triggers**: Check every short sequence of module and chassis changes against the final
+  state
+  ([`a6191fc`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a6191fcb655dd9259caa0dd46dc2bc73b3e20277))
+
+- **rename-triggers**: Count only the reapply's queries in the chassis-wide reapply cost test
+  ([`685f128`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/685f128aadaf8e0d3b459f3727ed8b7f513e1d15))
+
+- **rename-triggers**: Cover a new bay saved with an id that has no row yet
+  ([`f3a387e`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f3a387ed62c9eb6d5c071512ff1eede0e2a43ace))
+
+- **rename-triggers**: Cover installs, joins and leaves beside a module change in both orders
+  ([`5357d65`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5357d65bbc45ec93429074a3fcc423a29b4619db))
+
+- **rename-triggers**: Guard a bay edit and a chassis-position change in one transaction
+  ([`91025e2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/91025e276702aeba9ea12cfde43c4059fb5e19f5))
+
+- **rename-triggers**: Keep a module two levels below a retyped card unchanged
+  ([`e081d73`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e081d73097e0785dc03121fe9422c254253baec3))
+
+- **rename-triggers**: Pin the exact rule reads of a type change and split its control
+  ([`afdaa32`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/afdaa329b86c3e79f06d6a88747e33aabda9e99d))
+
+- **rename-triggers**: Read the raw name of a nested module from NetBox
+  ([`e913636`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e91363612dca08ffa9b2987c39e44476fa524913))
+
+- **rename-triggers**: Report the family a channelized rule built after a move without a rule
+  ([`bee7fc5`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/bee7fc540961526bdac478f9dee9615dd5fcd680))
+
+- **rename-triggers**: Report the family a channelized rule built after a move without a rule
+  ([`64339cf`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/64339cf99295ca4ff8d4d5d2a4452fa563c0f59f))
+
+- **rename-triggers**: Run saves before a device change through the shared helper
+  ([`9e24938`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/9e249383a288378cd83d4550f046685ca6ee6dc1))
+
+- **rename-triggers**: Share the chassis-change helpers and rule shapes
+  ([`8e4eec2`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8e4eec24b81773e0530acef9707c39b1cdf9a903))
+
+- **template-names**: Remove the tests of stored text that spells a former chassis-position marker
+  ([`c524d46`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c524d4699e05c4ff5cae577e701d4f75f093e4ab))
+
+- **vc-drift**: Read the historical matchers from the resolved templates
+  ([`ba3a3d9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ba3a3d95e6ea12ceb602fd09490a80a812d84596))
+
+- **vc-drift**: Read the historical matchers from the resolved templates
+  ([`97d6d76`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/97d6d765daf6c0e99b3375fa62c116ec1cb85d54))
+
+
 ## v1.6.0 (2026-09-28)
 
 ### Bug Fixes
