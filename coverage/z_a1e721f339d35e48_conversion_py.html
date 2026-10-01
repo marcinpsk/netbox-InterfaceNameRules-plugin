@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for netbox_interface_name_rules/family/conversion.py: 96%</title>
+    <title>Coverage for netbox_interface_name_rules/family/conversion.py: 96.15%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_c827f16f.png">
     <link rel="stylesheet" href="style_cb_4667309f.css" type="text/css">
     <script src="coverage_html_cb_15cffcd0.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>netbox_interface_name_rules<span class="sep">/</span>family<span class="sep">/</span>conversion.py</b>:
-            <span class="pc_cov">96%</span>
+            <span class="pc_cov">96.15%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -67,7 +67,7 @@
             <a id="nextFileLink" class="nav" href="z_a1e721f339d35e48_domain_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-01 17:06 +0000
+            created at 2026-10-01 21:36 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -101,7 +101,7 @@
     <p class="run"><span class="n"><a id="t17" href="#t17">17</a></span><span class="t"><span class="key">from</span> <span class="nam">dcim</span><span class="op">.</span><span class="nam">choices</span> <span class="key">import</span> <span class="nam">InterfaceTypeChoices</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t"><span class="key">from</span> <span class="nam">dcim</span><span class="op">.</span><span class="nam">models</span> <span class="key">import</span> <span class="nam">Interface</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t"><span class="key">from</span> <span class="nam">django</span><span class="op">.</span><span class="nam">core</span><span class="op">.</span><span class="nam">exceptions</span> <span class="key">import</span> <span class="nam">ValidationError</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="nam">django</span><span class="op">.</span><span class="nam">db</span> <span class="key">import</span> <span class="nam">IntegrityError</span><span class="op">,</span> <span class="nam">transaction</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="nam">django</span><span class="op">.</span><span class="nam">db</span> <span class="key">import</span> <span class="nam">IntegrityError</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t22" href="#t22">22</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="op">.</span><span class="nam">naming</span> <span class="key">import</span> <span class="nam">build_variables</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t23" href="#t23">23</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="op">.</span><span class="nam">transactions</span> <span class="key">import</span> <span class="nam">atomic_with_events</span>&nbsp;</span><span class="r"></span></p>
@@ -427,7 +427,7 @@
     <p class="exc show_exc"><span class="n"><a id="t343" href="#t343">343</a></span><span class="t"><span class="str">    rewrite back, so a family is never half converted and a scan writes nothing at all.</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t344" href="#t344">344</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t345" href="#t345">345</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="exc show_exc"><span class="n"><a id="t346" href="#t346">346</a></span><span class="t">        <span class="key">with</span> <span class="nam">atomic_with_events</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="exc show_exc"><span class="n"><a id="t346" href="#t346">346</a></span><span class="t">        <span class="key">with</span> <span class="nam">atomic_with_events</span><span class="op">(</span><span class="op">)</span> <span class="key">as</span> <span class="nam">block</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t347" href="#t347">347</a></span><span class="t">            <span class="nam">live</span> <span class="op">=</span> <span class="nam">_locked_family</span><span class="op">(</span><span class="nam">plan</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t348" href="#t348">348</a></span><span class="t">            <span class="key">if</span> <span class="nam">_is_stale</span><span class="op">(</span><span class="nam">plan</span><span class="op">,</span> <span class="nam">live</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t349" href="#t349">349</a></span><span class="t">                <span class="key">return</span> <span class="nam">_refused</span><span class="op">(</span><span class="nam">plan</span><span class="op">,</span> <span class="nam">FamilyStatus</span><span class="op">.</span><span class="nam">STALE</span><span class="op">,</span> <span class="nam">STALE_REASON</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -436,7 +436,7 @@
     <p class="exc show_exc"><span class="n"><a id="t352" href="#t352">352</a></span><span class="t">                <span class="key">return</span> <span class="nam">_refused</span><span class="op">(</span><span class="nam">plan</span><span class="op">,</span> <span class="nam">FamilyStatus</span><span class="op">.</span><span class="nam">BLOCKED</span><span class="op">,</span> <span class="nam">reason</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t353" href="#t353">353</a></span><span class="t">            <span class="nam">members</span> <span class="op">=</span> <span class="nam">_rewrite</span><span class="op">(</span><span class="nam">plan</span><span class="op">,</span> <span class="nam">live</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t354" href="#t354">354</a></span><span class="t">            <span class="key">if</span> <span class="key">not</span> <span class="nam">commit</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="exc show_exc"><span class="n"><a id="t355" href="#t355">355</a></span><span class="t">                <span class="nam">transaction</span><span class="op">.</span><span class="nam">set_rollback</span><span class="op">(</span><span class="key">True</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="exc show_exc"><span class="n"><a id="t355" href="#t355">355</a></span><span class="t">                <span class="nam">block</span><span class="op">.</span><span class="nam">set_rollback</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t356" href="#t356">356</a></span><span class="t">    <span class="key">except</span> <span class="nam">ValidationError</span> <span class="key">as</span> <span class="nam">error</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t357" href="#t357">357</a></span><span class="t">        <span class="key">return</span> <span class="nam">_refused</span><span class="op">(</span><span class="nam">plan</span><span class="op">,</span> <span class="nam">FamilyStatus</span><span class="op">.</span><span class="nam">BLOCKED</span><span class="op">,</span> <span class="str">&quot; &quot;</span><span class="op">.</span><span class="nam">join</span><span class="op">(</span><span class="nam">error</span><span class="op">.</span><span class="nam">messages</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t358" href="#t358">358</a></span><span class="t">    <span class="key">except</span> <span class="nam">IntegrityError</span> <span class="key">as</span> <span class="nam">error</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -527,7 +527,7 @@
             <a class="nav" href="z_a1e721f339d35e48_domain_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-01 17:06 +0000
+            created at 2026-10-01 21:36 +0000
         </p>
     </div>
 </footer>
