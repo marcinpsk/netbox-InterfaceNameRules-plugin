@@ -158,6 +158,13 @@ REVIEWED_FINGERPRINTS = {
     ("models/changes.py", "ObjectChange.migrate"): "c1927873bbc41a6d",
     ("models/changes.py", "ObjectChange.undo"): "24e38af98d10d67c",
 }
+# The netbox-branching release whose replay paths the allow-lists and the fingerprints record.
+REVIEWED_NETBOX_BRANCHING = "1.2.1"
+RE_REVIEW_RELEASE = (
+    "The installed netbox-branching is not the release whose replay paths were reviewed. Re-review its replay paths: "
+    "run the scan, read every new reference, every changed fingerprint and any dynamic dispatch, such as getattr with "
+    "a variable name. Then update REVIEWED_NETBOX_BRANCHING, the fingerprints and the allow-lists together."
+)
 # The message of a changed reviewed scope.
 RE_REVIEW = (
     "A reviewed scope of netbox-branching changed. A change in it can defer a replay past the wrapper without a new "
@@ -246,9 +253,12 @@ def reviewed(allowed):
 
 @skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
 class ReplayCallSiteContractTest(SimpleTestCase):
-    """Each replay of the installed netbox-branching runs inside a wrapped method, as in the reviewed release."""
+    """The installed netbox-branching is the reviewed release; the scan and the fingerprints help review the next one."""
 
     maxDiff = None
+
+    def test_the_installed_netbox_branching_is_the_reviewed_release(self):
+        self.assertEqual(branching.installed_version(), REVIEWED_NETBOX_BRANCHING, RE_REVIEW_RELEASE)
 
     def assert_reviewed(self, allowed):
         """Assert that the installed netbox-branching makes the references of *allowed*, each as often, and no other."""

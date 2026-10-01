@@ -28,11 +28,16 @@ def check_version(version: str) -> None:
         )
 
 
+def installed_version() -> str:
+    """Return the version of the installed netbox-branching."""
+    return apps.get_app_config(APP_LABEL).version
+
+
 def ready() -> None:
     """When netbox-branching is installed, check its version and mark each of its replays in the context that runs it."""
     if not apps.is_installed(APP_LABEL):
         return
-    check_version(apps.get_app_config(APP_LABEL).version)
+    check_version(installed_version())
     from netbox_branching.models import Branch
 
     for name in REPLAYING_METHODS:
