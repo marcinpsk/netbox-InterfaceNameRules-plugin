@@ -193,13 +193,8 @@ class ConversionVerdictTest(ConversionTestCase):
         """The preflight really performs the conversion to validate it, so the rollback is the feature."""
         pks = dict(Interface.objects.filter(module=self.module).values_list("name", "pk"))
 
-        with patch(
-            "netbox_interface_name_rules.family.conversion.transaction.set_rollback",
-            wraps=transaction.set_rollback,
-        ) as set_rollback:
-            self._verdicts()
+        self._verdicts()
 
-        set_rollback.assert_called_once_with(True)
         self._assert_still_flat(self.module, "3")
         self.assertEqual(dict(Interface.objects.filter(module=self.module).values_list("name", "pk")), pks)
 

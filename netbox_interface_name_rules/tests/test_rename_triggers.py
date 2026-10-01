@@ -10,12 +10,13 @@ committed callbacks, and reads the interface names back.
 import gc
 import re
 from contextlib import contextmanager
+from functools import partial
 from unittest import skipUnless
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleBay, VirtualChassis
 from django.contrib.contenttypes.models import ContentType
-from django.db import DatabaseError, DataError, IntegrityError, connection, transaction
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, DataError, IntegrityError, connection, transaction
 from django.db.models.signals import post_save
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
@@ -32,11 +33,15 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rename_outcomes import OutcomeKind
 from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import (
+    interface_signal,
+    lock_timeout,
     make_device,
     make_device_type,
     make_manufacturer,
     make_module_bay_templates,
     make_module_type,
+    row_lock_in_another_session,
+    set_lock_timeout,
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.tests.test_channelization import (
@@ -1142,3 +1147,49 @@ class CommittedRenameTriggerTest(_RenameTriggerFixture, TransactionTestCase):
             self.device.save()
 
         self.assertEqual(self._names(self.module), ["et-3/0/0"])
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ReconciliationFailureJournalTest(TransactionTestCase):
+    """A channel reconciliation that fails after the commit names each channel and the name it kept."""
+
+    def setUp(self):
+        manufacturer = make_manufacturer("ReconJournal")
+        device_type = make_device_type(manufacturer, "ReconJournal")
+        make_module_bay_templates(device_type, ("Bay 0", "Bay 1"))
+        self.device = make_device("ReconJournal", device_type)
+        self.module_type = _channelized_module_type(manufacturer, "ReconJournal-QSFP")
+        InterfaceNameRule.objects.create(
+            module_type=self.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=BreakoutModeChoices.CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+        # Channel 2 cannot take its target, so the rule keeps the name NetBox gave it.
+        Interface.objects.create(device=self.device, name="xe-0/0/1:1", type=PLAIN_TYPE)
+        # On main the plugin sets no timeout, and without one the reconciliation would wait for the lock.
+        self.addCleanup(set_lock_timeout, DEFAULT_DB_ALIAS, lock_timeout(DEFAULT_DB_ALIAS))
+        set_lock_timeout(DEFAULT_DB_ALIAS, "1s")
+
+    def test_the_journal_names_each_channel_and_its_kept_name(self):
+        """A second session locks the kept channel after NetBox's cascade renamed it, before the reconciliation."""
+        bay = ModuleBay.objects.get(device=self.device, name="Bay 1")
+
+        with row_lock_in_another_session("default") as lock:
+
+            def lock_after_the_cascade(sender, instance, **kwargs):
+                if instance.name == "et-0/0/1:2":
+                    transaction.on_commit(partial(lock, instance.pk), using=instance._state.db)
+
+            with interface_signal(post_save, lock_after_the_cascade), transaction.atomic():
+                module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
+
+        [entry] = _journal(module)
+        self.assertEqual(entry.kind, JournalEntryKindChoices.KIND_DANGER)
+        self.assertIn("Rename each channel back: `et-0/0/1:2` to `1:2`", entry.comments)
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module).values_list("name", flat=True)),
+            ["et-0/0/1", "et-0/0/1:2", "xe-0/0/1:0", "xe-0/0/1:2", "xe-0/0/1:3"],
+        )

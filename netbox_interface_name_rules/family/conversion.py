@@ -17,7 +17,7 @@ from dataclasses import replace
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import Interface
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError
 
 from ..naming import build_variables
 from ..transactions import atomic_with_events
@@ -343,7 +343,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
     rewrite back, so a family is never half converted and a scan writes nothing at all.
     """
     try:
-        with atomic_with_events():
+        with atomic_with_events() as block:
             live = _locked_family(plan)
             if _is_stale(plan, live):
                 return _refused(plan, FamilyStatus.STALE, STALE_REASON)
@@ -352,7 +352,7 @@ def _convert(plan, commit):  # pragma: no cover - requires channelization suppor
                 return _refused(plan, FamilyStatus.BLOCKED, reason)
             members = _rewrite(plan, live)
             if not commit:
-                transaction.set_rollback(True)
+                block.set_rollback()
     except ValidationError as error:
         return _refused(plan, FamilyStatus.BLOCKED, " ".join(error.messages))
     except IntegrityError as error:

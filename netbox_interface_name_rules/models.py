@@ -364,7 +364,12 @@ class InterfaceNameRule(NetBoxModel):
         if written := _RULE_VALIDATION_FIELDS.intersection(update_fields):
             # Validate the stored row on the alias Model.save() writes to, locked against a concurrent save.
             kwargs["using"] = using
-            with atomic_with_events(using=using):
+            if using != (routed := router.db_for_write(self.__class__)):
+                raise RuntimeError(f"A rule save writes to {using!r}, but the router gives {routed!r} for a rule.")
+            with atomic_with_events() as block:
+                # netbox-branching routes an exempted rule model to default, which is an alias of every scope.
+                if using not in block.aliases:
+                    raise RuntimeError(f"A rule save writes to {using!r}, outside the write scope {block.aliases}.")
                 stored = self.__class__._base_manager.using(using).select_for_update().filter(pk=self.pk)
                 # No ordering: the default one joins a nullable module type, which FOR UPDATE refuses.
                 row = stored.order_by().values("pk", *(_RULE_VALIDATION_FIELDS - written)).first()

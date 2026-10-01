@@ -25,10 +25,12 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
+from django.db import connections
 from extras.choices import EventRuleActionChoices
 from extras.models import EventRule, Webhook
 
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.transactions import READ_LOCK_TIMEOUT, SET_LOCK_TIMEOUT
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:
@@ -120,6 +122,27 @@ def make_unrunnable_rule(prefix: str) -> InterfaceNameRule:
     return rule
 
 
+def activate(branch):
+    """Return netbox-branching's context manager that makes *branch* active, or main for None."""
+    # Imported here, so that this module imports where netbox-branching is not installed.
+    from netbox_branching.utilities import activate_branch
+
+    return activate_branch(branch)
+
+
+def lock_timeout(alias: str) -> str:
+    """Return the ``lock_timeout`` of the session of *alias*, read as the write scope reads it."""
+    with connections[alias].cursor() as cursor:
+        cursor.execute(READ_LOCK_TIMEOUT)
+        return cursor.fetchone()[0]
+
+
+def set_lock_timeout(alias: str, value: str) -> None:
+    """Set the ``lock_timeout`` of the session of *alias*, as the write scope sets it."""
+    with connections[alias].cursor() as cursor:
+        cursor.execute(SET_LOCK_TIMEOUT, [value])
+
+
 def run_job_logged(test_case, runner, raises=None, **kwargs):
     """Run *runner* with *kwargs*, assert that it raises *raises* when given, and return the records it logs."""
     with test_case.assertLogs(f"netbox.jobs.{type(runner).__name__}", level="INFO") as logs:
@@ -157,3 +180,30 @@ def queued_webhook_jobs(event_rule) -> list:
 def queued_webhooks(event_rule) -> list[tuple[str, str]]:
     """Return the event type and object name of each webhook that *event_rule* queued, sorted."""
     return sorted((job.kwargs["event_type"], job.kwargs["data"]["name"]) for job in queued_webhook_jobs(event_rule))
+
+
+@contextlib.contextmanager
+def row_lock_in_another_session(alias):
+    """Yield a function that locks one interface row on *alias* from a second session until the block ends."""
+    other = connections.create_connection(alias)
+    try:
+        other.set_autocommit(False)
+
+        def lock(pk):
+            with other.cursor() as cursor:
+                cursor.execute("SELECT id FROM dcim_interface WHERE id = %s FOR UPDATE", [pk])
+
+        yield lock
+    finally:
+        other.rollback()
+        other.close()
+
+
+@contextlib.contextmanager
+def interface_signal(signal, receiver):
+    """Connect *receiver* to the model *signal* of Interface while the block runs."""
+    signal.connect(receiver, sender=Interface, weak=False)
+    try:
+        yield
+    finally:
+        signal.disconnect(receiver, sender=Interface)
