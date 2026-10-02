@@ -136,20 +136,23 @@ class ZeroMatchPatternWarningMixin:
         device_rule = _submitted(request, "applies_to_device_interfaces")
         started = timezone.now()
         response = super().post(request, *args, **kwargs)
-        if not regex_rule or device_rule:
-            return response
+        if regex_rule and not device_rule:
+            self._warn_if_pattern_matches_nothing(request, pattern, started)
+        return response
+
+    def _warn_if_pattern_matches_nothing(self, request, pattern, started):
         # Only a rule written by this request saved; a rejected form leaves nothing to report on.
         saved = self.queryset.model.objects.filter(
             module_type_pattern=pattern, module_type_is_regex=True, last_updated__gte=started
         )
         if not saved.exists():
-            return response
+            return
         from .rule_selection import module_types_matching_pattern
 
         try:
             matched = module_types_matching_pattern(pattern)
         except ValidationError:
-            return response
+            return
         if not matched:
             messages.warning(
                 request,
@@ -157,7 +160,6 @@ class ZeroMatchPatternWarningMixin:
                 "The field takes a regular expression, not a glob: '*' repeats the character "
                 "before it, so 'GLC-T*' does not match 'GLC-TE'. Use 'GLC-T.*'.",
             )
-        return response
 
 
 class InterfaceNameRuleCreateView(ZeroMatchPatternWarningMixin, generic.ObjectEditView):

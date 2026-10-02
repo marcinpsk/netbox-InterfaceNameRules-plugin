@@ -99,6 +99,9 @@ devcontainer = [
     "pynetbox",
     "playwright",
 ]
+ci-branching = [
+    "netboxlabs-netbox-branching==1.2.1",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["/opt/netbox/netbox", "."]

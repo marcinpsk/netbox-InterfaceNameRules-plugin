@@ -71,10 +71,12 @@ jobs:
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
+        shell: bash
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system --only-binary=:all: --group ci-tests
-          uv pip install --system -e .
+          uv export --system-certs --locked --group ci-tests --no-default-groups --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
+          uv pip install --system-certs --system --no-deps -e .
 
       - name: Set up NetBox configuration
         working-directory: netbox

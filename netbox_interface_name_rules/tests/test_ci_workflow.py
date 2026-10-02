@@ -20,6 +20,25 @@ def _steps_using(job, action):
     return [step for step in job["steps"] if step.get("uses", "").startswith(f"{action}@")]
 
 
+class WorkflowActionPinsTest(unittest.TestCase):
+    """Workflow jobs must use the same setup-uv action revision."""
+
+    def test_setup_uv_pins_match_across_all_workflow_jobs(self):
+        pins = {}
+        for path in sorted((_PROJECT_ROOT / ".github" / "workflows").iterdir()):
+            if path.suffix not in {".yaml", ".yml"}:
+                continue
+            workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for name, job in workflow["jobs"].items():
+                if "steps" not in job:
+                    continue
+                for index, step in enumerate(_steps_using(job, "astral-sh/setup-uv")):
+                    pins[f"{path.name}:{name}:{index}"] = step["uses"]
+
+        self.assertTrue(pins, "no setup-uv steps found")
+        self.assertEqual(len(set(pins.values())), 1, f"setup-uv pins differ across workflow jobs: {pins}")
+
+
 class CoverageCombineWorkflowTest(unittest.TestCase):
     """Every coverage leg must reach the one job that enforces the gate."""
 
