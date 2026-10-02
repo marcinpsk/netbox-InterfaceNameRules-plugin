@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           uv export --system-certs --locked --only-group lint --no-emit-project --format requirements-txt | \
-            uv pip install --system-certs --system --only-binary=:all: -r /dev/stdin
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
 
       - name: Check the lockfile is current
         run: uv lock --check
@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           uv export --system-certs --locked --only-group release --no-emit-project --format requirements-txt | \
-            uv pip install --system-certs --system --only-binary=:all: -r /dev/stdin
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
           python .github/scripts/check_release_config.py
           fixtures="$(mktemp -d)"
           trap 'rm -rf "$fixtures"' EXIT

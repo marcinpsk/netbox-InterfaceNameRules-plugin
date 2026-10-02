@@ -75,7 +75,7 @@ jobs:
         run: |
           uv pip install --system -r ../netbox/requirements.txt
           uv export --system-certs --locked --group ci-tests --no-default-groups --no-emit-project --format requirements-txt | \
-            uv pip install --system-certs --system --only-binary=:all: -r /dev/stdin
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
           uv pip install --system-certs --system --no-deps -e .
 
       - name: Set up NetBox configuration
