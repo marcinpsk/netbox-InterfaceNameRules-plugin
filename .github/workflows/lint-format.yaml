@@ -26,7 +26,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: 'uv pip install --system --only-binary=:all: --group lint'
+        shell: bash
+        run: |
+          uv export --system-certs --locked --only-group lint --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: -r /dev/stdin
 
       - name: Check the lockfile is current
         run: uv lock --check
@@ -42,8 +45,10 @@ jobs:
         run: pre-commit run --all-files zizmor
 
       - name: Check the release configuration
+        shell: bash
         run: |
-          uv pip install --system --only-binary=:all: --group release
+          uv export --system-certs --locked --only-group release --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: -r /dev/stdin
           python .github/scripts/check_release_config.py
           fixtures="$(mktemp -d)"
           trap 'rm -rf "$fixtures"' EXIT

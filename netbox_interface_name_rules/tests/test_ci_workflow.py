@@ -2,6 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the coverage wiring of the CI test workflow."""
 
+import shlex
 import tomllib
 import unittest
 from pathlib import Path
@@ -18,6 +19,78 @@ def _workflow_jobs():
 
 def _steps_using(job, action):
     return [step for step in job["steps"] if step.get("uses", "").startswith(f"{action}@")]
+
+
+class WorkflowActionPinsTest(unittest.TestCase):
+    """Workflow jobs must use the same setup-uv action revision."""
+
+    def test_setup_uv_pins_match_across_all_workflow_jobs(self):
+        pins = {}
+        for path in sorted((_PROJECT_ROOT / ".github" / "workflows").iterdir()):
+            if path.suffix not in {".yaml", ".yml"}:
+                continue
+            workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+            for name, job in workflow["jobs"].items():
+                if "steps" not in job:
+                    continue
+                for index, step in enumerate(_steps_using(job, "astral-sh/setup-uv")):
+                    pins[f"{path.name}:{name}:{index}"] = step["uses"]
+
+        self.assertTrue(pins, "no setup-uv steps found")
+        self.assertEqual(len(set(pins.values())), 1, f"setup-uv pins differ across workflow jobs: {pins}")
+
+
+class LockedWorkflowDependenciesTest(unittest.TestCase):
+    """CI tools use the lockfile without replacing NetBox's environment."""
+
+    def test_dependency_group_installers_consume_checked_lock_exports(self):
+        installers = [
+            ("test.yaml", "test-netbox", "Install NetBox and plugin", "ci-tests"),
+            ("test.yaml", "coverage", "Install coverage", "ci-tests"),
+            ("test.yaml", "test-netbox", "Install and configure netbox-branching", "ci-branching"),
+            ("test-netbox-main.yaml", "test-netbox-main", "Install NetBox and plugin", "ci-tests"),
+            ("lint-format.yaml", "format-and-lint", "Install dependencies", "lint"),
+            ("lint-format.yaml", "format-and-lint", "Check the release configuration", "release"),
+        ]
+        for filename, job, name, group in installers:
+            with self.subTest(workflow=filename, job=job, step=name):
+                workflow = yaml.safe_load(
+                    (_PROJECT_ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+                )
+                step = next(step for step in workflow["jobs"][job]["steps"] if step.get("name") == name)
+                commands = step["run"].replace("\\\n", " ").splitlines()
+                exports = [line.strip() for line in commands if line.strip().startswith("uv export ")]
+                self.assertEqual(len(exports), 1)
+                export, separator, install = exports[0].partition("|")
+                self.assertEqual(separator, "|")
+                export_args = shlex.split(export)
+                install_args = shlex.split(install)
+                for option in ("--system-certs", "--locked", "--no-emit-project"):
+                    self.assertIn(option, export_args)
+                if name == "Install NetBox and plugin":
+                    self.assertEqual(export_args[export_args.index("--group") + 1], group)
+                    self.assertIn("--no-default-groups", export_args)
+                    self.assertNotIn("--only-group", export_args)
+                    editable = next(line for line in commands if "-e ." in line)
+                    self.assertIn("--no-deps", shlex.split(editable))
+                else:
+                    self.assertEqual(export_args[export_args.index("--only-group") + 1], group)
+                self.assertEqual(export_args[export_args.index("--format") + 1], "requirements-txt")
+                self.assertEqual(install_args[:3], ["uv", "pip", "install"])
+                for option in ("--system-certs", "--system", "--only-binary=:all:"):
+                    self.assertIn(option, install_args)
+                self.assertEqual(install_args[install_args.index("-r") + 1], "/dev/stdin")
+                self.assertEqual(step.get("shell"), "bash", "explicit bash enables pipefail for the export")
+                self.assertNotIn("--group", install_args)
+
+    def test_branching_matrix_selects_the_locked_dependency_group(self):
+        jobs = _workflow_jobs()
+        cells = jobs["test-netbox"]["strategy"]["matrix"]["include"]
+        selected = [cell["netbox-branching"] for cell in cells if cell.get("netbox-branching")]
+        self.assertTrue(selected)
+        self.assertTrue(all(value is True for value in selected))
+        pyproject = tomllib.loads((_PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertTrue(pyproject["dependency-groups"].get("ci-branching"))
 
 
 class CoverageCombineWorkflowTest(unittest.TestCase):
