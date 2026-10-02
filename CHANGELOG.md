@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.8.1 (2026-10-02)
+
+### Bug Fixes
+
+- Require hashes for locked CI dependency installs
+  ([`b23cedb`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b23cedb4192c7ead4094668a5941ba656af7dd46))
+
+- Use locked CI dependencies and separate save warnings
+  ([`cf5516d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/cf5516dc83427ae4bdd74d31922f377c1885b51f))
+
+### Testing
+
+- Remove command-shape assertions from CI checks
+  ([`f4bbcbf`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f4bbcbffb3af5ce8682e52acb5d5c95095bbff50))
+
+
 ## v1.8.0 (2026-10-01)
 
 ### Bug Fixes
