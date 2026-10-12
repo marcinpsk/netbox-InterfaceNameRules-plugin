@@ -33,6 +33,7 @@ class TemplateVariableCondition(StrEnum):
     """Name conditions that control whether a template variable is available."""
 
     VIRTUAL_CHASSIS_MEMBER = "virtual_chassis_member"
+    BAY_POSITION_HAS_DIGIT = "bay_position_has_digit"
     RULE_DECLARES_CHANNELS = "rule_declares_channels"
 
 
@@ -73,6 +74,10 @@ _BUILT = TemplateVariableSource.MODULE_BAY_CHAIN
 _CALLER = TemplateVariableSource.RENAME_CALLER
 _SLOT_DESCRIPTION = "Top-level module bay position. A bay on the device gives only the trailing digits of its position."
 _VC_POSITION_DESCRIPTION = "Virtual Chassis member position. Available only on a member device."
+_BAY_POSITION_PATH_DESCRIPTION = (
+    "Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. "
+    "Available only when the position has such a digit."
+)
 
 TEMPLATE_VARIABLES = (
     TemplateVariable(
@@ -110,6 +115,16 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Numeric suffix of the module bay position."),
         ),
         "1",
+    ),
+    TemplateVariable(
+        "bay_position_path",
+        ((_MEMBER, _BUILT), (_PARENT, _BUILT)),
+        (
+            (_MEMBER, _BAY_POSITION_PATH_DESCRIPTION),
+            (_PARENT, _BAY_POSITION_PATH_DESCRIPTION),
+        ),
+        "0/0/3",
+        condition=TemplateVariableCondition.BAY_POSITION_HAS_DIGIT,
     ),
     TemplateVariable(
         "parent_bay_position",

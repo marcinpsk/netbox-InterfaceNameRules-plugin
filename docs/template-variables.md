@@ -16,7 +16,8 @@ interface name and shows it beside the result. For example, `Ethernet1/5` at pos
 The optional interface-name filter uses RE2. The database preview covers module rules only.
 
 For a module rule, a blank `{vc_position}` simulates a device outside a virtual chassis.
-A template that uses that variable then shows an evaluation error. A device-rule preview
+A template that uses that variable then shows that it is not available. So does a template
+that uses `{bay_position_path}` when `{bay_position}` has no digit. A device-rule preview
 requires a position because device rules rename only virtual-chassis members with a position.
 
 `{vc_position}` is accepted at save in every context that lists it. If the device does
@@ -38,6 +39,7 @@ Module rules use these variables in the Name Template field.
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
@@ -55,6 +57,7 @@ Module rules use these variables in the Parent Name Template field.
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
@@ -265,6 +268,27 @@ The complete family is checked before anything is written: one occupied name —
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
 (4.6 and older) a `channelized` rule is skipped and logged; it is never applied as a flat breakout
 instead.
+
+### Breakout from a prefixed bay position
+
+A device type can give a transceiver bay a full interface name as its position. A Juniper
+MX10008 line card in FPC 0 has the bay `et-0/0/3`. `{bay_position_path}` removes the characters
+before the first digit, so the channels can take another prefix.
+
+```yaml
+module_type_pattern: "QSFPP-4X10GE-.*"
+module_type_is_regex: true
+name_template: "xe-{bay_position_path}:{channel}"
+parent_name_template: "{bay_position}"
+breakout_mode: channelized
+channel_count: 4
+channel_start: 0
+# Bay position et-0/0/3 → et-0/0/3 (parent, 4 channels) + xe-0/0/3:0 … xe-0/0/3:3
+```
+
+A bay position without a digit has no `{bay_position_path}`. The rule then renames nothing. After
+an install, a journal entry on the module lists its interfaces. `{bay_position_path}` is text, so
+use `{bay_position_num}` in arithmetic.
 
 ### Converting an installed flat family
 

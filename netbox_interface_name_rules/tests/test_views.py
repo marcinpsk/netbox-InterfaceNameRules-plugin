@@ -311,7 +311,7 @@ class RuleListViewTest(ViewTestBase):
             rows_by_name.setdefault(name, []).append(contexts)
 
         self.assertEqual(set(rows_by_name), {variable.name for variable in TEMPLATE_VARIABLES})
-        self.assertEqual(len(rows), 12)
+        self.assertEqual(len(rows), 13)
         self.assertEqual(
             rows_by_name["base"],
             [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT], [NamingContext.DEVICE_INTERFACE]],
@@ -731,7 +731,7 @@ class RuleTestViewTest(ViewTestBase):
                 else:
                     self.assertFalse(response.context["form"].errors)
                     self.assertIsNone(response.context["preview_results"])
-                    self.assertTrue(response.context["error"])
+                    self.assertEqual(response.context["error"], "{vc_position} is not available on this device")
 
     def test_device_save_handoff_creates_tested_rule(self):
         from urllib.parse import parse_qs, urlsplit

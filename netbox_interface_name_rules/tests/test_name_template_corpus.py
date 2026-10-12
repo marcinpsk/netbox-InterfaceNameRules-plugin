@@ -77,6 +77,14 @@ NAME_TEMPLATE_CORPUS = (
         channel_count=4,
     ),
     TemplateCase(
+        "module member and parent read the bay position path",
+        "xe-{bay_position_path}:{channel}",
+        ACCEPTED,
+        parent_name_template="et-{bay_position_path}",
+        breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        channel_count=4,
+    ),
+    TemplateCase(
         "device interface variables",
         "{base}-{vc_position}-{port}",
         ACCEPTED,
@@ -90,13 +98,21 @@ NAME_TEMPLATE_CORPUS = (
         error_message="{bay_position} is not available in a device-level rule's name template. "
         "Available: {base}, {port}, {vc_position}.",
     ),
+    TemplateCase(
+        "device interface names the bay position path",
+        "ge-{bay_position_path}",
+        REFUSED,
+        applies_to_device_interfaces=True,
+        error_message="{bay_position_path} is not available in a device-level rule's name template. "
+        "Available: {base}, {port}, {vc_position}.",
+    ),
     TemplateCase("unbalanced name template", "xe-{bay_position", REFUSED),
     TemplateCase(
         "unknown template variable",
         "xe-{unknown}",
         REFUSED,
         error_message="{unknown} is not available in a module rule's name template. "
-        "Available: {base}, {bay_position}, {bay_position_num}, {parent_bay_position}, "
+        "Available: {base}, {bay_position}, {bay_position_num}, {bay_position_path}, {parent_bay_position}, "
         "{parent_bay_position_num}, {sfp_slot}, {slot}, {slot_num}, {vc_position}.",
     ),
     TemplateCase(

@@ -133,7 +133,7 @@ def _rename_outcomes(family_outcomes) -> tuple[RenameOutcome, ...]:
 
 def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
     """Return one unresolved-variable fact per interface that keeps its name for lack of *missing*."""
-    reason = f"{', '.join(name_template.variable_token(name) for name in missing)} is not available on this device"
+    reason = naming.unavailable_reason(missing)
     return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
 
 
@@ -251,17 +251,6 @@ def _has_stale_parent_bay(module_bay) -> bool:
     return installed is None or installed.pk != module_bay.module_id
 
 
-def _unavailable_rule_variables(rule, variables) -> tuple[str, ...]:
-    """Return the variables either template of the module *rule* reads that *variables* lack."""
-    return tuple(
-        dict.fromkeys(
-            name
-            for template in (rule.name_template, rule.parent_name_template)
-            for name in naming.unavailable_variables(template, variables)
-        )
-    )
-
-
 def _acted_on_names(rule, plans):
     """Return the name of every interface the admitted *plans* act on, in plan order."""
     names = []
@@ -287,7 +276,7 @@ def _apply_rule_to_module(
     from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
-    missing = _unavailable_rule_variables(rule, variables)
+    missing = naming.unavailable_variables(variables, rule.name_template, rule.parent_name_template)
     if report_only and not missing:
         return
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -564,7 +553,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
-        missing = naming.unavailable_variables(rule.name_template, variables)
+        missing = naming.unavailable_variables(variables, rule.name_template)
         if missing:
             names = (interface.name, *(child.name for child in children))
             by_family.setdefault(interface.pk, []).extend(_unresolved_outcomes(missing, names))
