@@ -741,7 +741,10 @@ outside their naming context, have unbalanced braces, or have a brace group that
 evaluate. Each warning names the rule ID, field, and reason. The migration leaves all
 values unchanged and completes even
 when it reports a refused rule. Correct the reported templates before saving those
-rules again. See <a href="../template-variables/">Template Variables</a> for each context's variables.</p>
+rules again. See <a href="../template-variables/">Template Variables</a> for each context's variables.
+Migration <code>0019</code> runs the same audit again, so it also reports a stored template that
+uses a text variable, such as <code>{bay_position}</code>, inside an arithmetic group. An upgrade
+that runs both audits reports a refused rule twice.</p>
 <p>Three migrations change stored rules to the shape that rule validation accepts.
 A rollback of these migrations does not restore the old values. If you need
 them, record them before the upgrade.</p>

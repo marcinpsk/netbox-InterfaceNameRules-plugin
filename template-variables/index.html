@@ -594,6 +594,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#breakout-from-a-prefixed-bay-position" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breakout from a prefixed bay position
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#converting-an-installed-flat-family" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -942,6 +953,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#breakout-from-a-prefixed-bay-position" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Breakout from a prefixed bay position
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#converting-an-installed-flat-family" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1005,7 +1027,9 @@ The error names the variable and lists the available variables. Module rules can
 <code>{channel}</code> only when they declare channels. Device rules cannot use module variables,
 and module rules cannot use <code>{port}</code>. Braces must balance in both template fields.
 A save also refuses a brace group that is neither a variable token nor integer arithmetic
-over variable tokens, such as <code>{slot_num // 2}</code> or <code>{bay_position!r}</code>.
+over variable tokens, such as <code>{slot_num // 2}</code> or <code>{bay_position!r}</code>. A save refuses a
+variable that holds text inside an arithmetic group, such as <code>{{bay_position} + 1}</code>. See
+<a href="#arithmetic-expressions">Arithmetic Expressions</a>.
 These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
 The rule tester applies the same checks for the selected rule kind.</p>
 <p>For a device rule, select <strong>Device-level interfaces</strong>, enter the current interface
@@ -1014,10 +1038,15 @@ interface name and shows it beside the result. For example, <code>Ethernet1/5</c
 <code>2</code> produces <code>eth2-5</code> with the name template <code>eth{vc_position}-{port}</code>.
 The optional interface-name filter uses RE2. The database preview covers module rules only.</p>
 <p>For a module rule, a blank <code>{vc_position}</code> simulates a device outside a virtual chassis.
-A template that uses that variable then shows an evaluation error. A device-rule preview
+A template that uses that variable then shows that it is not available. So does a template
+that uses <code>{bay_position_path}</code> when <code>{bay_position}</code> has no digit. A device-rule preview
 requires a position because device rules rename only virtual-chassis members with a position.</p>
-<p><code>{vc_position}</code> is accepted at save in every context that lists it. If the device does
-not provide a position at rename time, that rename is skipped and logged.</p>
+<p><code>{vc_position}</code> and <code>{bay_position_path}</code> are accepted at save in every context that lists
+them. If the device or the module bay does not provide the value at rename time, the
+interface keeps its name and the plugin logs the reason. An install, a rename trigger, Apply
+Rules, its preview, a flat-to-channelized conversion and the rule tester give the same
+reason, for example <code>{bay_position_path} is not available because the module bay position
+has no digit</code>.</p>
 <p>An upgrade reports stored rules that these checks refuse and changes none of them.
 See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <h2 id="available-variables">Available Variables</h2>
@@ -1035,7 +1064,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <tbody>
 <tr>
 <td><code>{slot}</code></td>
-<td>Top-level module bay position. A bay on the device gives only the trailing digits of its position.</td>
+<td>Top-level module bay position. A bay on the device gives only the trailing digits of its position. Text: arithmetic cannot use it. Use {slot_num} in arithmetic.</td>
 <td><code>3</code></td>
 </tr>
 <tr>
@@ -1045,7 +1074,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 </tr>
 <tr>
 <td><code>{bay_position}</code></td>
-<td>Position of the bay that holds the module.</td>
+<td>Position of the bay that holds the module. Text: arithmetic cannot use it. Use {bay_position_num} in arithmetic.</td>
 <td><code>swp1</code></td>
 </tr>
 <tr>
@@ -1054,8 +1083,13 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <td><code>1</code></td>
 </tr>
 <tr>
+<td><code>{bay_position_path}</code></td>
+<td>Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. Text: arithmetic cannot use it.</td>
+<td><code>0/0/3</code></td>
+</tr>
+<tr>
 <td><code>{parent_bay_position}</code></td>
-<td>Position of the parent module's bay.</td>
+<td>Position of the parent module's bay. Text: arithmetic cannot use it. Use {parent_bay_position_num} in arithmetic.</td>
 <td><code>TenGigabitEthernet3/2</code></td>
 </tr>
 <tr>
@@ -1070,7 +1104,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 </tr>
 <tr>
 <td><code>{base}</code></td>
-<td>The raw template name of the interface the rule renames.</td>
+<td>The raw template name of the interface the rule renames. Text: arithmetic cannot use it.</td>
 <td><code>et-0/0/1</code></td>
 </tr>
 <tr>
@@ -1098,7 +1132,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <tbody>
 <tr>
 <td><code>{slot}</code></td>
-<td>Top-level module bay position. A bay on the device gives only the trailing digits of its position.</td>
+<td>Top-level module bay position. A bay on the device gives only the trailing digits of its position. Text: arithmetic cannot use it. Use {slot_num} in arithmetic.</td>
 <td><code>3</code></td>
 </tr>
 <tr>
@@ -1108,7 +1142,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 </tr>
 <tr>
 <td><code>{bay_position}</code></td>
-<td>Position of the bay that holds the module.</td>
+<td>Position of the bay that holds the module. Text: arithmetic cannot use it. Use {bay_position_num} in arithmetic.</td>
 <td><code>swp1</code></td>
 </tr>
 <tr>
@@ -1117,8 +1151,13 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <td><code>1</code></td>
 </tr>
 <tr>
+<td><code>{bay_position_path}</code></td>
+<td>Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. Text: arithmetic cannot use it.</td>
+<td><code>0/0/3</code></td>
+</tr>
+<tr>
 <td><code>{parent_bay_position}</code></td>
-<td>Position of the parent module's bay.</td>
+<td>Position of the parent module's bay. Text: arithmetic cannot use it. Use {parent_bay_position_num} in arithmetic.</td>
 <td><code>TenGigabitEthernet3/2</code></td>
 </tr>
 <tr>
@@ -1133,7 +1172,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 </tr>
 <tr>
 <td><code>{base}</code></td>
-<td>The raw template name of the interface the rule renames.</td>
+<td>The raw template name of the interface the rule renames. Text: arithmetic cannot use it.</td>
 <td><code>et-0/0/1</code></td>
 </tr>
 <tr>
@@ -1156,7 +1195,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <tbody>
 <tr>
 <td><code>{base}</code></td>
-<td>Current interface name before the rule applies.</td>
+<td>Current interface name before the rule applies. Text: arithmetic cannot use it.</td>
 <td><code>et-0/0/1</code></td>
 </tr>
 <tr>
@@ -1166,7 +1205,7 @@ See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 </tr>
 <tr>
 <td><code>{port}</code></td>
-<td>Segment after the last slash in the current interface name. Uses the full name when no slash is present.</td>
+<td>Segment after the last slash in the current interface name. Uses the full name when no slash is present. Text: arithmetic cannot use it.</td>
 <td><code>1</code></td>
 </tr>
 </tbody>
@@ -1203,13 +1242,20 @@ position or on a name the rule gives it. Every other interface keeps its name an
 <h3 id="use-the-_num-variables-in-arithmetic">Use the <code>_num</code> variables in arithmetic</h3>
 <p>A device type may compose the parent into a bay position, the way the Catalyst 4900M and the
 MX304 do, so that a nested bay reads <code>TenGigabitEthernet3/2/1</code> rather than <code>1</code>. Positions are
-therefore path-shaped strings in the general case, and arithmetic on one fails:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Unsafe expression in name template: 8 + (TenGigabitEthernet3/2 - 1) * 2 + 1
+therefore text in the general case, and arithmetic on text fails. The variable table marks
+each variable that holds text. A save refuses such a variable inside an arithmetic group, and
+the error names the numeric counterpart when the variable has one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>GigabitEthernet{slot_num}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>{parent_bay_position} holds text and cannot be used in arithmetic. Use {parent_bay_position_num} instead.
 </code></pre></div>
 <p>Every position has a <code>_num</code> counterpart holding the number its digits spell, so a padded run
 such as <code>02</code> reads <code>2</code>, which is what arithmetic accepts. Use those wherever a template does
 arithmetic. They are also correct for a plain numeric position, so <code>_num</code> is the safe default;
-the raw variable still gives the position as it is stored.</p>
+the raw variable still gives the position as it is stored. <code>{base}</code>, <code>{port}</code> and
+<code>{bay_position_path}</code> have no numeric counterpart.</p>
+<p>A rule saved before this check can still hold a text variable in arithmetic. The rename then
+fails for each value that is not a number, and the interface keeps its name. An upgrade reports
+these rules and changes none of them. See <a href="../installation/#run-database-migrations">Installation</a>.</p>
 <h2 id="virtual-chassis-support">Virtual Chassis Support</h2>
 <h3 id="module-interface-rules-linecardsfp">Module Interface Rules (linecard/SFP)</h3>
 <p>When a module is installed on a device that belongs to a Virtual Chassis, the <code>{vc_position}</code> variable is injected automatically and reflects the device's chassis position (<code>device.vc_position</code>). Templates that use <code>{vc_position}</code> on non-VC devices rename nothing: the interfaces keep their names, and a journal entry on the module lists them.</p>
@@ -1338,6 +1384,22 @@ Blank leaves the parent the name NetBox gave it.</p>
 channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
 (4.6 and older) a <code>channelized</code> rule is skipped and logged; it is never applied as a flat breakout
 instead.</p>
+<h3 id="breakout-from-a-prefixed-bay-position">Breakout from a prefixed bay position</h3>
+<p>A device type can give a transceiver bay a full interface name as its position. A Juniper
+MX10008 line card in FPC 0 has the bay <code>et-0/0/3</code>. <code>{bay_position_path}</code> removes the characters
+before the first digit, so the channels can take another prefix.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">module_type_pattern</span><span class="p">:</span><span class="w"> </span><span class="s">"QSFPP-4X10GE-.*"</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">module_type_is_regex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"xe-{bay_position_path}:{channel}"</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nt">parent_name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"{bay_position}"</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nt">breakout_mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">channelized</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nt">channel_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="nt">channel_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># Bay position et-0/0/3 → et-0/0/3 (parent, 4 channels) + xe-0/0/3:0 … xe-0/0/3:3</span>
+</code></pre></div>
+<p>A bay position without a digit has no <code>{bay_position_path}</code>. The rule then renames nothing. After
+an install, a journal entry on the module lists its interfaces. <code>{bay_position_path}</code> is text, so
+use <code>{bay_position_num}</code> in arithmetic.</p>
 <h3 id="converting-an-installed-flat-family">Converting an installed flat family</h3>
 <p>Applying a rule never converts the flat family an earlier apply installed. A <code>channelized</code> rule with
 a <code>parent_name_template</code> set instead offers each such family for conversion on <strong>Apply Rules →
@@ -1363,15 +1425,16 @@ module type using the <code>{vc_position}</code> template token may predate a ch
 above). That base is recovered from the family's own names, so the family is still offered. Two
 cases deliberately are not: a <code>{base}</code> used inside an arithmetic expression (<code>p{1 + {base}}</code>), which
 cannot be evaluated symbolically, and an ambiguous recovery — one template matching two bases on the
-module, or two templates recovering the same one. Conversion rewrites rows an operator owns, so
+module, or two templates recovering the same one. A save refuses the first case now, so only a rule
+saved before that check can hold it. Conversion rewrites rows an operator owns, so
 those families are left unoffered rather than converted on a guess.</p>
 <h3 id="converter-offset">Converter Offset</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"GigabitEthernet{slot_num}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position_num}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}"</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"GigabitEthernet{slot_num}/{8</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">({parent_bay_position_num}</span><span class="nv"> </span><span class="s">-</span><span class="nv"> </span><span class="s">1)</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">+</span><span class="nv"> </span><span class="s">{sfp_slot}}"</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="c1"># Slot 3, parent bay 2, SFP slot 1 → GigabitEthernet3/11</span>
 </code></pre></div>
 <h3 id="ufispace-sonic">UfiSpace SONiC</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"swp{bay_position_num}"</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="c1"># Bay position swp5 → swp5</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">name_template</span><span class="p">:</span><span class="w"> </span><span class="s">"swp{bay_position_num}"</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="c1"># Bay position swp5 → swp5</span>
 </code></pre></div>
 
 
