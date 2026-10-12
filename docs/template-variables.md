@@ -22,8 +22,12 @@ A template that uses that variable then shows that it is not available. So does 
 that uses `{bay_position_path}` when `{bay_position}` has no digit. A device-rule preview
 requires a position because device rules rename only virtual-chassis members with a position.
 
-`{vc_position}` is accepted at save in every context that lists it. If the device does
-not provide a position at rename time, that rename is skipped and logged.
+`{vc_position}` and `{bay_position_path}` are accepted at save in every context that lists
+them. If the device or the module bay does not provide the value at rename time, the
+interface keeps its name and the plugin logs the reason. An install, a rename trigger, Apply
+Rules, its preview, a flat-to-channelized conversion and the rule tester give the same
+reason, for example `{bay_position_path} is not available because the module bay position
+has no digit`.
 
 An upgrade reports stored rules that these checks refuse and changes none of them.
 See [Installation](installation.md#run-database-migrations).
