@@ -929,11 +929,25 @@ class VcPositionConversionRecoveryTest(VcDriftTestCase):
 
     def test_a_base_inside_an_arithmetic_expression_is_skipped_cleanly(self):
         """A non-numeric sentinel cannot go through the arithmetic validator; the family is simply not offered."""
-        rule = self._flat_rule(self.arith_type, "p{1 + {base}}:{channel}")
+        # A save refuses {base} in arithmetic, so bulk_create and update store the rule as an older release saved it.
+        (rule,) = InterfaceNameRule.objects.bulk_create(
+            [
+                InterfaceNameRule(
+                    module_type=self.arith_type,
+                    name_template="p{1 + {base}}:{channel}",
+                    breakout_mode=FLAT,
+                    channel_count=4,
+                    channel_start=0,
+                )
+            ]
+        )
         module, _ = self._install_on(self.device, self.arith_type, "5")
         self.assertEqual(self._names(module), [f"p16:{channel}" for channel in range(4)])
         self._renumber(2)
-        self._switch_to_channelized(rule)
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(
+            breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{bay_position}"
+        )
+        rule.refresh_from_db()
 
         preview = find_convertible_families(rule)
 

@@ -12,6 +12,8 @@ Two variables are conditional, and the catalogue treats them differently because
 
 Evaluation does not read the catalogue. It substitutes the variables it receives and evaluates the arithmetic that remains, so the work per rename is unchanged and the automatic naming signal path is not affected. Validation reads the catalogue and runs only on save, clean and form paths. A failed evaluation is the one exception: it reads the catalogue to name a conditional variable that the device or the module bay does not provide, so every path that reports the failure gives the same reason.
 
+The catalogue marks each variable that can hold any text, and names the integer variable that arithmetic reads instead where one exists. A save refuses a text variable token anywhere inside an arithmetic group. The shape check cannot know a real value, so before this check a text variable passed it like an integer variable and failed only at rename time. Migration 0019 runs the audit of migration 0017 again, so an upgrade reports the stored rules that the new check refuses.
+
 Stored rules are audited and reported, never rewritten. A migration lists the rules the new checks refuse and leaves them as written. A name template is operator intent, unlike the enum and flag columns that migrations 0015 and 0016 repaired, so no automatic rewrite is correct. This follows the audit that migration 0014 performed for stored rule patterns.
 
 The variable reference comes from the catalogue. The two in-product tables render from it at request time, so they cannot drift. The two documentation tables and the agent instructions carry generated regions. The test suite checks that regeneration is a no-op, because a lint gate reads a diff and misses a file that a rebase carried in.

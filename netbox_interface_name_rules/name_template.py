@@ -6,7 +6,7 @@ import ast
 import itertools
 import operator
 import re
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 
 from django.core.exceptions import ValidationError
@@ -39,7 +39,11 @@ class TemplateVariableCondition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TemplateVariable:
-    """Describe one template variable and its naming-context metadata."""
+    """Describe one template variable and its naming-context metadata.
+
+    *text* is True when the value can be any text, so arithmetic cannot read it, and
+    *numeric_counterpart* names the integer variable that arithmetic reads instead.
+    """
 
     name: str
     providers: tuple[tuple[NamingContext, TemplateVariableSource], ...]
@@ -47,6 +51,9 @@ class TemplateVariable:
     example: str
     condition: TemplateVariableCondition | None = None
     refusals: tuple[tuple[NamingContext, str], ...] = ()
+    _: KW_ONLY
+    text: bool
+    numeric_counterpart: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +95,8 @@ TEMPLATE_VARIABLES = (
             (_PARENT, _SLOT_DESCRIPTION),
         ),
         "3",
+        text=True,
+        numeric_counterpart="slot_num",
     ),
     TemplateVariable(
         "slot_num",
@@ -97,6 +106,7 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Numeric suffix of the top-level module bay position."),
         ),
         "3",
+        text=False,
     ),
     TemplateVariable(
         "bay_position",
@@ -106,6 +116,8 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Position of the bay that holds the module."),
         ),
         "swp1",
+        text=True,
+        numeric_counterpart="bay_position_num",
     ),
     TemplateVariable(
         "bay_position_num",
@@ -115,6 +127,7 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Numeric suffix of the module bay position."),
         ),
         "1",
+        text=False,
     ),
     TemplateVariable(
         "bay_position_path",
@@ -125,6 +138,7 @@ TEMPLATE_VARIABLES = (
         ),
         "0/0/3",
         condition=TemplateVariableCondition.BAY_POSITION_HAS_DIGIT,
+        text=True,
     ),
     TemplateVariable(
         "parent_bay_position",
@@ -134,6 +148,8 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Position of the parent module's bay."),
         ),
         "TenGigabitEthernet3/2",
+        text=True,
+        numeric_counterpart="parent_bay_position_num",
     ),
     TemplateVariable(
         "parent_bay_position_num",
@@ -143,6 +159,7 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Numeric suffix of the parent module's bay position."),
         ),
         "2",
+        text=False,
     ),
     TemplateVariable(
         "sfp_slot",
@@ -152,6 +169,7 @@ TEMPLATE_VARIABLES = (
             (_PARENT, "Numeric sub-bay index within the parent module."),
         ),
         "0",
+        text=False,
     ),
     TemplateVariable(
         "base",
@@ -162,6 +180,7 @@ TEMPLATE_VARIABLES = (
             (_DEVICE, "Current interface name before the rule applies."),
         ),
         "et-0/0/1",
+        text=True,
     ),
     TemplateVariable(
         "vc_position",
@@ -173,6 +192,7 @@ TEMPLATE_VARIABLES = (
         ),
         "2",
         condition=TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER,
+        text=False,
     ),
     TemplateVariable(
         "channel",
@@ -181,6 +201,7 @@ TEMPLATE_VARIABLES = (
         "0",
         condition=TemplateVariableCondition.RULE_DECLARES_CHANNELS,
         refusals=((_PARENT, "The parent interface has no channel number; remove {channel}."),),
+        text=False,
     ),
     TemplateVariable(
         "port",
@@ -192,6 +213,7 @@ TEMPLATE_VARIABLES = (
             ),
         ),
         "1",
+        text=True,
     ),
 )
 
@@ -479,10 +501,16 @@ _CONTEXT_LABELS = {
 _REFUSALS = {
     (context, variable.name): message for variable in TEMPLATE_VARIABLES for context, message in variable.refusals
 }
+_TEXT_ARITHMETIC_REFUSALS = {
+    variable.name: f"{variable_token(variable.name)} holds text and cannot be used in arithmetic."
+    + ("" if variable.numeric_counterpart is None else f" Use {variable_token(variable.numeric_counterpart)} instead.")
+    for variable in TEMPLATE_VARIABLES
+    if variable.text
+}
 
 
 def _template_errors(template, context, channel_count):
-    """Return brace, context, and group-shape errors for one template."""
+    """Return brace, context, group-shape, and text-arithmetic errors for one template."""
     if not _parse_brace_groups(template).balanced:
         return ["Unbalanced braces — every '{' in the template needs a '}'."]
     available = {
@@ -491,28 +519,49 @@ def _template_errors(template, context, channel_count):
         if variable.condition != TemplateVariableCondition.RULE_DECLARES_CHANNELS or channel_count > 0
     }
     available_text = ", ".join(variable_token(name) for name in sorted(available))
-    return [
-        _REFUSALS.get((context, name))
-        or f"{variable_token(name)} is not available in a {_CONTEXT_LABELS[context]}. Available: {available_text}."
-        for name in referenced_variables(template)
-        if name not in available
-    ] + _group_errors(template)
+    text, groups = _token_groups(template)
+    return (
+        [
+            _REFUSALS.get((context, name))
+            or f"{variable_token(name)} is not available in a {_CONTEXT_LABELS[context]}. Available: {available_text}."
+            for name in referenced_variables(template)
+            if name not in available
+        ]
+        + _group_errors(template, text, groups)
+        + _text_arithmetic_errors(template, groups, available)
+    )
 
 
-def _group_errors(template):
-    """Return one error for each distinct brace group that no variable values can evaluate."""
+def _token_groups(template):
+    """Return *template* with each variable token as digits, and each evaluated group with the token spans in it."""
     tokens = tuple(variable_token(name) for name in referenced_variables(template) if name.isidentifier())
     # Same-length placeholders keep each evaluated group at its offset in the operator's template.
     text, literal_spans = _substitute_tokens(template, {token: "1" * len(token) for token in tokens})
     spans = iter(literal_spans)
     span = next(spans, None)
-    errors = {}
+    groups = []
     for field in _parse_brace_groups(text, literal_spans).evaluated_fields:
         group_spans = []
         while span is not None and span[0] < field.end:
             if span[0] > field.start:
                 group_spans.append(span)
             span = next(spans, None)
+        groups.append((field, group_spans))
+    return text, groups
+
+
+def _text_arithmetic_errors(template, groups, available):
+    """Return one error for each available text variable whose token is inside an evaluated group."""
+    names = dict.fromkeys(template[start + 1 : end - 1] for _field, spans in groups for start, end in spans)
+    return [
+        _TEXT_ARITHMETIC_REFUSALS[name] for name in names if name in available and name in _TEXT_ARITHMETIC_REFUSALS
+    ]
+
+
+def _group_errors(template, text, groups):
+    """Return one error for each distinct brace group that no variable values can evaluate."""
+    errors = {}
+    for field, group_spans in groups:
         failure = _group_shape_refusal(template, text, field, group_spans)
         group = template[field.start : field.end]
         if isinstance(failure, _FormatFieldError):

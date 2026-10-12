@@ -69,6 +69,9 @@ evaluate. Each warning names the rule ID, field, and reason. The migration leave
 values unchanged and completes even
 when it reports a refused rule. Correct the reported templates before saving those
 rules again. See [Template Variables](template-variables.md) for each context's variables.
+Migration `0019` runs the same audit again, so it also reports a stored template that
+uses a text variable, such as `{bay_position}`, inside an arithmetic group. An upgrade
+that runs both audits reports a refused rule twice.
 
 Three migrations change stored rules to the shape that rule validation accepts.
 A rollback of these migrations does not restore the old values. If you need

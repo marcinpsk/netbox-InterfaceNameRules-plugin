@@ -209,7 +209,7 @@ class BreakoutModeValidationTest(TestCase):
         rule = self._rule(
             breakout_mode=CHANNELIZED,
             channel_count=4,
-            parent_name_template="et-0/0/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}",
+            parent_name_template="et-0/0/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
         )
 
         rule.full_clean()
@@ -897,7 +897,8 @@ class RuleTestFormTopologyTest(TestCase):
     def test_a_parent_template_may_still_do_arithmetic_on_the_other_variables(self):
         """Arithmetic parent names are a documented form and must still preview."""
         form = self._form(
-            breakout_mode=CHANNELIZED, parent_name_template="et-0/0/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}"
+            breakout_mode=CHANNELIZED,
+            parent_name_template="et-0/0/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
         )
 
         self.assertTrue(form.is_valid(), form.errors)
