@@ -8,6 +8,7 @@ from pathlib import Path
 from .name_template import (
     TEMPLATE_VARIABLES,
     NamingContext,
+    variable_token,
     variables_for_context,
 )
 
@@ -85,14 +86,23 @@ def naming_context_reference():
     return tuple({"label": CONTEXT_LABELS[context], "summary": CONTEXT_SUMMARIES[context]} for context in NamingContext)
 
 
+def _description(variable, context):
+    """Return the guidance for *variable* in *context*, which says when arithmetic cannot read it."""
+    description = dict(variable.descriptions)[context]
+    if not variable.text:
+        return description
+    counterpart = variable.numeric_counterpart
+    note = "" if counterpart is None else f" Use {variable_token(counterpart)} in arithmetic."
+    return f"{description} Text: arithmetic cannot use it.{note}"
+
+
 def variable_reference_rows():
     """Group catalogue contexts that give one variable equal operator guidance."""
     rows = []
     for variable in TEMPLATE_VARIABLES:
         contexts_by_guidance = {}
-        descriptions = dict(variable.descriptions)
         for context, _source in variable.providers:
-            key = (descriptions[context], variable.example)
+            key = (_description(variable, context), variable.example)
             contexts_by_guidance.setdefault(key, []).append(context)
         rows.extend(
             TemplateVariableReferenceRow(tuple(contexts), variable.name, description, example)
@@ -107,7 +117,7 @@ def rule_tester_variable_rows(context):
         TemplateVariableReferenceRow(
             contexts=(context,),
             name=variable.name,
-            description=dict(variable.descriptions)[context],
+            description=_description(variable, context),
             example=variable.example,
         )
         for variable in variables_for_context(context)

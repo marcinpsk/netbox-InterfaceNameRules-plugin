@@ -10,7 +10,7 @@ Scenarios covered:
 - Simple rename (QSFP-100G on Juniper)
 - Breakout channels (QSFP-4X10G on Juniper)
 - Channel start offset (QSFP-DD 2x100G on Cisco)
-- Converter offset with arithmetic ({parent_bay_position})
+- Converter offset with arithmetic ({parent_bay_position_num})
 - bay_position_num extraction (UfiSpace swpN naming)
 """
 
@@ -204,7 +204,7 @@ class E2EConverterOffsetTest(TestCase):
         InterfaceNameRule.objects.create(
             module_type=cls.sfp_type,
             parent_module_type=cls.converter_type,
-            name_template="GigabitEthernet{slot}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}",
+            name_template="GigabitEthernet{slot}/{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}",
         )
 
     def test_converter_offset_arithmetic(self):

@@ -5,7 +5,9 @@ The error names the variable and lists the available variables. Module rules can
 `{channel}` only when they declare channels. Device rules cannot use module variables,
 and module rules cannot use `{port}`. Braces must balance in both template fields.
 A save also refuses a brace group that is neither a variable token nor integer arithmetic
-over variable tokens, such as `{slot_num // 2}` or `{bay_position!r}`.
+over variable tokens, such as `{slot_num // 2}` or `{bay_position!r}`. A save refuses a
+variable that holds text inside an arithmetic group, such as `{{bay_position} + 1}`. See
+[Arithmetic Expressions](#arithmetic-expressions).
 These checks apply to the edit form, REST API, bulk import, bulk edit, and direct saves.
 The rule tester applies the same checks for the selected rule kind.
 
@@ -20,8 +22,12 @@ A template that uses that variable then shows that it is not available. So does 
 that uses `{bay_position_path}` when `{bay_position}` has no digit. A device-rule preview
 requires a position because device rules rename only virtual-chassis members with a position.
 
-`{vc_position}` is accepted at save in every context that lists it. If the device does
-not provide a position at rename time, that rename is skipped and logged.
+`{vc_position}` and `{bay_position_path}` are accepted at save in every context that lists
+them. If the device or the module bay does not provide the value at rename time, the
+interface keeps its name and the plugin logs the reason. An install, a rename trigger, Apply
+Rules, its preview, a flat-to-channelized conversion and the rule tester give the same
+reason, for example `{bay_position_path} is not available because the module bay position
+has no digit`.
 
 An upgrade reports stored rules that these checks refuse and changes none of them.
 See [Installation](installation.md#run-database-migrations).
@@ -35,15 +41,15 @@ Module rules use these variables in the Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. | `3` |
+| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. Text: arithmetic cannot use it. Use {slot_num} in arithmetic. | `3` |
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
-| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position}` | Position of the bay that holds the module. Text: arithmetic cannot use it. Use {bay_position_num} in arithmetic. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
-| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
-| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. Text: arithmetic cannot use it. | `0/0/3` |
+| `{parent_bay_position}` | Position of the parent module's bay. Text: arithmetic cannot use it. Use {parent_bay_position_num} in arithmetic. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. Text: arithmetic cannot use it. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 | `{channel}` | Breakout channel number. Available when the rule declares channels. | `0` |
 
@@ -53,15 +59,15 @@ Module rules use these variables in the Parent Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. | `3` |
+| `{slot}` | Top-level module bay position. A bay on the device gives only the trailing digits of its position. Text: arithmetic cannot use it. Use {slot_num} in arithmetic. | `3` |
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
-| `{bay_position}` | Position of the bay that holds the module. | `swp1` |
+| `{bay_position}` | Position of the bay that holds the module. Text: arithmetic cannot use it. Use {bay_position_num} in arithmetic. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
-| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
-| `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. Text: arithmetic cannot use it. | `0/0/3` |
+| `{parent_bay_position}` | Position of the parent module's bay. Text: arithmetic cannot use it. Use {parent_bay_position_num} in arithmetic. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
-| `{base}` | The raw template name of the interface the rule renames. | `et-0/0/1` |
+| `{base}` | The raw template name of the interface the rule renames. Text: arithmetic cannot use it. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
 
 ### Device interface names
@@ -70,9 +76,9 @@ Device-interface rules use these variables in the Name Template field.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{base}` | Current interface name before the rule applies. | `et-0/0/1` |
+| `{base}` | Current interface name before the rule applies. Text: arithmetic cannot use it. | `et-0/0/1` |
 | `{vc_position}` | Virtual Chassis member position. Available only on a member device. | `2` |
-| `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. | `1` |
+| `{port}` | Segment after the last slash in the current interface name. Uses the full name when no slash is present. Text: arithmetic cannot use it. | `1` |
 <!-- END GENERATED TEMPLATE VARIABLE REFERENCE -->
 
 ### Device interface rule filter
@@ -117,16 +123,24 @@ Supported operators: `+`, `-`, `*`, `//` (floor division), parentheses. Float di
 
 A device type may compose the parent into a bay position, the way the Catalyst 4900M and the
 MX304 do, so that a nested bay reads `TenGigabitEthernet3/2/1` rather than `1`. Positions are
-therefore path-shaped strings in the general case, and arithmetic on one fails:
+therefore text in the general case, and arithmetic on text fails. The variable table marks
+each variable that holds text. A save refuses such a variable inside an arithmetic group, and
+the error names the numeric counterpart when the variable has one:
 
 ```
-Unsafe expression in name template: 8 + (TenGigabitEthernet3/2 - 1) * 2 + 1
+GigabitEthernet{slot_num}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}
+{parent_bay_position} holds text and cannot be used in arithmetic. Use {parent_bay_position_num} instead.
 ```
 
 Every position has a `_num` counterpart holding the number its digits spell, so a padded run
 such as `02` reads `2`, which is what arithmetic accepts. Use those wherever a template does
 arithmetic. They are also correct for a plain numeric position, so `_num` is the safe default;
-the raw variable still gives the position as it is stored.
+the raw variable still gives the position as it is stored. `{base}`, `{port}` and
+`{bay_position_path}` have no numeric counterpart.
+
+A rule saved before this check can still hold a text variable in arithmetic. The rename then
+fails for each value that is not a number, and the interface keeps its name. An upgrade reports
+these rules and changes none of them. See [Installation](installation.md#run-database-migrations).
 
 ## Virtual Chassis Support
 
@@ -320,7 +334,8 @@ module type using the `{vc_position}` template token may predate a chassis posit
 above). That base is recovered from the family's own names, so the family is still offered. Two
 cases deliberately are not: a `{base}` used inside an arithmetic expression (`p{1 + {base}}`), which
 cannot be evaluated symbolically, and an ambiguous recovery — one template matching two bases on the
-module, or two templates recovering the same one. Conversion rewrites rows an operator owns, so
+module, or two templates recovering the same one. A save refuses the first case now, so only a rule
+saved before that check can hold it. Conversion rewrites rows an operator owns, so
 those families are left unoffered rather than converted on a guess.
 
 ### Converter Offset

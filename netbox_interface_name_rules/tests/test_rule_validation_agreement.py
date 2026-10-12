@@ -521,7 +521,10 @@ class RefuseImplicitMigrationDatabase:
 
 # The template audit reports against the live language, so it must not hold a second parser.
 LIVE_IMPORT_PERMITS = frozenset(
-    {("0017_audit_name_templates.py", "netbox_interface_name_rules.name_template", (("validate_rule", None),))}
+    {
+        (migration, "netbox_interface_name_rules.name_template", (("log_refused_rules", None),))
+        for migration in ("0017_audit_name_templates.py", "0019_audit_text_variable_arithmetic.py")
+    }
 )
 
 

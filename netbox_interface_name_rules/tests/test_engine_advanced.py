@@ -963,11 +963,12 @@ class EngineRenameDeviceInterfaceExceptionTest(TestCase):
         """_rename_device_interface skips when template evaluation raises (lines 131-138)."""
         from netbox_interface_name_rules.engine import apply_device_interface_rules
 
-        # Create a device-interface rule with an unsafe template that triggers ValueError
-        rule = InterfaceNameRule.objects.create(
+        # A save refuses {base} in arithmetic, so this is a rule stored before that check.
+        rule = InterfaceNameRule(
             applies_to_device_interfaces=True,
             name_template="{1 + {base}}",  # {base} is Gi0/1 here, so evaluate_name_template raises ValueError
         )
+        InterfaceNameRule.objects.bulk_create([rule])
         Interface.objects.create(device=self.device, name="Gi0/1", type="1000base-t")
         apply_device_interface_rules(self.device)
         # Interface should NOT be renamed (exception was caught)

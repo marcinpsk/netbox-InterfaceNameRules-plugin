@@ -25,6 +25,8 @@ from netbox_interface_name_rules.name_template import (
     TemplateVariableCondition,
     TemplateVariableSource,
     evaluate_name_template,
+    unavailable_reason,
+    unavailable_variables,
     variables_for_context,
 )
 from netbox_interface_name_rules.naming import (
@@ -32,8 +34,6 @@ from netbox_interface_name_rules.naming import (
     build_device_interface_variables,
     build_variables,
     numeric_suffix,
-    unavailable_reason,
-    unavailable_variables,
 )
 from netbox_interface_name_rules.tests.helpers import (
     REQUIRES_MODULE_PLACEHOLDER,

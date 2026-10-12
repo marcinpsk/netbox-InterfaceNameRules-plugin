@@ -29,6 +29,7 @@ from netbox_interface_name_rules.name_template import (
     NamingContext,
     evaluate_name_template,
     referenced_variables,
+    validate_rule,
     variables_for_context,
 )
 from netbox_interface_name_rules.naming import build_bay_chain_variables, build_variables, numeric_suffix
@@ -115,6 +116,20 @@ class GeneratedTemplateVariableReferenceTest(unittest.TestCase):
             "### Device interface names\n\nDevice-interface rules use these variables in the Name Template field.",
             reference,
         )
+
+    def test_generated_reference_marks_each_text_variable_and_names_its_counterpart(self):
+        reference = render_markdown_reference(3)
+
+        for row in (
+            (
+                "| `{bay_position}` | Position of the bay that holds the module. "
+                "Text: arithmetic cannot use it. Use {bay_position_num} in arithmetic. | `swp1` |"
+            ),
+            "| `{base}` | Current interface name before the rule applies. Text: arithmetic cannot use it. | `et-0/0/1` |",
+            "| `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |",
+        ):
+            with self.subTest(row=row):
+                self.assertIn(row, reference)
 
     def test_writer_repairs_a_stale_region(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1170,6 +1185,26 @@ def _unavailable_variables(documented):
     return set(referenced_variables(documented.template)) - available
 
 
+def _save_check_fields(documented):
+    """Return the fields of a rule that declares channels and holds *documented* in its naming context."""
+    if documented.context == NamingContext.MODULE_PARENT:
+        return {
+            "breakout_mode": "channelized",
+            "channel_count": 4,
+            "name_template": "{base}:{channel}",
+            "parent_name_template": documented.template,
+            "applies_to_device_interfaces": False,
+        }
+    device = documented.context == NamingContext.DEVICE_INTERFACE
+    return {
+        "breakout_mode": "flat",
+        "channel_count": 0 if device else 4,
+        "name_template": documented.template,
+        "parent_name_template": "",
+        "applies_to_device_interfaces": device,
+    }
+
+
 def _example_variables(context):
     """Return representative values limited to one naming context."""
     composed = ModuleBay(position="Gi3/2/1", parent=ModuleBay(position="Gi3/2"))
@@ -1517,6 +1552,11 @@ class DocumentedTemplateTest(unittest.TestCase):
         for documented in _documented_templates():
             with self.subTest(source=documented.source, template=documented.template, context=documented.context):
                 evaluate_name_template(documented.template, _example_variables(documented.context))
+
+    def test_every_documented_template_passes_the_save_check_in_its_naming_context(self):
+        for documented in _documented_templates():
+            with self.subTest(source=documented.source, template=documented.template, context=documented.context):
+                validate_rule(**_save_check_fields(documented))
 
     def test_generated_markers_leave_their_content_visible_to_the_markdown_reader(self):
         with tempfile.TemporaryDirectory() as directory:

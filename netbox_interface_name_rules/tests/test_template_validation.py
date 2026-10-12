@@ -174,6 +174,97 @@ class BraceGroupShapeTest(SimpleTestCase):
         self.assertEqual(errors[-1], group + self.SUFFIX)
 
 
+# Each text variable and its numeric counterpart, as the operator decided in issue #165.
+TEXT_VARIABLES = {
+    "bay_position": "bay_position_num",
+    "parent_bay_position": "parent_bay_position_num",
+    "slot": "slot_num",
+    "base": None,
+    "port": None,
+    "bay_position_path": None,
+}
+INTEGER_VARIABLES = ("slot_num", "bay_position_num", "parent_bay_position_num", "sfp_slot", "vc_position", "channel")
+# The template field and the other rule fields that put a template in each naming context.
+CONTEXT_RULES = {
+    name_template.NamingContext.MODULE_MEMBER: ("name_template", {"breakout_mode": "flat"}),
+    name_template.NamingContext.MODULE_PARENT: (
+        "parent_name_template",
+        {"breakout_mode": "channelized", "name_template": "{base}:{channel}"},
+    ),
+    name_template.NamingContext.DEVICE_INTERFACE: (
+        "name_template",
+        {"breakout_mode": "flat", "applies_to_device_interfaces": True},
+    ),
+}
+
+
+class TextVariableArithmeticTest(SimpleTestCase):
+    """A save refuses a text variable inside an arithmetic group, because a text value fails there at rename time."""
+
+    def _errors(self, template, context):
+        field, fields = CONTEXT_RULES[context]
+        rule = {
+            "channel_count": 0 if context == name_template.NamingContext.DEVICE_INTERFACE else 4,
+            "name_template": "",
+            "parent_name_template": "",
+            "applies_to_device_interfaces": False,
+            **fields,
+            field: template,
+        }
+        try:
+            name_template.validate_rule(**rule)
+        except ValidationError as exc:
+            return exc.message_dict.get(field, [])
+        return []
+
+    @staticmethod
+    def _refusal(name, counterpart):
+        message = f"{{{name}}} holds text and cannot be used in arithmetic."
+        return message if counterpart is None else f"{message} Use {{{counterpart}}} instead."
+
+    def test_the_catalogue_classifies_every_variable(self):
+        self.assertEqual(
+            {variable.name for variable in name_template.TEMPLATE_VARIABLES},
+            {*TEXT_VARIABLES, *INTEGER_VARIABLES},
+        )
+
+    def test_each_text_variable_is_refused_inside_arithmetic_in_every_context_that_provides_it(self):
+        for context in name_template.NamingContext:
+            for variable in name_template.variables_for_context(context):
+                if variable.name not in TEXT_VARIABLES:
+                    continue
+                refusal = self._refusal(variable.name, TEXT_VARIABLES[variable.name])
+                for template in (f"x{{{{{variable.name}}} + 1}}", f"x{{1 + {{{variable.name}}}}}"):
+                    with self.subTest(context=context, template=template):
+                        self.assertEqual(self._errors(template, context), [refusal])
+                with self.subTest(context=context, template=f"bare {variable.name}"):
+                    self.assertEqual(self._errors(f"x{{{variable.name}}}", context), [])
+
+    def test_each_integer_variable_saves_inside_arithmetic_in_every_context_that_provides_it(self):
+        for context in name_template.NamingContext:
+            for variable in name_template.variables_for_context(context):
+                if variable.name not in INTEGER_VARIABLES:
+                    continue
+                with self.subTest(context=context, variable=variable.name):
+                    self.assertEqual(self._errors(f"x{{{{{variable.name}}} + 1}}", context), [])
+
+    def test_a_text_variable_is_reported_once_after_the_shape_errors(self):
+        context = name_template.NamingContext.MODULE_MEMBER
+        self.assertEqual(
+            self._errors("{{slot} + {bay_position}}/{{slot} ** 2}", context),
+            [
+                "{{slot} ** 2}" + BraceGroupShapeTest.SUFFIX,
+                self._refusal("slot", "slot_num"),
+                self._refusal("bay_position", "bay_position_num"),
+            ],
+        )
+
+    def test_a_text_variable_the_context_lacks_gets_only_the_context_error(self):
+        errors = self._errors("{{port} + 1}", name_template.NamingContext.MODULE_MEMBER)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("{port} is not available"))
+
+
 class TemplateBulkEditTest(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -277,6 +368,46 @@ class TemplateAuditMigrationTest(TransactionTestCase):
             self.assertEqual(list(Rule.objects.order_by("pk").values()), before)
             self.assertIn(target, MigrationExecutor(connection).loader.applied_migrations)
             self.assertEqual(len(logs.output), 7)
+        finally:
+            Rule.objects.filter(pk__in=[row.pk for row in rows]).delete()
+            MigrationExecutor(connection).migrate(latest)
+
+    def test_upgrade_reports_text_variables_in_arithmetic_without_changing_rows(self):
+        app_label = "netbox_interface_name_rules"
+        previous = (app_label, "0018_refuse_device_rule_parent_module_type")
+        target = (app_label, "0019_audit_text_variable_arithmetic")
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes(app_label)
+        executor.migrate([previous])
+        Rule = executor.loader.project_state([previous]).apps.get_model(app_label, "InterfaceNameRule")
+        rows = [
+            Rule(module_type_is_regex=True, module_type_pattern="audit-text", name_template="et-{{bay_position} + 1}"),
+            Rule(applies_to_device_interfaces=True, module_type_pattern="audit-base", name_template="p{1 + {base}}"),
+            Rule(
+                module_type_is_regex=True, module_type_pattern="audit-num", name_template="et-{{bay_position_num} + 1}"
+            ),
+        ]
+        Rule.objects.bulk_create(rows)
+        before = list(Rule.objects.order_by("pk").values())
+        logger = f"{app_label}.migrations.0019_audit_text_variable_arithmetic"
+        try:
+            with self.assertLogs(logger, level="WARNING") as logs:
+                MigrationExecutor(connection).migrate([target])
+            self.assertEqual(
+                logs.output,
+                [
+                    (
+                        f"WARNING:{logger}:InterfaceNameRule ID {rows[0].pk}: name_template: {{bay_position}} holds "
+                        "text and cannot be used in arithmetic. Use {bay_position_num} instead."
+                    ),
+                    (
+                        f"WARNING:{logger}:InterfaceNameRule ID {rows[1].pk}: name_template: {{base}} holds text "
+                        "and cannot be used in arithmetic."
+                    ),
+                ],
+            )
+            self.assertEqual(list(Rule.objects.order_by("pk").values()), before)
+            self.assertIn(target, MigrationExecutor(connection).loader.applied_migrations)
         finally:
             Rule.objects.filter(pk__in=[row.pk for row in rows]).delete()
             MigrationExecutor(connection).migrate(latest)

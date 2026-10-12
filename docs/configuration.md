@@ -219,7 +219,8 @@ interface and the reason:
 
 - the name the rule gives is already in use on the device,
 - a template variable is not available, such as `{vc_position}` on a device
-  outside a virtual chassis,
+  outside a virtual chassis or `{bay_position_path}` on a bay whose position
+  has no digit,
 - no single interface template claims the interface: two templates claim it,
   its template also claims another interface or flat family, or no template
   claims it. This applies to a rule that uses `{base}`, to a breakout rule, and
@@ -291,6 +292,10 @@ write connection gets no rename: run Apply Rules after it, or wrap the install i
 `transaction.atomic(using=router.db_for_write(Interface))`. In a netbox-branching
 branch, `transaction.atomic()` alone opens a transaction on `default`, not on the
 branch connection, so the rename runs before NetBox creates the interfaces.
+
+The preview and the apply show the reason for each family that the rule cannot
+rename. For a template variable that is not available, that reason is the same
+as in a [journal entry](#journal-entries-after-an-automatic-rename).
 
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where
