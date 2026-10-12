@@ -78,6 +78,7 @@ Module rules use these variables in the Name Template field.
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
@@ -95,6 +96,7 @@ Module rules use these variables in the Parent Name Template field.
 | `{slot_num}` | Numeric suffix of the top-level module bay position. | `3` |
 | `{bay_position}` | Position of the bay that holds the module. | `swp1` |
 | `{bay_position_num}` | Numeric suffix of the module bay position. | `1` |
+| `{bay_position_path}` | Position of the bay that holds the module, from its first digit 0-9: et-0/0/3 gives 0/0/3. Available only when the position has such a digit. | `0/0/3` |
 | `{parent_bay_position}` | Position of the parent module's bay. | `TenGigabitEthernet3/2` |
 | `{parent_bay_position_num}` | Numeric suffix of the parent module's bay position. | `2` |
 | `{sfp_slot}` | Numeric sub-bay index within the parent module. | `0` |
