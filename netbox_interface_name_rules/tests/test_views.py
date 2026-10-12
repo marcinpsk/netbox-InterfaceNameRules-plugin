@@ -529,7 +529,8 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
 
         response = self._post("GLC-T*")
 
-        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T*").exists())
+        rule = InterfaceNameRule.objects.get(module_type_pattern="GLC-T*")
+        self.assertRedirects(response, rule.get_absolute_url())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
@@ -557,6 +558,7 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
 
         rule.refresh_from_db()
         self.assertEqual(rule.module_type_pattern, "VIEW-T*")
+        self.assertRedirects(response, rule.get_absolute_url())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertTrue(any("matches no module type" in m for m in warnings), warnings)
 
@@ -628,6 +630,7 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
             },
         )
 
+        self.assertEqual(response.status_code, 200)
         self.assertFalse(InterfaceNameRule.objects.filter(module_type_pattern="REJECT-T*").exists())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
@@ -650,7 +653,8 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
             follow=True,
         )
 
-        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="^Ethernet.*$").exists())
+        rule = InterfaceNameRule.objects.get(module_type_pattern="^Ethernet.*$")
+        self.assertRedirects(response, rule.get_absolute_url())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertEqual([m for m in warnings if "matches no module type" in m], [], warnings)
 
@@ -661,7 +665,8 @@ class ZeroMatchPatternWarningTest(ViewTestBase):
 
         response = self._post("GLC-T.*")
 
-        self.assertTrue(InterfaceNameRule.objects.filter(module_type_pattern="GLC-T.*").exists())
+        rule = InterfaceNameRule.objects.get(module_type_pattern="GLC-T.*")
+        self.assertRedirects(response, rule.get_absolute_url())
         warnings = [str(m) for m in get_messages(response.wsgi_request) if m.level_tag == "warning"]
         self.assertEqual([m for m in warnings if "matches no module type" in m], [])
 

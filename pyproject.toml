@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netbox-interface-name-rules"
-version = "1.7.0"
+version = "1.8.1"
 description = "NetBox plugin for automatic interface renaming when modules are installed"
 readme = "README.md"
 requires-python = ">=3.12.0"
@@ -98,6 +98,9 @@ devcontainer = [
     # A co-mounted plugin's conftest imports these for type names only, so no browser is downloaded.
     "pynetbox",
     "playwright",
+]
+ci-branching = [
+    "netboxlabs-netbox-branching==1.2.1",
 ]
 
 [tool.pytest.ini_options]

@@ -41,7 +41,7 @@ jobs:
           # The same release with netbox-branching, so the branch tests run against a real provisioned branch.
           - python-version: "3.14"
             netbox-version: "v4.7.0"
-            netbox-branching: "1.2.1"
+            netbox-branching: true
             # The second coverage leg: only this cell runs the netbox-branching code paths.
             coverage: "netbox-v4.7.0-branching"
           # Early warning for upcoming NetBox changes. Non-blocking: unreleased NetBox breaks
@@ -100,10 +100,12 @@ jobs:
 
       - name: Install NetBox and plugin
         working-directory: netbox-InterfaceNameRules-plugin
+        shell: bash
         run: |
           uv pip install --system -r ../netbox/requirements.txt
-          uv pip install --system --only-binary=:all: --group ci-tests
-          uv pip install --system -e .
+          uv export --system-certs --locked --group ci-tests --no-default-groups --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
+          uv pip install --system-certs --system --no-deps -e .
 
       - name: Set up NetBox configuration
         working-directory: netbox
@@ -131,12 +133,12 @@ jobs:
       # netbox-branching refuses to start without DynamicSchemaDict and its router, and it must be the last plugin.
       - name: Install and configure netbox-branching
         if: matrix.netbox-branching
-        working-directory: netbox
-        env:
-          NETBOX_BRANCHING_VERSION: ${{ matrix.netbox-branching }}
+        working-directory: netbox-InterfaceNameRules-plugin
+        shell: bash
         run: |
-          uv pip install --system --only-binary=:all: "netboxlabs-netbox-branching==${NETBOX_BRANCHING_VERSION}"
-          cat >> netbox/netbox/configuration.py << 'EOF'
+          uv export --system-certs --locked --only-group ci-branching --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
+          cat >> ../netbox/netbox/netbox/configuration.py << 'EOF'
           from netbox_branching.utilities import DynamicSchemaDict
           DATABASES = DynamicSchemaDict({'default': DATABASE})
           del DATABASE
@@ -196,7 +198,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -218,8 +220,10 @@ jobs:
 
       - name: Install coverage
         working-directory: netbox-InterfaceNameRules-plugin
+        shell: bash
         run: |
-          uv pip install --system --only-binary=:all: --group ci-tests
+          uv export --system-certs --locked --only-group ci-tests --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
 
       # `coverage report` enforces `fail_under` from pyproject.toml on the combined data.
       - name: Combine and check coverage
