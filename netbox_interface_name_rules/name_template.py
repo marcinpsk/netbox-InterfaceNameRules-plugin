@@ -610,6 +610,21 @@ def validate_rule(*, breakout_mode, channel_count, name_template, parent_name_te
         raise ValidationError(errors)
 
 
+def log_refused_rules(rules, logger):
+    """Log each stored rule in the *rules* queryset that ``validate_rule`` refuses, and change no row."""
+    rows = rules.values(
+        "pk", "breakout_mode", "channel_count", "name_template", "parent_name_template", "applies_to_device_interfaces"
+    )
+    for fields in rows.iterator():
+        pk = fields.pop("pk")
+        try:
+            validate_rule(**fields)
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                for message in messages:
+                    logger.warning("InterfaceNameRule ID %s: %s: %s", pk, field, message)
+
+
 def evaluate_name_template(template: str, variables: dict) -> str:
     """Evaluate a name template with variable substitution and safe arithmetic.
 
