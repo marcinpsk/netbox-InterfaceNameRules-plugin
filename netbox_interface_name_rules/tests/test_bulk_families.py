@@ -729,6 +729,24 @@ class FlatFamilyCreationTest(BulkTestCase):
         self.assertEqual([member.status for member in outcome.skipped_members], [FamilyStatus.FAILED])
         self.assertEqual(self._names(module), ["2"])
 
+    def test_preview_and_apply_name_the_virtual_chassis_position_a_standalone_device_lacks(self):
+        """Apply Rules gives the reason an install gives, not the unsafe-expression text."""
+        rule = InterfaceNameRule.objects.create(
+            module_type=self._module_type("BULK-VC-ABSENT", ("{module}",)),
+            name_template="Gi{vc_position}/{bay_position_num}",
+        )
+        module = self._install("2", module_type=rule.module_type)
+        reason = "{vc_position} is not available on this device"
+
+        (entry,), _total = find_interfaces_for_rule(rule)
+        outcome = apply_rule_to_existing(rule)
+
+        self.assertEqual(entry["new_names"], [f"<error: {reason}>"])
+        self.assertEqual(
+            [member.reason for member in outcome.skipped_members], [f"failed to evaluate the interface name: {reason}"]
+        )
+        self.assertEqual(self._names(module), ["2"])
+
 
 class OnlyLivePlansAreExecutableTest(BulkTestCase):
     """A plan without live rows cannot reach an executor, whichever door it arrives at."""

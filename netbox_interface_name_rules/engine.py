@@ -133,7 +133,7 @@ def _rename_outcomes(family_outcomes) -> tuple[RenameOutcome, ...]:
 
 def _unresolved_outcomes(missing, interface_names) -> tuple[RenameOutcome, ...]:
     """Return one unresolved-variable fact per interface that keeps its name for lack of *missing*."""
-    reason = naming.unavailable_reason(missing)
+    reason = name_template.unavailable_reason(missing)
     return tuple(RenameOutcome(OutcomeKind.UNRESOLVED_VARIABLE, name, reason) for name in interface_names)
 
 
@@ -276,7 +276,7 @@ def _apply_rule_to_module(
     from dcim.models import Interface
 
     variables = build_variables(module_bay, device=module.device)
-    missing = naming.unavailable_variables(variables, rule.name_template, rule.parent_name_template)
+    missing = name_template.unavailable_variables(variables, rule.name_template, rule.parent_name_template)
     if report_only and not missing:
         return
     interfaces = list(Interface.objects.filter(module_id=module.pk).order_by("pk"))
@@ -553,7 +553,7 @@ def _apply_device_rule_to_families(device, vc_position, rule, families, claimed_
         if interface.pk in claimed_pks or not _matches_device_interface(rule, interface):
             continue
         variables = naming.build_device_interface_variables(interface.name, vc_position)
-        missing = naming.unavailable_variables(variables, rule.name_template)
+        missing = name_template.unavailable_variables(variables, rule.name_template)
         if missing:
             names = (interface.name, *(child.name for child in children))
             by_family.setdefault(interface.pk, []).extend(_unresolved_outcomes(missing, names))

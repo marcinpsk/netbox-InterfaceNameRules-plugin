@@ -10,7 +10,7 @@ The catalogue is per naming context, not one flat set. A module member name, a m
 
 Two variables are conditional, and the catalogue treats them differently because they are knowable at different times. The channel number belongs to the module member context when the rule declares channels, because the channel count is a field on the rule in front of the validator. The virtual-chassis position stays conditional, because it depends on the device the rule meets later. A template that uses it is valid when saved and may fail when evaluated, which is the graceful failure the documentation already describes.
 
-Evaluation does not read the catalogue. It substitutes the variables it receives and evaluates the arithmetic that remains, so the work per rename is unchanged and the automatic naming signal path is not affected. Validation reads the catalogue and runs only on save, clean and form paths.
+Evaluation does not read the catalogue. It substitutes the variables it receives and evaluates the arithmetic that remains, so the work per rename is unchanged and the automatic naming signal path is not affected. Validation reads the catalogue and runs only on save, clean and form paths. A failed evaluation is the one exception: it reads the catalogue to name a conditional variable that the device or the module bay does not provide, so every path that reports the failure gives the same reason.
 
 Stored rules are audited and reported, never rewritten. A migration lists the rules the new checks refuse and leaves them as written. A name template is operator intent, unlike the enum and flag columns that migrations 0015 and 0016 repaired, so no automatic rewrite is correct. This follows the audit that migration 0014 performed for stored rule patterns.
 

@@ -196,6 +196,21 @@ TEMPLATE_VARIABLES = (
 )
 
 
+_UNAVAILABLE_REASONS = {
+    TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER: "is not available on this device",
+    TemplateVariableCondition.BAY_POSITION_HAS_DIGIT: "is not available because the module bay position has no digit",
+}
+_RUNTIME_CONDITIONAL_VARIABLES = {
+    variable.name: _UNAVAILABLE_REASONS[variable.condition]
+    for variable in TEMPLATE_VARIABLES
+    if variable.condition not in (None, TemplateVariableCondition.RULE_DECLARES_CHANNELS)
+}
+
+
+class UnavailableVariableError(ValueError):
+    """Report each variable that a name template reads and the device or the module bay does not provide."""
+
+
 def variables_for_context(context: NamingContext, source: TemplateVariableSource | None = None):
     """Return the catalogue entries available in one naming context."""
     return tuple(
@@ -422,6 +437,23 @@ def referenced_variables(template):
     return tuple(names)
 
 
+def unavailable_variables(variables, *templates) -> tuple[str, ...]:
+    """Return the conditional variables that *templates* read and *variables* leave out, once each."""
+    return tuple(
+        dict.fromkeys(
+            name
+            for template in templates
+            for name in referenced_variables(template)
+            if name in _RUNTIME_CONDITIONAL_VARIABLES and name not in variables
+        )
+    )
+
+
+def unavailable_reason(names) -> str:
+    """Return why each variable in *names*, which ``unavailable_variables`` returned, is not available."""
+    return "; ".join(f"{variable_token(name)} {_RUNTIME_CONDITIONAL_VARIABLES[name]}" for name in names)
+
+
 def _validate_breakout_topology(breakout_mode, channel_count, parent_name_template, applies_to_device_interfaces):
     """Check that the mode, channel count, and parent template describe one topology."""
     channelized = breakout_mode == BreakoutModeChoices.CHANNELIZED
@@ -543,14 +575,24 @@ def evaluate_name_template(template: str, variables: dict) -> str:
 
     For example, ``GigabitEthernet{slot_num}/{8 + {sfp_slot}}`` substitutes the variables before
     evaluating the arithmetic expression.
+
+    A template that reads a conditional variable that *variables* leaves out raises
+    ``UnavailableVariableError``, which says why the variable is not available. Only a failed
+    evaluation reads the catalogue, so a successful one does no extra work.
     """
     replacements = {variable_token(key): str(value) for key, value in variables.items()}
     result, literal_spans = _substitute_tokens(template, replacements)
     parsed = _parse_brace_groups(result, literal_spans)
     parts = []
     end = 0
-    for field in parsed.evaluated_fields:
-        parts.extend((result[end : field.start], _evaluate_group(field.expression)))
-        end = field.end
+    try:
+        for field in parsed.evaluated_fields:
+            parts.extend((result[end : field.start], _evaluate_group(field.expression)))
+            end = field.end
+    except ValueError as error:
+        missing = unavailable_variables(variables, template)
+        if missing:
+            raise UnavailableVariableError(unavailable_reason(missing)) from error
+        raise
     parts.append(result[end:])
     return "".join(parts)

@@ -181,6 +181,8 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._group_errors".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._group_shape_refusal".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._VARIABLE_NAMES".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._UNAVAILABLE_REASONS".msg = "Use name_template.unavailable_reason."
+"netbox_interface_name_rules.name_template._RUNTIME_CONDITIONAL_VARIABLES".msg = "Use name_template.unavailable_variables."
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]

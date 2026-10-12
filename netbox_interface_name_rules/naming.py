@@ -6,24 +6,12 @@ import re
 from typing import NamedTuple
 
 from .name_template import (
-    TEMPLATE_VARIABLES,
     NamingContext,
     TemplateVariableCondition,
     TemplateVariableSource,
-    referenced_variables,
-    variable_token,
     variables_for_context,
 )
 
-_UNAVAILABLE_REASONS = {
-    TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER: "is not available on this device",
-    TemplateVariableCondition.BAY_POSITION_HAS_DIGIT: "is not available because the module bay position has no digit",
-}
-_RUNTIME_CONDITIONAL_VARIABLES = {
-    variable.name: _UNAVAILABLE_REASONS[variable.condition]
-    for variable in TEMPLATE_VARIABLES
-    if variable.condition not in (None, TemplateVariableCondition.RULE_DECLARES_CHANNELS)
-}
 _ASCII_DIGIT = re.compile("[0-9]")
 
 
@@ -208,20 +196,3 @@ def build_device_interface_variables(interface_name, vc_position):
     values = {"base": interface_name, "port": interface_name.rsplit("/", 1)[-1], "vc_position": str(vc_position)}
     conditions = {TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER: vc_position is not None}
     return _filter_variables(NamingContext.DEVICE_INTERFACE, None, values, conditions)
-
-
-def unavailable_variables(variables, *templates) -> tuple[str, ...]:
-    """Return the conditional variables that *templates* read and *variables* leave out, once each."""
-    return tuple(
-        dict.fromkeys(
-            name
-            for template in templates
-            for name in referenced_variables(template)
-            if name in _RUNTIME_CONDITIONAL_VARIABLES and name not in variables
-        )
-    )
-
-
-def unavailable_reason(names) -> str:
-    """Return why each variable in *names*, which ``unavailable_variables`` returned, is not available."""
-    return "; ".join(f"{variable_token(name)} {_RUNTIME_CONDITIONAL_VARIABLES[name]}" for name in names)

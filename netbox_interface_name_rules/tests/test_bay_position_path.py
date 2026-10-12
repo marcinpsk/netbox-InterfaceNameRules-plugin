@@ -101,6 +101,23 @@ class BayPositionPathFlatTest(MX10008Topology, TestCase):
 
         self.assertEqual(names_of(module), CHANNELS)
 
+    def test_apply_rules_names_the_variable_a_position_without_a_digit_lacks(self):
+        module = self._install(self.no_digit_bay)
+        rule = InterfaceNameRule.objects.get()
+        user = get_user_model().objects.create_superuser(
+            username="bay-path-applier", password=TEST_PASSWORD, email="bay-path-applier@example.com"
+        )
+        self.client.force_login(user)
+        url = reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", args=[rule.pk])
+
+        preview = self.client.get(url)
+        with self.assertLogs("netbox_interface_name_rules.family", level="WARNING") as logs:
+            self.client.post(url, {"action": "apply", "interface_ids": [Interface.objects.get(module=module).pk]})
+
+        self.assertContains(preview, f"&lt;error: {NO_DIGIT}&gt;")
+        self.assertIn(f"failed to evaluate the family names: {NO_DIGIT}", "\n".join(logs.output))
+        self.assertEqual(names_of(module), ["A"])
+
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class BayPositionPathChannelizedTest(MX10008Topology, TestCase):
@@ -137,12 +154,11 @@ class BayPositionPathChannelizedTest(MX10008Topology, TestCase):
         predicted = predict_rule_output(module, self.no_digit_bay, ["A"])
         applied = apply_rule_to_existing(rule)
 
-        self.assertEqual(len(entry["new_names"]), 1)
-        self.assertIn("bay_position_path", entry["new_names"][0])
+        self.assertEqual(entry["new_names"], [f"<error: {NO_DIGIT}>"])
         self.assertEqual(predicted, ["A"])
         (family,) = applied.families
         self.assertEqual(family.status, FamilyStatus.FAILED)
-        self.assertIn("bay_position_path", family.reason)
+        self.assertEqual(family.reason, f"failed to evaluate the family names: {NO_DIGIT}")
         self.assertEqual(names_of(module), ["A"])
 
     def test_the_rule_tester_previews_the_family_and_reports_a_position_without_a_digit(self):
