@@ -2,22 +2,17 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Build name-template variables from NetBox rows."""
 
+import re
 from typing import NamedTuple
 
 from .name_template import (
-    TEMPLATE_VARIABLES,
     NamingContext,
     TemplateVariableCondition,
     TemplateVariableSource,
-    referenced_variables,
     variables_for_context,
 )
 
-_DEVICE_CONDITIONAL_VARIABLES = frozenset(
-    variable.name
-    for variable in TEMPLATE_VARIABLES
-    if variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
-)
+_ASCII_DIGIT = re.compile("[0-9]")
 
 
 def _extract_trailing_digits(value: str) -> str:
@@ -101,31 +96,42 @@ def _resolve_slot(module_bay, bay_position, parent_bay_position):
     return own_digits
 
 
-def _filter_variables(context, source, values, vc_position):
-    """Select catalogue values whose condition is satisfied."""
+def _filter_variables(context, source, values, conditions):
+    """Select the catalogue values of *context* whose condition *conditions* maps to True."""
     return {
         variable.name: values[variable.name]
         for variable in variables_for_context(context, source=source)
-        if variable.condition is None
-        or (variable.condition == TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER and vc_position is not None)
+        if variable.condition is None or conditions[variable.condition]
     }
+
+
+def _position_path(position):
+    """Return *position* from its first ASCII digit, or None when it has none."""
+    digit = _ASCII_DIGIT.search(position)
+    return None if digit is None else position[digit.start() :]
 
 
 def build_bay_chain_variables(slot, bay_position, parent_bay_position, vc_position=None, *, bay_position_num=None):
     """Build the catalogue entries derived from resolved module-bay positions."""
     if bay_position_num is None:
         bay_position_num = numeric_suffix(bay_position)
+    bay_position_path = _position_path(bay_position)
     values = {
         "slot": slot,
         "slot_num": numeric_suffix(slot),
         "bay_position": bay_position,
         "bay_position_num": bay_position_num,
+        "bay_position_path": bay_position_path,
         "parent_bay_position": parent_bay_position,
         "parent_bay_position_num": numeric_suffix(parent_bay_position),
         "sfp_slot": bay_position_num,
         "vc_position": str(vc_position),
     }
-    return _filter_variables(NamingContext.MODULE_MEMBER, TemplateVariableSource.MODULE_BAY_CHAIN, values, vc_position)
+    conditions = {
+        TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER: vc_position is not None,
+        TemplateVariableCondition.BAY_POSITION_HAS_DIGIT: bay_position_path is not None,
+    }
+    return _filter_variables(NamingContext.MODULE_MEMBER, TemplateVariableSource.MODULE_BAY_CHAIN, values, conditions)
 
 
 def chassis_position(device):
@@ -176,7 +182,7 @@ def build_variables(module_bay, device=None):
     into a bay position, giving a path-shaped value such as
     ``TenGigabitEthernet3/2/1``, so arithmetic templates take the ``_num`` form.
     A virtual-chassis position is included only for a member device that has a
-    position.
+    position, and a bay position path only for a bay position that has a digit.
 
     A template that uses ``{vc_position}`` for a non-member device fails during
     evaluation because the variable is intentionally absent. Position zero is
@@ -188,13 +194,5 @@ def build_variables(module_bay, device=None):
 def build_device_interface_variables(interface_name, vc_position):
     """Build device-interface variables from the current name and VC position."""
     values = {"base": interface_name, "port": interface_name.rsplit("/", 1)[-1], "vc_position": str(vc_position)}
-    return _filter_variables(NamingContext.DEVICE_INTERFACE, None, values, vc_position)
-
-
-def unavailable_variables(template, variables) -> tuple[str, ...]:
-    """Return the variables *template* reads that this device does not provide in *variables*."""
-    return tuple(
-        name
-        for name in referenced_variables(template)
-        if name in _DEVICE_CONDITIONAL_VARIABLES and name not in variables
-    )
+    conditions = {TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER: vc_position is not None}
+    return _filter_variables(NamingContext.DEVICE_INTERFACE, None, values, conditions)

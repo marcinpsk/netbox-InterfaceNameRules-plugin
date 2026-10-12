@@ -156,6 +156,7 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._SLOT_DESCRIPTION".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._UNARY_OPERATORS".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._VC_POSITION_DESCRIPTION".msg = "Use the name_template public interface."
+"netbox_interface_name_rules.name_template._BAY_POSITION_PATH_DESCRIPTION".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._EvaluatedField".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._ParsedBraceGroups".msg = "Use the name_template public interface."
 "netbox_interface_name_rules.name_template._braces_balanced".msg = "Use the name_template public interface."
@@ -180,6 +181,11 @@ max-complexity = 15
 "netbox_interface_name_rules.name_template._group_errors".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._group_shape_refusal".msg = "Use name_template.validate_rule."
 "netbox_interface_name_rules.name_template._VARIABLE_NAMES".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._TEXT_ARITHMETIC_REFUSALS".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._token_groups".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._text_arithmetic_errors".msg = "Use name_template.validate_rule."
+"netbox_interface_name_rules.name_template._UNAVAILABLE_REASONS".msg = "Use name_template.unavailable_reason."
+"netbox_interface_name_rules.name_template._RUNTIME_CONDITIONAL_VARIABLES".msg = "Use name_template.unavailable_variables."
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]

@@ -311,7 +311,7 @@ class RuleListViewTest(ViewTestBase):
             rows_by_name.setdefault(name, []).append(contexts)
 
         self.assertEqual(set(rows_by_name), {variable.name for variable in TEMPLATE_VARIABLES})
-        self.assertEqual(len(rows), 12)
+        self.assertEqual(len(rows), 13)
         self.assertEqual(
             rows_by_name["base"],
             [[NamingContext.MODULE_MEMBER, NamingContext.MODULE_PARENT], [NamingContext.DEVICE_INTERFACE]],
@@ -736,7 +736,7 @@ class RuleTestViewTest(ViewTestBase):
                 else:
                     self.assertFalse(response.context["form"].errors)
                     self.assertIsNone(response.context["preview_results"])
-                    self.assertTrue(response.context["error"])
+                    self.assertEqual(response.context["error"], "{vc_position} is not available on this device")
 
     def test_device_save_handoff_creates_tested_rule(self):
         from urllib.parse import parse_qs, urlsplit
@@ -847,7 +847,7 @@ class RuleTestViewTest(ViewTestBase):
                     self.assertEqual({row[1] for row in rows}, {v.name for v in variables_for_context(context)})
                     self.assertEqual(
                         {row[1]: row[3] for row in rows},
-                        {v.name: dict(v.descriptions)[context] for v in variables_for_context(context)},
+                        {row.name: row.description for row in rule_tester_variable_rows(context)},
                     )
                     selected = _ReferenceRowParser(f"rule-tester-{kind}-variable-reference")
                     selected.feed(response.content.decode())
@@ -1120,7 +1120,7 @@ class RuleTestViewTest(ViewTestBase):
     def test_check_invalid_template_sets_error(self):
         """POST with a template the entered values cannot evaluate sets error context."""
         data = {
-            "name_template": "{1 + {bay_position}}",
+            "name_template": "{8 // ({bay_position_num} - 1)}",
             "channel_count": "0",
             "channel_start": "0",
             "var_bay_position": "swp1",

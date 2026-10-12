@@ -75,10 +75,13 @@ class RawBasePlainRenameTest(VcDriftTestCase):
             channel_start=0,
         )
         cls.arithmetic_type = plain_module_type(manufacturer, "RawBase-ARITH", PLAIN_TYPE)
-        InterfaceNameRule.objects.create(module_type=cls.arithmetic_type, name_template="{{base} + 100}")
         cls.vc_arithmetic_type = plain_module_type(manufacturer, "RawBase-VCARITH", PLAIN_TYPE)
-        InterfaceNameRule.objects.create(
-            module_type=cls.vc_arithmetic_type, name_template="{{base} + 100}.{vc_position}"
+        # A save refuses {base} in arithmetic, so bulk_create stores these rules as an older release saved them.
+        InterfaceNameRule.objects.bulk_create(
+            [
+                InterfaceNameRule(module_type=cls.arithmetic_type, name_template="{{base} + 100}"),
+                InterfaceNameRule(module_type=cls.vc_arithmetic_type, name_template="{{base} + 100}.{vc_position}"),
+            ]
         )
         cls.literal_marker_type = plain_module_type(manufacturer, "RawBase-LITERAL", PLAIN_TYPE)
         InterfaceNameRule.objects.create(
@@ -93,7 +96,9 @@ class RawBasePlainRenameTest(VcDriftTestCase):
         InterfaceNameRule.objects.create(module_type=cls.marker_type, name_template="{base}-x")
         cls.unevaluable_type = ModuleType.objects.create(manufacturer=manufacturer, model="RawBase-UNEVAL")
         InterfaceTemplate.objects.create(module_type=cls.unevaluable_type, name="xe-{module}", type=PLAIN_TYPE)
-        InterfaceNameRule.objects.create(module_type=cls.unevaluable_type, name_template="{{base} + 1}")
+        InterfaceNameRule.objects.bulk_create(
+            [InterfaceNameRule(module_type=cls.unevaluable_type, name_template="{{base} + 1}")]
+        )
 
     def test_a_forced_reapply_renames_nothing(self):
         module, bay = self._install_on(self.device, self.module_type, "3")

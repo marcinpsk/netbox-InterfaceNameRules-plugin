@@ -119,6 +119,20 @@ class EvaluateNameTemplateTest(TestCase):
             evaluate_name_template("et-0/0/{missing}", {})
         self.assertEqual(str(raised.exception), "Unsafe expression in name template: missing")
 
+    def test_an_absent_conditional_variable_is_rejected_with_the_reason_it_is_absent(self):
+        no_chassis = "{vc_position} is not available on this device"
+        no_digit = "{bay_position_path} is not available because the module bay position has no digit"
+        for template, variables, reason in (
+            ("Gi{vc_position}/1", {}, no_chassis),
+            ("xe-{bay_position_path}:{channel}", {"channel": "0"}, no_digit),
+            ("{{bay_position} + 1}/{{vc_position} + 1}", {"bay_position": "et-0/0/3"}, no_chassis),
+            ("{bay_position_path}.{vc_position}", {}, f"{no_digit}; {no_chassis}"),
+        ):
+            with self.subTest(template=template):
+                with self.assertRaises(ValueError) as raised:
+                    evaluate_name_template(template, variables)
+                self.assertEqual(str(raised.exception), reason)
+
     def test_unsafe_expression_rejected(self):
         with self.assertRaises(ValueError):
             evaluate_name_template(

@@ -77,6 +77,14 @@ NAME_TEMPLATE_CORPUS = (
         channel_count=4,
     ),
     TemplateCase(
+        "module member and parent read the bay position path",
+        "xe-{bay_position_path}:{channel}",
+        ACCEPTED,
+        parent_name_template="et-{bay_position_path}",
+        breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        channel_count=4,
+    ),
+    TemplateCase(
         "device interface variables",
         "{base}-{vc_position}-{port}",
         ACCEPTED,
@@ -90,13 +98,21 @@ NAME_TEMPLATE_CORPUS = (
         error_message="{bay_position} is not available in a device-level rule's name template. "
         "Available: {base}, {port}, {vc_position}.",
     ),
+    TemplateCase(
+        "device interface names the bay position path",
+        "ge-{bay_position_path}",
+        REFUSED,
+        applies_to_device_interfaces=True,
+        error_message="{bay_position_path} is not available in a device-level rule's name template. "
+        "Available: {base}, {port}, {vc_position}.",
+    ),
     TemplateCase("unbalanced name template", "xe-{bay_position", REFUSED),
     TemplateCase(
         "unknown template variable",
         "xe-{unknown}",
         REFUSED,
         error_message="{unknown} is not available in a module rule's name template. "
-        "Available: {base}, {bay_position}, {bay_position_num}, {parent_bay_position}, "
+        "Available: {base}, {bay_position}, {bay_position_num}, {bay_position_path}, {parent_bay_position}, "
         "{parent_bay_position_num}, {sfp_slot}, {slot}, {slot_num}, {vc_position}.",
     ),
     TemplateCase(
@@ -133,6 +149,49 @@ NAME_TEMPLATE_CORPUS = (
         channel_count=4,
     ),
     TemplateCase("variable token in arithmetic", "eth{{slot_num} // 2}", ACCEPTED),
+    TemplateCase("integer variable tokens in arithmetic", "et-{{vc_position} * 2 + {bay_position_num}}", ACCEPTED),
+    TemplateCase(
+        "text variable in arithmetic names its numeric counterpart",
+        "et-0/{{bay_position} + 1}/0",
+        REFUSED,
+        error_message="{bay_position} holds text and cannot be used in arithmetic. Use {bay_position_num} instead.",
+    ),
+    TemplateCase(
+        "text variable deep inside an arithmetic group",
+        "Gi{slot_num}/{8 + ({parent_bay_position} - 1) * 2 + {sfp_slot}}",
+        REFUSED,
+        error_message="{parent_bay_position} holds text and cannot be used in arithmetic. "
+        "Use {parent_bay_position_num} instead.",
+    ),
+    TemplateCase(
+        "slot in arithmetic",
+        "Gi{{slot} - 1}/0",
+        REFUSED,
+        error_message="{slot} holds text and cannot be used in arithmetic. Use {slot_num} instead.",
+    ),
+    TemplateCase(
+        "base in arithmetic has no numeric counterpart",
+        "p{1 + {base}}",
+        REFUSED,
+        error_message="{base} holds text and cannot be used in arithmetic.",
+    ),
+    TemplateCase(
+        "device port in arithmetic",
+        "Gi{vc_position}/{{port} + 1}",
+        REFUSED,
+        applies_to_device_interfaces=True,
+        error_message="{port} holds text and cannot be used in arithmetic.",
+    ),
+    TemplateCase(
+        "parent template bay position path in a group",
+        "{base}:{channel}",
+        REFUSED,
+        parent_name_template="et-{{bay_position_path}}",
+        error_field="parent_name_template",
+        error_message="{bay_position_path} holds text and cannot be used in arithmetic.",
+        breakout_mode=BreakoutModeChoices.CHANNELIZED,
+        channel_count=4,
+    ),
     TemplateCase("converter offset arithmetic", "swp{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}", ACCEPTED),
     TemplateCase("value-dependent zero divisor", "{{slot_num} // {sfp_slot}}", ACCEPTED),
     TemplateCase(

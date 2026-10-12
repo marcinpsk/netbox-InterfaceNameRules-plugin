@@ -16,7 +16,7 @@ from dcim.models import (
     ModuleType,
     VirtualChassis,
 )
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import (
@@ -25,6 +25,8 @@ from netbox_interface_name_rules.name_template import (
     TemplateVariableCondition,
     TemplateVariableSource,
     evaluate_name_template,
+    unavailable_reason,
+    unavailable_variables,
     variables_for_context,
 )
 from netbox_interface_name_rules.naming import (
@@ -33,22 +35,11 @@ from netbox_interface_name_rules.naming import (
     build_variables,
     numeric_suffix,
 )
-from netbox_interface_name_rules.tests.helpers import make_placement
-
-
-def _supports_module_placeholder():
-    """Return True when this NetBox resolves ``{module}`` in module-bay positions.
-
-    Probed from the helper that performs the resolution rather than a version comparison, so a
-    backport or an upstream removal is detected by what NetBox actually provides. Without it a
-    bay position stays literal, so a device type cannot compose the parent in at all.
-    """
-    from dcim import utils
-
-    return hasattr(utils, "resolve_module_placeholder")
-
-
-REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
+from netbox_interface_name_rules.tests.helpers import (
+    REQUIRES_MODULE_PLACEHOLDER,
+    make_placement,
+    supports_module_placeholder,
+)
 
 
 class TemplateVariableCatalogueTest(TestCase):
@@ -63,11 +54,13 @@ class TemplateVariableCatalogueTest(TestCase):
         caller = TemplateVariableSource.RENAME_CALLER
         vc_member = TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
         channels = TemplateVariableCondition.RULE_DECLARES_CHANNELS
+        has_digit = TemplateVariableCondition.BAY_POSITION_HAS_DIGIT
         expected = {
             "slot": ({(member, built), (parent, built)}, None),
             "slot_num": ({(member, built), (parent, built)}, None),
             "bay_position": ({(member, built), (parent, built)}, None),
             "bay_position_num": ({(member, built), (parent, built)}, None),
+            "bay_position_path": ({(member, built), (parent, built)}, has_digit),
             "parent_bay_position": ({(member, built), (parent, built)}, None),
             "parent_bay_position_num": ({(member, built), (parent, built)}, None),
             "sfp_slot": ({(member, built), (parent, built)}, None),
@@ -88,6 +81,7 @@ class TemplateVariableCatalogueTest(TestCase):
                 "slot_num",
                 "bay_position",
                 "bay_position_num",
+                "bay_position_path",
                 "parent_bay_position",
                 "parent_bay_position_num",
                 "sfp_slot",
@@ -100,6 +94,7 @@ class TemplateVariableCatalogueTest(TestCase):
                 "slot_num",
                 "bay_position",
                 "bay_position_num",
+                "bay_position_path",
                 "parent_bay_position",
                 "parent_bay_position_num",
                 "sfp_slot",
@@ -135,6 +130,40 @@ class NumericSuffixTest(TestCase):
     def test_an_ordinary_position_is_unchanged(self):
         self.assertEqual(numeric_suffix("TenGigabitEthernet3/2"), "2")
         self.assertEqual(numeric_suffix("swp11"), "11")
+
+
+class BayPositionPathTest(SimpleTestCase):
+    """``{bay_position_path}`` is the bay position from its first ASCII digit, and is absent without one."""
+
+    def test_the_path_starts_at_the_first_ascii_digit(self):
+        for position, path in (
+            ("et-0/0/3", "0/0/3"),
+            ("0/RP0", "0/RP0"),
+            ("RP0", "0"),
+            ("swp12", "12"),
+            ("TenGigabitEthernet3/2/1", "3/2/1"),
+            ("ge-0/0/1", "0/0/1"),
+            ("p\u0662-7", "7"),
+        ):
+            with self.subTest(position=position):
+                self.assertEqual(build_bay_chain_variables("1", position, "0")["bay_position_path"], path)
+
+    def test_a_position_without_an_ascii_digit_has_no_path(self):
+        template = "xe-{bay_position_path}:{channel}"
+        for position in ("A", "xe-", "p\u0662\u0663"):
+            with self.subTest(position=position):
+                variables = build_bay_chain_variables("1", position, "0", vc_position=2)
+
+                self.assertNotIn("bay_position_path", variables)
+                self.assertEqual(variables["bay_position"], position)
+                self.assertEqual(unavailable_variables(variables, template, "{bay_position}"), ("bay_position_path",))
+
+    def test_each_unavailable_variable_names_its_own_cause(self):
+        self.assertEqual(
+            unavailable_reason(("vc_position", "bay_position_path")),
+            "{vc_position} is not available on this device; "
+            "{bay_position_path} is not available because the module bay position has no digit",
+        )
 
 
 class NamingTest(TestCase):
@@ -200,6 +229,7 @@ class NamingTest(TestCase):
                 "slot_num": "7",
                 "bay_position": "7",
                 "bay_position_num": "7",
+                "bay_position_path": "7",
                 "parent_bay_position": "0",
                 "parent_bay_position_num": "0",
                 "sfp_slot": "7",
@@ -229,7 +259,7 @@ class NamingTest(TestCase):
                 NamingContext.MODULE_MEMBER,
                 source=TemplateVariableSource.MODULE_BAY_CHAIN,
             )
-            if variable.condition is None
+            if variable.condition != TemplateVariableCondition.VIRTUAL_CHASSIS_MEMBER
         }
 
         self.assertEqual(set(variables), catalogued)
@@ -244,6 +274,7 @@ class NamingTest(TestCase):
                 "slot_num": "3",
                 "bay_position": "bay/02",
                 "bay_position_num": "2",
+                "bay_position_path": "02",
                 "parent_bay_position": "parent/07",
                 "parent_bay_position_num": "7",
                 "sfp_slot": "2",
@@ -264,6 +295,7 @@ class NamingTest(TestCase):
                 "slot_num": "3",
                 "bay_position": "bay/02",
                 "bay_position_num": "2",
+                "bay_position_path": "02",
                 "parent_bay_position": "parent/07",
                 "parent_bay_position_num": "7",
                 "sfp_slot": "2",
@@ -285,7 +317,7 @@ class NamingTest(TestCase):
         self.assertEqual(variables["slot_num"], "7")
 
 
-@skipUnless(_supports_module_placeholder(), REQUIRES_MODULE_PLACEHOLDER)
+@skipUnless(supports_module_placeholder(), REQUIRES_MODULE_PLACEHOLDER)
 class NestedBayNumericTest(TestCase):
     """Composed bay positions are normal input, so every position has a numeric accessor.
 
@@ -336,6 +368,9 @@ class NestedBayNumericTest(TestCase):
         self.assertEqual(variables["parent_bay_position_num"], "2")
         self.assertEqual(variables["slot"], "3")
         self.assertEqual(variables["slot_num"], "3")
+
+    def test_a_composed_position_gives_its_path_from_the_first_digit(self):
+        self.assertEqual(build_variables(self.sfp_bay)["bay_position_path"], "3/2/1")
 
     def test_a_two_level_hierarchy_resolves_the_slot_from_the_bare_parent(self):
         """A transceiver straight in a line card, no converter: the parent bay is a bare slot."""

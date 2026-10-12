@@ -52,8 +52,21 @@ TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces (4.7+)"
 REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
 # On NetBox 4.5 and older the token stays literal in the interface name.
 REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.
+
+
+def supports_module_placeholder() -> bool:
+    """Return True when this NetBox resolves ``{module}`` in module-bay positions.
+
+    Probed from the helper that performs the resolution rather than a version comparison, so a
+    backport or an upstream removal is detected by what NetBox actually provides. Without it a
+    bay position stays literal, so a device type cannot compose the parent in at all.
+    """
+    from dcim import utils
+
+    return hasattr(utils, "resolve_module_placeholder")
 
 
 def slug_for(prefix: str, suffix: str = "") -> str:

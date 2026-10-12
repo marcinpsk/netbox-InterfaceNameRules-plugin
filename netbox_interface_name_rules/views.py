@@ -395,7 +395,7 @@ class RuleTestView(BaseMultiObjectView):
         Each row carries the role the DB preview uses — ``parent``, ``channel`` or ``interface`` —
         so a channelized rule shows the parent it creates alongside the channels under it.
         """
-        from .name_template import evaluate_name_template
+        from .name_template import UnavailableVariableError, evaluate_name_template
 
         name_template = cd["name_template"]
         channel_count = cd.get("channel_count") or 0
@@ -430,6 +430,8 @@ class RuleTestView(BaseMultiObjectView):
                     )
             else:
                 preview_results = [row(evaluate_name_template(name_template, variables), "interface")]
+        except UnavailableVariableError as exc:
+            return None, str(exc)
         except Exception as exc:
             logger.exception("Template evaluation error")
             return None, type(exc).__name__
