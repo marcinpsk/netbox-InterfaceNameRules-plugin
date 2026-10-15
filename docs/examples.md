@@ -146,9 +146,15 @@ without a channel number); leave it blank to keep the name NetBox gave the port.
 `{channel}` is `channel_start + channel_id - 1`, so NetBox's 1-based `channel_id`
 1…4 render as Juniper's `:0` … `:3`.
 
-The family is built only when every name it needs is free: if the parent's name
-or any channel name is already taken on the device, the whole family is skipped
-and logged rather than half created. Switching an existing rule from `flat` to
+The family is built only when it can take every name it needs, and never half
+created. An interface that already has a channel name, for example one that
+other tooling created with a LAG, addresses or VLANs, becomes that channel: it
+keeps its ID, name and configuration, and moves under the parent. This is done
+only when it is not on another module, is not a subinterface or a channelized
+parent, and has no cable. NetBox refuses a channel ID on an interface with a
+cable, and the plugin never removes a cable. Any other interface with one of the
+family's names, and any interface other than the port with the parent's name,
+skips the whole family with a warning that names it. Switching an existing rule from `flat` to
 `channelized` does not convert the flat interfaces an earlier apply installed —
 the two topologies are different objects to cabling and automation, so
 conversion is a separate, explicit operation. A module carrying more interfaces

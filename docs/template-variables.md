@@ -278,8 +278,10 @@ minus `{channel}` — the parent is the one interface in the family without a ch
 Braces must balance, so a stray `{` is refused on save instead of ending up in an interface name.
 Blank leaves the parent the name NetBox gave it.
 
-The complete family is checked before anything is written: one occupied name — the parent's or any
-channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
+The complete family is checked before anything is written. An interface that already has a channel
+name becomes that channel and keeps its configuration, when it is not on another module, is not a
+subinterface or a channelized parent, and has no cable. Any other occupied name, the parent's or a
+channel's, skips the whole family with a warning that names the interface. On NetBox releases that cannot model channels
 (4.6 and older) a `channelized` rule is skipped and logged; it is never applied as a flat breakout
 instead.
 
