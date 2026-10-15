@@ -30,6 +30,8 @@ from .names import (
     name_holders,
     name_owners,
     reconcile_after_parent_cascade,
+    repeated_name_refusal,
+    repeated_names,
     validate_or_block,
 )
 from .targets import UNCLAIMED_BASE_REASON, channelized_family_names, flat_family_names
@@ -120,7 +122,7 @@ def plan_structural_family(module, rule, variables, base, base_name, family_base
 
     *base_name* is the value of ``{base}``, or None when no template claims *base*. *family_bases*
     are the primary keys of the module's rows that the claim gives a template, which no family takes
-    over. ``settle_flat_surplus`` then decides for the module whether it carries a flat family.
+    over. ``settle_module_families`` then settles the families on the module against each other.
     """
     if not supports_channelization():
         return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
@@ -141,29 +143,46 @@ def module_taken_over_names(families, bases) -> frozenset:
     )
 
 
-def settle_flat_surplus(module, plans, interfaces, templates, bases):  # pragma: no cover - channelization only
-    """Return *plans* with every structural family refused when *module* carries a flat breakout family.
+def _without_holders(plan, names=None):
+    """Return *plan* holding no row with one of *names*, or no row at all when *names* is None."""
+    channels = tuple(
+        replace(channel, holder=None) if names is None or channel.name in names else channel
+        for channel in plan.channels
+    )
+    return replace(plan, channels=channels)
 
-    *interfaces* are the module's rows and *templates* its resolved templates. The rows that the
-    module's families take over are not flat siblings (ADR 0017); any other row beyond the templates
-    is a flat family, and building beside it would strand its siblings. Each family that is built
-    keeps the names of the rows that the module's families take over, for the check under lock.
+
+def _settled(plan, repeated, names, expanded, module):  # pragma: no cover - requires channelization support
+    """Return *plan* as the module's families settle it; see ``settle_module_families``."""
+    refusal = repeated_name_refusal(plan.channel_names, repeated)
+    if refusal is not None:
+        plan = _without_holders(plan, repeated)
+        return replace(plan, precondition_status=FamilyStatus.BLOCKED, precondition_reason=refusal[1])
+    if plan.precondition_status is not None:
+        return plan
+    if expanded:
+        # Converting one sibling into a parent would strand the others beside the new family.
+        reason = f"module {module} already carries a flat breakout family"
+        return replace(_without_holders(plan), precondition_status=FamilyStatus.BLOCKED, precondition_reason=reason)
+    return replace(plan, taken_over_names=tuple(sorted(names)))
+
+
+def settle_module_families(module, plans, interfaces, templates, bases):  # pragma: no cover - channelization only
+    """Return *plans* with the structural families on *module* settled against each other before execution.
+
+    A channel name that the families want more than once refuses every family that wants it, and no
+    family takes over its row. A parent name is left to NetBox's unique name, as before: no family
+    takes a row over by its parent name. Then, when *module* carries a flat breakout family, every other family is
+    refused. *interfaces* are the module's rows and *templates* its resolved templates. The rows
+    that the module's families take over are not flat siblings (ADR 0017); any other row beyond the
+    templates is. Each family that is built keeps the names of the rows that the module's families
+    take over, for the check under lock.
     """
     evaluated = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan) and plan.channels]
+    repeated = repeated_names(plan.channel_names for plan in evaluated)
     names = module_taken_over_names(((plan.base.name, plan.channel_names) for plan in evaluated), bases)
     expanded = flat_surplus([interface for interface in interfaces if interface.name not in names], templates) > 0
-    reason = f"module {module} already carries a flat breakout family"
-    settled = {}
-    for plan in evaluated:
-        if plan.precondition_status is not None:
-            continue
-        settled[plan.base.pk] = replace(plan, taken_over_names=tuple(sorted(names)))
-        if expanded:
-            # Converting one sibling into a parent would strand the others beside the new family.
-            channels = tuple(replace(channel, holder=None) for channel in plan.channels)
-            settled[plan.base.pk] = replace(
-                plan, channels=channels, precondition_status=FamilyStatus.BLOCKED, precondition_reason=reason
-            )
+    settled = {plan.base.pk: _settled(plan, repeated, names, expanded, module) for plan in evaluated}
     return [settled.get(plan.base.pk, plan) if isinstance(plan, StructuralFamilyPlan) else plan for plan in plans]
 
 
@@ -225,6 +244,9 @@ def _name_refusal(plan):  # pragma: no cover - requires channelization support
 
     One query, because the caller holds the plan's row locks while this runs.
     """
+    repeated = repeated_name_refusal(plan.channel_names, repeated_names([plan.channel_names]))
+    if repeated is not None:
+        return FamilyStatus.BLOCKED, repeated[1], repeated[0]
     channel_names = plan.channel_names
     holders = name_holders(plan.device_id, plan.target_names)
     planned = {channel.name: channel.holder.pk for channel in plan.channels if channel.holder is not None}

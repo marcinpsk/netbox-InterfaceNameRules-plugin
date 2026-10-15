@@ -21,7 +21,7 @@ from .domain import (
     ProspectiveFamilyPlanSet,
     ProspectiveMember,
 )
-from .names import COLLISION_REASON
+from .names import COLLISION_REASON, repeated_name_refusal, repeated_names
 from .structural import UNSUPPORTED_REASON, has_flat_expansion, module_taken_over_names
 from .targets import (
     UNCLAIMED_BASE_REASON,
@@ -339,25 +339,31 @@ def _is_structural_creation(plan) -> bool:
 def _settled_creations(plans, context, bases):
     """Refuse the channelized families the module cannot hold, as installed execution refuses them.
 
-    A flat family is decided for the whole module, as ``settle_flat_surplus`` decides it: the rows that
-    the module's families take over (ADR 0017) are not its siblings. A described interface with a
-    channel name is one a family can take over; only the rows the preview reads can say whether it
-    does, so only the parent name is checked against the described names here.
+    The families are settled against each other as ``settle_module_families`` settles them: a name
+    they want more than once as a channel refuses each family that wants it, and the rows that they take over
+    (ADR 0017) are not flat siblings. A described interface with a channel name is one a family can
+    take over; only the rows the preview reads can say whether it does, so only the parent name is
+    checked against the described names here.
     """
     creations = [plan for plan in plans if _is_structural_creation(plan)]
     if not creations:
         return plans
+    repeated = repeated_names(plan.target_names[1:] for plan in creations)
     names = module_taken_over_names(((plan.base_name, plan.target_names[1:]) for plan in creations), bases)
     expanded = context.flat_expansion and has_flat_expansion(context.module, names)
     return tuple(
-        _settled_creation(plan, context, expanded) if _is_structural_creation(plan) else plan for plan in plans
+        _settled_creation(plan, context, repeated, expanded) if _is_structural_creation(plan) else plan
+        for plan in plans
     )
 
 
-def _settled_creation(plan, context, expanded):  # pragma: no cover - requires channelization support
+def _settled_creation(plan, context, repeated, expanded):  # pragma: no cover - requires channelization support
     """Return *plan*, or the refusal of the family it would build when the module cannot hold it."""
     parent_name = plan.target_names[0]
-    if expanded:
+    refusal = repeated_name_refusal(plan.target_names[1:], repeated)
+    if refusal is not None:
+        reason = refusal[1]
+    elif expanded:
         # Converting one sibling into a parent would strand the others beside the new family.
         reason = FLAT_EXPANSION_REASON
     elif parent_name != plan.base_name and parent_name in context.taken_names:

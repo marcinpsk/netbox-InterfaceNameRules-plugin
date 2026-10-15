@@ -153,8 +153,8 @@ class StructuralFamilyPlan:
 
     @property
     def holders(self) -> tuple[InterfaceSnapshot, ...]:
-        """Return the snapshot of every existing row that has one of the channel names, in creation order."""
-        return tuple(channel.holder for channel in self.channels if channel.holder is not None)
+        """Return the snapshot of every existing row that has one of the channel names, once each, in creation order."""
+        return tuple(dict.fromkeys(channel.holder for channel in self.channels if channel.holder is not None))
 
 
 @dataclass(frozen=True, slots=True)

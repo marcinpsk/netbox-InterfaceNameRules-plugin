@@ -37,7 +37,7 @@ from .structural import (
     execute_structural_family,
     plan_flat_family,
     plan_structural_family,
-    settle_flat_surplus,
+    settle_module_families,
 )
 from .targets import (
     UNCLAIMED_BASE_REASON,
@@ -145,7 +145,7 @@ def _family_bases(interfaces, bases) -> frozenset:
 def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members):
     """Return a plan for each selected interface; a row that a family keeps or takes over is in that family's plan.
 
-    The module's flat surplus is settled over every plan before the selection, so it does not depend on it.
+    The module's families are settled against each other before the selection, so that does not depend on it.
     """
     family_bases = _family_bases(interfaces, bases)
     plans = [
@@ -155,7 +155,7 @@ def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_
         for base in plain
     ]
     if builds_channelized_family(rule):
-        plans = settle_flat_surplus(module, plans, interfaces, bases.catalog.get(), bases)
+        plans = settle_module_families(module, plans, interfaces, bases.catalog.get(), bases)
     plans = [plan for plan in plans if _reaches(plan, selected_pks)]
     kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
     kept.update(holder.pk for plan in plans if isinstance(plan, StructuralFamilyPlan) for holder in plan.holders)

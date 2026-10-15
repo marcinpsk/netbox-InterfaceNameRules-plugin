@@ -79,7 +79,7 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         variables = build_variables(bay, device=self.device)
         templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
         plan = plan_structural_family(module, self.rule, variables, base, base.name)
-        (plan,) = structural.settle_flat_surplus(
+        (plan,) = structural.settle_module_families(
             module, [plan], list(Interface.objects.filter(module=module)), templates, _UnclaimedNames()
         )
         return module, bay, plan
@@ -420,7 +420,7 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
     """A family that cannot be completed leaves the port exactly as NetBox instantiated it."""
 
     PREFIX = "StructRoll"
-    # Every channel resolves to one name, so the second insert hits NetBox's own uniqueness index.
+    # Every channel resolves to one name, so the family wants that name more than once.
     NAME_TEMPLATE = "xe-0/0/{bay_position}"
 
     def _assert_untouched(self, module):
@@ -438,9 +438,9 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
 
         self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
         self.assertEqual(outcome.changed_count, 0)
-        self.assertTrue(outcome.reason)
+        self.assertEqual(outcome.reason, f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)")
         self._assert_untouched(module)
-        self.assertTrue(any("already exists" in line for line in logs.output), logs.output)
+        self.assertTrue(any(outcome.reason in line for line in logs.output), logs.output)
 
     def test_the_install_entry_point_reports_the_rollback(self):
         module, bay = self._install(self.module_type, "3", run_rules=False)
@@ -450,6 +450,47 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
 
         self.assertEqual(built, 0)
         self._assert_untouched(module)
+
+    def _repeated_holder(self):
+        """Create the device-level row with the name every channel of the family repeats."""
+        return Interface.objects.create(device=self.device, name="xe-0/0/3", type=PLAIN_TYPE)
+
+    def _assert_holder_untouched(self, holder):
+        holder.refresh_from_db()
+        self.assertEqual(
+            (holder.name, holder.module_id, holder.parent_id, holder.channel_id, holder.type),
+            ("xe-0/0/3", None, None, None, PLAIN_TYPE),
+        )
+
+    def test_a_row_with_a_repeated_channel_name_is_not_taken_over_twice(self):
+        holder = self._repeated_holder()
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            built = apply_interface_name_rules(module, bay)
+
+        self.assertEqual(built, 0)
+        self._assert_untouched(module)
+        self._assert_holder_untouched(holder)
+        reason = f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)"
+        self.assertTrue(any(reason in line for line in logs.output), logs.output)
+
+    def test_a_plan_with_a_repeated_channel_name_is_refused_under_lock(self):
+        holder = self._repeated_holder()
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        base = Interface.objects.get(module=module)
+        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(
+            (outcome.status, outcome.reason),
+            (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)"),
+        )
+        self.assertEqual([member.interface_pk for member in outcome.members], [base.pk, holder.pk])
+        self._assert_untouched(module)
+        self._assert_holder_untouched(holder)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

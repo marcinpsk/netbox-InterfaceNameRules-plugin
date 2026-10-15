@@ -1233,7 +1233,7 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
         for name in ("0", "x0:1"):
             InterfaceTemplate.objects.create(module_type=cls.pair_type, name=name, type=PARENT_TYPE)
         cls.two_port_types = {}
-        for names in (("0", "1"), ("a", "b")):
+        for names in (("0", "00"), ("a", "b")):
             model = f"BrkExec-{''.join(names).upper()}"
             cls.two_port_types[names] = ModuleType.objects.create(
                 manufacturer=manufacturer, model=model, part_number=model
@@ -1480,24 +1480,56 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_family_never_takes_over_the_base_of_another_family(self):
-        module_type = self.two_port_types["0", "1"]
+        module_type = self.two_port_types["0", "00"]
         module = self._module_with(module_type=module_type)
         rule = self._rule(
-            "{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
+            "{base}{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
+        )
+        preview, _checked = find_interfaces_for_rule(rule)
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(
+            {entry["current_name"]: entry["new_names"] for entry in preview}, {"00": ["p00", "000", "001"]}
+        )
+        self.assertEqual(
+            members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: 00 (another family is built on it)")
+        )
+        self.assertEqual(members["00"], (FamilyStatus.CHANGED, ""))
+        self.assertEqual(self._names(module), ["0", "000", "001", "p00"])
+
+    def _assert_no_family_takes_over_a_row_two_families_want(self, cabled):
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("ch0", module_type=module_type)
+        if cabled:
+            peer = Interface.objects.create(device=self.device, name="peer-ch0", type=PARENT_TYPE)
+            Cable(a_terminations=[Interface.objects.get(module=module, name="ch0")], b_terminations=[peer]).save()
+        rule = self._rule(
+            "ch{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
         )
 
         offered, _changed = self._preview_then_apply(rule, module)
         members = self._apply_to_every_interface(rule, module)
 
+        reason = f"{COLLISION_REASON}: ch0 (the module's families want it more than once)"
         self.assertEqual(offered, {})
         self.assertEqual(
             members,
             {
-                "0": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: 1 (another family is built on it)"),
-                "1": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: 0 (another family is built on it)"),
+                "a": (FamilyStatus.BLOCKED, reason),
+                "b": (FamilyStatus.BLOCKED, reason),
+                "ch0": (FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON),
             },
         )
-        self.assertEqual(self._names(module), ["0", "1"])
+        self.assertEqual(self._names(module), ["a", "b", "ch0"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_two_families_never_take_over_a_row_they_both_want(self):
+        self._assert_no_family_takes_over_a_row_two_families_want(cabled=False)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_two_families_never_take_over_a_cabled_row_they_both_want(self):
+        self._assert_no_family_takes_over_a_row_two_families_want(cabled=True)
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_the_preview_offers_a_family_that_only_takes_over_rows(self):

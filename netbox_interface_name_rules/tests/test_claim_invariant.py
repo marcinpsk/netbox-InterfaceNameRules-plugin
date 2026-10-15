@@ -462,15 +462,18 @@ def _taken_over(layout, bases, candidates):
 
     The families are those that the run plans on *candidates*. A family takes over no row where NetBox
     has no channel fields, or when its base is unclaimed. A row the claim gives a template is no
-    family's: a family with such a row's name is refused and holds the other rows. When the rows that
-    the families take over do not explain the module's rows beyond its templates, the module carries a
-    flat family, and every other family is refused and holds no row.
+    family's, and neither is a row with a channel name that the families want more than once: a family that
+    wants either is refused and holds only its other rows. When the rows that the families take over
+    do not explain the module's rows beyond its templates, the module carries a flat family, and every
+    other family is refused and holds no row.
     """
     if layout.rule_key not in CHANNELIZED_RULES or not structural.supports_channelization():
         return {}
     families = {
         name: _flat_targets(layout.rule_key, base) for name in candidates if (base := bases.builds_on(name)) is not None
     }
+    wanted = Counter(channel for channels in families.values() for channel in channels)
+    repeated = {channel for channel, count in wanted.items() if count > 1}
     names = {
         channel
         for name, channels in families.items()
@@ -483,9 +486,35 @@ def _taken_over(layout, bases, candidates):
     taken = {}
     for name, channels in families.items():
         others = [row for row in layout.present if row in channels and row != name]
-        conflict = any(bases.builds_on(row) is not None for row in others)
-        taken[name] = set() if expanded and not conflict else {row for row in others if bases.builds_on(row) is None}
+        refused = any(bases.builds_on(row) is not None for row in others) or not repeated.isdisjoint(channels)
+        held = {row for row in others if bases.builds_on(row) is None and row not in repeated}
+        taken[name] = held if refused or not expanded else set()
     return taken
+
+
+def _contested_layouts():
+    """Yield two claimed ports whose families both want one existing row, with no stray row to refuse them."""
+    for kinds in itertools.combinations(KINDS, 2):
+        templates = _templates(kinds)
+        for holder in _flat_targets("channelized without base", NEW_BAY):
+            yield _Layout("channelized without base", None, templates, (*(t.current for t in templates), holder))
+
+
+def _takeover_kind(layout):
+    """Return whether a family in *layout* takes over a row, two families want one row, or neither."""
+    bases = _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False)
+    if any(_taken_over(layout, bases, layout.present).values()):
+        return "taken over"
+    wanted = Counter(
+        row
+        for name in layout.present
+        if layout.rule_key in CHANNELIZED_RULES and (base := bases.builds_on(name)) is not None
+        for row in _flat_targets(layout.rule_key, base)
+        if row in layout.present and row != name
+    )
+    if structural.supports_channelization() and any(count > 1 for count in wanted.values()):
+        return "contested"
+    return "neither"
 
 
 def _runs(layout, interfaces, bases):
@@ -660,35 +689,31 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertGreater(families, 0)
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
-    def test_every_interface_in_scope_is_in_exactly_one_plan(self):
-        """Each run plans each interface it may touch once, and no other: built, kept by its family, or kept and reported."""
+    def _assert_every_interface_in_scope_is_in_exactly_one_plan(self):
         layouts = [
             *(layout for layout in _layouts() if layout.previous_key == layout.rule_key),
             *_flat_layouts(),
             *_flat_layouts(CHANNELIZED_RULES),
+            *_contested_layouts(),
         ]
         failures = [(layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout)[0])]
-        taken_over = sum(
-            any(
-                _taken_over(
-                    layout, _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False), layout.present
-                ).values()
-            )
-            for layout in layouts
-        )
+        taken_over = Counter(_takeover_kind(layout) for layout in layouts)
 
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
-        self.assertGreater(taken_over, 0)
+        if structural.supports_channelization():
+            self.assertGreater(taken_over["taken over"], 0)
+            self.assertGreater(taken_over["contested"], 0)
+        else:
+            self.assertEqual(taken_over["taken over"] + taken_over["contested"], 0)
+
+    def test_every_interface_in_scope_is_in_exactly_one_plan(self):
+        """Each run plans each interface it may touch once, and no other: built, kept by its family, or kept and reported."""
+        self._assert_every_interface_in_scope_is_in_exactly_one_plan()
 
     def test_every_interface_in_scope_is_in_exactly_one_plan_where_netbox_has_no_channels(self):
         """A release without channel fields builds no channelized family, so it takes over no row (ADR 0017)."""
-        layouts = list(_flat_layouts(CHANNELIZED_RULES))
         with patch.object(structural, "supports_channelization", return_value=False):
-            failures = [
-                (layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout)[0])
-            ]
-
-        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+            self._assert_every_interface_in_scope_is_in_exactly_one_plan()
 
     def test_every_leftover_beside_a_channelized_family_is_planned_only_in_its_scope(self):
         """A breakout rule keeps a leftover a template alone claims only when Apply Rules selects it (ADR 0013)."""
