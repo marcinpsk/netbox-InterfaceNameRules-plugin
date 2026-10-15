@@ -280,7 +280,9 @@ Blank leaves the parent the name NetBox gave it.
 
 The complete family is checked before anything is written. An interface that already has a channel
 name becomes that channel and keeps its configuration, when it is not on another module, is not a
-subinterface or a channelized parent, and has no cable. Any other occupied name, the parent's or a
+subinterface or a channelized parent, is not the port that another family is built on, and has no
+cable. The module's families must also want its name only once: a name that they want more than
+once refuses every family that wants it. Any other occupied name, the parent's or a
 channel's, skips the whole family with a warning that names the interface. On NetBox releases that cannot model channels
 (4.6 and older) a `channelized` rule is skipped and logged; it is never applied as a flat breakout
 instead.

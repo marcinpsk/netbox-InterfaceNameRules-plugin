@@ -151,8 +151,10 @@ created. An interface that already has a channel name, for example one that
 other tooling created with a LAG, addresses or VLANs, becomes that channel: it
 keeps its ID, name and configuration, and moves under the parent. This is done
 only when it is not on another module, is not a subinterface or a channelized
-parent, and has no cable. NetBox refuses a channel ID on an interface with a
-cable, and the plugin never removes a cable. Any other interface with one of the
+parent, is not the port that another family is built on, and has no cable.
+NetBox refuses a channel ID on an interface with a cable, and the plugin never
+removes a cable. The module's families must also want its name only once: a name
+that they want more than once refuses every family that wants it. Any other interface with one of the
 family's names, and any interface other than the port with the parent's name,
 skips the whole family with a warning that names it. Switching an existing rule from `flat` to
 `channelized` does not convert the flat interfaces an earlier apply installed —
