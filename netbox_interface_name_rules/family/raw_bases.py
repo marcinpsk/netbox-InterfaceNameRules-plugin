@@ -176,6 +176,10 @@ class RawBases:
         """Return the raw template name *name* stands for, or None when no single template claims it."""
         return self._resolved().bases.get(name)
 
+    def claims_alone(self, name) -> bool:
+        """Return whether one template alone claims *name*, so that no family takes its row over (ADR 0017)."""
+        return self.claim(name).accepted
+
     def is_ambiguous(self, name):
         """Return whether a rule that reads the claim finds *name* claimed, but not by one template alone."""
         if not (self._reads_base or self._breaks_out):
@@ -334,3 +338,7 @@ class GivenRawNames:
         return None if self._bases.is_ambiguous(name) else name
 
     builds_on = base_for
+
+    def claims_alone(self, name) -> bool:
+        """Return whether one template alone claims *name* among the given names; any other name is no template's."""
+        return self._bases.claims_alone(name)

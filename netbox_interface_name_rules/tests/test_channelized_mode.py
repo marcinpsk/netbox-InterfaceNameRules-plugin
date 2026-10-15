@@ -527,6 +527,26 @@ class ChannelizedModeTakeoverTest(ChannelizationTestCase):
         self.assertIn("cable", family.reason)
         self.assertEqual(refusals, {"3": family.reason})
 
+    def _assert_prediction_agrees_with_the_apply(self, bind):
+        """Assert prediction names the family that the apply builds over the rows, bound to the module or not."""
+        holders = self._holders(*self.CHANNEL_NAMES)
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        if bind:
+            Interface.objects.filter(pk__in=[holder.pk for holder in holders]).update(module=module)
+
+        predicted = predict_rule_output(module, bay, ["3"])
+        apply_interface_name_rules(module, bay)
+
+        self.assertEqual(predicted, self.FAMILY_NAMES)
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self._assert_taken_over(module, holders)
+
+    def test_prediction_names_the_family_that_takes_over_rows_on_the_module(self):
+        self._assert_prediction_agrees_with_the_apply(bind=True)
+
+    def test_prediction_names_the_family_that_takes_over_device_rows(self):
+        self._assert_prediction_agrees_with_the_apply(bind=False)
+
     def test_reapply_takes_over_the_rows_once_the_blocking_cable_is_gone(self):
         holders = self._holders(*self.CHANNEL_NAMES)
         cable = self._cable(holders[0])

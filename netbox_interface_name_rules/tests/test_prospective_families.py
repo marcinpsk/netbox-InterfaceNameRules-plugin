@@ -80,6 +80,11 @@ class _NamesAreRaw:
 
     builds_on = base_for
 
+    @staticmethod
+    def claims_alone(_name):
+        """No channel name these tests plan is a template's raw name."""
+        return False
+
 
 _NAMES_ARE_RAW = _NamesAreRaw()
 

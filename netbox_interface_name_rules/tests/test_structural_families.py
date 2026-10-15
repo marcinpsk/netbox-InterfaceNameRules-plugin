@@ -49,8 +49,8 @@ class _UnclaimedNames:
     """The claim over a module whose only interface is the base: no channel name is a template's."""
 
     @staticmethod
-    def builds_on(_name):
-        return None
+    def claims_alone(_name):
+        return False
 
 
 class StructuralFamilyTestCase(ChannelizationTestCase):

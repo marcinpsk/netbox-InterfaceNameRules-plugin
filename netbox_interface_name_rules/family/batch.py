@@ -139,7 +139,7 @@ def _creation_plan(module, rule, variables, base, base_name, family_bases, membe
 
 def _family_bases(interfaces, bases) -> frozenset:
     """Return the primary key of each interface the claim gives a template, which no other family takes over."""
-    return frozenset(interface.pk for interface in interfaces if bases.builds_on(interface.name) is not None)
+    return frozenset(interface.pk for interface in interfaces if bases.claims_alone(interface.name))
 
 
 def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members):

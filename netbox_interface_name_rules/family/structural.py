@@ -144,7 +144,7 @@ def module_taken_over_names(families, bases) -> frozenset:
         name
         for base_name, channel_names in families
         for name in taken_over_names(base_name, channel_names)
-        if bases.builds_on(name) is None
+        if not bases.claims_alone(name)
     )
 
 
