@@ -80,7 +80,12 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
         plan = plan_structural_family(module, self.rule, variables, base, base.name, family_bases)
         (plan,) = structural.settle_module_families(
-            module, [plan], list(Interface.objects.filter(module=module)), templates, _UnclaimedNames()
+            module,
+            [plan],
+            list(Interface.objects.filter(module=module)),
+            templates,
+            _UnclaimedNames(),
+            frozenset({base.pk}),
         )
         return module, bay, plan
 

@@ -148,7 +148,8 @@ def _family_bases(interfaces, bases) -> frozenset:
 def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members):
     """Return a plan for each selected interface; a row that a family keeps or takes over is in that family's plan.
 
-    The module's families are settled against each other before the selection, so that does not depend on it.
+    The module's families are settled against each other before the selection, so a repeated name does not
+    depend on it. Only a family that the selection reaches takes over its rows.
     """
     family_bases = _family_bases(interfaces, bases)
     plans = [
@@ -158,7 +159,8 @@ def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_
         for base in plain
     ]
     if builds_channelized_family(rule):
-        plans = settle_module_families(module, plans, interfaces, bases.catalog.get(), bases)
+        applied = frozenset(plan.base.pk for plan in plans if _reaches(plan, selected_pks))
+        plans = settle_module_families(module, plans, interfaces, bases.catalog.get(), bases, applied)
     plans = [plan for plan in plans if _reaches(plan, selected_pks)]
     kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
     kept.update(holder.pk for plan in plans if isinstance(plan, StructuralFamilyPlan) for holder in plan.holders)

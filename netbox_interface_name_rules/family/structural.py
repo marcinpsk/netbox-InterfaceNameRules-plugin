@@ -178,7 +178,9 @@ def _settled(plan, repeated, names, expanded, module):  # pragma: no cover - req
     return replace(plan, taken_over_names=tuple(sorted(names)))
 
 
-def settle_module_families(module, plans, interfaces, templates, bases):  # pragma: no cover - channelization only
+def settle_module_families(  # pragma: no cover - channelization only
+    module, plans, interfaces, templates, bases, applied
+):
     """Return *plans* with the structural families on *module* settled against each other before execution.
 
     A channel name that the families want more than once refuses every family that wants it, and no
@@ -186,12 +188,14 @@ def settle_module_families(module, plans, interfaces, templates, bases):  # prag
     takes a row over by its parent name. Then, when *module* carries a flat breakout family, every other family is
     refused. *interfaces* are the module's rows and *templates* its resolved templates. The rows
     that the module's families take over are not flat siblings (ADR 0017); any other row beyond the
-    templates is. Each family that is built keeps the names of the rows that the module's families
-    take over, for the check under lock.
+    templates is. *applied* holds the base of each family that the apply reaches: a family that it
+    does not reach takes over no row. Each family that is built keeps the names of the rows that the
+    module's families take over, for the check under lock.
     """
     evaluated = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan) and plan.channels]
     repeated = repeated_names(plan.channel_names for plan in evaluated)
-    families = ((plan.base.name, plan.channel_names, plan.precondition_status) for plan in evaluated)
+    reached = [plan for plan in evaluated if plan.base.pk in applied]
+    families = ((plan.base.name, plan.channel_names, plan.precondition_status) for plan in reached)
     names = module_taken_over_names(families, repeated, bases)
     expanded = flat_surplus([interface for interface in interfaces if interface.name not in names], templates) > 0
     settled = {plan.base.pk: _settled(plan, repeated, names, expanded, module) for plan in evaluated}

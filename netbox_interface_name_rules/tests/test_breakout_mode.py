@@ -28,7 +28,7 @@ from dcim.models import Cable, Interface, InterfaceTemplate, ModuleType, Virtual
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, transaction
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import MigrationLoader
@@ -1576,6 +1576,40 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
             },
         )
         self.assertEqual(self._names(module), ["a", "a:0", "b"])
+
+    def _built_after_selective_apply(self, cabled, selected):
+        """Apply to the *selected* ports of a module with rows ``a:0`` and ``b:0``; the *cabled* ports' rows have a cable.
+
+        Return the parents built, after asserting that no row beyond the templates is left beside them.
+        """
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("a:0", "b:0", module_type=module_type)
+        for port in cabled:
+            peer = Interface.objects.create(device=self.device, name=f"peer-{port}:0", type=PARENT_TYPE)
+            row = Interface.objects.get(module=module, name=f"{port}:0")
+            Cable(a_terminations=[row], b_terminations=[peer]).save()
+        rule = self._rule("{base}:{channel}", breakout_mode=CHANNELIZED, module_type=module_type)
+        pks = Interface.objects.filter(module=module, name__in=selected).values_list("pk", flat=True)
+
+        apply_rule_to_existing(rule, interface_ids=list(pks))
+
+        rows = list(Interface.objects.filter(module=module, channel_id__isnull=True))
+        built = sorted(row.name for row in rows if row.channels)
+        surplus = len(rows) - InterfaceTemplate.objects.filter(module_type=module_type).count()
+        if built:
+            self.assertEqual(surplus, 0, sorted(row.name for row in rows))
+        return built
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_selective_apply_builds_no_family_beside_a_row_it_does_not_take_over(self):
+        built = {}
+        for cabled in ((), ("a",), ("b",), ("a", "b")):
+            for selected in (("a",), ("b",), ("a", "b")):
+                with self.subTest(cabled=cabled, selected=selected), transaction.atomic():
+                    built[cabled, selected] = self._built_after_selective_apply(cabled, selected)
+                    transaction.set_rollback(True)
+
+        self.assertEqual({case: parents for case, parents in built.items() if parents}, {((), ("a", "b")): ["a", "b"]})
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_the_row_a_family_with_a_repeated_name_leaves_is_a_flat_sibling(self):
