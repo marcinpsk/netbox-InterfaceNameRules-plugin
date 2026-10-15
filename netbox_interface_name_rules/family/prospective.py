@@ -22,7 +22,7 @@ from .domain import (
     ProspectiveMember,
 )
 from .names import COLLISION_REASON
-from .structural import UNSUPPORTED_REASON, has_flat_expansion
+from .structural import UNSUPPORTED_REASON, has_flat_expansion, strands_flat_siblings
 from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
@@ -223,14 +223,17 @@ def _flat_creation_plan(rule, variables, base_name, base):
     )
 
 
-def _structural_refusal(base_name, flat_expansion, taken_names, target_names):  # pragma: no cover - see below
-    """Return why the planned family cannot be built here, or None when nothing refuses it."""
-    if flat_expansion:
+def _structural_refusal(base_name, context, parent_name, channel_names):  # pragma: no cover - see below
+    """Return why the planned family cannot be built here, or None when nothing refuses it.
+
+    A described interface with a channel name is one the family can take over (ADR 0017); only the
+    rows a preview reads can say whether it does, so that question is left to the preview.
+    """
+    if strands_flat_siblings(context.module, context.flat_expansion, base_name, channel_names):
         # Converting one sibling into a parent would strand the others beside the new family.
         return FLAT_EXPANSION_REASON
-    collisions = [name for name in target_names if name != base_name and name in taken_names]
-    if collisions:
-        return f"{COLLISION_REASON}: {collisions[0]}"
+    if parent_name != base_name and parent_name in context.taken_names:
+        return f"{COLLISION_REASON}: {parent_name}"
     return None
 
 
@@ -244,8 +247,7 @@ def _modelled_structural_plan(rule, variables, base_name, base, context):  # pra
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.FAILED, str(error)
         )
-    target_names = (parent_name, *(name for _channel_id, name in channels))
-    refusal = _structural_refusal(base_name, context.flat_expansion, context.taken_names, target_names)
+    refusal = _structural_refusal(base_name, context, parent_name, [name for _channel_id, name in channels])
     if refusal is not None:
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.BLOCKED, refusal
@@ -287,6 +289,7 @@ def _plain_plan(rule, variables, base_name, base, context):
 class _CreationContext:
     """The module-wide facts every creation plan on one module shares."""
 
+    module: object
     taken_names: frozenset
     flat_expansion: bool
 
@@ -296,6 +299,7 @@ def _creation_context(module, rule, interfaces, plain):
     builds_channels = rule.channel_count > 0 and rule.breakout_mode == BreakoutModeChoices.CHANNELIZED
     flat_expansion = bool(plain) and builds_channels and supports_channelization() and has_flat_expansion(module)
     return _CreationContext(
+        module=module,
         taken_names=frozenset(interface.name for interface in interfaces),
         flat_expansion=flat_expansion,
     )

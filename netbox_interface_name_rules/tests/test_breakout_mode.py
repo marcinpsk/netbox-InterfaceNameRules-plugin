@@ -24,7 +24,7 @@ from unittest import skipIf, skipUnless
 from unittest.mock import patch
 
 import yaml
-from dcim.models import Interface, InterfaceTemplate, ModuleType, VirtualChassis
+from dcim.models import Cable, Interface, InterfaceTemplate, ModuleType, VirtualChassis
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -1157,14 +1157,19 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
         self.assertEqual(self._names(module), ["0", "x0:1", "xx0:1:0"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
-    def test_a_blocked_family_takes_no_name_from_another_interface(self):
-        """The family on ``0`` is blocked, so ``x0:1`` keeps its own outcome although the family names it."""
+    def test_a_blocked_family_reports_the_row_it_would_take_over_once(self):
+        """The family on ``0`` cannot take over ``x0:1``, which has a cable, so both keep their names (ADR 0017).
+
+        ``x0:1`` is reported once, as a row the refused family left as it was.
+        """
         module_type = ModuleType.objects.create(
             manufacturer=self.module_type.manufacturer, model="BrkGate-CH", part_number="BrkGate-CH"
         )
         InterfaceTemplate.objects.create(module_type=module_type, name="0", type=PARENT_TYPE)
         module, _ = self._install(module_type, "5")
-        Interface.objects.create(device=self.device, module=module, name="x0:1", type=PARENT_TYPE)
+        holder = Interface.objects.create(device=self.device, module=module, name="x0:1", type=PARENT_TYPE)
+        peer = Interface.objects.create(device=self.device, name="peer-x0:1", type=PARENT_TYPE)
+        Cable(a_terminations=[holder], b_terminations=[peer]).save()
         rule = InterfaceNameRule.objects.create(
             module_type=module_type,
             name_template="x{base}:{channel}",
@@ -1180,9 +1185,9 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
 
         self.assertEqual(outcome.changed_count, 0)
         self.assertEqual(self._names(module), ["0", "x0:1"])
-        reasons = {member.current_name: member.reason for family in outcome.families for member in family.members}
-        self.assertEqual(sorted(reasons), ["0", "x0:1"])
-        self.assertEqual(reasons["x0:1"], UNCLAIMED_BASE_REASON)
+        members = [(member.current_name, member.reason) for family in outcome.families for member in family.members]
+        reason = f"{COLLISION_REASON}: x0:1 (it has a cable)"
+        self.assertEqual(members, [("0", reason), ("x0:1", reason)])
 
     def test_prediction_keeps_the_names_the_claim_refuses(self):
         module, bay = self._install(self.module_type, "5")
@@ -1457,13 +1462,23 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channel_name_in_use_reports_the_base(self):
         module = self._module_with()
-        Interface.objects.create(device=self.device, name="x0:1", type=PARENT_TYPE)
+        Interface.objects.create(device=self.device, name="x0:1", type=PARENT_TYPE, channels=4)
         rule = self._rule("x{base}:{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}")
 
         members = self._apply_to_every_interface(rule, module)
 
-        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:1"))
+        self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:1 (it is a channelized parent)"))
         self.assertEqual(self._names(module), ["0"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_channel_row_on_the_module_is_taken_over_and_reported_once(self):
+        module = self._module_with("x0:1")
+        rule = self._rule("x{base}:{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}")
+
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(members["x0:1"], (FamilyStatus.CHANGED, ""))
+        self.assertEqual(self._names(module), ["p0", "x0:0", "x0:1"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_flat_expansion_found_at_execution_reports_the_base(self):

@@ -842,11 +842,11 @@ def _process_module(rule, module, ifaces, variables, limit, results, module_qs, 
     entries = [_installed_flat_entry(module, plan, rows_by_pk[plan.member_pks[0]]) for plan in installed]
     offered = _preview_plans(rule, plan_set)
     # The apply refuses a family whose names are in use, so the preview offers no change there.
-    in_use = family_ops.creation_names_in_use(module, rule, ifaces, bases, offered)
+    refused = family_ops.creation_name_refusals(module, rule, ifaces, bases, offered)
     entries.extend(
         _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
         for plan in offered
-        if plan.base_name not in in_use
+        if plan.base_name not in refused
     )
     for entry in entries:
         if entry is None:

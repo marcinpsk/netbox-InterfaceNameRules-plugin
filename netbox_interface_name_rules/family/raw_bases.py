@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
-from .targets import breaks_out, flat_family_names, used_parent_template
+from .targets import breaks_out, builds_channelized_family, flat_family_names, used_parent_template
 from .template_names import VC_POSITION_DIGITS, ResolvedTemplateName
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,7 @@ class RawBases:
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._breaks_out = breaks_out(rule)
         self._claims_flat = previous_forms is None and self._breaks_out
+        self._builds_channels = builds_channelized_family(rule)
         self._resolution = None
 
     def base_for(self, name):
@@ -255,6 +256,9 @@ class RawBases:
     def _flat_families(self, template):
         """Return, by the plain interfaces the module carries, each flat family whose first one it carries."""
         if not self._claims_flat:
+            return {}
+        # A flat apply renames the port, so beside a raw-named port a channelized rule takes the rows over (ADR 0017).
+        if self._builds_channels and not self._raw_forms(template).isdisjoint(self._plain):
             return {}
         rule = self._rule
         first = _renamed_pattern(

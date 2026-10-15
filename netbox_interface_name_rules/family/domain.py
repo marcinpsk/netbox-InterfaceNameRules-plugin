@@ -109,10 +109,11 @@ class InstalledFamilyPlanSet:
 
 @dataclass(frozen=True, slots=True)
 class PlannedChannel:
-    """One channel row a structural plan creates under its parent."""
+    """One channel row a structural plan creates under its parent, or takes over from *holder* (ADR 0017)."""
 
     channel_id: int
     name: str
+    holder: InterfaceSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,9 +137,19 @@ class StructuralFamilyPlan:
         return FamilyTopology.CHANNELIZED
 
     @property
+    def channel_names(self) -> tuple[str, ...]:
+        """Return every channel name in creation order."""
+        return tuple(channel.name for channel in self.channels)
+
+    @property
     def target_names(self) -> tuple[str, ...]:
         """Return the parent name and every channel name in creation order."""
-        return (self.parent_target_name, *(channel.name for channel in self.channels))
+        return (self.parent_target_name, *self.channel_names)
+
+    @property
+    def holders(self) -> tuple[InterfaceSnapshot, ...]:
+        """Return the snapshot of every existing row that has one of the channel names, in creation order."""
+        return tuple(channel.holder for channel in self.channels if channel.holder is not None)
 
 
 @dataclass(frozen=True, slots=True)

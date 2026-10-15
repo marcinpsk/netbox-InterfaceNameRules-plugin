@@ -26,6 +26,60 @@ def first_taken_name(target_names, owners, own_pks):
     return next((name for name in target_names if name in owners and owners[name] not in own_pks), None)
 
 
+def name_holders(device_id, names) -> dict:
+    """Return the interface that has each of *names* on the device, by name, with its parent."""
+    return {
+        interface.name: interface
+        for interface in Interface.objects.filter(device_id=device_id, name__in=names).select_related("parent")
+    }
+
+
+def channel_holder_refusal(holder, module_id) -> str:
+    """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
+
+    *holder* is the row that has one of the family's channel names. Planning, the preview and
+    execution all ask this one question (ADR 0017).
+    """
+    if holder.module_id is not None and holder.module_id != module_id:
+        return "it belongs to another module"
+    if holder.parent_id is not None or getattr(holder, "channel_id", None) is not None:
+        return f"it is already a subinterface of {getattr(holder.parent, 'name', 'another interface')}"
+    if getattr(holder, "channels", None):
+        return "it is a channelized parent"
+    # NetBox refuses a channel ID on an interface with a cable, and the plugin never edits a cable.
+    if holder.cable_id is not None:
+        return "it has a cable"
+    return ""
+
+
+def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id):
+    """Return ``(name, reason)`` for the first name a channelized family cannot take, or None.
+
+    *holders* maps each name in use on the device to the row that has it, and a row in *own_pks* is
+    the family's own. The family takes over a row with a channel name that ``channel_holder_refusal``
+    allows.
+    """
+    holder = holders.get(parent_name)
+    if holder is not None and holder.pk not in own_pks:
+        return parent_name, f"{COLLISION_REASON}: {parent_name}"
+    for name in channel_names:
+        holder = holders.get(name)
+        if holder is None or holder.pk in own_pks:
+            continue
+        refusal = channel_holder_refusal(holder, module_id)
+        if refusal:
+            return name, f"{COLLISION_REASON}: {name} ({refusal})"
+    return None
+
+
+def validate_or_block(interface, role):
+    """Run NetBox's own validation on *interface*, restating a rejection as this family's reason."""
+    try:
+        interface.full_clean()
+    except ValidationError as error:
+        raise ValidationError(f"{role} {interface.name!r}: {' '.join(error.messages)}") from error
+
+
 def name_is_taken(device_id, target_name, exclude_pk) -> bool:
     """Return whether an interface other than *exclude_pk* already owns *target_name* on the device."""
     return Interface.objects.filter(device_id=device_id, name=target_name).exclude(pk=exclude_pk).exists()

@@ -35,7 +35,7 @@ from .domain import (
     MemberOutcome,
 )
 from .installed import interfaces_by_module, module_raw_bases
-from .names import COLLISION_REASON, is_name_collision, name_is_taken
+from .names import COLLISION_REASON, is_name_collision, name_is_taken, validate_or_block
 from .targets import channelized_family_names, used_parent_template
 from .template_names import pinned_template_cache
 
@@ -193,14 +193,6 @@ def _refused(plan, status, reason):  # pragma: no cover - requires channelizatio
     return _outcome(plan, status, members, reason)
 
 
-def _validate_or_block(interface, role):  # pragma: no cover - requires channelization support
-    """Run NetBox's own validation on *interface*, restating a rejection as this family's reason."""
-    try:
-        interface.full_clean()
-    except ValidationError as error:
-        raise ValidationError(f"{role} {interface.name!r}: {' '.join(error.messages)}") from error
-
-
 def _locked_family(plan):  # pragma: no cover - requires channelization support
     """Lock every planned row for the transaction and return the live rows by primary key."""
     return {
@@ -291,7 +283,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
     base.mode = ""
     base.untagged_vlan = None
     base.vrf = None
-    _validate_or_block(base, "parent")
+    validate_or_block(base, "parent")
     base.save()  # BaseInterface.save() drops the tagged VLANs of a row that no longer tags
     base.snapshot()
     base.tags.clear()
@@ -307,7 +299,7 @@ def _split_base(plan, base):  # pragma: no cover - requires channelization suppo
         custom_field_data=dict(base.custom_field_data or {}),
         **carried,
     )
-    _validate_or_block(channel, "channel")
+    validate_or_block(channel, "channel")
     channel.save()
     channel.tagged_vlans.set(tagged_vlans)
     channel.tags.set(tags)
@@ -330,7 +322,7 @@ def _rewrite(plan, live):  # pragma: no cover - requires channelization support
         sibling.type = InterfaceTypeChoices.TYPE_CHANNEL
         sibling.parent = base
         sibling.channel_id = member.channel_id
-        _validate_or_block(sibling, "channel")
+        validate_or_block(sibling, "channel")
         sibling.save()
         members.append(MemberOutcome(sibling.pk, sibling.name, sibling.name, FamilyStatus.CHANGED))
     return tuple(members)
