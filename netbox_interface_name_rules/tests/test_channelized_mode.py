@@ -579,6 +579,30 @@ class ChannelizedModeTwoModuleTakeoverTest(ChannelizationTestCase):
             channel_start=0,
         )
 
+    def test_a_batch_reports_no_device_row_that_two_refused_families_want(self):
+        module_a, _ = self._install(self.module_type, "1", run_rules=False)
+        module_b, _ = self._install(self.module_type, "2", run_rules=False)
+        lanes = [
+            Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE) for name in ("lane:0", "lane:1")
+        ]
+        peer = Interface.objects.create(device=self.device, name="peer-lane:0", type=PLAIN_TYPE)
+        Cable(a_terminations=[lanes[0]], b_terminations=[peer]).save()
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = apply_rule_to_existing(self.rule)
+
+        pks = [member.interface_pk for family in outcome.families for member in family.members]
+        bases = [Interface.objects.get(module=module).pk for module in (module_a, module_b)]
+        self.assertEqual(sorted(pks), sorted(bases))
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            sorted((member.interface_pk, member.reason) for member in outcome.skipped_members),
+            [(pk, "target name is already in use: lane:0 (it has a cable)") for pk in sorted(bases)],
+        )
+        for lane in lanes:
+            lane.refresh_from_db()
+            self.assertEqual((lane.module_id, lane.channel_id), (None, None))
+
     def test_a_batch_reports_each_row_once_when_two_modules_want_its_name(self):
         module_a, _ = self._install(self.module_type, "1", run_rules=False)
         module_b, _ = self._install(self.module_type, "2", run_rules=False)

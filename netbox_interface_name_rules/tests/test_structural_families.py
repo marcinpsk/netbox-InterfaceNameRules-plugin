@@ -488,7 +488,7 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
             (outcome.status, outcome.reason),
             (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)"),
         )
-        self.assertEqual([member.interface_pk for member in outcome.members], [base.pk, holder.pk])
+        self.assertEqual([member.interface_pk for member in outcome.members], [base.pk])
         self._assert_untouched(module)
         self._assert_holder_untouched(holder)
 

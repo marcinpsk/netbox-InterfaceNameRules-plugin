@@ -30,6 +30,7 @@ it keeps a name that one template alone claims only when Apply Rules selects tha
 """
 
 import itertools
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -62,6 +63,12 @@ CHANNELIZED_FAMILY = ("chan", "chan:0", "chan:1")
 LAYOUT_COUNT = 7884
 FLAT_LAYOUT_COUNT = 2862
 CHANNELIZED_LAYOUT_COUNT = 5724
+# Where a row with a name a family wants can be, other than on the module the family is built on.
+_FOREIGN_ROWS = {
+    "on another module": {"module_id": 2},
+    "with no module": {"module_id": None},
+    "with no module and a cable": {"module_id": None, "cable_id": 1},
+}
 
 
 @dataclass(frozen=True)
@@ -741,12 +748,26 @@ class ClaimInvariantTest(SimpleTestCase):
         with patch.object(structural, "supports_channelization", return_value=False):
             self._assert_every_interface_in_scope_is_in_exactly_one_plan()
 
-    def test_no_family_holds_a_row_of_another_module(self):
-        """A row of another module with a channel name refuses the family, and only its own module reports it."""
+    def test_each_row_a_family_wants_beyond_its_module_is_reported_at_most_once(self):
+        """Each interface is in at most one outcome of a batch, wherever the rows a family wants are (ADR 0017)."""
+        self._assert_each_row_beyond_the_module_is_reported_at_most_once()
+
+    def test_each_row_beyond_the_module_is_reported_at_most_once_where_netbox_has_no_channels(self):
+        with patch.object(structural, "supports_channelization", return_value=False):
+            self._assert_each_row_beyond_the_module_is_reported_at_most_once()
+
+    def _assert_each_row_beyond_the_module_is_reported_at_most_once(self):
+        """Assert that each interface is in at most one outcome of a batch, wherever the rows a family wants are.
+
+        Each name a family wants that the module holds no row for is given a row elsewhere on the device:
+        on another module, with no module, or with no module and a cable. No family holds a row of another
+        module, and a refusal reports only the rows of its own module, so the module that has a row, or the
+        one family that takes over a row with no module, is the only outcome that reports it.
+        """
         layouts = list(_flat_layouts(CHANNELIZED_RULES))
         failures = []
-        refused = 0
-        for layout in layouts:
+        seen = Counter()
+        for (variant, fields), layout in itertools.product(_FOREIGN_ROWS.items(), layouts):
             rule = _rule(layout.rule_key)
             interfaces = _interfaces(layout)
             bases = _claim(layout, rule, interfaces, moved=False)
@@ -758,25 +779,41 @@ class ClaimInvariantTest(SimpleTestCase):
                 if channel not in layout.present
             }
             foreign = [
-                SimpleNamespace(**{**vars(_row(1000 + index, name)), "module_id": 2})
+                SimpleNamespace(**{**vars(_row(1000 + index, name)), **fields})
                 for index, name in enumerate(sorted(wanted))
             ]
             with patch.object(structural, "name_holders", _module_holders([*interfaces, *foreign])):
                 plans = family.plan_module_families(MODULE, rule, _variables(NEW_VC, NEW_BAY), interfaces, bases).plans
-            held = [
-                holder.name
-                for plan in plans
-                if isinstance(plan, family.StructuralFamilyPlan)
-                for holder in plan.holders
-                if holder.module_id == 2
-            ]
+            structural_plans = [plan for plan in plans if isinstance(plan, family.StructuralFamilyPlan)]
+            held = {holder.pk for plan in structural_plans for holder in plan.holders} & {row.pk for row in foreign}
+            logging.disable(logging.WARNING)
+            try:
+                refusals = [family.execute_family_plan(plan) for plan in structural_plans if plan.precondition_status]
+            finally:
+                logging.disable(logging.NOTSET)
+            reported = Counter(member.interface_pk for outcome in refusals for member in outcome.members)
             counts = _plan_counts(plans)
-            refused += any("it belongs to another module" in plan.precondition_reason for plan in plans)
-            if held or any(counts[name] != 1 for name in layout.present):
-                failures.append((layout.rule_key, layout.present, held, dict(counts)))
+            seen[variant, "held"] += bool(held)
+            seen[variant, "refused"] += any(row.name in outcome.reason for outcome in refusals for row in foreign)
+            wrong = {
+                "held from another module": sorted(pk for pk in held if fields["module_id"] is not None),
+                "reported from elsewhere": sorted(set(reported) & {row.pk for row in foreign}),
+                "reported twice": sorted(pk for pk, count in reported.items() if count > 1),
+                "planned other than once": sorted(name for name in layout.present if counts[name] != 1),
+            }
+            if any(wrong.values()):
+                failures.append((variant, layout.rule_key, layout.present, wrong))
 
-        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
-        self.assertEqual(refused > 0, structural.supports_channelization())
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts) * len(_FOREIGN_ROWS)} layouts differ")
+        supported = structural.supports_channelization()
+        expected = {
+            ("on another module", "held"): False,
+            ("on another module", "refused"): supported,
+            ("with no module", "held"): supported,
+            ("with no module and a cable", "held"): supported,
+            ("with no module and a cable", "refused"): supported,
+        }
+        self.assertEqual({key: seen[key] > 0 for key in expected}, expected)
 
     def test_every_leftover_beside_a_channelized_family_is_planned_only_in_its_scope(self):
         """A breakout rule keeps a leftover a template alone claims only when Apply Rules selects it (ADR 0013)."""

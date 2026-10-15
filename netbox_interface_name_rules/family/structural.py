@@ -203,7 +203,7 @@ def _outcome(plan, status, members, reason=""):
 
 
 def _refused(plan, status, reason, target_name):
-    """Log why the family was not built and return an outcome for the base and every holder, which it left as they were."""
+    """Log why the family was not built and return an outcome for the base and each held row of its module."""
     logger.warning("Cannot build a channelized family on interface %r: %s.", plan.base.name, reason)
     members = (
         MemberOutcome(
@@ -213,7 +213,12 @@ def _refused(plan, status, reason, target_name):
             status=status,
             reason=reason,
         ),
-        *(MemberOutcome(holder.pk, holder.name, holder.name, status, reason) for holder in plan.holders),
+        # A row with no module is reported only by the family that takes it over, so a batch reports it once.
+        *(
+            MemberOutcome(holder.pk, holder.name, holder.name, status, reason)
+            for holder in plan.holders
+            if holder.module_id == plan.module_id
+        ),
     )
     return _outcome(plan, status, members, reason)
 
