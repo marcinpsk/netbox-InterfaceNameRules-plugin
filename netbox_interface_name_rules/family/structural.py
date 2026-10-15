@@ -137,15 +137,18 @@ def plan_structural_family(module, rule, variables, base, base_name, family_base
     return _modelled_plan(module, rule, variables, base, base_name, family_bases)  # pragma: no cover - see above
 
 
-def module_taken_over_names(families, bases) -> frozenset:
+def module_taken_over_names(families, repeated, bases) -> frozenset:
     """Return the names of the rows that the channelized families planned on one module take over.
 
-    *families* pairs the base name of each family whose names were evaluated with its channel names.
-    A row the claim gives a template is no family's to take over, so it is not one of them.
+    *families* gives the base name, channel names and precondition status of each family whose names
+    were evaluated, and *repeated* the channel names that the families want more than once. A refused
+    family takes over no row, so its rows stay flat siblings. A row the claim gives a template is no
+    family's to take over, so it is not one of them.
     """
     return frozenset(
         name
-        for base_name, channel_names in families
+        for base_name, channel_names, status in families
+        if status is None and repeated_name_refusal(channel_names, repeated) is None
         for name in taken_over_names(base_name, channel_names)
         if not bases.claims_alone(name)
     )
@@ -188,7 +191,8 @@ def settle_module_families(module, plans, interfaces, templates, bases):  # prag
     """
     evaluated = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan) and plan.channels]
     repeated = repeated_names(plan.channel_names for plan in evaluated)
-    names = module_taken_over_names(((plan.base.name, plan.channel_names) for plan in evaluated), bases)
+    families = ((plan.base.name, plan.channel_names, plan.precondition_status) for plan in evaluated)
+    names = module_taken_over_names(families, repeated, bases)
     expanded = flat_surplus([interface for interface in interfaces if interface.name not in names], templates) > 0
     settled = {plan.base.pk: _settled(plan, repeated, names, expanded, module) for plan in evaluated}
     return [settled.get(plan.base.pk, plan) if isinstance(plan, StructuralFamilyPlan) else plan for plan in plans]

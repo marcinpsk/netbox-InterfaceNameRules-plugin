@@ -349,7 +349,8 @@ def _settled_creations(plans, context, bases):
     if not creations:
         return plans
     repeated = repeated_names(plan.target_names[1:] for plan in creations)
-    names = module_taken_over_names(((plan.base_name, plan.target_names[1:]) for plan in creations), bases)
+    families = ((plan.base_name, plan.target_names[1:], plan.precondition_status) for plan in creations)
+    names = module_taken_over_names(families, repeated, bases)
     expanded = context.flat_expansion and has_flat_expansion(context.module, names)
     return tuple(
         _settled_creation(plan, context, repeated, expanded) if _is_structural_creation(plan) else plan

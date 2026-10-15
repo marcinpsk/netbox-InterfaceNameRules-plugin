@@ -32,9 +32,12 @@ from .installed import (
     plan_kept_interface,
 )
 from .names import COLLISION_REASON, channelized_name_refusal, first_taken_name, name_holders
+from .prospective import FLAT_EXPANSION_REASON
 from .structural import (
     execute_flat_family,
     execute_structural_family,
+    has_flat_expansion,
+    module_taken_over_names,
     plan_flat_family,
     plan_structural_family,
     settle_module_families,
@@ -284,7 +287,24 @@ def creation_name_refusals(module, rule, interfaces, bases, plans) -> dict[str, 
         refusal = _creation_refusal(module, plan, holders, own_pks, family_bases)
         if refusal is not None:
             refusals[plan.base_name] = refusal
+    refusals.update(_flat_expansion_refusals(module, creations, refusals, bases))
     return refusals
+
+
+def _flat_expansion_refusals(module, creations, refusals, bases):  # pragma: no cover - channelization only
+    """Return the refusal of each channelized creation that the rows of the *refusals* families block.
+
+    A refused family takes over no row, so its rows can be flat siblings, as ``settle_module_families``
+    decides at execution. *creations* are settled already, so no channel name in them repeats.
+    """
+    channelized = [plan for plan in creations if plan.topology == FamilyTopology.CHANNELIZED]
+    if not any(plan.base_name in refusals for plan in channelized):
+        return {}
+    built = [plan for plan in channelized if plan.base_name not in refusals]
+    families = ((plan.base_name, plan.target_names[1:], plan.precondition_status) for plan in built)
+    if not built or not has_flat_expansion(module, module_taken_over_names(families, frozenset(), bases)):
+        return {}
+    return dict.fromkeys((plan.base_name for plan in built), FLAT_EXPANSION_REASON)
 
 
 def _selection_pks(plan):

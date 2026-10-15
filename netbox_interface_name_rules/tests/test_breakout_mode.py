@@ -1233,7 +1233,7 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
         for name in ("0", "x0:1"):
             InterfaceTemplate.objects.create(module_type=cls.pair_type, name=name, type=PARENT_TYPE)
         cls.two_port_types = {}
-        for names in (("0", "00"), ("a", "b")):
+        for names in (("0", "00"), ("a", "b"), ("1", "11", "5")):
             model = f"BrkExec-{''.join(names).upper()}"
             cls.two_port_types[names] = ModuleType.objects.create(
                 manufacturer=manufacturer, model=model, part_number=model
@@ -1553,6 +1553,53 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
         self.assertEqual(offered, {"a": ["a", "a:0", "a:1"], "b": ["b", "b:0", "b:1"]})
         self.assertEqual(changed, offered)
         self.assertEqual(self._names(module), ["a", "a:0", "a:1", "b", "b:0", "b:1"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_the_row_a_blocked_family_leaves_is_a_flat_sibling(self):
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("a:0", module_type=module_type)
+        peer = Interface.objects.create(device=self.device, name="peer-a:0", type=PARENT_TYPE)
+        Cable(a_terminations=[Interface.objects.get(module=module, name="a:0")], b_terminations=[peer]).save()
+        rule = self._rule("{base}:{channel}", breakout_mode=CHANNELIZED, module_type=module_type)
+
+        offered, changed = self._preview_then_apply(rule, module)
+        members = self._apply_to_every_interface(rule, module)
+
+        cabled = f"{COLLISION_REASON}: a:0 (it has a cable)"
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(
+            members,
+            {
+                "a": (FamilyStatus.BLOCKED, cabled),
+                "a:0": (FamilyStatus.BLOCKED, cabled),
+                "b": (FamilyStatus.BLOCKED, f"module {module} already carries a flat breakout family"),
+            },
+        )
+        self.assertEqual(self._names(module), ["a", "a:0", "b"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_the_row_a_family_with_a_repeated_name_leaves_is_a_flat_sibling(self):
+        module_type = self.two_port_types["1", "11", "5"]
+        module = self._module_with("112", module_type=module_type)
+        rule = self._rule(
+            "{base}{channel}", 12, breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
+        )
+
+        offered, changed = self._preview_then_apply(rule, module)
+        members = self._apply_to_every_interface(rule, module)
+
+        repeated = f"{COLLISION_REASON}: 110 (the module's families want it more than once)"
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(
+            members,
+            {
+                "1": (FamilyStatus.BLOCKED, repeated),
+                "11": (FamilyStatus.BLOCKED, repeated),
+                "112": (FamilyStatus.BLOCKED, repeated),
+                "5": (FamilyStatus.BLOCKED, f"module {module} already carries a flat breakout family"),
+            },
+        )
+        self.assertEqual(self._names(module), ["1", "11", "112", "5"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channel_row_on_the_module_is_taken_over_and_reported_once(self):
