@@ -213,7 +213,7 @@ class RawBases:
             raw_claimed.update(
                 name for name in single if self._is_raw_name(name, template, raw_names, forms[template.pk])
             )
-            families = self._flat_families(template)
+            families = self._flat_families(template, raw_names, forms[template.pk])
             flat.update(((template.pk, unit), family) for unit, family in families.items())
             claims.append(
                 TemplateClaim(template.pk, template.template_name, [(name,) for name in single] + [*families])
@@ -253,12 +253,17 @@ class RawBases:
             historical is not None and name not in raw_names and historical.fullmatch(name) is not None
         )
 
-    def _flat_families(self, template):
-        """Return, by the plain interfaces the module carries, each flat family whose first one it carries."""
+    def _flat_families(self, template, raw_names, raw_forms):
+        """Return, by the plain interfaces the module carries, each flat family whose first one it carries.
+
+        *raw_names* and *raw_forms* are what ``_is_raw_name`` reads to recognise the template's raw name.
+        """
         if not self._claims_flat:
             return {}
         # A flat apply renames the port, so beside a raw-named port a channelized rule takes the rows over (ADR 0017).
-        if self._builds_channels and not self._raw_forms(template).isdisjoint(self._plain):
+        if self._builds_channels and any(
+            self._is_raw_name(name, template, raw_names, raw_forms) for name in self._plain
+        ):
             return {}
         rule = self._rule
         first = _renamed_pattern(

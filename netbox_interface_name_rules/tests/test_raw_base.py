@@ -489,6 +489,61 @@ class RawBaseDriftedCreationTest(VcDriftTestCase):
         self.assertEqual([entry["new_names"] for entry in preview], [["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"]])
         self.assertEqual(self._names(module), ["xe-1/0/3", "xe-2/0/3:0", "xe-2/0/3:1"])
 
+    def _drifted_port_with_channel_rows(self, model):
+        """Install a port whose template reads the position, add the rule and the rows with its channel names."""
+        module_type = token_module_type(
+            ModuleType.objects.get(pk=self.module_type.pk).manufacturer, model, "{vc_position:0}/{module}"
+        )
+        module, bay = self._install_on(self.device, module_type, "3")
+        rule = InterfaceNameRule.objects.create(
+            module_type=module_type,
+            name_template="xe-{base}:{channel}",
+            parent_name_template="et-{base}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+        holders = [
+            Interface.objects.create(device=self.device, module=module, name=name, type=PLAIN_TYPE)
+            for name in ("xe-2/3:0", "xe-2/3:1")
+        ]
+        return module, bay, rule, holders
+
+    def _assert_taken_over(self, module, holders):
+        """Assert the drifted port is the parent and each row is its channel, under its own primary key."""
+        parent = Interface.objects.get(module=module, channels__isnull=False)
+        self.assertEqual((parent.name, parent.channels), ("et-2/3", 2))
+        self.assertEqual(
+            [(row.pk, row.parent_id, row.channel_id) for row in Interface.objects.filter(parent=parent).order_by("pk")],
+            [(holder.pk, parent.pk, channel_id) for channel_id, holder in enumerate(holders, start=1)],
+        )
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_renumber_takes_over_the_channel_rows_beside_a_drifted_port(self):
+        module, _bay, _rule, holders = self._drifted_port_with_channel_rows("RawBaseDrift-TAKE")
+        self.assertEqual(self._names(module), ["1/3", "xe-2/3:0", "xe-2/3:1"])
+
+        self._renumber(2)
+
+        self.assertEqual(self._names(module), ["et-2/3", "xe-2/3:0", "xe-2/3:1"])
+        self._assert_taken_over(module, holders)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_apply_rules_takes_over_the_channel_rows_beside_a_port_left_drifted_by_a_renumber(self):
+        module, _bay, rule, holders = self._drifted_port_with_channel_rows("RawBaseDrift-APPLY")
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(enabled=False)
+        self._renumber(2)
+        self.assertEqual(self._names(module), ["1/3", "xe-2/3:0", "xe-2/3:1"])
+        InterfaceNameRule.objects.filter(pk=rule.pk).update(enabled=True)
+        rule.refresh_from_db()
+
+        preview = find_interfaces_for_rule(rule)[0]
+        apply_rule_to_existing(rule)
+
+        self.assertEqual([entry["new_names"] for entry in preview], [["et-2/3", "xe-2/3:0", "xe-2/3:1"]])
+        self.assertEqual(self._names(module), ["et-2/3", "xe-2/3:0", "xe-2/3:1"])
+        self._assert_taken_over(module, holders)
+
     def test_a_drifted_flat_family_whose_rule_spells_a_text_sentinel_is_offered_for_conversion(self):
         drift_type = token_module_type(
             ModuleType.objects.get(pk=self.module_type.pk).manufacturer,

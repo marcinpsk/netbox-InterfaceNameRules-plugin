@@ -661,6 +661,32 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertGreater(kept, 0)
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
+    def test_a_channelized_rule_reads_no_flat_family_beside_a_raw_named_port(self):
+        """Beside a port with its raw name, now or at an earlier position, the rows are no flat family (ADR 0017).
+
+        Where every template has a port with its raw name, the claim is the one the module docstring states
+        without flat families, and a port with an earlier raw name is admitted like one with its raw name now.
+        """
+        layouts = list(_flat_layouts(CHANNELIZED_RULES))
+        failures = []
+        historical = 0
+        for layout in layouts:
+            templates = [template for template in layout.templates if not template.stand_in]
+            currents = {template.current for template in templates}
+            raw_named = [
+                [name for name in layout.present if _is_raw(template, name, currents)] for template in templates
+            ]
+            if not templates or not all(raw_named):
+                continue
+            historical += any(name not in currents for names in raw_named for name in names)
+            bases = _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False)
+            got = {name: base for name in layout.present if (base := bases.builds_on(name)) is not None}
+            if got != _expected(layout, moved=False).bases:
+                failures.append((layout.rule_key, layout.present, got))
+
+        self.assertGreater(historical, 0)
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+
     def test_every_flat_layout_claims_each_family_whole(self):
         layouts = list(_flat_layouts())
         failures = []
