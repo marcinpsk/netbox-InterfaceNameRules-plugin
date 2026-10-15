@@ -229,7 +229,7 @@ def _blocking_reason(plan, live) -> str:  # pragma: no cover - requires channeli
                 f"{sibling.name!r} is already channel {sibling.channel_id} of {owner}; "
                 f"converting would take it out of that family"
             )
-        # TYPE_CHANNEL is nonconnectable but not virtual, so Interface.clean() accepts a cable on one.
+        # NetBox refuses a channel_id on a row with a cable; this check names the row first.
         if sibling.cable_id:
             return f"{sibling.name!r} has a cable attached; a channel takes its cable from the parent"
     return ""
