@@ -24,6 +24,7 @@ from .domain import (
 )
 from .names import (
     COLLISION_REASON,
+    belongs_elsewhere,
     channelized_name_refusal,
     first_taken_name,
     is_name_collision,
@@ -109,8 +110,12 @@ def _modelled_plan(module, rule, variables, base, base_name, family_bases):  # p
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
     channel_names = [name for _channel_id, name in channels]
     rows = {name: row for name, row in name_holders(module.device_id, channel_names).items() if row.pk != base.pk}
-    # A row another family is built on keeps its own plan, so this plan does not hold it.
-    holders = {name: InterfaceSnapshot.from_interface(row) for name, row in rows.items() if row.pk not in family_bases}
+    # A row of another module or family is reported by its own outcome, so this plan does not hold it.
+    holders = {
+        name: InterfaceSnapshot.from_interface(row)
+        for name, row in rows.items()
+        if not belongs_elsewhere(row, module.pk, family_bases)
+    }
     refusal = channelized_name_refusal(parent_target_name, channel_names, rows, (base.pk,), module.pk, family_bases)
     if refusal is not None:
         return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, refusal[1], holders)
@@ -249,15 +254,16 @@ def _name_refusal(plan):  # pragma: no cover - requires channelization support
         return FamilyStatus.BLOCKED, repeated[1], repeated[0]
     channel_names = plan.channel_names
     holders = name_holders(plan.device_id, plan.target_names)
+    refusal = channelized_name_refusal(plan.parent_target_name, channel_names, holders, (plan.base.pk,), plan.module_id)
+    if refusal is not None:
+        name, reason = refusal
+        return FamilyStatus.BLOCKED, reason, name
+    # Every row left with a channel name qualifies, so the plan must hold exactly those rows.
     planned = {channel.name: channel.holder.pk for channel in plan.channels if channel.holder is not None}
     live = {name: row.pk for name, row in holders.items() if name in channel_names and row.pk != plan.base.pk}
     if live != planned:
         return FamilyStatus.STALE, HOLDER_CHANGED_REASON, plan.parent_target_name
-    refusal = channelized_name_refusal(plan.parent_target_name, channel_names, holders, (plan.base.pk,), plan.module_id)
-    if refusal is None:
-        return None
-    name, reason = refusal
-    return FamilyStatus.BLOCKED, reason, name
+    return None
 
 
 def _first_taken_name(plan, own_pks):

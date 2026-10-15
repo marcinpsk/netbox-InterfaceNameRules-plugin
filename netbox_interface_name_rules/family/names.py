@@ -36,13 +36,8 @@ def name_holders(device_id, names) -> dict:
     }
 
 
-def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
-    """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
-
-    *holder* is the row that has one of the family's channel names, and *family_bases* holds the
-    primary key of each row another family is built on. Planning, the preview and execution all ask
-    this one question (ADR 0017).
-    """
+def _owner_refusal(holder, module_id, family_bases):
+    """Return why *holder* belongs to another module or family, or an empty string."""
     if holder.pk in family_bases:
         return "another family is built on it"
     if holder.module_id is not None and holder.module_id != module_id:
@@ -51,6 +46,24 @@ def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
         return f"it is already a subinterface of {getattr(holder.parent, 'name', 'another interface')}"
     if getattr(holder, "channels", None):
         return "it is a channelized parent"
+    return ""
+
+
+def belongs_elsewhere(holder, module_id, family_bases=frozenset()) -> bool:
+    """Return whether *holder* belongs to another module or family, so that its own outcome reports it."""
+    return bool(_owner_refusal(holder, module_id, family_bases))
+
+
+def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
+    """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
+
+    *holder* is the row that has one of the family's channel names, and *family_bases* holds the
+    primary key of each row another family is built on. Planning, the preview and execution all ask
+    this one question (ADR 0017).
+    """
+    refusal = _owner_refusal(holder, module_id, family_bases)
+    if refusal:
+        return refusal
     # NetBox refuses a channel ID on an interface with a cable, and the plugin never edits a cable.
     if holder.cable_id is not None:
         return "it has a cable"

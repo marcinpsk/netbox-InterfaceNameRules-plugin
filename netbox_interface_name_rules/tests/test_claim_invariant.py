@@ -741,6 +741,43 @@ class ClaimInvariantTest(SimpleTestCase):
         with patch.object(structural, "supports_channelization", return_value=False):
             self._assert_every_interface_in_scope_is_in_exactly_one_plan()
 
+    def test_no_family_holds_a_row_of_another_module(self):
+        """A row of another module with a channel name refuses the family, and only its own module reports it."""
+        layouts = list(_flat_layouts(CHANNELIZED_RULES))
+        failures = []
+        refused = 0
+        for layout in layouts:
+            rule = _rule(layout.rule_key)
+            interfaces = _interfaces(layout)
+            bases = _claim(layout, rule, interfaces, moved=False)
+            wanted = {
+                channel
+                for name in layout.present
+                if (base := bases.builds_on(name)) is not None
+                for channel in _flat_targets(layout.rule_key, base)
+                if channel not in layout.present
+            }
+            foreign = [
+                SimpleNamespace(**{**vars(_row(1000 + index, name)), "module_id": 2})
+                for index, name in enumerate(sorted(wanted))
+            ]
+            with patch.object(structural, "name_holders", _module_holders([*interfaces, *foreign])):
+                plans = family.plan_module_families(MODULE, rule, _variables(NEW_VC, NEW_BAY), interfaces, bases).plans
+            held = [
+                holder.name
+                for plan in plans
+                if isinstance(plan, family.StructuralFamilyPlan)
+                for holder in plan.holders
+                if holder.module_id == 2
+            ]
+            counts = _plan_counts(plans)
+            refused += any("it belongs to another module" in plan.precondition_reason for plan in plans)
+            if held or any(counts[name] != 1 for name in layout.present):
+                failures.append((layout.rule_key, layout.present, held, dict(counts)))
+
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+        self.assertEqual(refused > 0, structural.supports_channelization())
+
     def test_every_leftover_beside_a_channelized_family_is_planned_only_in_its_scope(self):
         """A breakout rule keeps a leftover a template alone claims only when Apply Rules selects it (ADR 0013)."""
         layouts = list(_channelized_layouts())

@@ -543,6 +543,50 @@ class ChannelizedModeTakeoverTest(ChannelizationTestCase):
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeTwoModuleTakeoverTest(ChannelizationTestCase):
+    """A row is reported by the outcome of the module it belongs to, never by a family on another module."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = build_device("ChanTwoMod", ["1", "2"])
+        cls.module_type = plain_module_type(manufacturer, "ChanTwoMod-QSFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="lane:{channel}",
+            parent_name_template="p{base}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def test_a_batch_reports_each_row_once_when_two_modules_want_its_name(self):
+        module_a, _ = self._install(self.module_type, "1", run_rules=False)
+        module_b, _ = self._install(self.module_type, "2", run_rules=False)
+        lanes = [
+            Interface.objects.create(device=self.device, module=module_b, name=name, type=PLAIN_TYPE)
+            for name in ("lane:0", "lane:1")
+        ]
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = apply_rule_to_existing(self.rule)
+
+        pks = [member.interface_pk for family in outcome.families for member in family.members]
+        self.assertEqual(len(pks), len(set(pks)), pks)
+        self.assertEqual(outcome.changed_count, 3)
+        base_a = Interface.objects.get(module=module_a)
+        self.assertEqual(
+            [(member.interface_pk, member.reason) for member in outcome.skipped_members],
+            [(base_a.pk, "target name is already in use: lane:0 (it belongs to another module)")],
+        )
+        self.assertEqual(self._names(module_a), ["1"])
+        self.assertEqual(self._names(module_b), ["lane:0", "lane:1", "p2"])
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module_b, channel_id__isnull=False).values_list("pk", flat=True)),
+            [lane.pk for lane in lanes],
+        )
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ChannelizedModeFlatFamilyTest(ChannelizationTestCase):
     """Switching a rule to channelized never converts the flat family it already installed."""
 
