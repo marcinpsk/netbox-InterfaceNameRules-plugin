@@ -383,6 +383,12 @@ class ChannelTakeoverDocumentationTest(unittest.TestCase):
                 with self.subTest(guide=path[-1], reason=reason):
                     self.assertIn(condition.lower(), paragraph)
 
+    def test_partial_repair_separates_a_flat_refusal_from_a_channelized_takeover(self):
+        section = _normalised_doc("docs", "examples.md").split("### Partial breakout repair", 1)[1].split("###", 1)[0]
+
+        self.assertIn("a `flat` rule does not count an interface with one of the family's channel names", section)
+        self.assertIn("A `channelized` rule takes over such an interface as its channel", section)
+
 
 class BaseVariableDocumentationTest(unittest.TestCase):
     """Keep each module-family base path explicit outside the generated reference."""

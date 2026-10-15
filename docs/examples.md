@@ -226,9 +226,12 @@ If a device was provisioned partially (e.g. only 2 of 4 channels were created
 manually), run **Apply Rules → Preview & Apply** for the matching rule. When
 the interfaces carry the family's channel names and the first channel is one of
 them, the engine creates only the missing channels and leaves the existing
-interfaces unchanged. When the port still has its raw name, an interface with
-one of the family's channel names is not part of the family. The family is then
-not built, and the plugin reports the port and that interface.
+interfaces unchanged. When the port still has its raw name, a `flat` rule does
+not count an interface with one of the family's channel names as part of the
+family. The family is then not built, and the plugin reports the port and that
+interface. A `channelized` rule takes over such an interface as its channel and
+keeps its configuration, when the interface meets the conditions in
+[Channelized breakout](#channelized-breakout-netbox-47).
 
 ### Build Rule — SONiC QSFP-DD 4×100G breakout
 
