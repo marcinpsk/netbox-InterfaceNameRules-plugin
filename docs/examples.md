@@ -162,7 +162,8 @@ the two topologies are different objects to cabling and automation, so
 conversion is a separate, explicit operation. A module carrying more interfaces
 than its module type's templates describe is read as holding such a family: the
 rule refuses it with a warning naming the module, whatever names the new
-templates would take.
+templates would take. The interfaces that the module's families take over are
+not counted. An interface of a family that is not built is counted.
 
 On NetBox releases that cannot model channels (4.6 and older) a `channelized`
 rule is skipped with a warning and nothing is created — it is never quietly

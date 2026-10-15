@@ -389,6 +389,12 @@ class ChannelTakeoverDocumentationTest(unittest.TestCase):
         self.assertIn("a `flat` rule does not count an interface with one of the family's channel names", section)
         self.assertIn("A `channelized` rule takes over such an interface as its channel", section)
 
+    def test_the_flat_surplus_counts_only_the_rows_no_built_family_takes_over(self):
+        guide = _normalised_doc("docs", "examples.md")
+
+        self.assertIn("The interfaces that the module's families take over are not counted.", guide)
+        self.assertIn("An interface of a family that is not built is counted.", guide)
+
 
 class BaseVariableDocumentationTest(unittest.TestCase):
     """Keep each module-family base path explicit outside the generated reference."""
