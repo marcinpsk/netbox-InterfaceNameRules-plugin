@@ -49,12 +49,12 @@ def _owner_refusal(holder, module_id, family_bases):
     return ""
 
 
-def belongs_elsewhere(holder, module_id, family_bases=frozenset()) -> bool:
+def belongs_elsewhere(holder, module_id, family_bases) -> bool:
     """Return whether *holder* belongs to another module or family, so that its own outcome reports it."""
     return bool(_owner_refusal(holder, module_id, family_bases))
 
 
-def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
+def channel_holder_refusal(holder, module_id, family_bases) -> str:
     """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
 
     *holder* is the row that has one of the family's channel names, and *family_bases* holds the
@@ -70,7 +70,7 @@ def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
     return ""
 
 
-def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id, family_bases=frozenset()):
+def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id, family_bases):
     """Return ``(name, reason)`` for the first name a channelized family cannot take, or None.
 
     *holders* maps each name in use on the device to the row that has it, and a row in *own_pks* is

@@ -72,13 +72,13 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
             channel_start=0,
         )
 
-    def _plan(self, position="3"):
+    def _plan(self, position="3", family_bases=frozenset()):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
         variables = build_variables(bay, device=self.device)
         templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
-        plan = plan_structural_family(module, self.rule, variables, base, base.name)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, family_bases)
         (plan,) = structural.settle_module_families(
             module, [plan], list(Interface.objects.filter(module=module)), templates, _UnclaimedNames()
         )
@@ -400,6 +400,22 @@ class StructuralFamilyHolderRevalidationTest(StructuralFamilyTestCase):
         holder.refresh_from_db()
         self.assertEqual((holder.module_id, holder.channel_id), (None, None))
 
+    def test_another_family_base_renamed_to_a_channel_name_after_planning_is_refused_as_its_own(self):
+        other_base = Interface.objects.create(device=self.device, name="other-port", type=PLAIN_TYPE)
+        module, _bay, plan = self._plan(family_bases=frozenset({other_base.pk}))
+        rename_out_of_band(other_base, "xe-0/0/3:1")
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(
+            (outcome.status, outcome.reason),
+            (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3:1 (another family is built on it)"),
+        )
+        self.assertEqual(self._names(module), ["3"])
+        other_base.refresh_from_db()
+        self.assertEqual((other_base.module_id, other_base.parent_id, other_base.channel_id), (None, None, None))
+
     def test_a_holder_netbox_rejects_names_the_row_and_rolls_the_family_back(self):
         holder = Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE, mtu=1)
         module, _bay, plan = self._plan()
@@ -479,7 +495,8 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
         holder = self._repeated_holder()
         module, bay = self._install(self.module_type, "3", run_rules=False)
         base = Interface.objects.get(module=module)
-        plan = plan_structural_family(module, self.rule, build_variables(bay, device=self.device), base, base.name)
+        variables = build_variables(bay, device=self.device)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, frozenset())
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
             outcome = execute_structural_family(plan)

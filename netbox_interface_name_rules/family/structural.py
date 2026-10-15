@@ -78,7 +78,7 @@ def flat_surplus(interfaces, templates) -> int:
     return sum(1 for interface in interfaces if getattr(interface, "channel_id", None) is None) - len(templates)
 
 
-def _plan(module, base, parent_target_name, channels, status=None, reason="", holders=None):
+def _plan(module, base, parent_target_name, channels, family_bases, status=None, reason="", holders=None):
     """Build one immutable structural plan for *base*; *holders* snapshots the rows with a channel name, by name."""
     holders = holders or {}
     channel_names = [name for _channel_id, name in channels]
@@ -93,6 +93,7 @@ def _plan(module, base, parent_target_name, channels, status=None, reason="", ho
         channels=tuple(
             PlannedChannel(channel_id=channel_id, name=name, holder=holders.get(name)) for channel_id, name in channels
         ),
+        family_bases=frozenset(family_bases),
         precondition_status=status,
         precondition_reason=reason,
         taken_over_names=taken_over_names(base.name, channel_names),
@@ -102,12 +103,12 @@ def _plan(module, base, parent_target_name, channels, status=None, reason="", ho
 def _modelled_plan(module, rule, variables, base, base_name, family_bases):  # pragma: no cover - channelization only
     """Return the plan for a NetBox release that can hold the family."""
     if base_name is None:
-        return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
+        return _plan(module, base, base.name, (), family_bases, FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
     try:
         parent_target_name, channels = channelized_family_names(rule, base.name, base_name, variables)
     except (TypeError, ValueError) as error:
         reason = f"failed to evaluate the family names: {error}"
-        return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
+        return _plan(module, base, base.name, (), family_bases, FamilyStatus.FAILED, reason)
     channel_names = [name for _channel_id, name in channels]
     rows = {name: row for name, row in name_holders(module.device_id, channel_names).items() if row.pk != base.pk}
     # A row of another module or family is reported by its own outcome, so this plan does not hold it.
@@ -118,11 +119,13 @@ def _modelled_plan(module, rule, variables, base, base_name, family_bases):  # p
     }
     refusal = channelized_name_refusal(parent_target_name, channel_names, rows, (base.pk,), module.pk, family_bases)
     if refusal is not None:
-        return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, refusal[1], holders)
-    return _plan(module, base, parent_target_name, channels, holders=holders)
+        return _plan(
+            module, base, parent_target_name, channels, family_bases, FamilyStatus.BLOCKED, refusal[1], holders
+        )
+    return _plan(module, base, parent_target_name, channels, family_bases, holders=holders)
 
 
-def plan_structural_family(module, rule, variables, base, base_name, family_bases=frozenset()) -> StructuralFamilyPlan:
+def plan_structural_family(module, rule, variables, base, base_name, family_bases) -> StructuralFamilyPlan:
     """Return the plan for the channelized family *rule* builds on plain interface *base*.
 
     *base_name* is the value of ``{base}``, or None when no template claims *base*. *family_bases*
@@ -130,7 +133,7 @@ def plan_structural_family(module, rule, variables, base, base_name, family_base
     over. ``settle_module_families`` then settles the families on the module against each other.
     """
     if not supports_channelization():
-        return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
+        return _plan(module, base, base.name, (), family_bases, FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
     return _modelled_plan(module, rule, variables, base, base_name, family_bases)  # pragma: no cover - see above
 
 
@@ -259,7 +262,9 @@ def _name_refusal(plan):  # pragma: no cover - requires channelization support
         return FamilyStatus.BLOCKED, repeated[1], repeated[0]
     channel_names = plan.channel_names
     holders = name_holders(plan.device_id, plan.target_names)
-    refusal = channelized_name_refusal(plan.parent_target_name, channel_names, holders, (plan.base.pk,), plan.module_id)
+    refusal = channelized_name_refusal(
+        plan.parent_target_name, channel_names, holders, (plan.base.pk,), plan.module_id, plan.family_bases
+    )
     if refusal is not None:
         name, reason = refusal
         return FamilyStatus.BLOCKED, reason, name
