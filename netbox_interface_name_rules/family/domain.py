@@ -118,7 +118,11 @@ class PlannedChannel:
 
 @dataclass(frozen=True, slots=True)
 class StructuralFamilyPlan:
-    """An executable plan that turns one plain interface into a channelized family."""
+    """An executable plan that turns one plain interface into a channelized family.
+
+    *taken_over_names* are the names of the rows that the families planned on the module take over,
+    which the module's flat surplus does not count (ADR 0017).
+    """
 
     family_id: str
     device_id: int
@@ -130,6 +134,7 @@ class StructuralFamilyPlan:
     channels: tuple[PlannedChannel, ...]
     precondition_status: FamilyStatus | None = None
     precondition_reason: str = ""
+    taken_over_names: tuple[str, ...] = ()
 
     @property
     def topology(self) -> FamilyTopology:

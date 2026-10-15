@@ -22,7 +22,7 @@ from .domain import (
     ProspectiveMember,
 )
 from .names import COLLISION_REASON
-from .structural import UNSUPPORTED_REASON, has_flat_expansion, strands_flat_siblings
+from .structural import UNSUPPORTED_REASON, has_flat_expansion, module_taken_over_names
 from .targets import (
     UNCLAIMED_BASE_REASON,
     breaks_out,
@@ -223,21 +223,7 @@ def _flat_creation_plan(rule, variables, base_name, base):
     )
 
 
-def _structural_refusal(base_name, context, parent_name, channel_names):  # pragma: no cover - see below
-    """Return why the planned family cannot be built here, or None when nothing refuses it.
-
-    A described interface with a channel name is one the family can take over (ADR 0017); only the
-    rows a preview reads can say whether it does, so that question is left to the preview.
-    """
-    if strands_flat_siblings(context.module, context.flat_expansion, base_name, channel_names):
-        # Converting one sibling into a parent would strand the others beside the new family.
-        return FLAT_EXPANSION_REASON
-    if parent_name != base_name and parent_name in context.taken_names:
-        return f"{COLLISION_REASON}: {parent_name}"
-    return None
-
-
-def _modelled_structural_plan(rule, variables, base_name, base, context):  # pragma: no cover - see below
+def _modelled_structural_plan(rule, variables, base_name, base):  # pragma: no cover - see below
     """Plan the channelized family for a NetBox release that can hold it."""
     if base is None:
         return _unclaimed(base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT)
@@ -246,11 +232,6 @@ def _modelled_structural_plan(rule, variables, base_name, base, context):  # pra
     except (TypeError, ValueError) as error:
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.FAILED, str(error)
-        )
-    refusal = _structural_refusal(base_name, context, parent_name, [name for _channel_id, name in channels])
-    if refusal is not None:
-        return _refused_creation(
-            base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.BLOCKED, refusal
         )
     members = (
         ProspectiveMember(source_name=base_name, target_name=parent_name, role=MemberRole.PARENT),
@@ -267,21 +248,21 @@ def _modelled_structural_plan(rule, variables, base_name, base, context):  # pra
     )
 
 
-def _structural_plan(rule, variables, base_name, base, context):
+def _structural_plan(rule, variables, base_name, base):
     """Plan the channelized family a rule builds on one plain interface."""
     if not supports_channelization():
         return _refused_creation(
             base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON
         )
-    return _modelled_structural_plan(rule, variables, base_name, base, context)  # pragma: no cover - see above
+    return _modelled_structural_plan(rule, variables, base_name, base)  # pragma: no cover - see above
 
 
-def _plain_plan(rule, variables, base_name, base, context):
+def _plain_plan(rule, variables, base_name, base):
     """Plan the family *rule* intends on the plain interface *base_name*, with *base* as ``{base}``."""
     if rule.channel_count <= 0:
         return _simple_plan(rule, variables, base_name, base)
     if rule.breakout_mode == BreakoutModeChoices.CHANNELIZED:
-        return _structural_plan(rule, variables, base_name, base, context)
+        return _structural_plan(rule, variables, base_name, base)
     return _flat_creation_plan(rule, variables, base_name, base)
 
 
@@ -342,7 +323,47 @@ def plan_prospective_families(module, rule, variables, interfaces, bases) -> Pro
     plans = tuple(
         _rename_plan(rule, variables, root, family, suffixes, bases)
         if _is_family_root(rule, root, family)
-        else _plain_plan(rule, variables, root.name, _plain_base(rule, bases, root.name), context)
+        else _plain_plan(rule, variables, root.name, _plain_base(rule, bases, root.name))
         for root, family in families
     )
-    return ProspectiveFamilyPlanSet(module_id=module.pk, plans=plans)
+    return ProspectiveFamilyPlanSet(module_id=module.pk, plans=_settled_creations(plans, context, bases))
+
+
+def _is_structural_creation(plan) -> bool:
+    """Return whether *plan* builds a channelized family whose names were evaluated."""
+    return (
+        plan.topology == FamilyTopology.CHANNELIZED and plan.base_name is not None and plan.precondition_status is None
+    )
+
+
+def _settled_creations(plans, context, bases):
+    """Refuse the channelized families the module cannot hold, as installed execution refuses them.
+
+    A flat family is decided for the whole module, as ``settle_flat_surplus`` decides it: the rows that
+    the module's families take over (ADR 0017) are not its siblings. A described interface with a
+    channel name is one a family can take over; only the rows the preview reads can say whether it
+    does, so only the parent name is checked against the described names here.
+    """
+    creations = [plan for plan in plans if _is_structural_creation(plan)]
+    if not creations:
+        return plans
+    names = module_taken_over_names(((plan.base_name, plan.target_names[1:]) for plan in creations), bases)
+    expanded = context.flat_expansion and has_flat_expansion(context.module, names)
+    return tuple(
+        _settled_creation(plan, context, expanded) if _is_structural_creation(plan) else plan for plan in plans
+    )
+
+
+def _settled_creation(plan, context, expanded):  # pragma: no cover - requires channelization support
+    """Return *plan*, or the refusal of the family it would build when the module cannot hold it."""
+    parent_name = plan.target_names[0]
+    if expanded:
+        # Converting one sibling into a parent would strand the others beside the new family.
+        reason = FLAT_EXPANSION_REASON
+    elif parent_name != plan.base_name and parent_name in context.taken_names:
+        reason = f"{COLLISION_REASON}: {parent_name}"
+    else:
+        return plan
+    return _refused_creation(
+        plan.base_name, FamilyTopology.CHANNELIZED, MemberRole.PARENT, FamilyStatus.BLOCKED, reason
+    )

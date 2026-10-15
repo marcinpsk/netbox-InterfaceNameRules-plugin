@@ -35,9 +35,9 @@ from .names import COLLISION_REASON, channelized_name_refusal, first_taken_name,
 from .structural import (
     execute_flat_family,
     execute_structural_family,
-    flat_surplus,
     plan_flat_family,
     plan_structural_family,
+    settle_flat_surplus,
 )
 from .targets import (
     UNCLAIMED_BASE_REASON,
@@ -130,19 +130,32 @@ def _is_top_level(interface) -> bool:
     return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
 
 
-def _creation_plan(module, rule, variables, base, base_name, surplus, members):
+def _creation_plan(module, rule, variables, base, base_name, family_bases, members):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
-        return plan_structural_family(module, rule, variables, base, base_name, surplus)
+        return plan_structural_family(module, rule, variables, base, base_name, family_bases)
     return plan_flat_family(module, rule, variables, base, base_name, members)
 
 
-def _creation_plans(module, rule, variables, plain, bases, selected_pks, surplus, members):
-    """Return a plan for each selected interface; a row that a family keeps or takes over is in that family's plan."""
+def _family_bases(interfaces, bases) -> frozenset:
+    """Return the primary key of each interface the claim gives a template, which no other family takes over."""
+    return frozenset(interface.pk for interface in interfaces if bases.builds_on(interface.name) is not None)
+
+
+def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members):
+    """Return a plan for each selected interface; a row that a family keeps or takes over is in that family's plan.
+
+    The module's flat surplus is settled over every plan before the selection, so it does not depend on it.
+    """
+    family_bases = _family_bases(interfaces, bases)
     plans = [
-        _creation_plan(module, rule, variables, base, bases.builds_on(base.name), surplus, members.get(base.name, ()))
+        _creation_plan(
+            module, rule, variables, base, bases.builds_on(base.name), family_bases, members.get(base.name, ())
+        )
         for base in plain
     ]
+    if builds_channelized_family(rule):
+        plans = settle_flat_surplus(module, plans, interfaces, bases.catalog.get(), bases)
     plans = [plan for plan in plans if _reaches(plan, selected_pks)]
     kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
     kept.update(holder.pk for plan in plans if isinstance(plan, StructuralFamilyPlan) for holder in plan.holders)
@@ -233,18 +246,18 @@ def plan_module_families(
                 rule,
             )
     else:
-        surplus = flat_surplus(interfaces, bases.catalog.get()) if builds_channelized_family(rule) else 0
         members = half_built_members(rule, interfaces, bases)
-        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, surplus, members)
+        leftover = _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
     return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
 
 
-def _creation_refusal(module, plan, holders, own_pks):
-    """Return the reason the executor of *plan* gives when one of its names is in use, or None."""
+def _creation_refusal(module, plan, holders, own_pks, family_bases):
+    """Return the reason the apply gives *plan* when one of its names is in use, or None."""
     if plan.topology == FamilyTopology.CHANNELIZED:
         channel_names = [member.target_name for member in plan.members if member.role == MemberRole.CHANNEL]
-        refusal = channelized_name_refusal(plan.members[0].target_name, channel_names, holders, own_pks, module.pk)
+        parent_name = plan.members[0].target_name
+        refusal = channelized_name_refusal(parent_name, channel_names, holders, own_pks, module.pk, family_bases)
         return None if refusal is None else refusal[1]
     owners = {name: holder.pk for name, holder in holders.items()}
     taken = first_taken_name(plan.target_names, owners, own_pks)
@@ -264,10 +277,11 @@ def creation_name_refusals(module, rule, interfaces, bases, plans) -> dict[str, 
     pks = {interface.name: interface.pk for interface in interfaces}
     members = half_built_members(rule, interfaces, bases)
     holders = name_holders(module.device_id, {name for plan in creations for name in plan.target_names})
+    family_bases = _family_bases(interfaces, bases)
     refusals = {}
     for plan in creations:
         own_pks = {pks[plan.base_name], *(member.pk for member in members.get(plan.base_name, ()))}
-        refusal = _creation_refusal(module, plan, holders, own_pks)
+        refusal = _creation_refusal(module, plan, holders, own_pks, family_bases)
         if refusal is not None:
             refusals[plan.base_name] = refusal
     return refusals

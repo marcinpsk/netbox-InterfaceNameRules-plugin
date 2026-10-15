@@ -34,12 +34,15 @@ def name_holders(device_id, names) -> dict:
     }
 
 
-def channel_holder_refusal(holder, module_id) -> str:
+def channel_holder_refusal(holder, module_id, family_bases=frozenset()) -> str:
     """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
 
-    *holder* is the row that has one of the family's channel names. Planning, the preview and
-    execution all ask this one question (ADR 0017).
+    *holder* is the row that has one of the family's channel names, and *family_bases* holds the
+    primary key of each row another family is built on. Planning, the preview and execution all ask
+    this one question (ADR 0017).
     """
+    if holder.pk in family_bases:
+        return "another family is built on it"
     if holder.module_id is not None and holder.module_id != module_id:
         return "it belongs to another module"
     if holder.parent_id is not None or getattr(holder, "channel_id", None) is not None:
@@ -52,12 +55,12 @@ def channel_holder_refusal(holder, module_id) -> str:
     return ""
 
 
-def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id):
+def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id, family_bases=frozenset()):
     """Return ``(name, reason)`` for the first name a channelized family cannot take, or None.
 
     *holders* maps each name in use on the device to the row that has it, and a row in *own_pks* is
     the family's own. The family takes over a row with a channel name that ``channel_holder_refusal``
-    allows.
+    allows, given *family_bases*.
     """
     holder = holders.get(parent_name)
     if holder is not None and holder.pk not in own_pks:
@@ -66,7 +69,7 @@ def channelized_name_refusal(parent_name, channel_names, holders, own_pks, modul
         holder = holders.get(name)
         if holder is None or holder.pk in own_pks:
             continue
-        refusal = channel_holder_refusal(holder, module_id)
+        refusal = channel_holder_refusal(holder, module_id, family_bases)
         if refusal:
             return name, f"{COLLISION_REASON}: {name} ({refusal})"
     return None

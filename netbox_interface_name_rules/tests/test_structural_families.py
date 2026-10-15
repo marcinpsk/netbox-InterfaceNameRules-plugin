@@ -45,6 +45,14 @@ from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.transactions import write_scope
 
 
+class _UnclaimedNames:
+    """The claim over a module whose only interface is the base: no channel name is a template's."""
+
+    @staticmethod
+    def builds_on(_name):
+        return None
+
+
 class StructuralFamilyTestCase(ChannelizationTestCase):
     """One device, one plain module type, and the channelized rule under test."""
 
@@ -70,8 +78,10 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
         base = Interface.objects.get(module=module)
         variables = build_variables(bay, device=self.device)
         templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
-        surplus = structural.flat_surplus(Interface.objects.filter(module=module), templates)
-        plan = plan_structural_family(module, self.rule, variables, base, base.name, surplus)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name)
+        (plan,) = structural.settle_flat_surplus(
+            module, [plan], list(Interface.objects.filter(module=module)), templates, _UnclaimedNames()
+        )
         return module, bay, plan
 
 

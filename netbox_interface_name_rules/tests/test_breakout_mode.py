@@ -1232,6 +1232,14 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
         )
         for name in ("0", "x0:1"):
             InterfaceTemplate.objects.create(module_type=cls.pair_type, name=name, type=PARENT_TYPE)
+        cls.two_port_types = {}
+        for names in (("0", "1"), ("a", "b")):
+            model = f"BrkExec-{''.join(names).upper()}"
+            cls.two_port_types[names] = ModuleType.objects.create(
+                manufacturer=manufacturer, model=model, part_number=model
+            )
+            for name in names:
+                InterfaceTemplate.objects.create(module_type=cls.two_port_types[names], name=name, type=PARENT_TYPE)
 
     def _module_with(self, *names, module_type=None):
         """Install the module and add the interfaces *names* beside the ones its templates give."""
@@ -1469,6 +1477,50 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
 
         self.assertEqual(members["0"], (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: x0:1 (it is a channelized parent)"))
         self.assertEqual(self._names(module), ["0"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_a_family_never_takes_over_the_base_of_another_family(self):
+        module_type = self.two_port_types["0", "1"]
+        module = self._module_with(module_type=module_type)
+        rule = self._rule(
+            "{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
+        )
+
+        offered, _changed = self._preview_then_apply(rule, module)
+        members = self._apply_to_every_interface(rule, module)
+
+        self.assertEqual(offered, {})
+        self.assertEqual(
+            members,
+            {
+                "0": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: 1 (another family is built on it)"),
+                "1": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: 0 (another family is built on it)"),
+            },
+        )
+        self.assertEqual(self._names(module), ["0", "1"])
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_the_preview_offers_a_family_that_only_takes_over_rows(self):
+        module = self._module_with("0:0", "0:1")
+        rule = self._rule("{base}:{channel}", breakout_mode=CHANNELIZED)
+
+        offered, changed = self._preview_then_apply(rule, module)
+
+        self.assertEqual(offered, {"0": ["0", "0:0", "0:1"]})
+        self.assertEqual(changed, offered)
+        self.assertEqual(Interface.objects.get(module=module, name="0").channels, 2)
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_the_rows_two_families_take_over_are_not_a_flat_family(self):
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("a:0", "b:0", module_type=module_type)
+        rule = self._rule("{base}:{channel}", breakout_mode=CHANNELIZED, module_type=module_type)
+
+        offered, changed = self._preview_then_apply(rule, module)
+
+        self.assertEqual(offered, {"a": ["a", "a:0", "a:1"], "b": ["b", "b:0", "b:1"]})
+        self.assertEqual(changed, offered)
+        self.assertEqual(self._names(module), ["a", "a:0", "a:1", "b", "b:0", "b:1"])
 
     @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
     def test_a_channel_row_on_the_module_is_taken_over_and_reported_once(self):

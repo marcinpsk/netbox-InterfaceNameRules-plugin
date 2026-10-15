@@ -3,6 +3,7 @@
 """Plan and execute the creation of interface families."""
 
 import logging
+from dataclasses import replace
 
 from dcim.choices import InterfaceTypeChoices
 from dcim.models import Interface, InterfaceTemplate
@@ -61,20 +62,12 @@ def has_flat_expansion(module, channel_names=()) -> bool:  # pragma: no cover - 
     return _flat_expansion(module.module_type_id, module.pk, channel_names)
 
 
-def _taken_over_names(base_name, channel_names):
+def taken_over_names(base_name, channel_names) -> tuple[str, ...]:
     """Return the channel names whose rows a family on *base_name* takes over instead of stranding.
 
     A flat family gives its first row one of its channel names, so the siblings of such a base stay siblings.
     """
     return () if base_name in channel_names else tuple(channel_names)
-
-
-def strands_flat_siblings(module, flat_expansion, base_name, channel_names) -> bool:  # pragma: no cover
-    """Return whether a family on *base_name* with *channel_names* would leave flat siblings beside it on *module*.
-
-    *flat_expansion* is the answer for the whole module, so the module is read again only when it is set.
-    """
-    return flat_expansion and has_flat_expansion(module, _taken_over_names(base_name, channel_names))
 
 
 def flat_surplus(interfaces, templates) -> int:
@@ -85,6 +78,7 @@ def flat_surplus(interfaces, templates) -> int:
 def _plan(module, base, parent_target_name, channels, status=None, reason="", holders=None):
     """Build one immutable structural plan for *base*; *holders* snapshots the rows with a channel name, by name."""
     holders = holders or {}
+    channel_names = [name for _channel_id, name in channels]
     return StructuralFamilyPlan(
         family_id=f"structural:{base.pk}",
         device_id=module.device_id,
@@ -98,10 +92,11 @@ def _plan(module, base, parent_target_name, channels, status=None, reason="", ho
         ),
         precondition_status=status,
         precondition_reason=reason,
+        taken_over_names=taken_over_names(base.name, channel_names),
     )
 
 
-def _modelled_plan(module, rule, variables, base, base_name, surplus):  # pragma: no cover - channelization only
+def _modelled_plan(module, rule, variables, base, base_name, family_bases):  # pragma: no cover - channelization only
     """Return the plan for a NetBox release that can hold the family."""
     if base_name is None:
         return _plan(module, base, base.name, (), FamilyStatus.BLOCKED, UNCLAIMED_BASE_REASON)
@@ -111,40 +106,65 @@ def _modelled_plan(module, rule, variables, base, base_name, surplus):  # pragma
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), FamilyStatus.FAILED, reason)
     channel_names = [name for _channel_id, name in channels]
-    holders = _channel_holders(module, base, channel_names)
-    if surplus > _taken_over_siblings(module, base, channel_names, holders):
-        # Converting one sibling into a parent would strand the others beside the new family.
-        reason = f"module {module} already carries a flat breakout family"
-        return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, reason)
+    rows = {name: row for name, row in name_holders(module.device_id, channel_names).items() if row.pk != base.pk}
+    # A row another family is built on keeps its own plan, so this plan does not hold it.
+    holders = {name: InterfaceSnapshot.from_interface(row) for name, row in rows.items() if row.pk not in family_bases}
+    refusal = channelized_name_refusal(parent_target_name, channel_names, rows, (base.pk,), module.pk, family_bases)
+    if refusal is not None:
+        return _plan(module, base, parent_target_name, channels, FamilyStatus.BLOCKED, refusal[1], holders)
     return _plan(module, base, parent_target_name, channels, holders=holders)
 
 
-def _channel_holders(module, base, channel_names):  # pragma: no cover - requires channelization support
-    """Return a snapshot of every row other than *base* that has one of *channel_names* on the device, by name."""
-    rows = name_holders(module.device_id, channel_names)
-    return {name: InterfaceSnapshot.from_interface(row) for name, row in rows.items() if row.pk != base.pk}
-
-
-def _taken_over_siblings(module, base, channel_names, holders):  # pragma: no cover - requires channelization support
-    """Return how many of *module*'s rows outside a channel the family on *base* takes over from *holders*."""
-    names = _taken_over_names(base.name, channel_names)
-    return sum(
-        1
-        for name, holder in holders.items()
-        if name in names and holder.module_id == module.pk and holder.channel_id is None
-    )
-
-
-def plan_structural_family(module, rule, variables, base, base_name, surplus) -> StructuralFamilyPlan:
+def plan_structural_family(module, rule, variables, base, base_name, family_bases=frozenset()) -> StructuralFamilyPlan:
     """Return the plan for the channelized family *rule* builds on plain interface *base*.
 
-    *base_name* is the value of ``{base}``, or None when no template claims *base*. *surplus* is how
-    many rows outside a channel the module carries beyond its templates, as ``flat_surplus`` counts.
-    A surplus that the rows the family takes over do not explain is a flat breakout family.
+    *base_name* is the value of ``{base}``, or None when no template claims *base*. *family_bases*
+    are the primary keys of the module's rows that the claim gives a template, which no family takes
+    over. ``settle_flat_surplus`` then decides for the module whether it carries a flat family.
     """
     if not supports_channelization():
         return _plan(module, base, base.name, (), FamilyStatus.UNSUPPORTED, UNSUPPORTED_REASON)
-    return _modelled_plan(module, rule, variables, base, base_name, surplus)  # pragma: no cover - see above
+    return _modelled_plan(module, rule, variables, base, base_name, family_bases)  # pragma: no cover - see above
+
+
+def module_taken_over_names(families, bases) -> frozenset:
+    """Return the names of the rows that the channelized families planned on one module take over.
+
+    *families* pairs the base name of each family whose names were evaluated with its channel names.
+    A row the claim gives a template is no family's to take over, so it is not one of them.
+    """
+    return frozenset(
+        name
+        for base_name, channel_names in families
+        for name in taken_over_names(base_name, channel_names)
+        if bases.builds_on(name) is None
+    )
+
+
+def settle_flat_surplus(module, plans, interfaces, templates, bases):  # pragma: no cover - channelization only
+    """Return *plans* with every structural family refused when *module* carries a flat breakout family.
+
+    *interfaces* are the module's rows and *templates* its resolved templates. The rows that the
+    module's families take over are not flat siblings (ADR 0017); any other row beyond the templates
+    is a flat family, and building beside it would strand its siblings. Each family that is built
+    keeps the names of the rows that the module's families take over, for the check under lock.
+    """
+    evaluated = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan) and plan.channels]
+    names = module_taken_over_names(((plan.base.name, plan.channel_names) for plan in evaluated), bases)
+    expanded = flat_surplus([interface for interface in interfaces if interface.name not in names], templates) > 0
+    reason = f"module {module} already carries a flat breakout family"
+    settled = {}
+    for plan in evaluated:
+        if plan.precondition_status is not None:
+            continue
+        settled[plan.base.pk] = replace(plan, taken_over_names=tuple(sorted(names)))
+        if expanded:
+            # Converting one sibling into a parent would strand the others beside the new family.
+            channels = tuple(replace(channel, holder=None) for channel in plan.channels)
+            settled[plan.base.pk] = replace(
+                plan, channels=channels, precondition_status=FamilyStatus.BLOCKED, precondition_reason=reason
+            )
+    return [settled.get(plan.base.pk, plan) if isinstance(plan, StructuralFamilyPlan) else plan for plan in plans]
 
 
 def _outcome(plan, status, members, reason=""):
@@ -195,7 +215,7 @@ def _stale_reason(plan, rows):  # pragma: no cover - requires channelization sup
     ):
         return HOLDER_CHANGED_REASON
     # A sibling added since planning would be stranded beside the family this plan builds.
-    if _flat_expansion(plan.module_type_id, plan.module_id, _taken_over_names(plan.base.name, plan.channel_names)):
+    if _flat_expansion(plan.module_type_id, plan.module_id, plan.taken_over_names):
         return MODULE_CHANGED_REASON
     return ""
 
