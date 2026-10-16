@@ -67,6 +67,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      # Crash recovery (WAL replay) can take minutes; failures in this window count only after the first healthy probe.
+      start_period: 10m
+      start_interval: 5s
     networks:
       default:
         ipv4_address: 172.28.200.3

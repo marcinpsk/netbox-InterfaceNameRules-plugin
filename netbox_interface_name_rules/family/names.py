@@ -3,6 +3,7 @@
 """Shared live interface-name primitives for family execution and its preview."""
 
 import logging
+from collections import Counter
 
 from dcim.models import Interface
 from django.core.exceptions import ValidationError
@@ -13,6 +14,7 @@ from ..transactions import atomic_with_events, on_commit
 logger = logging.getLogger(__name__)
 
 COLLISION_REASON = "target name is already in use"
+REPEATED_NAME_REASON = "the module's families want it more than once"
 INTERFACE_NAME_CONSTRAINT = "dcim_interface_unique_device_name"
 
 
@@ -24,6 +26,93 @@ def name_owners(device_id, names) -> dict[str, int]:
 def first_taken_name(target_names, owners, own_pks):
     """Return the first of *target_names* that *owners* gives to an interface outside *own_pks*, or None."""
     return next((name for name in target_names if name in owners and owners[name] not in own_pks), None)
+
+
+def name_holders(device_id, names) -> dict:
+    """Return the interface that has each of *names* on the device, by name, with its parent."""
+    return {
+        interface.name: interface
+        for interface in Interface.objects.filter(device_id=device_id, name__in=names).select_related("parent")
+    }
+
+
+def _owner_refusal(holder, module_id, family_bases):
+    """Return why *holder* belongs to another module or family, or an empty string."""
+    if holder.pk in family_bases:
+        return "another family is built on it"
+    if holder.module_id is not None and holder.module_id != module_id:
+        return "it belongs to another module"
+    if holder.parent_id is not None or getattr(holder, "channel_id", None) is not None:
+        return f"it is already a subinterface of {getattr(holder.parent, 'name', 'another interface')}"
+    if getattr(holder, "channels", None):
+        return "it is a channelized parent"
+    return ""
+
+
+def belongs_elsewhere(holder, module_id, family_bases) -> bool:
+    """Return whether *holder* belongs to another module or family, so that its own outcome reports it."""
+    return bool(_owner_refusal(holder, module_id, family_bases))
+
+
+def channel_holder_refusal(holder, module_id, family_bases) -> str:
+    """Return why a family built on module *module_id* cannot take over *holder*, or an empty string.
+
+    *holder* is the row that has one of the family's channel names, and *family_bases* holds the
+    primary key of each row another family is built on. Planning, the preview and execution all ask
+    this one question (ADR 0017).
+    """
+    refusal = _owner_refusal(holder, module_id, family_bases)
+    if refusal:
+        return refusal
+    # NetBox refuses a channel ID on an interface with a cable, and the plugin never edits a cable.
+    if holder.cable_id is not None:
+        return "it has a cable"
+    return ""
+
+
+def channelized_name_refusal(parent_name, channel_names, holders, own_pks, module_id, family_bases):
+    """Return ``(name, reason)`` for the first name a channelized family cannot take, or None.
+
+    *holders* maps each name in use on the device to the row that has it, and a row in *own_pks* is
+    the family's own. The family takes over a row with a channel name that ``channel_holder_refusal``
+    allows, given *family_bases*.
+    """
+    holder = holders.get(parent_name)
+    if holder is not None and holder.pk not in own_pks:
+        return parent_name, f"{COLLISION_REASON}: {parent_name}"
+    for name in channel_names:
+        holder = holders.get(name)
+        if holder is None or holder.pk in own_pks:
+            continue
+        refusal = channel_holder_refusal(holder, module_id, family_bases)
+        if refusal:
+            return name, f"{COLLISION_REASON}: {name} ({refusal})"
+    return None
+
+
+def repeated_names(families) -> frozenset:
+    """Return each channel name that the channelized families on one module want more than once.
+
+    *families* holds the channel names of each family, so a name repeated inside one family counts as
+    well as a name two families share. Planning, the preview and execution refuse every family that
+    wants such a name, and none of them takes over the row that has it (ADR 0017).
+    """
+    counts = Counter(name for channel_names in families for name in channel_names)
+    return frozenset(name for name, count in counts.items() if count > 1)
+
+
+def repeated_name_refusal(channel_names, repeated):
+    """Return ``(name, reason)`` for the first of *channel_names* in *repeated*, or None."""
+    name = next((name for name in channel_names if name in repeated), None)
+    return None if name is None else (name, f"{COLLISION_REASON}: {name} ({REPEATED_NAME_REASON})")
+
+
+def validate_or_block(interface, role):
+    """Run NetBox's own validation on *interface*, restating a rejection as this family's reason."""
+    try:
+        interface.full_clean()
+    except ValidationError as error:
+        raise ValidationError(f"{role} {interface.name!r}: {' '.join(error.messages)}") from error
 
 
 def name_is_taken(device_id, target_name, exclude_pk) -> bool:

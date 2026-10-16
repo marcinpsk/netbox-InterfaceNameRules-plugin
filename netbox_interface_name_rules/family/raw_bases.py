@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 from ..name_template import evaluate_name_template, references_variable
 from .claims import TemplateClaim, resolve_template_claims
-from .targets import breaks_out, flat_family_names, used_parent_template
+from .targets import breaks_out, builds_channelized_family, flat_family_names, used_parent_template
 from .template_names import VC_POSITION_DIGITS, ResolvedTemplateName
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,7 @@ class RawBases:
         self._reads_base = previous_forms is not None or rule_reads_base(rule)
         self._breaks_out = breaks_out(rule)
         self._claims_flat = previous_forms is None and self._breaks_out
+        self._builds_channels = builds_channelized_family(rule)
         self._resolution = None
 
     def base_for(self, name):
@@ -174,6 +175,10 @@ class RawBases:
     def builds_on(self, name):
         """Return the raw template name *name* stands for, or None when no single template claims it."""
         return self._resolved().bases.get(name)
+
+    def claims_alone(self, name) -> bool:
+        """Return whether one template alone claims *name*, so that no family takes its row over (ADR 0017)."""
+        return self.claim(name).accepted
 
     def is_ambiguous(self, name):
         """Return whether a rule that reads the claim finds *name* claimed, but not by one template alone."""
@@ -212,7 +217,7 @@ class RawBases:
             raw_claimed.update(
                 name for name in single if self._is_raw_name(name, template, raw_names, forms[template.pk])
             )
-            families = self._flat_families(template)
+            families = self._flat_families(template, raw_names, forms[template.pk])
             flat.update(((template.pk, unit), family) for unit, family in families.items())
             claims.append(
                 TemplateClaim(template.pk, template.template_name, [(name,) for name in single] + [*families])
@@ -252,9 +257,17 @@ class RawBases:
             historical is not None and name not in raw_names and historical.fullmatch(name) is not None
         )
 
-    def _flat_families(self, template):
-        """Return, by the plain interfaces the module carries, each flat family whose first one it carries."""
+    def _flat_families(self, template, raw_names, raw_forms):
+        """Return, by the plain interfaces the module carries, each flat family whose first one it carries.
+
+        *raw_names* and *raw_forms* are what ``_is_raw_name`` reads to recognise the template's raw name.
+        """
         if not self._claims_flat:
+            return {}
+        # A flat apply renames the port, so beside a raw-named port a channelized rule takes the rows over (ADR 0017).
+        if self._builds_channels and any(
+            self._is_raw_name(name, template, raw_names, raw_forms) for name in self._plain
+        ):
             return {}
         rule = self._rule
         first = _renamed_pattern(
@@ -325,3 +338,7 @@ class GivenRawNames:
         return None if self._bases.is_ambiguous(name) else name
 
     builds_on = base_for
+
+    def claims_alone(self, name) -> bool:
+        """Return whether one template alone claims *name* among the given names; any other name is no template's."""
+        return self._bases.claims_alone(name)

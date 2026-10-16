@@ -746,14 +746,17 @@ def _plan_details(plan) -> list:
 
 
 def _plan_changes_names(plan, existing_names) -> bool:
-    """Return whether the planned family would rename or create anything.
+    """Return whether the planned family would rename, create or restructure anything.
 
     A plan that renames members compares intent with the names they carry now.  A plan that builds
-    a family out of one base compares intent with the names the module already holds, so a family
-    an earlier apply already installed previews as no change.
+    a channelized family always channelizes its base, also when it only takes over rows that carry
+    the names already (ADR 0017).  A plan that builds a flat family compares intent with the names
+    the module already holds, so a family an earlier apply already installed previews as no change.
     """
     if plan.base_name is None:  # pragma: no cover - requires channelization support
         return plan.target_names != plan.source_names
+    if plan.topology == family_ops.FamilyTopology.CHANNELIZED:
+        return True
     return plan.target_names[0] != plan.base_name or any(
         target_name not in existing_names for target_name in plan.target_names
     )
@@ -842,11 +845,11 @@ def _process_module(rule, module, ifaces, variables, limit, results, module_qs, 
     entries = [_installed_flat_entry(module, plan, rows_by_pk[plan.member_pks[0]]) for plan in installed]
     offered = _preview_plans(rule, plan_set)
     # The apply refuses a family whose names are in use, so the preview offers no change there.
-    in_use = family_ops.creation_names_in_use(module, rule, ifaces, bases, offered)
+    refused = family_ops.creation_name_refusals(module, rule, ifaces, bases, offered)
     entries.extend(
         _plan_entry(module, plan, rows_by_name[_plan_root_name(plan)], existing_names)
         for plan in offered
-        if plan.base_name not in in_use
+        if plan.base_name not in refused
     )
     for entry in entries:
         if entry is None:

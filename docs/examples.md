@@ -146,15 +146,24 @@ without a channel number); leave it blank to keep the name NetBox gave the port.
 `{channel}` is `channel_start + channel_id - 1`, so NetBox's 1-based `channel_id`
 1…4 render as Juniper's `:0` … `:3`.
 
-The family is built only when every name it needs is free: if the parent's name
-or any channel name is already taken on the device, the whole family is skipped
-and logged rather than half created. Switching an existing rule from `flat` to
+The family is built only when it can take every name it needs, and never half
+created. An interface that already has a channel name, for example one that
+other tooling created with a LAG, addresses or VLANs, becomes that channel: it
+keeps its ID, name and configuration, and moves under the parent. This is done
+only when it is not on another module, is not a subinterface or a channelized
+parent, is not the port that another family is built on, and has no cable.
+NetBox refuses a channel ID on an interface with a cable, and the plugin never
+removes a cable. The module's families must also want its name only once: a name
+that they want more than once refuses every family that wants it. Any other interface with one of the
+family's names, and any interface other than the port with the parent's name,
+skips the whole family with a warning that names it. Switching an existing rule from `flat` to
 `channelized` does not convert the flat interfaces an earlier apply installed —
 the two topologies are different objects to cabling and automation, so
 conversion is a separate, explicit operation. A module carrying more interfaces
 than its module type's templates describe is read as holding such a family: the
 rule refuses it with a warning naming the module, whatever names the new
-templates would take.
+templates would take. The interfaces that the module's families take over are
+not counted. An interface of a family that is not built is counted.
 
 On NetBox releases that cannot model channels (4.6 and older) a `channelized`
 rule is skipped with a warning and nothing is created — it is never quietly
@@ -218,9 +227,12 @@ If a device was provisioned partially (e.g. only 2 of 4 channels were created
 manually), run **Apply Rules → Preview & Apply** for the matching rule. When
 the interfaces carry the family's channel names and the first channel is one of
 them, the engine creates only the missing channels and leaves the existing
-interfaces unchanged. When the port still has its raw name, an interface with
-one of the family's channel names is not part of the family. The family is then
-not built, and the plugin reports the port and that interface.
+interfaces unchanged. When the port still has its raw name, a `flat` rule does
+not count an interface with one of the family's channel names as part of the
+family. The family is then not built, and the plugin reports the port and that
+interface. A `channelized` rule takes over such an interface as its channel and
+keeps its configuration, when the interface meets the conditions in
+[Channelized breakout](#channelized-breakout-netbox-47).
 
 ### Build Rule — SONiC QSFP-DD 4×100G breakout
 

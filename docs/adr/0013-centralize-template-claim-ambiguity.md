@@ -21,7 +21,8 @@ The pass collects every form of every template as evidence, in this one order:
    through a channel that the rule gave the template's base;
 4. a flat family: the plain interfaces that the rule's channel names spell from one of those bases,
    when the module carries the first one. A flat breakout rule gives it. A channelized rule gave it
-   while the rule was flat;
+   while the rule was flat, so it reads none while the module still has a port with any raw name
+   of items 1 and 2 (ADR 0017);
 5. after a move or a bay edit, the raw name and the names the previous rule gave, from the previous
    state. A move recognises no flat family (ADR 0015), so its pass has no flat family forms.
 
@@ -52,7 +53,9 @@ The paths read the result as follows:
 - A breakout rule builds a family only on an interface that one template alone claims. This holds on
   every path: an install, a forced reapply, Apply Rules and its preview. It also holds when the rule
   does not read `{base}`, and on a module type without templates. Every other interface keeps its
-  name and is reported as unclaimed. No family takes an interface by its name. A flat family keeps
+  name and is reported as unclaimed. No family takes an interface by its name, except that a
+  channelized family takes over a row with one of its channel names when the row qualifies
+  (ADR 0017). A flat family keeps
   only the other interfaces of the flat family unit that the claim gave its template, and its plan
   holds them by primary key. Another interface that has one of the family's names is a collision:
   the family is refused, and that interface has its own plan. So when two interfaces would build one
