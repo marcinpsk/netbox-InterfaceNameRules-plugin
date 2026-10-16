@@ -6,6 +6,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.9.0 (2026-10-12)
+
+### Bug Fixes
+
+- **naming**: Report why a variable is not available on every path
+  ([`f4bb751`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f4bb751c0e15e7aca5207ce01725587492911f67))
+
+### Chores
+
+- Remove release configuration validator
+  ([`c2650f3`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/c2650f35e83a355ea92e343f090b6a149ee48fcb))
+
+- **deps-dev**: Bump ruff from 0.16.8 to 0.16.9
+  ([`40eb791`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/40eb79137545f9c3b0244188a4707b6135b058e1))
+
+### Documentation
+
+- Say where an unavailable variable is reported
+  ([`0386a99`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0386a9991f9ef79976c76af8d037394a7ae44119))
+
+- **adr**: Name {bay_position_path} as a conditional variable in ADR 0014
+  ([`95dfafa`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/95dfafa1e4510f047979a9b777c0a33c7351b68d))
+
+### Features
+
+- **templates**: Refuse a text variable inside arithmetic at save time
+  ([`6673d00`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6673d00340a453497a5460fdc0111cb4ddf2bb61))
+
+### Refactoring
+
+- **migrations**: Share the stored-rule template audit
+  ([`281c3a7`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/281c3a7d25dafd46798fe2d8338be75889c78ca3))
+
+
 ## v1.8.1 (2026-10-02)
 
 ### Bug Fixes
