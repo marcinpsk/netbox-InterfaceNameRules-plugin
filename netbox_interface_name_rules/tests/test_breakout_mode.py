@@ -1591,6 +1591,30 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
         )
         self.assertEqual(self._names(module), ["a", "a:0", "b"])
 
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_the_row_a_family_with_a_taken_parent_name_leaves_is_a_flat_sibling(self):
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("a:0", module_type=module_type)
+        Interface.objects.create(device=self.device, name="pa", type=PARENT_TYPE)
+        rule = self._rule(
+            "{base}:{channel}", breakout_mode=CHANNELIZED, parent_name_template="p{base}", module_type=module_type
+        )
+
+        offered, changed = self._preview_then_apply(rule, module)
+        members = self._apply_to_every_interface(rule, module)
+
+        taken = f"{COLLISION_REASON}: pa"
+        self.assertEqual((offered, changed), ({}, {}))
+        self.assertEqual(
+            members,
+            {
+                "a": (FamilyStatus.BLOCKED, taken),
+                "a:0": (FamilyStatus.BLOCKED, taken),
+                "b": (FamilyStatus.BLOCKED, f"module {module} already carries a flat breakout family"),
+            },
+        )
+        self.assertEqual(self._names(module), ["a", "a:0", "b"])
+
     def _built_after_selective_apply(self, cabled, selected):
         """Apply to the *selected* ports of a module with rows ``a:0`` and ``b:0``; the *cabled* ports' rows have a cable.
 

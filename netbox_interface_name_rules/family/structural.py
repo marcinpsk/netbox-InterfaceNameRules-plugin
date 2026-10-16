@@ -111,12 +111,13 @@ def _modelled_plan(module, rule, variables, base, base_name, family_bases):  # p
         reason = f"failed to evaluate the family names: {error}"
         return _plan(module, base, base.name, (), family_bases, FamilyStatus.FAILED, reason)
     channel_names = [name for _channel_id, name in channels]
-    rows = {name: row for name, row in name_holders(module.device_id, channel_names).items() if row.pk != base.pk}
+    names = (parent_target_name, *channel_names)
+    rows = {name: row for name, row in name_holders(module.device_id, names).items() if row.pk != base.pk}
     # A row of another module or family is reported by its own outcome, so this plan does not hold it.
     holders = {
         name: InterfaceSnapshot.from_interface(row)
         for name, row in rows.items()
-        if not belongs_elsewhere(row, module.pk, family_bases)
+        if name in channel_names and not belongs_elsewhere(row, module.pk, family_bases)
     }
     refusal = channelized_name_refusal(parent_target_name, channel_names, rows, (base.pk,), module.pk, family_bases)
     if refusal is not None:
@@ -185,7 +186,7 @@ def settle_module_families(  # pragma: no cover - channelization only
     """Return *plans* with the structural families on *module* settled against each other before execution.
 
     A channel name that the families want more than once refuses every family that wants it, and no
-    family takes over its row. A parent name is left to NetBox's unique name, as before: no family
+    family takes over its row. Planning refuses a family whose parent name is in use, and no family
     takes a row over by its parent name. Then, when *module* carries a flat breakout family, every other family is
     refused. *interfaces* are the module's rows and *templates* its resolved templates. The rows
     that the module's families take over are not flat siblings (ADR 0017); any other row beyond the
