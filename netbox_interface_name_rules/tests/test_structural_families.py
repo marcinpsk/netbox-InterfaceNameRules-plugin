@@ -28,6 +28,7 @@ from netbox_interface_name_rules.family import (
     structural,
 )
 from netbox_interface_name_rules.family import names as family_names
+from netbox_interface_name_rules.family.names import COLLISION_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     CHANNELIZED,
@@ -42,6 +43,14 @@ from netbox_interface_name_rules.tests.helpers import (
 )
 from netbox_interface_name_rules.tests.out_of_band import rename_out_of_band
 from netbox_interface_name_rules.transactions import write_scope
+
+
+class _UnclaimedNames:
+    """The claim over a module whose only interface is the base: no channel name is a template's."""
+
+    @staticmethod
+    def claims_alone(_name):
+        return False
 
 
 class StructuralFamilyTestCase(ChannelizationTestCase):
@@ -63,14 +72,21 @@ class StructuralFamilyTestCase(ChannelizationTestCase):
             channel_start=0,
         )
 
-    def _plan(self, position="3"):
+    def _plan(self, position="3", family_bases=frozenset()):
         """Install a raw-named module and return its module, bay and structural plan."""
         module, bay = self._install(self.module_type, position, run_rules=False)
         base = Interface.objects.get(module=module)
         variables = build_variables(bay, device=self.device)
         templates = InterfaceTemplate.objects.filter(module_type=module.module_type)
-        flat_expansion = structural.carries_flat_expansion(Interface.objects.filter(module=module), templates)
-        plan = plan_structural_family(module, self.rule, variables, base, base.name, flat_expansion)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, family_bases)
+        (plan,) = structural.settle_module_families(
+            module,
+            [plan],
+            list(Interface.objects.filter(module=module)),
+            templates,
+            _UnclaimedNames(),
+            frozenset({base.pk}),
+        )
         return module, bay, plan
 
 
@@ -327,24 +343,97 @@ class StructuralFamilyCollisionScanTest(StructuralFamilyTestCase):
         _module, _bay, plan = self._plan()
 
         with CaptureQueriesContext(connection) as queries:
-            taken = structural._first_taken_name(plan, (plan.base.pk,))
+            refusal = structural._name_refusal(plan)
 
-        self.assertIsNone(taken)
+        self.assertIsNone(refusal)
         self.assertEqual(len(plan.target_names), 5)
         self.assertEqual(len(queries.captured_queries), 1, queries.captured_queries)
 
-    def test_the_scan_reports_the_first_taken_name_in_plan_order(self):
+    def test_the_scan_reports_the_first_refused_name_in_plan_order(self):
+        Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE, channels=4)
+        Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE, channels=4)
         _module, _bay, plan = self._plan()
-        Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
-        Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
 
-        self.assertEqual(structural._first_taken_name(plan, (plan.base.pk,)), "xe-0/0/3:1")
+        self.assertEqual(
+            structural._name_refusal(plan),
+            (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3:1 (it is a channelized parent)", "xe-0/0/3:1"),
+        )
 
     def test_the_base_row_never_counts_as_a_collision(self):
         _module, _bay, plan = self._plan()
         rename_out_of_band(Interface.objects.get(pk=plan.base.pk), plan.target_names[0])
 
-        self.assertIsNone(structural._first_taken_name(plan, (plan.base.pk,)))
+        self.assertIsNone(structural._name_refusal(plan))
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class StructuralFamilyHolderRevalidationTest(StructuralFamilyTestCase):
+    """The rows a plan takes over are locked and compared with their snapshots at execution (ADR 0002)."""
+
+    PREFIX = "StructHold"
+
+    def test_the_plan_snapshots_the_row_that_has_each_channel_name(self):
+        holder = Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
+
+        _module, _bay, plan = self._plan()
+
+        self.assertEqual([snapshot.pk for snapshot in plan.holders], [holder.pk])
+        self.assertEqual([channel.holder is not None for channel in plan.channels], [False, True, False, False])
+
+    def test_a_holder_renamed_after_planning_is_stale_and_untouched(self):
+        holder = Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE)
+        module, _bay, plan = self._plan()
+        rename_out_of_band(holder, "moved-away")
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual((outcome.status, outcome.reason), (FamilyStatus.STALE, structural.HOLDER_CHANGED_REASON))
+        self.assertEqual(self._names(module), ["3"])
+        holder.refresh_from_db()
+        self.assertEqual((holder.name, holder.module_id, holder.channel_id), ("moved-away", None, None))
+
+    def test_a_holder_added_after_planning_is_stale_and_untouched(self):
+        module, _bay, plan = self._plan()
+        holder = Interface.objects.create(device=self.device, name="xe-0/0/3:2", type=PLAIN_TYPE)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual((outcome.status, outcome.reason), (FamilyStatus.STALE, structural.HOLDER_CHANGED_REASON))
+        self.assertEqual(self._names(module), ["3"])
+        holder.refresh_from_db()
+        self.assertEqual((holder.module_id, holder.channel_id), (None, None))
+
+    def test_another_family_base_renamed_to_a_channel_name_after_planning_is_refused_as_its_own(self):
+        other_base = Interface.objects.create(device=self.device, name="other-port", type=PLAIN_TYPE)
+        module, _bay, plan = self._plan(family_bases=frozenset({other_base.pk}))
+        rename_out_of_band(other_base, "xe-0/0/3:1")
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(
+            (outcome.status, outcome.reason),
+            (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3:1 (another family is built on it)"),
+        )
+        self.assertEqual(self._names(module), ["3"])
+        other_base.refresh_from_db()
+        self.assertEqual((other_base.module_id, other_base.parent_id, other_base.channel_id), (None, None, None))
+
+    def test_a_holder_netbox_rejects_names_the_row_and_rolls_the_family_back(self):
+        holder = Interface.objects.create(device=self.device, name="xe-0/0/3:1", type=PLAIN_TYPE, mtu=1)
+        module, _bay, plan = self._plan()
+        Interface.objects.filter(pk=holder.pk).update(mtu=0)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
+        self.assertIn("channel 'xe-0/0/3:1'", outcome.reason)
+        self.assertEqual(self._names(module), ["3"])
+        holder.refresh_from_db()
+        self.assertEqual((holder.module_id, holder.channel_id), (None, None))
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
@@ -352,7 +441,7 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
     """A family that cannot be completed leaves the port exactly as NetBox instantiated it."""
 
     PREFIX = "StructRoll"
-    # Every channel resolves to one name, so the second insert hits NetBox's own uniqueness index.
+    # Every channel resolves to one name, so the family wants that name more than once.
     NAME_TEMPLATE = "xe-0/0/{bay_position}"
 
     def _assert_untouched(self, module):
@@ -370,9 +459,9 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
 
         self.assertEqual(outcome.status, FamilyStatus.BLOCKED)
         self.assertEqual(outcome.changed_count, 0)
-        self.assertTrue(outcome.reason)
+        self.assertEqual(outcome.reason, f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)")
         self._assert_untouched(module)
-        self.assertTrue(any("already exists" in line for line in logs.output), logs.output)
+        self.assertTrue(any(outcome.reason in line for line in logs.output), logs.output)
 
     def test_the_install_entry_point_reports_the_rollback(self):
         module, bay = self._install(self.module_type, "3", run_rules=False)
@@ -382,6 +471,48 @@ class StructuralFamilyRollbackTest(StructuralFamilyTestCase):
 
         self.assertEqual(built, 0)
         self._assert_untouched(module)
+
+    def _repeated_holder(self):
+        """Create the device-level row with the name every channel of the family repeats."""
+        return Interface.objects.create(device=self.device, name="xe-0/0/3", type=PLAIN_TYPE)
+
+    def _assert_holder_untouched(self, holder):
+        holder.refresh_from_db()
+        self.assertEqual(
+            (holder.name, holder.module_id, holder.parent_id, holder.channel_id, holder.type),
+            ("xe-0/0/3", None, None, None, PLAIN_TYPE),
+        )
+
+    def test_a_row_with_a_repeated_channel_name_is_not_taken_over_twice(self):
+        holder = self._repeated_holder()
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            built = apply_interface_name_rules(module, bay)
+
+        self.assertEqual(built, 0)
+        self._assert_untouched(module)
+        self._assert_holder_untouched(holder)
+        reason = f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)"
+        self.assertTrue(any(reason in line for line in logs.output), logs.output)
+
+    def test_a_plan_with_a_repeated_channel_name_is_refused_under_lock(self):
+        holder = self._repeated_holder()
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        base = Interface.objects.get(module=module)
+        variables = build_variables(bay, device=self.device)
+        plan = plan_structural_family(module, self.rule, variables, base, base.name, frozenset())
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = execute_structural_family(plan)
+
+        self.assertEqual(
+            (outcome.status, outcome.reason),
+            (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: xe-0/0/3 (the module's families want it more than once)"),
+        )
+        self.assertEqual([member.interface_pk for member in outcome.members], [base.pk])
+        self._assert_untouched(module)
+        self._assert_holder_untouched(holder)
 
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)

@@ -6,8 +6,8 @@ A ``breakout_mode=channelized`` rule turns one plain port into the topology NetB
 base row becomes the physical parent (``channels`` set, keeping its pk, type and module link) and
 N channel subinterfaces are created under it (``type='channel'``, ``parent``, ``channel_id``
 1..N).  Because that replaces rows an operator may already have cabled or addressed, creation is
-preflighted: if the parent target or any channel name is taken, the whole family is skipped and
-nothing at all is mutated.
+preflighted: a row that already has a channel name becomes that channel when it qualifies, and any
+other taken name skips the whole family, so nothing at all is mutated.
 
 Everything runs against real module installs, so the structure under test is the one NetBox's own
 instantiation and validation produce.  Mode-independent behaviour lives in test_breakout_mode.py.
@@ -16,9 +16,11 @@ instantiation and validation produce.  Mode-independent behaviour lives in test_
 from typing import ClassVar
 from unittest import skipUnless
 
-from dcim.models import Interface, InterfaceTemplate
+from dcim.choices import InterfaceTypeChoices
+from dcim.models import Cable, Interface, InterfaceTemplate, Module, ModuleBay
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from ipam.models import IPAddress
 
 from netbox_interface_name_rules.engine import (
     apply_interface_name_rules,
@@ -31,8 +33,11 @@ from netbox_interface_name_rules.engine import (
 from netbox_interface_name_rules.family import (
     UNCLAIMED_BASE_REASON,
     FamilyStatus,
+    describe_interfaces,
     execute_installed_plan,
+    module_raw_bases,
     plan_installed_families,
+    plan_prospective_families,
 )
 from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -222,12 +227,13 @@ class ChannelizedModeInstallTest(ChannelizationTestCase):
 
 @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
 class ChannelizedModePreflightTest(ChannelizationTestCase):
-    """A family is built only when every name it needs is free; otherwise nothing moves."""
+    """A family is built only when it can take every name it needs; otherwise nothing moves."""
 
     @classmethod
     def setUpTestData(cls):
-        manufacturer, cls.device = build_device("ChanPre", ["3", "4", "5"])
+        manufacturer, cls.device = build_device("ChanPre", ["3", "4", "5", "9"])
         cls.module_type = plain_module_type(manufacturer, "ChanPre-QSFP")
+        cls.other_type = plain_module_type(manufacturer, "ChanPre-OTHER")
         cls.rule = InterfaceNameRule.objects.create(
             module_type=cls.module_type,
             name_template="xe-0/0/{bay_position}:{channel}",
@@ -240,6 +246,15 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
     def _occupy(self, name):
         """Create an unrelated device-level interface holding *name*."""
         return Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE, module=None)
+
+    def _occupy_on_another_module(self, name):
+        """Create an interface holding *name* on a module in another bay, which no family may take over."""
+        other = Module.objects.create(
+            device=self.device,
+            module_bay=ModuleBay.objects.get(device=self.device, name="Bay 9"),
+            module_type=self.other_type,
+        )
+        return Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE, module=other)
 
     def _assert_nothing_was_built(self, module, raw_name):
         """Assert the port is still a plain, raw-named interface with no channels anywhere on it."""
@@ -263,7 +278,7 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
 
     def test_an_occupied_channel_name_skips_the_family_before_anything_is_mutated(self):
         """The check runs before ``channels`` is set, so a blocked family leaves no channelized parent."""
-        self._occupy("xe-0/0/4:2")
+        self._occupy_on_another_module("xe-0/0/4:2")
         module, bay = self._install(self.module_type, "4", run_rules=False)
 
         with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
@@ -304,7 +319,7 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
 
     def test_the_family_is_built_once_the_blocker_is_gone(self):
         """The skip is a state of the device, not a decision about the rule."""
-        occupant = self._occupy("xe-0/0/3:0")
+        occupant = self._occupy_on_another_module("xe-0/0/3:0")
         module, bay = self._install(self.module_type, "3", run_rules=False)
         apply_interface_name_rules(module, bay)
         occupant.delete()
@@ -315,6 +330,303 @@ class ChannelizedModePreflightTest(ChannelizationTestCase):
         self.assertEqual(
             self._names(module),
             ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"],
+        )
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeTakeoverTest(ChannelizationTestCase):
+    """A family takes over the rows that already hold its channel names, when each one qualifies (ADR 0017)."""
+
+    FAMILY_NAMES: ClassVar[list[str]] = ["et-0/0/3", "xe-0/0/3:0", "xe-0/0/3:1", "xe-0/0/3:2", "xe-0/0/3:3"]
+    CHANNEL_NAMES: ClassVar[list[str]] = FAMILY_NAMES[1:]
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = build_device("ChanTake", ["3", "9"])
+        cls.module_type = plain_module_type(manufacturer, "ChanTake-QSFP")
+        cls.other_type = plain_module_type(manufacturer, "ChanTake-OTHER")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="xe-0/0/{bay_position}:{channel}",
+            parent_name_template="et-0/0/{bay_position}",
+            breakout_mode=CHANNELIZED,
+            channel_count=4,
+            channel_start=0,
+        )
+
+    def _holders(self, *names):
+        """Create one device-level interface for each of *names*, as other tooling leaves them."""
+        return [Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE) for name in names]
+
+    def _cable(self, holder):
+        """Connect *holder* to a new device-level peer and return the cable."""
+        peer = Interface.objects.create(device=self.device, name=f"peer-{holder.name}", type=PLAIN_TYPE)
+        cable = Cable(a_terminations=[holder], b_terminations=[peer])
+        cable.save()
+        return cable
+
+    def _install_bay_3(self):
+        """Install the ruled module in bay 3, so NetBox creates the base row and the trigger runs on commit."""
+        return self._install(self.module_type, "3")
+
+    def _row(self, row):
+        """Return the live facts a takeover writes, so a test can tell whether a row changed."""
+        row.refresh_from_db()
+        return (row.name, row.module_id, row.parent_id, row.channel_id, row.type)
+
+    def _assert_taken_over(self, module, holders):
+        """Assert each holder kept its pk and name and is now the channel of the parent that its name gives."""
+        parent = self._parent(module)
+        self.assertEqual(parent.name, "et-0/0/3")
+        self.assertEqual(parent.channels, 4)
+        for holder in holders:
+            with self.subTest(holder=holder.name):
+                channel_id = self.CHANNEL_NAMES.index(holder.name) + 1
+                self.assertEqual(self._row(holder), (holder.name, module.pk, parent.pk, channel_id, CHANNEL_TYPE))
+
+    def _assert_refused(self, module, holders, before):
+        """Assert the base is still the plain raw row and every holder is exactly as it was."""
+        self.assertEqual(self._names(module), ["3"])
+        self.assertIsNone(Interface.objects.get(module=module).channels)
+        self.assertEqual([self._row(holder) for holder in holders], before)
+
+    def _preview_refusals(self, module, bay):
+        """Return the refusal the preview gives each family it plans on *module*, by base name."""
+        from netbox_interface_name_rules.family import creation_name_refusals
+
+        variables = build_variables(bay, device=self.device)
+        rows = list(Interface.objects.filter(module=module))
+        bases = module_raw_bases(module, self.rule, variables, rows)
+        plan_set = plan_prospective_families(module, self.rule, variables, describe_interfaces(rows), bases)
+        return creation_name_refusals(module, self.rule, rows, bases, plan_set.plans)
+
+    def test_install_takes_over_every_existing_channel_row_and_keeps_its_configuration(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        lag = Interface.objects.create(device=self.device, name="ae0", type=InterfaceTypeChoices.TYPE_LAG)
+        holders[0].lag = lag
+        holders[0].save()
+        address = IPAddress.objects.create(address="192.0.2.1/31", assigned_object=holders[1])
+
+        module, _bay = self._install_bay_3()
+
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self.assertEqual(Interface.objects.filter(module=module).count(), 5)
+        self._assert_taken_over(module, holders)
+        self.assertEqual(holders[0].lag_id, lag.pk)
+        address.refresh_from_db()
+        self.assertEqual(address.assigned_object_id, holders[1].pk)
+
+    def test_install_takes_over_the_rows_that_exist_and_creates_the_others(self):
+        holders = self._holders("xe-0/0/3:0", "xe-0/0/3:2")
+
+        module, _bay = self._install_bay_3()
+
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self._assert_taken_over(module, holders)
+        created = Interface.objects.filter(module=module, channel_id__in=(2, 4)).exclude(
+            pk__in=[holder.pk for holder in holders]
+        )
+        self.assertEqual(sorted(created.values_list("name", flat=True)), ["xe-0/0/3:1", "xe-0/0/3:3"])
+
+    def test_a_holder_with_a_cable_refuses_the_whole_family(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        cable = self._cable(holders[2])
+        before = [self._row(holder) for holder in holders]
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            module, _bay = self._install_bay_3()
+
+        self._assert_refused(module, holders, before)
+        holders[2].refresh_from_db()
+        self.assertEqual(holders[2].cable_id, cable.pk)
+        self.assertTrue(Cable.objects.filter(pk=cable.pk).exists())
+        self.assertTrue(any("xe-0/0/3:2" in line and "cable" in line for line in logs.output), logs.output)
+
+    def test_a_holder_on_another_module_refuses_the_whole_family(self):
+        other = Module.objects.create(
+            device=self.device,
+            module_bay=ModuleBay.objects.get(device=self.device, name="Bay 9"),
+            module_type=self.other_type,
+        )
+        holders = self._holders("xe-0/0/3:0", "xe-0/0/3:1")
+        holders[1].module = other
+        holders[1].save()
+        before = [self._row(holder) for holder in holders]
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            module, _bay = self._install_bay_3()
+
+        self._assert_refused(module, holders, before)
+        self.assertTrue(any("xe-0/0/3:1" in line and "another module" in line for line in logs.output), logs.output)
+
+    def test_a_holder_in_another_family_refuses_the_whole_family(self):
+        parent = Interface.objects.create(device=self.device, name="et-0/0/9", type=PARENT_TYPE, channels=4)
+        holders = self._holders("xe-0/0/3:0")
+        holders.append(
+            Interface.objects.create(
+                device=self.device, name="xe-0/0/3:1", type=CHANNEL_TYPE, parent=parent, channel_id=2
+            )
+        )
+        before = [self._row(holder) for holder in holders]
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING") as logs:
+            module, _bay = self._install_bay_3()
+
+        self._assert_refused(module, holders, before)
+        self.assertTrue(any("xe-0/0/3:1" in line and "et-0/0/9" in line for line in logs.output), logs.output)
+
+    def test_install_takes_over_rows_another_tool_bound_to_the_module(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        bay = ModuleBay.objects.get(device=self.device, name="Bay 3")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            module = Module.objects.create(device=self.device, module_bay=bay, module_type=self.module_type)
+            for holder in holders:
+                holder.module = module
+                holder.save()
+
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self._assert_taken_over(module, holders)
+
+    def test_the_preview_offers_the_family_that_the_takeover_builds(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+
+        results, _checked = find_interfaces_for_rule(self.rule)
+        predicted = predict_rule_output(module, bay, ["3"])
+        outcome = apply_rule_to_existing(self.rule)
+
+        self.assertEqual([entry["new_names"] for entry in results], [self.FAMILY_NAMES])
+        self.assertEqual(predicted, self.FAMILY_NAMES)
+        self.assertEqual(outcome.changed_count, 5)
+        self.assertEqual(
+            sorted(
+                (member.interface_pk, member.current_name, member.status)
+                for family in outcome.families
+                for member in family.members
+                if member.interface_pk in {holder.pk for holder in holders}
+            ),
+            [(holder.pk, holder.name, FamilyStatus.CHANGED) for holder in holders],
+        )
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+
+    def test_the_preview_gives_the_refusal_that_the_apply_gives(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        self._cable(holders[1])
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+
+        results, _checked = find_interfaces_for_rule(self.rule)
+        refusals = self._preview_refusals(module, bay)
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = apply_rule_to_existing(self.rule)
+
+        self.assertEqual(results, [])
+        self.assertEqual(outcome.changed_count, 0)
+        (family,) = outcome.blocked_families
+        self.assertIn("xe-0/0/3:1", family.reason)
+        self.assertIn("cable", family.reason)
+        self.assertEqual(refusals, {"3": family.reason})
+
+    def _assert_prediction_agrees_with_the_apply(self, bind):
+        """Assert prediction names the family that the apply builds over the rows, bound to the module or not."""
+        holders = self._holders(*self.CHANNEL_NAMES)
+        module, bay = self._install(self.module_type, "3", run_rules=False)
+        if bind:
+            Interface.objects.filter(pk__in=[holder.pk for holder in holders]).update(module=module)
+
+        predicted = predict_rule_output(module, bay, ["3"])
+        apply_interface_name_rules(module, bay)
+
+        self.assertEqual(predicted, self.FAMILY_NAMES)
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self._assert_taken_over(module, holders)
+
+    def test_prediction_names_the_family_that_takes_over_rows_on_the_module(self):
+        self._assert_prediction_agrees_with_the_apply(bind=True)
+
+    def test_prediction_names_the_family_that_takes_over_device_rows(self):
+        self._assert_prediction_agrees_with_the_apply(bind=False)
+
+    def test_reapply_takes_over_the_rows_once_the_blocking_cable_is_gone(self):
+        holders = self._holders(*self.CHANNEL_NAMES)
+        cable = self._cable(holders[0])
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            module, bay = self._install_bay_3()
+        self.assertEqual(self._names(module), ["3"])
+        cable.delete()
+
+        built = apply_interface_name_rules(module, bay, force_reapply=True)
+
+        self.assertEqual(built, 5)
+        self.assertEqual(self._names(module), self.FAMILY_NAMES)
+        self._assert_taken_over(module, holders)
+
+
+@skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+class ChannelizedModeTwoModuleTakeoverTest(ChannelizationTestCase):
+    """A row is reported by the outcome of the module it belongs to, never by a family on another module."""
+
+    @classmethod
+    def setUpTestData(cls):
+        manufacturer, cls.device = build_device("ChanTwoMod", ["1", "2"])
+        cls.module_type = plain_module_type(manufacturer, "ChanTwoMod-QSFP")
+        cls.rule = InterfaceNameRule.objects.create(
+            module_type=cls.module_type,
+            name_template="lane:{channel}",
+            parent_name_template="p{base}",
+            breakout_mode=CHANNELIZED,
+            channel_count=2,
+            channel_start=0,
+        )
+
+    def test_a_batch_reports_no_device_row_that_two_refused_families_want(self):
+        module_a, _ = self._install(self.module_type, "1", run_rules=False)
+        module_b, _ = self._install(self.module_type, "2", run_rules=False)
+        lanes = [
+            Interface.objects.create(device=self.device, name=name, type=PLAIN_TYPE) for name in ("lane:0", "lane:1")
+        ]
+        peer = Interface.objects.create(device=self.device, name="peer-lane:0", type=PLAIN_TYPE)
+        Cable(a_terminations=[lanes[0]], b_terminations=[peer]).save()
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = apply_rule_to_existing(self.rule)
+
+        pks = [member.interface_pk for family in outcome.families for member in family.members]
+        bases = [Interface.objects.get(module=module).pk for module in (module_a, module_b)]
+        self.assertEqual(sorted(pks), sorted(bases))
+        self.assertEqual(outcome.changed_count, 0)
+        self.assertEqual(
+            sorted((member.interface_pk, member.reason) for member in outcome.skipped_members),
+            [(pk, "target name is already in use: lane:0 (it has a cable)") for pk in sorted(bases)],
+        )
+        for lane in lanes:
+            lane.refresh_from_db()
+            self.assertEqual((lane.module_id, lane.channel_id), (None, None))
+
+    def test_a_batch_reports_each_row_once_when_two_modules_want_its_name(self):
+        module_a, _ = self._install(self.module_type, "1", run_rules=False)
+        module_b, _ = self._install(self.module_type, "2", run_rules=False)
+        lanes = [
+            Interface.objects.create(device=self.device, module=module_b, name=name, type=PLAIN_TYPE)
+            for name in ("lane:0", "lane:1")
+        ]
+
+        with self.assertLogs(PLUGIN_LOGGER, level="WARNING"):
+            outcome = apply_rule_to_existing(self.rule)
+
+        pks = [member.interface_pk for family in outcome.families for member in family.members]
+        self.assertEqual(len(pks), len(set(pks)), pks)
+        self.assertEqual(outcome.changed_count, 3)
+        base_a = Interface.objects.get(module=module_a)
+        self.assertEqual(
+            [(member.interface_pk, member.reason) for member in outcome.skipped_members],
+            [(base_a.pk, "target name is already in use: lane:0 (it belongs to another module)")],
+        )
+        self.assertEqual(self._names(module_a), ["1"])
+        self.assertEqual(self._names(module_b), ["lane:0", "lane:1", "p2"])
+        self.assertEqual(
+            sorted(Interface.objects.filter(module=module_b, channel_id__isnull=False).values_list("pk", flat=True)),
+            [lane.pk for lane in lanes],
         )
 
 

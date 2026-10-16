@@ -30,15 +30,18 @@ it keeps a name that one template alone claims only when Apply Rules selects tha
 """
 
 import itertools
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
 from netbox_interface_name_rules import family
 from netbox_interface_name_rules.choices import BreakoutModeChoices
+from netbox_interface_name_rules.family import structural
 from netbox_interface_name_rules.family.batch import CHANNELIZED_MODULE_REASON
 from netbox_interface_name_rules.family.template_names import ResolvedTemplateName
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -60,6 +63,12 @@ CHANNELIZED_FAMILY = ("chan", "chan:0", "chan:1")
 LAYOUT_COUNT = 7884
 FLAT_LAYOUT_COUNT = 2862
 CHANNELIZED_LAYOUT_COUNT = 5724
+# Where a row with a name a family wants can be, other than on the module the family is built on.
+_FOREIGN_ROWS = {
+    "on another module": {"module_id": 2},
+    "with no module": {"module_id": None},
+    "with no module and a cable": {"module_id": None, "cable_id": 1},
+}
 
 
 @dataclass(frozen=True)
@@ -285,7 +294,15 @@ def _rule(rule_key):
 
 def _row(pk, name, parent_id=None, channel_id=None, channels=None):
     return SimpleNamespace(
-        pk=pk, name=name, device_id=1, module_id=1, parent_id=parent_id, channel_id=channel_id, channels=channels
+        pk=pk,
+        name=name,
+        device_id=1,
+        module_id=1,
+        parent_id=parent_id,
+        parent=None,
+        channel_id=channel_id,
+        channels=channels,
+        cable_id=None,
     )
 
 
@@ -426,7 +443,7 @@ def _plan_counts(plans):
         if isinstance(plan, family.FlatCreationPlan):
             counts.update([plan.base.name, *(member.name for member in plan.members)])
         elif isinstance(plan, family.StructuralFamilyPlan):
-            counts[plan.base.name] += 1
+            counts.update([plan.base.name, *(holder.name for holder in plan.holders)])
         else:
             counts.update(member.snapshot.name for member in plan.members)
     return counts
@@ -447,19 +464,97 @@ def _flat_units(layout, bases):
     ]
 
 
+def _taken_over(layout, bases, candidates):
+    """Return, by base, the rows with a channel name that the channelized family on that base takes over (ADR 0017).
+
+    The families are those that the run plans on *candidates*. A family takes over no row where NetBox
+    has no channel fields, or when its base is unclaimed. A row the claim gives a template is no
+    family's, and neither is a row with a channel name that the families want more than once: a family that
+    wants either is refused and holds only its other rows. When the rows that the families take over
+    do not explain the module's rows beyond its templates, the module carries a flat family, and every
+    other family is refused and holds no row.
+    """
+    if layout.rule_key not in CHANNELIZED_RULES or not structural.supports_channelization():
+        return {}
+    families = {
+        name: _flat_targets(layout.rule_key, base) for name in candidates if (base := bases.builds_on(name)) is not None
+    }
+    wanted = Counter(channel for channels in families.values() for channel in channels)
+    repeated = {channel for channel, count in wanted.items() if count > 1}
+    names = {
+        channel
+        for name, channels in families.items()
+        if name not in channels
+        for channel in channels
+        if bases.builds_on(channel) is None
+    }
+    templates = sum(1 for template in layout.templates if not template.stand_in)
+    expanded = sum(1 for name in layout.present if name not in names) > templates
+    taken = {}
+    for name, channels in families.items():
+        others = [row for row in layout.present if row in channels and row != name]
+        refused = any(bases.builds_on(row) is not None for row in others) or not repeated.isdisjoint(channels)
+        held = {row for row in others if bases.builds_on(row) is None and row not in repeated}
+        taken[name] = held if refused or not expanded else set()
+    return taken
+
+
+def _contested_layouts():
+    """Yield two claimed ports whose families both want one existing row, with no stray row to refuse them."""
+    for kinds in itertools.combinations(KINDS, 2):
+        templates = _templates(kinds)
+        for holder in _flat_targets("channelized without base", NEW_BAY):
+            yield _Layout("channelized without base", None, templates, (*(t.current for t in templates), holder))
+
+
+def _takeover_kind(layout):
+    """Return whether a family in *layout* takes over a row, two families want one row, or neither."""
+    bases = _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False)
+    if any(_taken_over(layout, bases, layout.present).values()):
+        return "taken over"
+    wanted = Counter(
+        row
+        for name in layout.present
+        if layout.rule_key in CHANNELIZED_RULES and (base := bases.builds_on(name)) is not None
+        for row in _flat_targets(layout.rule_key, base)
+        if row in layout.present and row != name
+    )
+    if structural.supports_channelization() and any(count > 1 for count in wanted.values()):
+        return "contested"
+    return "neither"
+
+
 def _runs(layout, interfaces, bases):
-    """Return each run with the interfaces it plans; a selection of one row of a flat family reaches the family."""
+    """Return each run with the interfaces it plans; a selection of one row of a family reaches the family."""
     present = set(layout.present)
     reach = {name: set(unit) for unit in _flat_units(layout, bases) for name in unit}
+    raw = {name for name in present if bases.claim(name).raw}
+    taken = _taken_over(layout, bases, present)
+    installed = _taken_over(layout, bases, raw)
     return [
-        ("install", family.RunScope.INSTALL, None, {name for name in present if bases.claim(name).raw}, {}),
+        ("install", family.RunScope.INSTALL, None, raw.union(*installed.values()), {}),
         ("forced reapply", family.RunScope.FORCED, None, present, {}),
         ("Apply Rules", None, None, present, {}),
         *(
-            (f"Apply Rules on {row.name}", None, frozenset({row.pk}), reach.get(row.name, {row.name}), {})
+            (
+                f"Apply Rules on {row.name}",
+                None,
+                frozenset({row.pk}),
+                reach.get(row.name, {row.name}) | taken.get(row.name, set()),
+                {},
+            )
             for row in interfaces
         ),
     ]
+
+
+def _module_holders(interfaces):
+    """Return the device-wide name read over the module's rows, because a layout has no other interface."""
+
+    def holders(device_id, names):
+        return {row.name: row for row in interfaces if row.device_id == device_id and row.name in names}
+
+    return holders
 
 
 def _runs_beside_channelized(layout, interfaces, bases):
@@ -518,7 +613,8 @@ def _unplanned(layout):
     runs = (_runs_beside_channelized if layout.channelized else _runs)(layout, interfaces, bases)
     wrong, reasons = {}, set()
     for label, scope, selected, in_scope, leftover in runs:
-        plans = family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope, selected).plans
+        with patch.object(structural, "name_holders", _module_holders(interfaces)):
+            plans = family.plan_module_families(MODULE, rule, variables, interfaces, bases, scope, selected).plans
         counts = _plan_counts(plans)
         view = _plan_view(plans) if leftover else {}
         bad = {name: counts[name] for name in names if counts[name] > 1 or (name in in_scope) != bool(counts[name])}
@@ -572,6 +668,32 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertGreater(kept, 0)
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
+    def test_a_channelized_rule_reads_no_flat_family_beside_a_raw_named_port(self):
+        """Beside a port with its raw name, now or at an earlier position, the rows are no flat family (ADR 0017).
+
+        Where every template has a port with its raw name, the claim is the one the module docstring states
+        without flat families, and a port with an earlier raw name is admitted like one with its raw name now.
+        """
+        layouts = list(_flat_layouts(CHANNELIZED_RULES))
+        failures = []
+        historical = 0
+        for layout in layouts:
+            templates = [template for template in layout.templates if not template.stand_in]
+            currents = {template.current for template in templates}
+            raw_named = [
+                [name for name in layout.present if _is_raw(template, name, currents)] for template in templates
+            ]
+            if not templates or not all(raw_named):
+                continue
+            historical += any(name not in currents for names in raw_named for name in names)
+            bases = _claim(layout, _rule(layout.rule_key), _interfaces(layout), moved=False)
+            got = {name: base for name in layout.present if (base := bases.builds_on(name)) is not None}
+            if got != _expected(layout, moved=False).bases:
+                failures.append((layout.rule_key, layout.present, got))
+
+        self.assertGreater(historical, 0)
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+
     def test_every_flat_layout_claims_each_family_whole(self):
         layouts = list(_flat_layouts())
         failures = []
@@ -600,16 +722,98 @@ class ClaimInvariantTest(SimpleTestCase):
         self.assertGreater(families, 0)
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
 
-    def test_every_interface_in_scope_is_in_exactly_one_plan(self):
-        """Each run plans each interface it may touch once, and no other: built, kept by its family, or kept and reported."""
+    def _assert_every_interface_in_scope_is_in_exactly_one_plan(self):
         layouts = [
             *(layout for layout in _layouts() if layout.previous_key == layout.rule_key),
             *_flat_layouts(),
             *_flat_layouts(CHANNELIZED_RULES),
+            *_contested_layouts(),
         ]
         failures = [(layout.rule_key, layout.present, wrong) for layout in layouts if (wrong := _unplanned(layout)[0])]
+        taken_over = Counter(_takeover_kind(layout) for layout in layouts)
 
         self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts)} layouts differ")
+        if structural.supports_channelization():
+            self.assertGreater(taken_over["taken over"], 0)
+            self.assertGreater(taken_over["contested"], 0)
+        else:
+            self.assertEqual(taken_over["taken over"] + taken_over["contested"], 0)
+
+    def test_every_interface_in_scope_is_in_exactly_one_plan(self):
+        """Each run plans each interface it may touch once, and no other: built, kept by its family, or kept and reported."""
+        self._assert_every_interface_in_scope_is_in_exactly_one_plan()
+
+    def test_every_interface_in_scope_is_in_exactly_one_plan_where_netbox_has_no_channels(self):
+        """A release without channel fields builds no channelized family, so it takes over no row (ADR 0017)."""
+        with patch.object(structural, "supports_channelization", return_value=False):
+            self._assert_every_interface_in_scope_is_in_exactly_one_plan()
+
+    def test_each_row_a_family_wants_beyond_its_module_is_reported_at_most_once(self):
+        """Each interface is in at most one outcome of a batch, wherever the rows a family wants are (ADR 0017)."""
+        self._assert_each_row_beyond_the_module_is_reported_at_most_once()
+
+    def test_each_row_beyond_the_module_is_reported_at_most_once_where_netbox_has_no_channels(self):
+        with patch.object(structural, "supports_channelization", return_value=False):
+            self._assert_each_row_beyond_the_module_is_reported_at_most_once()
+
+    def _assert_each_row_beyond_the_module_is_reported_at_most_once(self):
+        """Assert that each interface is in at most one outcome of a batch, wherever the rows a family wants are.
+
+        Each name a family wants that the module holds no row for is given a row elsewhere on the device:
+        on another module, with no module, or with no module and a cable. No family holds a row of another
+        module, and a refusal reports only the rows of its own module, so the module that has a row, or the
+        one family that takes over a row with no module, is the only outcome that reports it.
+        """
+        layouts = list(_flat_layouts(CHANNELIZED_RULES))
+        failures = []
+        seen = Counter()
+        for (variant, fields), layout in itertools.product(_FOREIGN_ROWS.items(), layouts):
+            rule = _rule(layout.rule_key)
+            interfaces = _interfaces(layout)
+            bases = _claim(layout, rule, interfaces, moved=False)
+            wanted = {
+                channel
+                for name in layout.present
+                if (base := bases.builds_on(name)) is not None
+                for channel in _flat_targets(layout.rule_key, base)
+                if channel not in layout.present
+            }
+            foreign = [
+                SimpleNamespace(**{**vars(_row(1000 + index, name)), **fields})
+                for index, name in enumerate(sorted(wanted))
+            ]
+            with patch.object(structural, "name_holders", _module_holders([*interfaces, *foreign])):
+                plans = family.plan_module_families(MODULE, rule, _variables(NEW_VC, NEW_BAY), interfaces, bases).plans
+            structural_plans = [plan for plan in plans if isinstance(plan, family.StructuralFamilyPlan)]
+            held = {holder.pk for plan in structural_plans for holder in plan.holders} & {row.pk for row in foreign}
+            logging.disable(logging.WARNING)
+            try:
+                refusals = [family.execute_family_plan(plan) for plan in structural_plans if plan.precondition_status]
+            finally:
+                logging.disable(logging.NOTSET)
+            reported = Counter(member.interface_pk for outcome in refusals for member in outcome.members)
+            counts = _plan_counts(plans)
+            seen[variant, "held"] += bool(held)
+            seen[variant, "refused"] += any(row.name in outcome.reason for outcome in refusals for row in foreign)
+            wrong = {
+                "held from another module": sorted(pk for pk in held if fields["module_id"] is not None),
+                "reported from elsewhere": sorted(set(reported) & {row.pk for row in foreign}),
+                "reported twice": sorted(pk for pk, count in reported.items() if count > 1),
+                "planned other than once": sorted(name for name in layout.present if counts[name] != 1),
+            }
+            if any(wrong.values()):
+                failures.append((variant, layout.rule_key, layout.present, wrong))
+
+        self.assertEqual(failures[:3], [], f"{len(failures)} of {len(layouts) * len(_FOREIGN_ROWS)} layouts differ")
+        supported = structural.supports_channelization()
+        expected = {
+            ("on another module", "held"): False,
+            ("on another module", "refused"): supported,
+            ("with no module", "held"): supported,
+            ("with no module and a cable", "held"): supported,
+            ("with no module and a cable", "refused"): supported,
+        }
+        self.assertEqual({key: seen[key] > 0 for key in expected}, expected)
 
     def test_every_leftover_beside_a_channelized_family_is_planned_only_in_its_scope(self):
         """A breakout rule keeps a leftover a template alone claims only when Apply Rules selects it (ADR 0013)."""

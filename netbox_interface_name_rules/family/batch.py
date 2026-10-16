@@ -18,6 +18,7 @@ from .domain import (
     FlatCreationPlan,
     InstalledFamilyPlan,
     MemberOutcome,
+    MemberRole,
     RunScope,
     StructuralFamilyPlan,
 )
@@ -30,13 +31,17 @@ from .installed import (
     plan_interface_rename,
     plan_kept_interface,
 )
-from .names import first_taken_name, name_owners
+from .names import COLLISION_REASON, channelized_name_refusal, first_taken_name, name_holders
+from .prospective import FLAT_EXPANSION_REASON
 from .structural import (
-    carries_flat_expansion,
     execute_flat_family,
+    execute_module_structural_families,
     execute_structural_family,
+    has_flat_expansion,
+    module_taken_over_names,
     plan_flat_family,
     plan_structural_family,
+    settle_module_families,
 )
 from .targets import (
     UNCLAIMED_BASE_REASON,
@@ -129,23 +134,37 @@ def _is_top_level(interface) -> bool:
     return not _is_channel(interface) and getattr(interface, "parent_id", None) is None
 
 
-def _creation_plan(module, rule, variables, base, base_name, flat_expansion, members):
+def _creation_plan(module, rule, variables, base, base_name, family_bases, members):
     """Return the plan that builds the family *rule* describes on one plain interface."""
     if builds_channelized_family(rule):
-        return plan_structural_family(module, rule, variables, base, base_name, flat_expansion)
+        return plan_structural_family(module, rule, variables, base, base_name, family_bases)
     return plan_flat_family(module, rule, variables, base, base_name, members)
 
 
-def _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members):
-    """Return a plan for each selected interface; a row that a half-built family keeps is in that family's plan."""
+def _family_bases(interfaces, bases) -> frozenset:
+    """Return the primary key of each interface the claim gives a template, which no other family takes over."""
+    return frozenset(interface.pk for interface in interfaces if bases.claims_alone(interface.name))
+
+
+def _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members):
+    """Return a plan for each selected interface; a row that a family keeps or takes over is in that family's plan.
+
+    The module's families are settled against each other before the selection, so a repeated name does not
+    depend on it. Only a family that the selection reaches takes over its rows.
+    """
+    family_bases = _family_bases(interfaces, bases)
     plans = [
         _creation_plan(
-            module, rule, variables, base, bases.builds_on(base.name), flat_expansion, members.get(base.name, ())
+            module, rule, variables, base, bases.builds_on(base.name), family_bases, members.get(base.name, ())
         )
         for base in plain
     ]
+    if builds_channelized_family(rule):
+        applied = frozenset(plan.base.pk for plan in plans if _reaches(plan, selected_pks))
+        plans = settle_module_families(module, plans, interfaces, bases.catalog.get(), bases, applied)
     plans = [plan for plan in plans if _reaches(plan, selected_pks)]
     kept = {member.pk for plan in plans if isinstance(plan, FlatCreationPlan) for member in plan.members}
+    kept.update(holder.pk for plan in plans if isinstance(plan, StructuralFamilyPlan) for holder in plan.holders)
     return [plan for plan in plans if plan.base.pk not in kept]
 
 
@@ -233,32 +252,62 @@ def plan_module_families(
                 rule,
             )
     else:
-        flat_expansion = builds_channelized_family(rule) and carries_flat_expansion(interfaces, bases.catalog.get())
         members = half_built_members(rule, interfaces, bases)
-        leftover = _creation_plans(module, rule, variables, plain, bases, selected_pks, flat_expansion, members)
+        leftover = _creation_plans(module, rule, variables, interfaces, plain, bases, selected_pks, members)
     installed_plans = installed.plans if scope is None else _in_scope_installed(installed.plans, bases, scope)
     return ModuleFamilyPlans(installed=tuple(_selected(installed_plans, selected_pks)), leftover=tuple(leftover))
 
 
-def creation_names_in_use(module, rule, interfaces, bases, plans) -> dict[str, str]:
-    """Return, by base name, the first name in use on the device outside the rows each creation in *plans* keeps.
+def _creation_refusal(module, plan, holders, own_pks, family_bases):
+    """Return the reason the apply gives *plan* when one of its names is in use, or None."""
+    if plan.topology == FamilyTopology.CHANNELIZED:
+        channel_names = [member.target_name for member in plan.members if member.role == MemberRole.CHANNEL]
+        parent_name = plan.members[0].target_name
+        refusal = channelized_name_refusal(parent_name, channel_names, holders, own_pks, module.pk, family_bases)
+        return None if refusal is None else refusal[1]
+    owners = {name: holder.pk for name, holder in holders.items()}
+    taken = first_taken_name(plan.target_names, owners, own_pks)
+    return None if taken is None else f"{COLLISION_REASON}: {taken}"
+
+
+def creation_name_refusals(module, rule, interfaces, bases, plans) -> dict[str, str]:
+    """Return, by base name, why each creation in *plans* cannot take its names on the device.
 
     *plans* are prospective plans. Each creation is checked as its executor checks it at execution,
-    so a preview offers no family that the apply refuses because one of its names is in use.
+    with the rows it keeps or takes over, so a preview offers no family that the apply refuses because
+    one of its names is in use, and gives the reason the apply gives.
     """
     creations = [plan for plan in plans if plan.base_name is not None and plan.precondition_status is None]
     if not breaks_out(rule) or not creations:
         return {}
     pks = {interface.name: interface.pk for interface in interfaces}
     members = half_built_members(rule, interfaces, bases)
-    owners = name_owners(module.device_id, {name for plan in creations for name in plan.target_names})
-    in_use = {}
+    holders = name_holders(module.device_id, {name for plan in creations for name in plan.target_names})
+    family_bases = _family_bases(interfaces, bases)
+    refusals = {}
     for plan in creations:
         own_pks = {pks[plan.base_name], *(member.pk for member in members.get(plan.base_name, ()))}
-        taken = first_taken_name(plan.target_names, owners, own_pks)
-        if taken is not None:
-            in_use[plan.base_name] = taken
-    return in_use
+        refusal = _creation_refusal(module, plan, holders, own_pks, family_bases)
+        if refusal is not None:
+            refusals[plan.base_name] = refusal
+    refusals.update(_flat_expansion_refusals(module, creations, refusals, bases))
+    return refusals
+
+
+def _flat_expansion_refusals(module, creations, refusals, bases):  # pragma: no cover - channelization only
+    """Return the refusal of each channelized creation that the rows of the *refusals* families block.
+
+    A refused family takes over no row, so its rows can be flat siblings, as ``settle_module_families``
+    decides at execution. *creations* are settled already, so no channel name in them repeats.
+    """
+    channelized = [plan for plan in creations if plan.topology == FamilyTopology.CHANNELIZED]
+    if not any(plan.base_name in refusals for plan in channelized):
+        return {}
+    built = [plan for plan in channelized if plan.base_name not in refusals]
+    families = ((plan.base_name, plan.target_names[1:], plan.precondition_status) for plan in built)
+    if not built or not has_flat_expansion(module, module_taken_over_names(families, frozenset(), bases)):
+        return {}
+    return dict.fromkeys((plan.base_name for plan in built), FLAT_EXPANSION_REASON)
 
 
 def _selection_pks(plan):
@@ -287,9 +336,16 @@ def _selected(plans, selected_pks):
 
 
 def execute_module_families(plans):
-    """Execute each planned family in order, and yield its outcome before the next family runs."""
+    """Execute each planned family in order, and yield its outcome before the next family runs.
+
+    The channelized families that the module builds run together, in one transaction, in the place of the first one.
+    """
+    channelized = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan)]
     for plan in plans:
-        yield execute_family_plan(plan)
+        if not isinstance(plan, StructuralFamilyPlan):
+            yield execute_family_plan(plan)
+        elif plan is channelized[0]:
+            yield from execute_module_structural_families(channelized)
 
 
 def _apply_module(rule, module, interfaces, selected_pks):

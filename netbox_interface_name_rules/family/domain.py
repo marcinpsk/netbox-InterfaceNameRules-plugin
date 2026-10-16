@@ -109,15 +109,21 @@ class InstalledFamilyPlanSet:
 
 @dataclass(frozen=True, slots=True)
 class PlannedChannel:
-    """One channel row a structural plan creates under its parent."""
+    """One channel row a structural plan creates under its parent, or takes over from *holder* (ADR 0017)."""
 
     channel_id: int
     name: str
+    holder: InterfaceSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class StructuralFamilyPlan:
-    """An executable plan that turns one plain interface into a channelized family."""
+    """An executable plan that turns one plain interface into a channelized family.
+
+    *taken_over_names* are the names of the rows that the families planned on the module take over,
+    which the module's flat surplus does not count (ADR 0017). *family_bases* are the primary keys of
+    the rows another family is built on, which execution refuses to take over under lock as planning did.
+    """
 
     family_id: str
     device_id: int
@@ -127,8 +133,10 @@ class StructuralFamilyPlan:
     parent_target_name: str
     channel_count: int
     channels: tuple[PlannedChannel, ...]
+    family_bases: frozenset[int]
     precondition_status: FamilyStatus | None = None
     precondition_reason: str = ""
+    taken_over_names: tuple[str, ...] = ()
 
     @property
     def topology(self) -> FamilyTopology:
@@ -136,9 +144,19 @@ class StructuralFamilyPlan:
         return FamilyTopology.CHANNELIZED
 
     @property
+    def channel_names(self) -> tuple[str, ...]:
+        """Return every channel name in creation order."""
+        return tuple(channel.name for channel in self.channels)
+
+    @property
     def target_names(self) -> tuple[str, ...]:
         """Return the parent name and every channel name in creation order."""
-        return (self.parent_target_name, *(channel.name for channel in self.channels))
+        return (self.parent_target_name, *self.channel_names)
+
+    @property
+    def holders(self) -> tuple[InterfaceSnapshot, ...]:
+        """Return the snapshot of every existing row that has one of the channel names, once each, in creation order."""
+        return tuple(dict.fromkeys(channel.holder for channel in self.channels if channel.holder is not None))
 
 
 @dataclass(frozen=True, slots=True)

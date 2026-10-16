@@ -80,6 +80,11 @@ class _NamesAreRaw:
 
     builds_on = base_for
 
+    @staticmethod
+    def claims_alone(_name):
+        """No channel name these tests plan is a template's raw name."""
+        return False
+
 
 _NAMES_ARE_RAW = _NamesAreRaw()
 
@@ -407,14 +412,17 @@ class ProspectiveStructuralPlanTest(ProspectivePlanTestCase):
         self.assertEqual(plan_set.predicted_names("3"), plan.target_names)
 
     def test_a_planned_name_another_interface_owns_blocks_the_family(self):
-        """The structural executor refuses a family whose names are taken, so the plan says so first."""
+        """The structural executor refuses a family whose names are taken, so the plan says so first.
+
+        Both templates build a family with the same channel names, so each family is refused for those (ADR 0017).
+        """
         module, bay = self._install(self.collision_type, "4", run_rules=False)
 
         plan_set = self._prospective(module, bay, self.collision_rule)
 
         blocked = [plan for plan in plan_set.plans if plan.base_name == "4"]
         self.assertEqual(blocked[0].precondition_status, FamilyStatus.BLOCKED)
-        self.assertIn("et-0/0/4", blocked[0].precondition_reason)
+        self.assertIn("xe-0/0/4:0 (the module's families want it more than once)", blocked[0].precondition_reason)
         self.assertEqual(plan_set.predicted_names("4"), ("4",))
 
 

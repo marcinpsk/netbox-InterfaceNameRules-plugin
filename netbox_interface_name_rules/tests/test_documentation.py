@@ -23,6 +23,7 @@ from django.core.management.base import CommandError
 
 from netbox_interface_name_rules import template_variable_reference
 from netbox_interface_name_rules.branching import SUPPORTED_SERIES
+from netbox_interface_name_rules.family import names as family_names
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import (
     TEMPLATE_VARIABLES,
@@ -334,6 +335,65 @@ class ConversionDocumentationTest(unittest.TestCase):
             for reason in _PREFLIGHT_REASONS:
                 with self.subTest(reason=reason, sentence=sentence):
                     self.assertNotIn(reason, sentence)
+
+
+# Each reason a family gives for not taking over a channel row, and the condition both user guides state for it.
+_TAKEOVER_CONDITIONS = {
+    "another family is built on it": "is not the port that another family is built on",
+    "it belongs to another module": "is not on another module",
+    "it is already a subinterface of": "is not a subinterface",
+    "it is a channelized parent": "or a channelized parent",
+    "it has a cable": "has no cable",
+    family_names.REPEATED_NAME_REASON: "the module's families must also want its name only once",
+}
+
+
+def _channel_holder_reasons():
+    """Return the leading text of each reason that ``channel_holder_refusal`` can return."""
+    tree = ast.parse(Path(family_names.__file__).read_text(encoding="utf-8"))
+    reasons = {family_names.REPEATED_NAME_REASON}
+    refusal_functions = ("_owner_refusal", "channel_holder_refusal")
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef) or function.name not in refusal_functions:
+            continue
+        for node in ast.walk(function):
+            value = node.value if isinstance(node, ast.Return) else None
+            if isinstance(value, ast.JoinedStr):
+                value = value.values[0]
+            if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value:
+                reasons.add(value.value.strip())
+    return reasons
+
+
+class ChannelTakeoverDocumentationTest(unittest.TestCase):
+    """Keep the documented takeover conditions consistent with ``channel_holder_refusal``."""
+
+    _PARAGRAPHS = (
+        (("docs", "examples.md"), "The family is built only when", "Any other interface with one of"),
+        (("docs", "template-variables.md"), "The complete family is checked before", "Any other occupied name"),
+    )
+
+    def test_every_refusal_reason_has_a_documented_condition(self):
+        self.assertEqual(set(_TAKEOVER_CONDITIONS), _channel_holder_reasons())
+
+    def test_each_user_guide_states_every_condition(self):
+        for path, start, end in self._PARAGRAPHS:
+            paragraph = _normalised_doc(*path).split(start, 1)[1].split(end, 1)[0].lower()
+            for reason, condition in _TAKEOVER_CONDITIONS.items():
+                with self.subTest(guide=path[-1], reason=reason):
+                    self.assertIn(condition.lower(), paragraph)
+
+    def test_partial_repair_separates_a_flat_refusal_from_a_channelized_takeover(self):
+        section = _normalised_doc("docs", "examples.md").split("### Partial breakout repair", 1)[1].split("###", 1)[0]
+
+        self.assertIn("a `flat` rule does not count an interface with one of the family's channel names", section)
+        self.assertIn("A `channelized` rule takes over such an interface as its channel", section)
+
+    def test_the_flat_surplus_counts_only_the_rows_no_built_family_takes_over(self):
+        guide = _normalised_doc("docs", "examples.md")
+
+        self.assertIn("The interfaces that the module's families take over are not counted.", guide)
+        self.assertIn("An interface of a family that is not built is counted.", guide)
 
 
 class BaseVariableDocumentationTest(unittest.TestCase):
