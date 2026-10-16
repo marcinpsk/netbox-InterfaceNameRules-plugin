@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.10.0 (2026-10-16)
+
+### Bug Fixes
+
+- **family**: Refuse a family whose parent name is in use when it is planned
+  ([`21886d8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/21886d8bc2db2dcf8bd8d308a8a67567b39e9189))
+
+### Chores
+
+- **deps**: Bump the github-actions group with 4 updates
+  ([`61d7e62`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/61d7e62735818091a48738eee45a00ba9fce85b1))
+
+- **deps-dev**: Bump django from 6.1.1 to 6.1.2
+  ([`0d9505a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/0d9505a2683b8a1c42b962c8eb3dca4781784822))
+
+- **deps-dev**: Bump ruff from 0.16.9 to 0.16.10
+  ([`58ba6a9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/58ba6a96071ca5ffb3f7e579827110015dee0bb5))
+
+
 ## v1.9.0 (2026-10-12)
 
 ### Bug Fixes
