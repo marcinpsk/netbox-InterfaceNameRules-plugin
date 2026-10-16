@@ -48,7 +48,12 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.family import UNCLAIMED_BASE_REASON, FamilyStatus
 from netbox_interface_name_rules.family.names import COLLISION_REASON, INTERFACE_NAME_CONSTRAINT
-from netbox_interface_name_rules.family.structural import MODULE_CHANGED_REASON, STALE_REASON
+from netbox_interface_name_rules.family.structural import (
+    HOLDER_CHANGED_REASON,
+    MODULE_CHANGED_REASON,
+    SIBLING_LEFT_REASON,
+    STALE_REASON,
+)
 from netbox_interface_name_rules.filters import InterfaceNameRuleFilterSet
 from netbox_interface_name_rules.forms import RuleTestForm
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -1204,17 +1209,26 @@ class FlatBreakoutClaimGateTest(ChannelizationTestCase):
 
 
 @contextmanager
-def _before_the_first_row_lock(action):
-    """Run *action* once, just before the executor locks its first row, as a concurrent writer would."""
-    pending = [action]
+def _before_the_row_lock(number, action):
+    """Run *action* once, just before the executor's *number*-th row lock, as a concurrent writer would."""
+    locks = []
 
     def wrapper(execute, sql, params, many, context):
-        if pending and "FOR UPDATE" in sql:
-            pending.pop()()
+        if "FOR UPDATE" in sql and len(locks) < number:
+            locks.append(sql)
+            if len(locks) == number:
+                action()
         return execute(sql, params, many, context)
 
     with connection.execute_wrapper(wrapper):
         yield
+    if len(locks) != number:
+        raise AssertionError(f"The executor took {len(locks)} row locks, not {number}.")
+
+
+def _before_the_first_row_lock(action):
+    """Run *action* once, just before the executor locks its first row, as a concurrent writer would."""
+    return _before_the_row_lock(1, action)
 
 
 class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
@@ -1593,9 +1607,13 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
 
         apply_rule_to_existing(rule, interface_ids=list(pks))
 
+        return self._parents_built_without_a_flat_sibling(module)
+
+    def _parents_built_without_a_flat_sibling(self, module):
+        """Return the parents built on *module*, after asserting that no row beyond the templates is left beside them."""
         rows = list(Interface.objects.filter(module=module, channel_id__isnull=True))
         built = sorted(row.name for row in rows if row.channels)
-        surplus = len(rows) - InterfaceTemplate.objects.filter(module_type=module_type).count()
+        surplus = len(rows) - InterfaceTemplate.objects.filter(module_type=module.module_type).count()
         if built:
             self.assertEqual(surplus, 0, sorted(row.name for row in rows))
         return built
@@ -1658,6 +1676,47 @@ class ExecutionOutcomeCoverageTest(ChannelizationTestCase):
 
         self.assertEqual(members["0"], (FamilyStatus.STALE, MODULE_CHANGED_REASON))
         self.assertEqual(self._names(module), ["0", "late"])
+
+    def _add_a_cable(self, row):
+        peer = Interface.objects.create(device=self.device, name=f"peer-{row.name}", type=PARENT_TYPE)
+        Cable(a_terminations=[row], b_terminations=[peer]).save()
+
+    def _outcomes_after_a_change_at_execution(self, port, change):
+        """Apply to a module with rows ``a:0`` and ``b:0``; *change* edits ``<port>:0`` just before *port*'s family locks it.
+
+        Return the parents built and the outcome of each port.
+        """
+        module_type = self.two_port_types["a", "b"]
+        module = self._module_with("a:0", "b:0", module_type=module_type)
+        row = Interface.objects.get(module=module, name=f"{port}:0")
+        rule = self._rule("{base}:{channel}", breakout_mode=CHANNELIZED, module_type=module_type)
+
+        with _before_the_row_lock("ab".index(port) + 1, lambda: change(row)):
+            members = self._apply_to_every_interface(rule, module)
+
+        return self._parents_built_without_a_flat_sibling(module), {name: members[name] for name in "ab"}
+
+    @skipUnless(supports_channelization(), REQUIRES_CHANNELIZATION)
+    def test_no_family_is_built_beside_the_rows_of_a_family_refused_at_execution(self):
+        changes = {"cable": self._add_a_cable, "rename": lambda row: rename_out_of_band(row, f"old-{row.name}")}
+        left = (FamilyStatus.BLOCKED, SIBLING_LEFT_REASON)
+        expected = {
+            ("a", "cable"): {"a": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: a:0 (it has a cable)"), "b": left},
+            ("a", "rename"): {
+                "a": (FamilyStatus.STALE, HOLDER_CHANGED_REASON),
+                "b": (FamilyStatus.STALE, MODULE_CHANGED_REASON),
+            },
+            ("b", "cable"): {"a": left, "b": (FamilyStatus.BLOCKED, f"{COLLISION_REASON}: b:0 (it has a cable)")},
+            ("b", "rename"): {"a": left, "b": (FamilyStatus.STALE, HOLDER_CHANGED_REASON)},
+        }
+        outcomes = {}
+        for port in "ab":
+            for name, change in changes.items():
+                with self.subTest(port=port, change=name), transaction.atomic():
+                    outcomes[port, name] = self._outcomes_after_a_change_at_execution(port, change)
+                    transaction.set_rollback(True)
+
+        self.assertEqual(outcomes, {case: ([], members) for case, members in expected.items()})
 
 
 @skipIf(supports_channelization(), "requires a NetBox that cannot model channelized interfaces (4.6 and older)")

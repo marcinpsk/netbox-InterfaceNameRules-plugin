@@ -35,6 +35,7 @@ from .names import COLLISION_REASON, channelized_name_refusal, first_taken_name,
 from .prospective import FLAT_EXPANSION_REASON
 from .structural import (
     execute_flat_family,
+    execute_module_structural_families,
     execute_structural_family,
     has_flat_expansion,
     module_taken_over_names,
@@ -335,9 +336,16 @@ def _selected(plans, selected_pks):
 
 
 def execute_module_families(plans):
-    """Execute each planned family in order, and yield its outcome before the next family runs."""
+    """Execute each planned family in order, and yield its outcome before the next family runs.
+
+    The channelized families that the module builds run together, in one transaction, in the place of the first one.
+    """
+    channelized = [plan for plan in plans if isinstance(plan, StructuralFamilyPlan)]
     for plan in plans:
-        yield execute_family_plan(plan)
+        if not isinstance(plan, StructuralFamilyPlan):
+            yield execute_family_plan(plan)
+        elif plan is channelized[0]:
+            yield from execute_module_structural_families(channelized)
 
 
 def _apply_module(rule, module, interfaces, selected_pks):

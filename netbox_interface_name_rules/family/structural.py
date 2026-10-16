@@ -43,6 +43,7 @@ UNSUPPORTED_REASON = "this NetBox release cannot model channelized interfaces"
 STALE_REASON = "the base interface changed after planning"
 MODULE_CHANGED_REASON = "the module's interfaces changed after planning"
 HOLDER_CHANGED_REASON = "an interface with one of the channel names changed after planning"
+SIBLING_LEFT_REASON = "another interface on the module would stay a flat sibling of this family"
 
 
 def _flat_expansion(module_type_id, module_id, channel_names=()) -> bool:  # pragma: no cover - channelization only
@@ -390,6 +391,25 @@ def execute_structural_family(plan: StructuralFamilyPlan) -> FamilyOutcome:
     if plan.precondition_status is not None:
         return _refused(plan, plan.precondition_status, plan.precondition_reason, plan.parent_target_name)
     return _install_family(plan)  # pragma: no cover - requires channelization support
+
+
+def execute_module_structural_families(plans) -> tuple[FamilyOutcome, ...]:  # pragma: no cover - channelization only
+    """Build the channelized families planned on one module in one transaction, and keep none beside a flat sibling.
+
+    A family that is not built leaves its rows as flat siblings, so each family built beside them rolls back (ADR 0017).
+    """
+    if len({plan.module_id for plan in plans}) != 1:
+        raise ValueError("The channelized families of one transaction must be on one module.")
+    with atomic_with_events() as block:
+        outcomes = tuple(execute_structural_family(plan) for plan in plans)
+        built = [outcome.status == FamilyStatus.CHANGED for outcome in outcomes]
+        if not any(built) or not _flat_expansion(plans[0].module_type_id, plans[0].module_id):
+            return outcomes
+        block.set_rollback()
+    return tuple(
+        _refused(plan, FamilyStatus.BLOCKED, SIBLING_LEFT_REASON, plan.parent_target_name) if was_built else outcome
+        for plan, outcome, was_built in zip(plans, outcomes, built, strict=True)
+    )
 
 
 # ---------------------------------------------------------------------------
