@@ -1380,8 +1380,12 @@ minus <code>{channel}</code> — the parent is the one interface in the family w
 <code>{channel}</code> in it is rejected in every spelling, including inside an expression (<code>{channel + 1}</code>).
 Braces must balance, so a stray <code>{</code> is refused on save instead of ending up in an interface name.
 Blank leaves the parent the name NetBox gave it.</p>
-<p>The complete family is checked before anything is written: one occupied name — the parent's or any
-channel's — skips the whole family with a warning. On NetBox releases that cannot model channels
+<p>The complete family is checked before anything is written. An interface that already has a channel
+name becomes that channel and keeps its configuration, when it is not on another module, is not a
+subinterface or a channelized parent, is not the port that another family is built on, and has no
+cable. The module's families must also want its name only once: a name that they want more than
+once refuses every family that wants it. Any other occupied name, the parent's or a
+channel's, skips the whole family with a warning that names the interface. On NetBox releases that cannot model channels
 (4.6 and older) a <code>channelized</code> rule is skipped and logged; it is never applied as a flat breakout
 instead.</p>
 <h3 id="breakout-from-a-prefixed-bay-position">Breakout from a prefixed bay position</h3>
