@@ -100,7 +100,7 @@ devcontainer = [
     "playwright",
 ]
 ci-branching = [
-    "netboxlabs-netbox-branching==1.2.1",
+    "netboxlabs-netbox-branching==1.2.2",
 ]
 
 [tool.pytest.ini_options]
