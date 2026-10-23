@@ -6,6 +6,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.10.1 (2026-10-23)
+
+### Bug Fixes
+
+- Certifi update
+  ([`074f1af`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/074f1af5571dd9cf9657feb6d6c2fc16b1094050))
+
+### Chores
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([`8380ba0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8380ba085419b2d12d3467831e685df880680d17))
+
+- **deps**: Bump the uv group across 1 directory with 2 updates
+  ([`df47f86`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/df47f86bde6486a73ff7764b0ff8c53b426fcab6))
+
+- **deps-dev**: Bump netboxlabs-netbox-branching from 1.2.1 to 1.2.2
+  ([`ce1b333`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/ce1b3331cd8d2b03d9f3c3ad2f214c4d964f024f))
+
+- **deps-dev**: Bump playwright from 1.63.0 to 1.64.0
+  ([`97f91a8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/97f91a87372b3c7c3d34871bee6991e1b843d08c))
+
+- **deps-dev**: Bump pre-commit from 4.6.2 to 4.7.0
+  ([`a1e5de8`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a1e5de8eacca8de5d56ec3ed31f874faf6a37ada))
+
+- **deps-dev**: Bump pynetbox from 7.8.0 to 7.9.0
+  ([`fee932b`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/fee932bdd8a62fa570f06cdd923cc449c0c36d22))
+
+### Testing
+
+- **branching**: Accept each reviewed netbox-branching release
+  ([`6d6f28a`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/6d6f28a1305c8896666de81cc0f40d7580a76200))
+
+- **branching**: Record the reviewed replay paths of netbox-branching 1.2.2
+  ([`e9c71aa`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/e9c71aa2dc0687e807b8d1307d8f32be22bcb2dd))
+
+
 ## v1.10.0 (2026-10-16)
 
 ### Bug Fixes
