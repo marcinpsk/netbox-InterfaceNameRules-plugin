@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 from unittest import skipUnless
 
 from dcim.models import Interface
@@ -103,8 +104,8 @@ class ReplayWrapperContractTest(SimpleTestCase):
         self.assertEqual(self.replaying_methods(), wrapped)
 
 
-# Each (name, receiver, module, scope) reference to a name that saves a replayed object in 1.2.2: count, what reaches it.
-REPLAY_SAVES = {
+# Each (name, receiver, module, scope) reference to a name that saves a replayed object in 1.2.1: count, what reaches it.
+REPLAY_SAVES_1_2_1 = {
     ("apply", "change", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): (1, "Branch.merge"),
     ("undo", "change", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): (1, "Branch.revert"),
     ("apply", "dummy_change", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): (1, "Branch.merge"),
@@ -121,34 +122,6 @@ REPLAY_SAVES = {
     ("update_object", "", "models/changes.py", "ObjectChange.apply"): (1, "each apply above"),
     ("deserialize_object", "", "models/changes.py", "ObjectChange.undo"): (1, "each undo above"),
     ("update_object", "", "models/changes.py", "ObjectChange.undo"): (1, "each undo above"),
-    ("_update_dependent_objects", "self", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): (
-        1,
-        "Branch.merge",
-    ),
-    ("_update_dependent_objects", "self", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): (
-        1,
-        "Branch.revert",
-    ),
-    ("_update_dependent_objects", "self", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): (
-        1,
-        "Branch.merge",
-    ),
-    ("_update_dependent_objects", "self", "merge_strategies/squash.py", "SquashMergeStrategy.revert"): (
-        1,
-        "Branch.revert",
-    ),
-    (
-        "update_dependent_objects",
-        "hasattr(model)",
-        "merge_strategies/strategy.py",
-        "MergeStrategy._update_dependent_objects",
-    ): (1, "each strategy call above"),
-    (
-        "update_dependent_objects",
-        "instance",
-        "merge_strategies/strategy.py",
-        "MergeStrategy._update_dependent_objects",
-    ): (1, "each strategy call above"),
 }
 # Each reference to a name that starts a replay: a merge strategy, a sync helper, or a wrapped method.
 REPLAY_ENTRIES = {
@@ -168,34 +141,90 @@ NAMING_CALLS = frozenset({"getattr", "setattr", "hasattr"})
 SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 # Each helper that saves a replayed object: the scan counts the references to it, so only a fingerprint reviews its body.
 REPLAY_HELPERS = {("utilities.py", "update_object")}
-# The fingerprint of each scope that the allow-lists and REPLAY_HELPERS name, in netbox-branching 1.2.2; see fingerprint.
-REVIEWED_FINGERPRINTS = {
+# The fingerprint of each scope that the allow-lists and REPLAY_HELPERS name, in netbox-branching 1.2.1; see fingerprint.
+FINGERPRINTS_1_2_1 = {
     ("jobs.py", "MergeBranchJob.run"): "d039282f2832f890",
     ("jobs.py", "RevertBranchJob.run"): "e0be2037fbdbaca7",
-    ("merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "7fe9d0c0209d5a20",
-    ("merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "499a313e112a769c",
-    ("merge_strategies/squash.py", "SquashMergeStrategy.merge"): "2a882f7e80c12e6d",
-    ("merge_strategies/squash.py", "SquashMergeStrategy.revert"): "0630ffd2d04afec3",
-    ("merge_strategies/strategy.py", "MergeStrategy._update_dependent_objects"): "61914564b7e61925",
+    ("merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "42aa32ddbda92a55",
+    ("merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "882b00bb19bab80d",
+    ("merge_strategies/squash.py", "SquashMergeStrategy.merge"): "c57d4abe51355d00",
+    ("merge_strategies/squash.py", "SquashMergeStrategy.revert"): "257f571c7d9201bb",
     ("models/branches.py", "Branch"): "5c1032613ea2f2a4",
-    ("models/branches.py", "Branch._apply_sync_update"): "adcf483d926e7bfc",
+    ("models/branches.py", "Branch._apply_sync_update"): "7e235e9385c13ac4",
     ("models/branches.py", "Branch._handle_sync_delete"): "ff0d26c6de4ae7df",
     ("models/branches.py", "Branch.merge"): "3e0ad757b725963d",
     ("models/branches.py", "Branch.revert"): "c736016e1ddc2011",
-    ("models/branches.py", "Branch.sync"): "d0102ddfaf77676d",
-    ("models/changes.py", "<module>"): "2d360995f1b41f71",
+    ("models/branches.py", "Branch.sync"): "395aa970f1eeb7fd",
+    ("models/changes.py", "<module>"): "6ed9b80466510e19",
     ("models/changes.py", "ObjectChange"): "b449c0c1b1db6de6",
     ("models/changes.py", "ObjectChange.apply"): "6b9f955fbd2370cf",
     ("models/changes.py", "ObjectChange.migrate"): "c1927873bbc41a6d",
     ("models/changes.py", "ObjectChange.undo"): "24e38af98d10d67c",
     ("utilities.py", "update_object"): "843097e36b00aaf9",
 }
-# The netbox-branching release whose replay paths the allow-lists and the fingerprints record.
-REVIEWED_NETBOX_BRANCHING = "1.2.2"
+
+
+class ReviewedRelease(NamedTuple):
+    """The review record of a netbox-branching release: its references that save a replayed object, its fingerprints."""
+
+    saves: dict
+    fingerprints: dict
+
+
+# Each netbox-branching release whose replay paths were reviewed. The plugin supports each of them.
+REVIEWED_RELEASES = {
+    "1.2.1": ReviewedRelease(REPLAY_SAVES_1_2_1, FINGERPRINTS_1_2_1),
+    "1.2.2": ReviewedRelease(
+        # Merge and revert update the dependent objects of the replayed changes, inside the wrapped methods.
+        REPLAY_SAVES_1_2_1
+        | {
+            ("_update_dependent_objects", "self", "merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): (
+                1,
+                "Branch.merge",
+            ),
+            ("_update_dependent_objects", "self", "merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): (
+                1,
+                "Branch.revert",
+            ),
+            ("_update_dependent_objects", "self", "merge_strategies/squash.py", "SquashMergeStrategy.merge"): (
+                1,
+                "Branch.merge",
+            ),
+            ("_update_dependent_objects", "self", "merge_strategies/squash.py", "SquashMergeStrategy.revert"): (
+                1,
+                "Branch.revert",
+            ),
+            (
+                "update_dependent_objects",
+                "hasattr(model)",
+                "merge_strategies/strategy.py",
+                "MergeStrategy._update_dependent_objects",
+            ): (1, "each strategy call above"),
+            (
+                "update_dependent_objects",
+                "instance",
+                "merge_strategies/strategy.py",
+                "MergeStrategy._update_dependent_objects",
+            ): (1, "each strategy call above"),
+        },
+        # The scopes that 1.2.2 changes or adds.
+        FINGERPRINTS_1_2_1
+        | {
+            ("merge_strategies/iterative.py", "IterativeMergeStrategy.merge"): "7fe9d0c0209d5a20",
+            ("merge_strategies/iterative.py", "IterativeMergeStrategy.revert"): "499a313e112a769c",
+            ("merge_strategies/squash.py", "SquashMergeStrategy.merge"): "2a882f7e80c12e6d",
+            ("merge_strategies/squash.py", "SquashMergeStrategy.revert"): "0630ffd2d04afec3",
+            ("merge_strategies/strategy.py", "MergeStrategy._update_dependent_objects"): "61914564b7e61925",
+            ("models/branches.py", "Branch._apply_sync_update"): "adcf483d926e7bfc",
+            ("models/branches.py", "Branch.sync"): "d0102ddfaf77676d",
+            ("models/changes.py", "<module>"): "2d360995f1b41f71",
+        },
+    ),
+}
 RE_REVIEW_RELEASE = (
-    "The installed netbox-branching is not the release whose replay paths were reviewed. Re-review its replay paths: "
+    "The installed netbox-branching is not a release whose replay paths were reviewed. Re-review its replay paths: "
     "run the scan, read every new reference, every changed fingerprint and any dynamic dispatch, such as getattr with "
-    "a variable name. Then update REVIEWED_NETBOX_BRANCHING, the fingerprints and the allow-lists together."
+    "a variable name. Then add the release to REVIEWED_RELEASES with its references and fingerprints."
 )
 # The message of a changed reviewed scope.
 RE_REVIEW = (
@@ -273,9 +302,9 @@ def scope_fingerprints(package, scopes):
     return found
 
 
-def reviewed_scopes():
-    """Return each ``(module, scope)`` that the allow-lists and ``REPLAY_HELPERS`` name."""
-    return {(module, scope) for _, _, module, scope in (*REPLAY_SAVES, *REPLAY_ENTRIES)} | REPLAY_HELPERS
+def reviewed_scopes(saves):
+    """Return each ``(module, scope)`` that *saves*, ``REPLAY_ENTRIES`` and ``REPLAY_HELPERS`` name."""
+    return {(module, scope) for _, _, module, scope in (*saves, *REPLAY_ENTRIES)} | REPLAY_HELPERS
 
 
 def reviewed(allowed):
@@ -285,12 +314,23 @@ def reviewed(allowed):
 
 @skipUnless(BRANCHING_INSTALLED, BRANCHING_SKIP_REASON)
 class ReplayCallSiteContractTest(SimpleTestCase):
-    """The installed netbox-branching is the reviewed release; the scan and the fingerprints help review the next one."""
+    """The installed netbox-branching is a reviewed release; the scan and the fingerprints help review the next one."""
 
     maxDiff = None
 
-    def test_the_installed_netbox_branching_is_the_reviewed_release(self):
-        self.assertEqual(branching.installed_version(), REVIEWED_NETBOX_BRANCHING, RE_REVIEW_RELEASE)
+    def installed_release(self):
+        """Return the review record of the installed netbox-branching."""
+        installed = branching.installed_version()
+        self.assertIn(installed, list(REVIEWED_RELEASES), RE_REVIEW_RELEASE)
+        return REVIEWED_RELEASES[installed]
+
+    def test_the_installed_netbox_branching_is_a_reviewed_release(self):
+        self.installed_release()
+
+    def test_each_release_fingerprints_each_scope_it_names(self):
+        for version, release in REVIEWED_RELEASES.items():
+            with self.subTest(version=version):
+                self.assertEqual(set(release.fingerprints), reviewed_scopes(release.saves))
 
     def assert_reviewed(self, allowed):
         """Assert that the installed netbox-branching makes the references of *allowed*, each as often, and no other."""
@@ -300,7 +340,7 @@ class ReplayCallSiteContractTest(SimpleTestCase):
         self.assertDictEqual(dict(found), dict(reviewed(allowed)))
 
     def test_each_reference_that_saves_a_replayed_object_is_reviewed(self):
-        self.assert_reviewed(REPLAY_SAVES)
+        self.assert_reviewed(self.installed_release().saves)
 
     def test_each_replay_starts_in_a_wrapped_method(self):
         self.assert_reviewed(REPLAY_ENTRIES)
@@ -308,10 +348,10 @@ class ReplayCallSiteContractTest(SimpleTestCase):
     def test_each_reviewed_scope_is_unchanged(self):
         import netbox_branching
 
-        found = scope_fingerprints(Path(netbox_branching.__file__).parent, reviewed_scopes())
+        release = self.installed_release()
+        found = scope_fingerprints(Path(netbox_branching.__file__).parent, reviewed_scopes(release.saves))
 
-        self.assertEqual(set(REVIEWED_FINGERPRINTS), reviewed_scopes())
-        self.assertDictEqual(found, REVIEWED_FINGERPRINTS, RE_REVIEW)
+        self.assertDictEqual(found, release.fingerprints, RE_REVIEW)
 
 
 class ReplayCallSiteScanTest(SimpleTestCase):
