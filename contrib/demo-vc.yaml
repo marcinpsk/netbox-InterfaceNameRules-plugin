@@ -3,7 +3,7 @@
 #
 # Demo Virtual Chassis Interface Name Rules
 #
-# These rules target the devcontainer demo devices created by load-sample-data.py
+# These rules target the devcontainer demo devices created by scripts/load_demo_data.py
 # and demonstrate {vc_position} usage for both MODULE interfaces and DEVICE interfaces.
 #
 # MODULE interface rules (applied via post_save on dcim.Module):

@@ -301,13 +301,10 @@ python manage.py collectstatic --noinput >/dev/null 2>&1 || true
 
 echo "📂 Loading sample data from contrib/..."
 LIBRENMS_CONTRIB="$PLUGIN_WS_DIR/../netbox-librenms-plugin/.devcontainer/scripts/load-sample-data.py"
-INR_CONTRIB="$PLUGIN_WS_DIR/.devcontainer/scripts/load-sample-data.py"
 if [ -f "$LIBRENMS_CONTRIB" ]; then
   python manage.py shell < "$LIBRENMS_CONTRIB" 2>/dev/null | grep -E "(Loading|✓|✅|created|updated|skipped|⚠️)" || true
 fi
-if [ -f "$INR_CONTRIB" ]; then
-  python manage.py shell < "$INR_CONTRIB" 2>/dev/null | grep -E "(Loading|✓|✅|created|updated|skipped|⚠️)" || true
-fi
+PYTHONPATH=/opt/netbox/netbox python "$PLUGIN_WS_DIR/scripts/load_demo_data.py" || echo "⚠️  Demo data loaded with errors"
 
 # Pre-commit hooks
 cd "$PLUGIN_WS_DIR"
