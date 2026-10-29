@@ -139,6 +139,8 @@
         </tbody>
       </table>
     </div>
+  {% elif not rule.enabled %}
+    <div class="card-body text-muted">This rule is disabled. Enable it to preview and apply it.</div>
   {% else %}
     <div class="card-body text-muted">No installed interfaces would be affected by this rule.</div>
   {% endif %}

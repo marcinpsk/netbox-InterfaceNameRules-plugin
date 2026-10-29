@@ -481,6 +481,23 @@ class RuleApplyDetailViewTest(ViewTestBase):
         self.assertEqual(response.context["checked_unit"], expected)
         self.assertEqual(response.context["families_supported"], supports_channelization())
 
+    def test_a_disabled_rule_says_why_its_preview_is_empty(self):
+        """A disabled rule selects no module, so the empty preview names the cause instead of a missing match."""
+        device = make_device("Disabled", self.device_type, name="disabled-dev-01")
+        bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
+        module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
+        Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
+        self.rule.enabled = False
+        self.rule.save()
+
+        response = self.client.get(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
+        )
+
+        self.assertEqual(response.context["preview"], [])
+        self.assertContains(response, "This rule is disabled. Enable it to preview and apply it.")
+        self.assertNotContains(response, "No installed interfaces would be affected by this rule.")
+
 
 class RuleApplicableViewTest(ViewTestBase):
     """Test the RuleApplicableView (AJAX applicable check)."""
