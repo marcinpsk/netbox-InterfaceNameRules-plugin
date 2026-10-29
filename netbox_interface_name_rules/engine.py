@@ -506,32 +506,26 @@ def pinned_reapply(modules):
 def _device_interface_rules(device):
     """Return enabled device-interface rules in matching priority order.
 
-    A rule platform matches the device platform and each of its ancestors.
+    A rule platform matches the device platform and each of its ancestors. The lineage comes from the
+    platform tree of the rule snapshot, which reads the alias the router gives for platforms.
     """
     from django.db.models import Q
 
     from .models import InterfaceNameRule
 
     device_type = getattr(device, "device_type", None)
-    platform = getattr(device, "platform", None)
-    candidates = InterfaceNameRule.objects.filter(applies_to_device_interfaces=True, enabled=True)
-    platform_scope = Q(platform__isnull=True)
-    if platform is not None:
-        ancestors = platform.get_ancestors(include_self=True)
-        if ancestors.db != candidates.db:
-            # Exempt rule models in a branch: a subquery would read the platform tree of main.
-            ancestors = list(ancestors.values_list("pk", flat=True))
-        platform_scope |= Q(platform__in=ancestors)
+    lineage = rule_selection.platform_lineage(getattr(device, "platform", None))
+    closeness = {pk: index for index, pk in enumerate(lineage)}
     rules = list(
-        candidates.filter(Q(device_type=device_type) | Q(device_type__isnull=True))
-        .filter(platform_scope)
-        .select_related("platform")
+        InterfaceNameRule.objects.filter(applies_to_device_interfaces=True, enabled=True)
+        .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
+        .filter(Q(platform__isnull=True) | Q(platform__in=lineage))
     )
-    # Higher score first, then the closer (deeper) platform, then the longer pattern, then the lower pk.
+    # Higher score first, then the closer platform, then the longer pattern, then the lower pk.
     rules.sort(
         key=lambda r: (
             -r.specificity_score,
-            -r.platform.level if r.platform_id else 0,
+            closeness.get(r.platform_id, len(lineage)),
             -len(r.module_type_pattern or ""),
             r.pk,
         )
@@ -725,7 +719,7 @@ def _build_module_qs(rule):
     if rule.device_type:
         qs = qs.filter(device__device_type=rule.device_type)
     if rule.platform:
-        qs = qs.filter(device__platform__in=rule.platform.get_descendants(include_self=True))
+        qs = qs.filter(device__platform__in=rule_selection.platform_subtree(rule.platform.pk))
     return qs
 
 
@@ -930,10 +924,10 @@ def _rule_modules(rule):
     rename triggers. An unsaved rule, such as the rule tester's preview, is no stored rule that
     selection can pick, so it keeps every module in its scope.
     """
-    modules = list(_build_module_qs(rule).select_related(*_NAMING_RELATIONS))
-    if getattr(rule, "pk", None) is None:
-        return modules
     with pinned_rule_cache():
+        modules = list(_build_module_qs(rule).select_related(*_NAMING_RELATIONS))
+        if getattr(rule, "pk", None) is None:
+            return modules
         return [module for module in modules if _selected_rule(module, module.module_bay) == rule]
 
 

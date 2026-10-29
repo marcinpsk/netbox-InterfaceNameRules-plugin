@@ -42,6 +42,14 @@ class _BranchPlatformTreeTests:
         self.device_rule = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, platform=self.junos, name_template="junos{vc_position}/{port}"
         )
+        self.upper = Platform.objects.create(name=f"{prefix} A", slug=f"{prefix.lower()}-a")
+        self.lower = Platform.objects.create(name=f"{prefix} B", slug=f"{prefix.lower()}-b", parent=self.upper)
+        self.on_upper = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, platform=self.upper, name_template="a{vc_position}/{port}"
+        )
+        self.on_lower = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, platform=self.lower, name_template="b{vc_position}/{port}"
+        )
         user = User.objects.create_user(username=f"{prefix.lower()}-operator")
         self.branch = self.provision_branch(prefix, user)
         if self.EXEMPT:
@@ -115,6 +123,44 @@ class _BranchPlatformTreeTests:
             rule = InterfaceNameRule.objects.get(pk=self.rule.pk)
             self.assertEqual(list(_build_module_qs(rule).values_list("pk", flat=True)), [module.pk])
             self.assertEqual(self._select(Platform.objects.get(pk=self.evo.pk)), self.rule)
+
+    def test_device_interface_rules_rank_the_closer_platform_in_the_branch_tree(self):
+        """Main has A over B; the branch swaps them, so on a device on A the rule on A comes first."""
+        with activate(self.branch):
+            lower = Platform.objects.get(pk=self.lower.pk)
+            lower.parent = None
+            lower.save()
+            upper = Platform.objects.get(pk=self.upper.pk)
+            upper.parent = lower
+            upper.save()
+            device = Device.objects.create(
+                name="branch-swap-member",
+                device_type=self.device_type,
+                role=self.placement.role,
+                site=self.placement.site,
+                platform=upper,
+                virtual_chassis=VirtualChassis.objects.create(name="branch-swap-vc"),
+                vc_position=1,
+            )
+            rules = _device_interface_rules(Device.objects.get(pk=device.pk))
+            self.assertEqual(rules, [self.on_upper, self.on_lower])
+
+    def test_the_apply_scope_ignores_a_rule_platform_loaded_with_the_rule(self):
+        """A rule read with select_related("platform") carries the platform from the rule alias."""
+        with activate(self.branch):
+            self._move_junos_under_a_branch_root()
+            device = Device.objects.create(
+                name="branch-joined-host",
+                device_type=self.device_type,
+                role=self.placement.role,
+                site=self.placement.site,
+                platform=self.evo,
+            )
+            module = Module.objects.create(
+                device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.module_type
+            )
+            rule = InterfaceNameRule.objects.select_related("platform").get(pk=self.rule.pk)
+            self.assertEqual(list(_build_module_qs(rule).values_list("pk", flat=True)), [module.pk])
 
 
 class BranchPlatformTreeTest(_BranchPlatformTreeTests, BranchTestCase):

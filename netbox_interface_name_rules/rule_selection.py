@@ -266,6 +266,21 @@ def _platform_lineage(platform_id, platform_parents) -> list:
     return lineage
 
 
+def platform_lineage(platform) -> list:
+    """Return the pk of *platform* and of each of its ancestors, the closest first, from the rule snapshot."""
+    if platform is None:
+        return []
+    _, _, platform_parents, _ = _get_enabled_rules()
+    return _platform_lineage(platform.pk, platform_parents)
+
+
+def platform_subtree(platform_id) -> set:
+    """Return *platform_id* and the pk of each of its descendants, from the rule snapshot."""
+    _, _, platform_parents, _ = _get_enabled_rules()
+    descendants = (pk for pk in platform_parents if platform_id in _platform_lineage(pk, platform_parents))
+    return {platform_id, *descendants}
+
+
 def _rule_scope_matches(rule, scope_ids):
     """Return whether a rule has exactly the requested scope values."""
     parent_module_type_id, device_type_id, platform_id = scope_ids
