@@ -262,8 +262,9 @@ class InterfaceNameRule(NetBoxModel):
 
         A platform rule also matches a device on a descendant of its platform (NetBox 4.4+).
         The platform bit is the same for each matching platform, so the score does
-        not order them. For one device, the engine tries the rule on the closest
-        platform first, before it compares pattern length and pk.
+        not order them. For one device, among rules with the same parent module type
+        and device type, the engine tries the rule on the closest platform first,
+        before it compares pattern length and pk.
         """
         scope = (
             (4 if self.parent_module_type_id else 0)

@@ -47,14 +47,16 @@ When multiple regex patterns match at the same score, the longest pattern wins.
 
 A platform scope matches a device on that platform and a device on a child
 platform of it, at any depth. Platforms nest from NetBox 4.4; on NetBox 4.3 a
-platform scope matches its exact platform only. For example, a rule on `JunOS` matches a device on
-`JunOS 24.4R2-S5.4-EVO` when that platform is a child of `JunOS`. When rules on
+platform scope matches its exact platform only. For example, a rule on `JunOS`
+matches a device on `JunOS 24.4R2-S5.4-EVO` when that platform is a child of
+`JunOS`. When rules on
 more than one of these platforms match at the same parent module type and device
 type scope, the rule on the platform closest to the device platform wins. A rule
 with no platform comes after them. The score does not show this order, because
 it depends on the device. Apply Rules uses the same scope: a rule on `JunOS`
 previews and renames the modules on devices on `JunOS` and on its child
-platforms, except a module for which a rule on a closer platform wins.
+platforms, except a module for which another rule wins (see
+[Apply Rules and the Applicable Column](#apply-rules-and-the-applicable-column)).
 
 ### RE2 Pattern Syntax
 
@@ -313,7 +315,9 @@ interface **would actually change name** if the rule were applied.  Rules where
 all matching interfaces are already correctly named show `—`.
 
 Apply Rules skips each module for which the engine selects another rule, for
-example a rule with a device type or a rule on a closer platform. The preview,
+example an exact module type rule, a rule that adds a parent module type or a
+device type, or a rule on a closer platform with the same parent module type
+and device type. The preview,
 the Applicable column and the flat-to-channelized conversion skip it too. So
 Apply Rules gives a module the same names that a rename trigger gives it. A
 disabled rule is never selected, so its preview is empty. The Build Rule tester

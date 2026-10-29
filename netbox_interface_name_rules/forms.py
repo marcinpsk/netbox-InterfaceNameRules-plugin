@@ -268,7 +268,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
             ),
             "platform": (
                 "Optional. Restricts this rule to devices running this OS/platform or a child platform of it (NetBox 4.4+). "
-                "When rules on more than one of these platforms match, the rule on the closest platform wins. "
+                "Among matching rules with the same parent module type and device type, "
+                "the rule on the closest platform wins. "
                 "Setting this raises the priority score by 100 (regex)."
             ),
             "module_type_is_regex": (
