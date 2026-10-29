@@ -53,7 +53,7 @@ type scope, the rule on the platform closest to the device platform wins. A rule
 with no platform comes after them. The score does not show this order, because
 it depends on the device. Apply Rules uses the same scope: a rule on `JunOS`
 previews and renames the modules on devices on `JunOS` and on its child
-platforms.
+platforms, except a module for which a rule on a closer platform wins.
 
 ### RE2 Pattern Syntax
 
@@ -310,6 +310,14 @@ as in a [journal entry](#journal-entries-after-an-automatic-rename).
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where
 all matching interfaces are already correctly named show `—`.
+
+Apply Rules skips each module for which the engine selects another rule, for
+example a rule with a device type or a rule on a closer platform. The preview,
+the Applicable column and the flat-to-channelized conversion skip it too. So
+Apply Rules gives a module the same names that a rename trigger gives it. A
+disabled rule is never selected, so its preview is empty. The Build Rule tester
+previews every installed module in the scope of the rule, because the rule is
+not saved yet.
 
 ## netbox-branching
 

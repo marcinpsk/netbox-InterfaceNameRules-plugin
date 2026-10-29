@@ -1020,6 +1020,7 @@ class ConversionScanCostTest(ConversionTestCase):
 
     def test_a_second_module_of_the_same_type_costs_the_scan_no_extra_queries(self):
         """Resolving the names per module turns an Apply page load into a fleet-sized scan."""
+        self._verdicts()  # The first scan loads the rule cache.
         one_module = len(self._scan_queries())
 
         self._install(self.module_type, "4", run_rules=False)

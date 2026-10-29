@@ -2,10 +2,9 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """A rule's platform scope covers the child platforms of that platform, and the closest platform wins."""
 
-from dcim.models import Interface, Module, ModuleBay, Platform, VirtualChassis
+from dcim.models import Interface, Platform, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
@@ -13,55 +12,10 @@ from netbox_interface_name_rules.engine import (
     apply_device_interface_rules,
     apply_rule_to_existing,
     find_interfaces_for_rule,
-    find_matching_rule,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.tests.helpers import (
-    make_device,
-    make_device_type,
-    make_manufacturer,
-    make_module_bay_templates,
-    make_module_type,
-    make_placement,
-)
-
-PATTERN = r"QSFPP-4X10GE-.*"
-
-
-class PlatformTreeFixtures(TestCase):
-    """A Junos platform tree, an unrelated platform, and a breakout module type."""
-
-    @classmethod
-    def setUpTestData(cls):
-        manufacturer = make_manufacturer("PlatTree")
-        cls.module_type = make_module_type(manufacturer, "PlatTree", model="QSFPP-4X10GE-LR")
-        cls.device_type = make_device_type(manufacturer, "PlatTree", model="PTX10008-PlatTree")
-        make_module_bay_templates(cls.device_type, ("Bay 0",))
-        cls.placement = make_placement("PlatTree")
-        cls.junos = Platform.objects.create(name="PlatTree JunOS", slug="plattree-junos")
-        cls.evo = Platform.objects.create(name="PlatTree JunOS 24.4R2-EVO", slug="plattree-evo", parent=cls.junos)
-        cls.evo_build = Platform.objects.create(
-            name="PlatTree JunOS 24.4R2-S5.4-EVO", slug="plattree-s54", parent=cls.evo
-        )
-        cls.junos_sibling = Platform.objects.create(name="PlatTree JunOS 23.4R1", slug="plattree-234", parent=cls.junos)
-        cls.eos = Platform.objects.create(name="PlatTree EOS", slug="plattree-eos")
-
-    def _regex_rule(self, template, **scope):
-        return InterfaceNameRule.objects.create(
-            module_type_is_regex=True, module_type_pattern=PATTERN, name_template=template, **scope
-        )
-
-    def _select(self, platform, device_type=None):
-        return find_matching_rule(self.module_type, None, device_type or self.device_type, platform)
-
-    def _module_on(self, platform, name):
-        """Install the breakout module on a new device on *platform*, with one raw interface."""
-        device = make_device("PlatTree", self.device_type, self.placement, name=name, platform=platform)
-        module = Module.objects.create(
-            device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.module_type
-        )
-        Interface.objects.create(device=device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
-        return module
+from netbox_interface_name_rules.tests.helpers import make_device
+from netbox_interface_name_rules.tests.platform_cases import PATTERN, PlatformTreeFixtures
 
 
 class ModuleRuleSelectionTest(PlatformTreeFixtures):
