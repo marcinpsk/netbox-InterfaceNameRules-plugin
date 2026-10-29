@@ -3,14 +3,16 @@
 # Copyright (C) 2026 Marcin Zieba <marcinpsk@gmail.com>
 """Check that the built site and the captured screenshots and recordings match.
 
-`mkdocs build --strict` does not fail on a missing image in raw HTML, or on a missing video. Run this check on the built site: it
-reads the `<img src>`, `<video src>`, `<video poster>` and `<source src>` of every HTML page, so the
-renderer has already resolved each Markdown form, code block and comment. It fails when a relative media
-URL of a page, or a page or README media URL under the `site_url` of mkdocs.yml, is not a file inside the
-site, and when a captured screenshot or recording is on no page.
+`mkdocs build --strict` does not fail on a missing image in raw HTML, or on a missing video. Run this
+check on the built site: it reads the `<img src>`, `<video src>`, `<video poster>` and `<source src>` of
+every HTML page, so the renderer has already resolved each Markdown form, code block and comment.
+
+It fails when a media URL of a page is not a file inside the site. A relative URL resolves against its
+page, and a root-relative URL (`/...`) or a URL under the `site_url` of mkdocs.yml resolves against the
+site path. It also fails when a README media URL under the `site_url` is not in the site, and when a page
+or the README shows no captured file: a screenshot, a recording, its poster or its GIF.
 
 Not checked: `srcset` candidates.
-Not checked: root-relative URLs (`/...`), which depend on the `site_url` path.
 The README check renders the README with Python-Markdown, which MkDocs uses, and reads the same elements.
 """
 
@@ -28,7 +30,7 @@ import yaml
 #: The media root, relative to the site root.
 MEDIA = Path("assets")
 #: The captured files that a page must show, relative to the media root.
-CAPTURES = ("screenshots/*.png", "recordings/*.mp4")
+CAPTURES = ("screenshots/*.png", "recordings/*.mp4", "recordings/*.png", "recordings/*.gif")
 #: The attributes that name a media file, for each element.
 _MEDIA_ATTRIBUTES = {"img": ("src",), "video": ("src", "poster"), "source": ("src",)}
 
@@ -51,50 +53,59 @@ def _sources(html: str) -> list[str]:
     return parser.sources
 
 
-def _site_file(site: Path, site_url: str, source: str) -> Path:
-    """Return the file of the site that *source*, a URL under *site_url*, names."""
-    return (site / unquote(urlsplit(source).path.removeprefix(urlsplit(site_url).path))).resolve()
+def _site_file(site: Path, site_path: str, path: str) -> Path | None:
+    """Return the file of the site that the URL *path* names, or None when the path is outside *site_path*."""
+    if not path.startswith(site_path):
+        return None
+    return (site / unquote(path.removeprefix(site_path))).resolve()
 
 
-def _media(site: Path, site_url: str, page: Path) -> list[tuple[str, Path]]:
+def _is_site_file(site: Path, file: Path | None) -> bool:
+    return file is not None and file.is_relative_to(site) and file.is_file()
+
+
+def _media(site: Path, site_url: str, page: Path) -> list[tuple[str, Path | None]]:
     """Return each media file of *page* in the site: its URL, and its file, resolved as a browser resolves it."""
+    site_path = urlsplit(site_url).path
     files = []
     for source in _sources(page.read_text(encoding="utf-8")):
         url = urlsplit(source)
-        if source.startswith(site_url):
-            files.append((source, _site_file(site, site_url, source)))
-        elif not (url.scheme or url.netloc or not url.path or url.path.startswith("/")):
+        if source.startswith(site_url) or (url.path.startswith("/") and not (url.scheme or url.netloc)):
+            files.append((source, _site_file(site, site_path, url.path)))
+        elif not (url.scheme or url.netloc or not url.path):
             files.append((source, (page.parent / unquote(url.path)).resolve()))
     return files
 
 
-def _readme_problems(site: Path, site_url: str, readme: Path) -> list[str]:
-    """Return one message for each README image under the site URL that the site does not hold."""
+def _readme_media(site: Path, site_url: str, readme: Path) -> list[tuple[str, Path | None]]:
+    """Return each README media URL under the site URL, and the file of the site that it names."""
     html = markdown.markdown(readme.read_text(encoding="utf-8"))
-    found = []
-    for source in _sources(html):
-        if not source.startswith(site_url):
-            continue
-        image = _site_file(site, site_url, source)
-        if not image.is_relative_to(site) or not image.is_file():
-            found.append(f"missing: {source} (shown by {readme.name})")
-    return found
+    site_path = urlsplit(site_url).path
+    return [
+        (source, _site_file(site, site_path, urlsplit(source).path))
+        for source in _sources(html)
+        if source.startswith(site_url)
+    ]
 
 
 def problems(site_dir: Path, media_dir: Path, readme: Path, config: Path) -> list[str]:
-    """Return one message for each media file that the site lacks and each capture that no page shows."""
+    """Return one message for each media file that the site lacks and each capture that nothing shows."""
     site = site_dir.resolve()
     media = (site_dir / MEDIA).resolve()
     site_url = yaml.safe_load(config.read_text(encoding="utf-8"))["site_url"]
+    shown_by = [
+        (page.relative_to(site_dir).as_posix(), source, file)
+        for page in sorted(site_dir.rglob("*.html"))
+        for source, file in _media(site, site_url, page)
+    ]
+    shown_by += [(readme.name, source, file) for source, file in _readme_media(site, site_url, readme)]
     found = []
     shown = set()
-    for page in sorted(site_dir.rglob("*.html")):
-        for source, file in _media(site, site_url, page):
-            if not file.is_relative_to(site) or not file.is_file():
-                found.append(f"missing: {source} (shown by {page.relative_to(site_dir).as_posix()})")
-            elif file.is_relative_to(media):
-                shown.add(file.relative_to(media))
-    found.extend(_readme_problems(site, site_url, readme))
+    for name, source, file in shown_by:
+        if not _is_site_file(site, file):
+            found.append(f"missing: {source} (shown by {name})")
+        elif file.is_relative_to(media):
+            shown.add(file.relative_to(media))
     captured = {file.relative_to(media_dir) for pattern in CAPTURES for file in media_dir.glob(pattern)}
     found.extend(f"unreferenced: {file.as_posix()}" for file in sorted(captured - shown))
     return found

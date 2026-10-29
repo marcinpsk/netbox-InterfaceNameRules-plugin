@@ -189,13 +189,72 @@ _CLIP_FILES = ("recordings/clip.mp4", "recordings/clip.png")
 
 
 def test_a_page_whose_recording_and_poster_exist_passes(tmp_path: Path, _check) -> None:
-    # A poster and a GIF are not recordings, so only the MP4 must be on a page.
-    site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/clip.gif"))
+    site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, _CLIP_FILES)
 
     result = _check(site, media)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "Each local media file of the site exists, and each of the 1 captures is on a page.\n"
+    assert result.stdout == "Each local media file of the site exists, and each of the 2 captures is on a page.\n"
+
+
+def test_a_captured_gif_that_no_page_and_no_readme_shows_fails(tmp_path: Path, _check) -> None:
+    site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/clip.gif"))
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == "unreferenced: recordings/clip.gif\n"
+
+
+def test_a_captured_poster_that_no_page_shows_fails(tmp_path: Path, _check) -> None:
+    site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/other.png"))
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == "unreferenced: recordings/other.png\n"
+
+
+def test_a_gif_that_only_the_readme_shows_is_on_a_page(tmp_path: Path, _check) -> None:
+    readme = f"![A clip]({_SITE_URL}assets/recordings/clip.gif)\n"
+    site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/clip.gif"), readme=readme)
+
+    result = _check(site, media)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Each local media file of the site exists, and each of the 3 captures is on a page.\n"
+
+
+def test_a_root_relative_video_src_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
+    page = '<video src="/project/assets/recordings/missing.mp4"></video>'
+    site, media = _tree(tmp_path, {"leases/index.html": page}, ())
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == "missing: /project/assets/recordings/missing.mp4 (shown by leases/index.html)\n"
+
+
+def test_a_root_relative_src_under_the_site_path_shows_its_capture(tmp_path: Path, _check) -> None:
+    site, media = _tree(
+        tmp_path, {"guide/index.html": '<img src="/project/assets/screenshots/shot.png">'}, ("shot.png",)
+    )
+
+    result = _check(site, media)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_root_relative_src_outside_the_site_path_fails(tmp_path: Path, _check) -> None:
+    # The deploy publishes the site under its path only, so another path of the host is not in it.
+    site, media = _tree(tmp_path, {"index.html": '<img src="/other/assets/logo.png">'}, ())
+    (site / "other" / "assets").mkdir(parents=True)
+    (site / "other" / "assets" / "logo.png").write_bytes(_PNG)
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == "missing: /other/assets/logo.png (shown by index.html)\n"
 
 
 def test_a_video_src_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
@@ -216,7 +275,9 @@ def test_a_video_poster_that_the_site_lacks_fails(tmp_path: Path, _check) -> Non
     result = _check(site, media)
 
     assert result.returncode == 1
-    assert result.stderr == "missing: ../assets/recordings/clip.png (shown by leases/index.html)\n"
+    assert result.stderr == (
+        "missing: ../assets/recordings/clip.png (shown by leases/index.html)\nunreferenced: recordings/clip.png\n"
+    )
 
 
 def test_a_video_source_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
