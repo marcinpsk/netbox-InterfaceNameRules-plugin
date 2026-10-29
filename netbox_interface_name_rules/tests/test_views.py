@@ -331,6 +331,16 @@ class RuleListViewTest(ViewTestBase):
         self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
         self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
+    def test_priority_tooltip_says_the_closest_platform_wins_a_tie(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+
+        self.assertContains(
+            response,
+            "Higher score = higher priority in rule lookup. Exception: among module rules of the same kind "
+            "(exact or regex) with the same parent module type and device type, the rule on the closest "
+            "platform wins.",
+        )
+
     def test_list_view_unauthenticated_redirects(self):
         """Unauthenticated access to list view redirects to login."""
         self.client.logout()

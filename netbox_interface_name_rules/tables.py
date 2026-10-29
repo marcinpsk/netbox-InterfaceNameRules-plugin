@@ -13,7 +13,18 @@ class SpecificityColumn(tables.Column):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("verbose_name", "Priority")
         kwargs.setdefault("orderable", False)
-        kwargs.setdefault("attrs", {"th": {"title": "Higher score = higher priority in rule lookup"}})
+        kwargs.setdefault(
+            "attrs",
+            {
+                "th": {
+                    "title": (
+                        "Higher score = higher priority in rule lookup. Exception: among module rules of the same "
+                        "kind (exact or regex) with the same parent module type and device type, the rule on the "
+                        "closest platform wins."
+                    )
+                }
+            },
+        )
         super().__init__(*args, **kwargs)
 
     def render(self, value, record):
