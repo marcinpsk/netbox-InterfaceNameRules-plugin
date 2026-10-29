@@ -86,6 +86,25 @@ class _BranchPlatformTreeTests:
 
         self.assertEqual(self._select(Platform.objects.get(pk=self.evo.pk)), self.rule)
 
+    def test_the_apply_scope_leaves_out_a_platform_moved_out_of_the_tree_in_the_branch(self):
+        """In the branch EVO is no longer under JunOS; on main it still is."""
+        with activate(self.branch):
+            evo = Platform.objects.get(pk=self.evo.pk)
+            evo.parent = None
+            evo.save()
+            device = Device.objects.create(
+                name="branch-detached-host",
+                device_type=self.device_type,
+                role=self.placement.role,
+                site=self.placement.site,
+                platform=evo,
+            )
+            Module.objects.create(
+                device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.module_type
+            )
+            rule = InterfaceNameRule.objects.get(pk=self.rule.pk)
+            self.assertEqual(list(_build_module_qs(rule).values_list("pk", flat=True)), [])
+
     def _move_junos_under_a_branch_root(self):
         """In the branch, move JunOS under a new root, so the tree paths in the branch differ from main."""
         junos = Platform.objects.get(pk=self.junos.pk)

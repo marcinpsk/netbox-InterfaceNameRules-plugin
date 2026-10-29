@@ -177,6 +177,7 @@ class ApplyScopeTest(PlatformTreeFixtures):
         apply_rule_to_existing(rule)
 
         self.assertEqual(Interface.objects.get(module=on_build).name, "xe-0/0/0")
+        self.assertEqual(Interface.objects.get(module=on_junos).name, "xe-0/0/0")
         self.assertEqual(Interface.objects.get(module=on_eos).name, "et-0/0/0")
 
     def test_a_child_platform_rule_does_not_cover_a_parent_platform_module(self):

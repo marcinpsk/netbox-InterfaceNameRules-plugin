@@ -7,6 +7,7 @@ These tests create real DB objects and exercise the full engine pipeline.
 
 import dataclasses
 import threading
+from unittest import skipUnless
 
 from dcim.models import (
     DeviceType,
@@ -28,7 +29,8 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES
-from netbox_interface_name_rules.tests.helpers import make_device
+from netbox_interface_name_rules.rule_selection import platforms_nest
+from netbox_interface_name_rules.tests.helpers import REQUIRES_NESTED_PLATFORMS, make_device
 
 
 class FindMatchingRuleTest(TestCase):
@@ -613,6 +615,46 @@ class FindMatchingRuleCachingTest(TestCase):
 
         # The restored cache must serve an unpinned lookup, so a later test cannot inherit a broken cache.
         self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)
+
+    @skipUnless(platforms_nest(), REQUIRES_NESTED_PLATFORMS)
+    def test_pinned_block_keeps_its_platform_tree_across_concurrent_cache_reload(self):
+        """A pinned batch matches ancestors from the tree it primed with, also after another thread reloads.
+
+        The reload publishes a tree in which both child platforms are roots. A child-platform lookup
+        that the pinned memo does not hold must still find the rule on the parent platform.
+        """
+        from netbox_interface_name_rules import rule_selection
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        parent = Platform.objects.create(name="CacheParentOS", slug="cache-parent-os")
+        first = Platform.objects.create(name="CacheChildOS 1", slug="cache-child-os-1", parent=parent)
+        second = Platform.objects.create(name="CacheChildOS 2", slug="cache-child-os-2", parent=parent)
+        on_parent = InterfaceNameRule.objects.create(
+            module_type=self.module_type, platform=parent, name_template="p{bay_position}"
+        )
+
+        def concurrent_reload():
+            rule_selection._RULE_CACHE = rule_selection._RuleSnapshot(
+                aliases=(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS),
+                version="concurrent-reload-other-tree",
+                exact=(),
+                regex=(),
+                platform_parents={parent.pk: None, first.pk: None, second.pk: None},
+                memo={},
+            )
+
+        try:
+            with pinned_rule_cache():
+                self.assertEqual(find_matching_rule(self.module_type, None, self.device_type, first), on_parent)
+
+                worker = threading.Thread(target=concurrent_reload)
+                worker.start()
+                worker.join()
+                self.assertEqual(rule_selection._RULE_CACHE.version, "concurrent-reload-other-tree")
+
+                self.assertEqual(find_matching_rule(self.module_type, None, self.device_type, second), on_parent)
+        finally:
+            rule_selection._RULE_CACHE = rule_selection._empty_rule_cache()
 
     def test_reload_publishes_a_fresh_cache_snapshot_atomically(self):
         """A version change rebinds _RULE_CACHE to a new snapshot instead of mutating the old one in place.
