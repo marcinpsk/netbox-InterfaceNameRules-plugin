@@ -14,7 +14,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
 | Device Type | No | Restrict to devices of this type |
-| Platform | No | Restrict to devices running this software platform/OS or a child platform of it |
+| Platform | No | Restrict to devices running this software platform/OS or a child platform of it (NetBox 4.4+) |
 | Name Template | Yes | Interface name pattern with template variables |
 | Parent Name Template | No | Name template for the channelized parent, with the same variables as Name Template except `{channel}`. Blank keeps the parent's current name |
 | Breakout Mode | No | Flat renames the base to the first channel and creates sibling interfaces. Channelized turns the base into a parent with one subinterface per channel (requires NetBox channel support) |
@@ -46,7 +46,8 @@ subinterface is never matched on its own; it follows the parent whose family a r
 When multiple regex patterns match at the same score, the longest pattern wins.
 
 A platform scope matches a device on that platform and a device on a child
-platform of it, at any depth. For example, a rule on `JunOS` matches a device on
+platform of it, at any depth. Platforms nest from NetBox 4.4; on NetBox 4.3 a
+platform scope matches its exact platform only. For example, a rule on `JunOS` matches a device on
 `JunOS 24.4R2-S5.4-EVO` when that platform is a child of `JunOS`. When rules on
 more than one of these platforms match at the same parent module type and device
 type scope, the rule on the platform closest to the device platform wins. A rule

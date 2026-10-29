@@ -50,7 +50,7 @@ class InterfaceNameRule(NetBoxModel):
     Scoping fields (all optional):
       - parent_module_type: match only when installed inside this module type
       - device_type:        match only devices of this hardware model
-      - platform:           match only devices running this software platform/OS or a child platform of it
+      - platform:           match only devices running this software platform/OS or a child platform of it (NetBox 4.4+)
     """
 
     module_type = models.ForeignKey(
@@ -105,7 +105,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         related_name="+",
         verbose_name="Platform",
-        help_text="If set, rule only applies to devices running this software platform/OS or a child platform of it",
+        help_text=(
+            "If set, rule only applies to devices running this software platform/OS "
+            "or a child platform of it (NetBox 4.4+)"
+        ),
     )
     name_template = models.CharField(
         max_length=255,
@@ -257,7 +260,7 @@ class InterfaceNameRule(NetBoxModel):
         A device-level rule takes no parent_module_type, so its scope is at most 3.
         Two rules with the same score fall back to lowest pk (first created).
 
-        A platform rule also matches a device on a descendant of its platform.
+        A platform rule also matches a device on a descendant of its platform (NetBox 4.4+).
         The platform bit is the same for each matching platform, so the score does
         not order them. For one device, the engine tries the rule on the closest
         platform first, before it compares pattern length and pk.

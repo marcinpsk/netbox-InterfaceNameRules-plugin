@@ -89,7 +89,8 @@ class RuleTestForm(forms.Form):
         required=False,
         label="Platform",
         help_text=(
-            "Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS) or a child platform of it"
+            "Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS) "
+            "or a child platform of it (NetBox 4.4+)"
         ),
         widget=forms.Select(attrs={"class": "form-select"}),
     )
@@ -266,7 +267,7 @@ class InterfaceNameRuleForm(NetBoxModelForm):
                 "Setting this raises the priority score by 200 (regex)."
             ),
             "platform": (
-                "Optional. Restricts this rule to devices running this OS/platform or a child platform of it. "
+                "Optional. Restricts this rule to devices running this OS/platform or a child platform of it (NetBox 4.4+). "
                 "When rules on more than one of these platforms match, the rule on the closest platform wins. "
                 "Setting this raises the priority score by 100 (regex)."
             ),

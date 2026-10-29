@@ -74,7 +74,7 @@ A named value that a name template substitutes before it evaluates the arithmeti
 _Avoid_: Placeholder, token
 
 **Rule scope**:
-The parent module type, device type and platform that limit where a rule applies. A blank scope field matches every value. A platform scope matches a device on that platform or on a descendant of it. When several rules match a module, an exact module type rule comes before a pattern rule. In each of the two, a parent module type scope comes first, then a device type scope, then the platform closest to the device platform; a rule with no platform comes last.
+The parent module type, device type and platform that limit where a rule applies. A blank scope field matches every value. A platform scope matches a device on that platform or on a descendant of it; platforms nest from NetBox 4.4. When several rules match a module, an exact module type rule comes before a pattern rule. In each of the two, a parent module type scope comes first, then a device type scope, then the platform closest to the device platform; a rule with no platform comes last.
 _Avoid_: Filter, match criteria
 
 **Naming context**:
