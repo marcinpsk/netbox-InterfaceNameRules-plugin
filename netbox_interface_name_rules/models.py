@@ -237,7 +237,7 @@ class InterfaceNameRule(NetBoxModel):
 
     @property
     def specificity_score(self) -> int:
-        """Numeric priority score; a longer regex pattern can raise it above a rule with more scope.
+        """Numeric priority score — higher beats lower in rule lookup.
 
         The engine selects rules in this order (``find_matching_rule``):
 
@@ -248,13 +248,13 @@ class InterfaceNameRule(NetBoxModel):
         3. **Regex pattern length** (longer = more specific string match).
 
         Score layout:
-          - Exact FK rules: 1000 + scope  (1000–1007)
-          - Regex rules:    scope × 100 + len(pattern)
-            e.g. device-scoped 15-char pattern → 2×100+15 = 215
-                 platform-scoped 2-char pattern → 1×100+2 = 102
-          Exact rules always outrank regex (max regex score with scope=7,
-          max_length=255 would be 7×100+255 = 955, so 1000 safely exceeds
-          any possible regex score).
+          - Exact FK rules: 10000 + scope  (10000–10007)
+          - Regex rules:    scope × 1000 + len(pattern)
+            e.g. device-scoped 15-char pattern → 2×1000+15 = 2015
+                 platform-scoped 2-char pattern → 1×1000+2 = 1002
+          A pattern has at most 255 characters, so more scope always scores
+          higher than a longer pattern, and exact rules (10000+) always score
+          higher than regex rules (at most 7×1000+255 = 7255).
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
         A device-level rule takes no parent_module_type, so its scope is at most 3.
@@ -272,8 +272,8 @@ class InterfaceNameRule(NetBoxModel):
             + (1 if self.platform_id else 0)
         )
         if not self.module_type_is_regex:
-            return 1000 + scope
-        return scope * 100 + len(self.module_type_pattern)
+            return 10000 + scope
+        return scope * 1000 + len(self.module_type_pattern)
 
     @property
     def specificity_label(self) -> str:

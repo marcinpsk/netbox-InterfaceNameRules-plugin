@@ -72,33 +72,33 @@ class ModelSpecificityTest(TestCase):
         cls.platform = Platform.objects.create(name="SPEC-IOS", slug="spec-ios")
 
     def test_exact_global_score(self):
-        """Exact FK rule with no scoping: score=1000."""
+        """Exact FK rule with no scoping: score=10000."""
         rule = InterfaceNameRule(
             module_type=self.module_type,
             name_template="port{bay_position}",
         )
-        self.assertEqual(rule.specificity_score, 1000)
+        self.assertEqual(rule.specificity_score, 10000)
 
     def test_exact_with_device_type_score(self):
-        """Exact FK rule with device_type: score=1002."""
+        """Exact FK rule with device_type: score=10002."""
         rule = InterfaceNameRule(
             module_type=self.module_type,
             device_type=self.device_type,
             name_template="port{bay_position}",
         )
-        self.assertEqual(rule.specificity_score, 1002)
+        self.assertEqual(rule.specificity_score, 10002)
 
     def test_exact_with_platform_score(self):
-        """Exact FK rule with platform only: score=1001."""
+        """Exact FK rule with platform only: score=10001."""
         rule = InterfaceNameRule(
             module_type=self.module_type,
             platform=self.platform,
             name_template="port{bay_position}",
         )
-        self.assertEqual(rule.specificity_score, 1001)
+        self.assertEqual(rule.specificity_score, 10001)
 
     def test_exact_full_specificity_score(self):
-        """Exact FK rule with all scoping fields: score=1007."""
+        """Exact FK rule with all scoping fields: score=10007."""
         rule = InterfaceNameRule(
             module_type=self.module_type,
             device_type=self.device_type,
@@ -106,10 +106,10 @@ class ModelSpecificityTest(TestCase):
             name_template="port{bay_position}",
         )
         rule.parent_module_type_id = self.module_type.pk  # set FK id directly
-        self.assertEqual(rule.specificity_score, 1007)
+        self.assertEqual(rule.specificity_score, 10007)
 
     def test_regex_global_score(self):
-        """Regex rule with no scoping: score = 0 * 100 + len(pattern)."""
+        """Regex rule with no scoping: score = 0 * 1000 + len(pattern)."""
         rule = InterfaceNameRule(
             module_type_is_regex=True,
             module_type_pattern="QSFP-.*",
@@ -118,14 +118,31 @@ class ModelSpecificityTest(TestCase):
         self.assertEqual(rule.specificity_score, len("QSFP-.*"))
 
     def test_regex_with_device_scope_score(self):
-        """Regex rule with device_type: score = 2 * 100 + len(pattern)."""
+        """Regex rule with device_type: score = 2 * 1000 + len(pattern)."""
         rule = InterfaceNameRule(
             module_type_is_regex=True,
             module_type_pattern="SFP-10G-.*",
             name_template="port{bay_position}",
         )
         rule.device_type_id = self.device_type.pk
-        self.assertEqual(rule.specificity_score, 200 + len("SFP-10G-.*"))
+        self.assertEqual(rule.specificity_score, 2000 + len("SFP-10G-.*"))
+
+    def test_more_scope_outscores_the_longest_pattern(self):
+        """A regex rule with more scope scores higher than any rule with less scope, as the lookup selects it."""
+
+        def regex_score(scope, pattern):
+            rule = InterfaceNameRule(module_type_is_regex=True, module_type_pattern=pattern)
+            rule.parent_module_type_id = self.module_type.pk if scope & 4 else None
+            rule.device_type_id = self.device_type.pk if scope & 2 else None
+            rule.platform_id = self.platform.pk if scope & 1 else None
+            return rule.specificity_score
+
+        longest = "S" * InterfaceNameRule._meta.get_field("module_type_pattern").max_length
+        for scope in range(1, 8):
+            with self.subTest(scope=scope):
+                self.assertGreater(regex_score(scope, "S"), regex_score(scope - 1, longest))
+        exact = InterfaceNameRule(module_type=self.module_type)
+        self.assertGreater(exact.specificity_score, regex_score(7, longest))
 
     def test_specificity_label_exact_global(self):
         """specificity_label for exact global rule is 'exact / global'."""

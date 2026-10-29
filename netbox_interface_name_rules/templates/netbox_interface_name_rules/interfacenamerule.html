@@ -27,23 +27,23 @@
     <br>
     <small>
       This score is <em>auto-computed</em> — you cannot set it directly.
-      It summarises which rule wins when multiple rules match the same module.
-      <strong>Lookup order:</strong> exact module type before regex, then more scope, then the closest platform,
-      then the longer pattern, then the older rule. A higher score from a longer pattern does not beat more scope.
-      Exact FK rules always outrank regex rules (score 1000+&nbsp;vs max ≤&nbsp;955).
+      It controls which rule wins when multiple rules match the same module.
+      <strong>Higher score = higher priority</strong>, except that among rules of the same kind with the same scope,
+      the rule on the closest platform wins.
+      Exact FK rules always outrank regex rules (score 10000+&nbsp;vs max ≤&nbsp;7255).
       Among regex rules, adding scope fields raises the score:
-      <code>parent_module_type</code>&nbsp;+4×100,
-      <code>device_type</code>&nbsp;+2×100,
-      <code>platform</code>&nbsp;+1×100,
-      plus pattern length.
+      <code>parent_module_type</code>&nbsp;+4×1000,
+      <code>device_type</code>&nbsp;+2×1000,
+      <code>platform</code>&nbsp;+1×1000,
+      plus pattern length (at most 255).
       <a data-bs-toggle="collapse" href="#priority-detail" class="ms-1">More…</a>
     </small>
     <div class="collapse mt-2" id="priority-detail">
       <table class="table table-sm table-bordered mb-0 small">
         <thead class="table-light"><tr><th>Rule type</th><th>Score formula</th><th>Range</th></tr></thead>
         <tbody>
-          <tr><td>Exact FK (module_type)</td><td>1000 + scope</td><td>1000 – 1007</td></tr>
-          <tr><td>Regex (module_type_pattern)</td><td>scope × 100 + len(pattern)</td><td>0 – 955</td></tr>
+          <tr><td>Exact FK (module_type)</td><td>10000 + scope</td><td>10000 – 10007</td></tr>
+          <tr><td>Regex (module_type_pattern)</td><td>scope × 1000 + len(pattern)</td><td>1 – 7255</td></tr>
         </tbody>
       </table>
       <p class="small mb-0 mt-1">

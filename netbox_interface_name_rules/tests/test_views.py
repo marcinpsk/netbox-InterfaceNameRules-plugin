@@ -331,14 +331,13 @@ class RuleListViewTest(ViewTestBase):
         self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
         self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
-    def test_priority_tooltip_states_the_lookup_order(self):
+    def test_priority_tooltip_says_the_closest_platform_wins_a_tie(self):
         response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
 
         self.assertContains(
             response,
-            "Lookup order: exact module type before regex, then more scope (parent module type, then device "
-            "type, then platform), then the closest platform, then the longer pattern, then the older rule. "
-            "A higher score from a longer pattern does not beat more scope.",
+            "Higher score = higher priority in rule lookup. Exception: among rules of the same kind (exact or "
+            "regex) with the same scope, the rule on the closest platform wins.",
         )
 
     def test_list_view_unauthenticated_redirects(self):
@@ -361,19 +360,23 @@ class RuleDetailViewTest(ViewTestBase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
 
-    def test_priority_panel_states_the_lookup_order(self):
+    def test_priority_panel_states_the_score_layout(self):
         response = self.client.get(
             reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", kwargs={"pk": self.rule.pk})
         )
 
         page = " ".join(response.content.decode().split())
-        self.assertIn(
-            "<strong>Lookup order:</strong> exact module type before regex, then more scope, then the closest "
-            "platform, then the longer pattern, then the older rule. A higher score from a longer pattern does "
-            "not beat more scope.",
-            page,
-        )
-        self.assertNotIn("Higher score = higher priority", page)
+        for statement in (
+            (
+                "<strong>Higher score = higher priority</strong>, except that among rules of the same kind with "
+                "the same scope, the rule on the closest platform wins."
+            ),
+            "Exact FK rules always outrank regex rules (score 10000+&nbsp;vs max ≤&nbsp;7255).",
+            "<tr><td>Exact FK (module_type)</td><td>10000 + scope</td><td>10000 – 10007</td></tr>",
+            "<tr><td>Regex (module_type_pattern)</td><td>scope × 1000 + len(pattern)</td><td>1 – 7255</td></tr>",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, page)
 
     def test_detail_view_404_for_missing(self):
         """Detail view returns 404 for non-existent rule PK."""

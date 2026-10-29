@@ -46,8 +46,8 @@ the `FPC/PIC/port` convention — for pizza-box ACX devices this simplifies to
 ```
 
 **Rule priority tip:** The exact FK rule for `SFP-10G-LR` automatically
-outranks any `SFP-10G-.*` regex rule at the same scope (score ≥ 1000 vs
-score ≤ 955). You don't need to remove regex rules to avoid conflicts — the
+outranks any `SFP-10G-.*` regex rule at the same scope (score ≥ 10000 vs
+score ≤ 7255). You don't need to remove regex rules to avoid conflicts — the
 exact FK rule always wins.
 
 ### Rule detail — Juniper ACX7024 QSFP+ 4×10G breakout

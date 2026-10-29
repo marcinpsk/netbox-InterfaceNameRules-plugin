@@ -71,12 +71,12 @@ class RuleSelectionTest(TestCase):
 
         selected = find_matching_rule(self.module_type, parent_module_type, self.device_type, platform)
 
-        self.assertEqual(parent_scoped.specificity_score, 1004)
-        self.assertEqual(device_and_platform_scoped.specificity_score, 1003)
+        self.assertEqual(parent_scoped.specificity_score, 10004)
+        self.assertEqual(device_and_platform_scoped.specificity_score, 10003)
         self.assertEqual(selected, parent_scoped)
 
-    def test_more_scope_beats_a_higher_score_from_a_longer_pattern(self):
-        """A short parent-scoped regex beats a long device-and-platform regex with a higher score."""
+    def test_more_scope_beats_a_longer_pattern_and_scores_higher(self):
+        """A short parent-scoped regex beats a long device-and-platform regex, and its score is higher."""
         parent_module_type = ModuleType.objects.create(
             manufacturer=self.module_type.manufacturer,
             model="SELECTOR-LONG-CHASSIS",
@@ -99,8 +99,8 @@ class RuleSelectionTest(TestCase):
 
         selected = find_matching_rule(self.module_type, parent_module_type, self.device_type, platform)
 
-        self.assertEqual(parent_scoped.specificity_score, 403)
-        self.assertEqual(device_and_platform_scoped.specificity_score, 503)
+        self.assertEqual(parent_scoped.specificity_score, 4003)
+        self.assertEqual(device_and_platform_scoped.specificity_score, 3203)
         self.assertEqual(selected, parent_scoped)
 
     def test_a_root_platform_scope_matches_its_exact_platform_on_every_release(self):

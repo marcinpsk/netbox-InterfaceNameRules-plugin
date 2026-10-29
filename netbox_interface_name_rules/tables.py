@@ -18,9 +18,8 @@ class SpecificityColumn(tables.Column):
             {
                 "th": {
                     "title": (
-                        "Lookup order: exact module type before regex, then more scope (parent module type, then "
-                        "device type, then platform), then the closest platform, then the longer pattern, then the "
-                        "older rule. A higher score from a longer pattern does not beat more scope."
+                        "Higher score = higher priority in rule lookup. Exception: among rules of the same kind "
+                        "(exact or regex) with the same scope, the rule on the closest platform wins."
                     )
                 }
             },
