@@ -75,6 +75,34 @@ class RuleSelectionTest(TestCase):
         self.assertEqual(device_and_platform_scoped.specificity_score, 1003)
         self.assertEqual(selected, parent_scoped)
 
+    def test_more_scope_beats_a_higher_score_from_a_longer_pattern(self):
+        """A short parent-scoped regex beats a long device-and-platform regex with a higher score."""
+        parent_module_type = ModuleType.objects.create(
+            manufacturer=self.module_type.manufacturer,
+            model="SELECTOR-LONG-CHASSIS",
+            part_number="SELECTOR-LONG-CHASSIS",
+        )
+        platform = Platform.objects.create(name="SelectorLongOS", slug="selector-long-os")
+        parent_scoped = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="S.*",
+            parent_module_type=parent_module_type,
+            name_template="parent{bay_position}",
+        )
+        device_and_platform_scoped = InterfaceNameRule.objects.create(
+            module_type_is_regex=True,
+            module_type_pattern="S" + "E?" * 100 + ".*",
+            device_type=self.device_type,
+            platform=platform,
+            name_template="devplat{bay_position}",
+        )
+
+        selected = find_matching_rule(self.module_type, parent_module_type, self.device_type, platform)
+
+        self.assertEqual(parent_scoped.specificity_score, 403)
+        self.assertEqual(device_and_platform_scoped.specificity_score, 503)
+        self.assertEqual(selected, parent_scoped)
+
     def test_a_root_platform_scope_matches_its_exact_platform_on_every_release(self):
         """NetBox 4.3 does not nest platforms, so there a platform scope is its exact platform."""
         platform = Platform.objects.create(name="SelectorExactOS", slug="selector-exact-os")

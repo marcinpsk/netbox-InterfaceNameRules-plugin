@@ -237,7 +237,7 @@ class InterfaceNameRule(NetBoxModel):
 
     @property
     def specificity_score(self) -> int:
-        """Numeric priority score — higher beats lower in rule lookup.
+        """Numeric priority score; a longer regex pattern can raise it above a rule with more scope.
 
         The engine selects rules in this order (``find_matching_rule``):
 

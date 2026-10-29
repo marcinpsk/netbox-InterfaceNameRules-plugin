@@ -331,14 +331,14 @@ class RuleListViewTest(ViewTestBase):
         self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
         self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
-    def test_priority_tooltip_says_the_closest_platform_wins_a_tie(self):
+    def test_priority_tooltip_states_the_lookup_order(self):
         response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
 
         self.assertContains(
             response,
-            "Higher score = higher priority in rule lookup. Exception: among module rules of the same kind "
-            "(exact or regex) with the same parent module type and device type, the rule on the closest "
-            "platform wins.",
+            "Lookup order: exact module type before regex, then more scope (parent module type, then device "
+            "type, then platform), then the closest platform, then the longer pattern, then the older rule. "
+            "A higher score from a longer pattern does not beat more scope.",
         )
 
     def test_list_view_unauthenticated_redirects(self):
@@ -360,6 +360,20 @@ class RuleDetailViewTest(ViewTestBase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_priority_panel_states_the_lookup_order(self):
+        response = self.client.get(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", kwargs={"pk": self.rule.pk})
+        )
+
+        page = " ".join(response.content.decode().split())
+        self.assertIn(
+            "<strong>Lookup order:</strong> exact module type before regex, then more scope, then the closest "
+            "platform, then the longer pattern, then the older rule. A higher score from a longer pattern does "
+            "not beat more scope.",
+            page,
+        )
+        self.assertNotIn("Higher score = higher priority", page)
 
     def test_detail_view_404_for_missing(self):
         """Detail view returns 404 for non-existent rule PK."""

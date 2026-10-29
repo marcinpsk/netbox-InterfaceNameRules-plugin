@@ -18,9 +18,9 @@ class SpecificityColumn(tables.Column):
             {
                 "th": {
                     "title": (
-                        "Higher score = higher priority in rule lookup. Exception: among module rules of the same "
-                        "kind (exact or regex) with the same parent module type and device type, the rule on the "
-                        "closest platform wins."
+                        "Lookup order: exact module type before regex, then more scope (parent module type, then "
+                        "device type, then platform), then the closest platform, then the longer pattern, then the "
+                        "older rule. A higher score from a longer pattern does not beat more scope."
                     )
                 }
             },
