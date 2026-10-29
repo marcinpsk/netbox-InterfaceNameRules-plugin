@@ -24,13 +24,13 @@
 #   3. For regex rules: longer pattern beats shorter at the same scope.
 #
 # Examples for a QSFP-DD-400G-DR4 module in a S9610-36D device on SONiC:
-#   Rule A: /.*/ platform=SONiC              → score 100+2=102  (pl, short)
-#   Rule B: /QSFP-DD-400G-.*/ platform=SONiC → score 100+15=115 (pl, longer)
+#   Rule A: /.*/ platform=SONiC              → score 1000+2=1002  (pl, short)
+#   Rule B: /QSFP-DD-400G-.*/ platform=SONiC → score 1000+15=1015 (pl, longer)
 #   → Rule B wins (highest score). Rule A catches everything else.
 #
 # ⚠ WARNING: Don't mix device-type and platform rules for the same device.
-#   A device-type rule at scope "dt" (score 2xx) always shadows a platform rule
-#   at scope "pl" (score 1xx), even if the platform rule has a more specific
+#   A device-type rule at scope "dt" (score 2xxx) always shadows a platform rule
+#   at scope "pl" (score 1xxx), even if the platform rule has a more specific
 #   pattern. Choose ONE approach: platform-scoped (this file) OR device-type-scoped
 #   (see ufispace-device-type.yaml).
 #

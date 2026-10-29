@@ -55,7 +55,7 @@ exact FK rule always wins.
 The rule detail page shows the auto-computed **priority score** and a
 human-readable label (e.g. `regex(13) / device`):
 
-![Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 213](screenshots/04-rule-detail-juniper-xe-breakout.png)
+![Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 2013](screenshots/04-rule-detail-juniper-xe-breakout.png)
 
 ---
 
@@ -253,7 +253,7 @@ files to avoid ambiguity.
 
 ### Rule detail — SONiC platform-scoped catch-all
 
-![Rule detail for SONiC catch-all rule, showing platform scope and priority score 102](screenshots/04c-rule-detail-sonic-swp.png)
+![Rule detail for SONiC catch-all rule, showing platform scope and priority score 1002](screenshots/04c-rule-detail-sonic-swp.png)
 
 ---
 
