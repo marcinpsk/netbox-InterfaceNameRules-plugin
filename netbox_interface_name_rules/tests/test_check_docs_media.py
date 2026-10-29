@@ -227,16 +227,24 @@ def test_a_gif_that_only_the_readme_shows_is_on_a_page(tmp_path: Path, _check) -
 
 def test_a_gif_inside_a_readme_code_block_is_not_on_a_page(tmp_path: Path, _check) -> None:
     image = f"![A clip]({_SITE_URL}assets/recordings/clip.gif)"
-    for fence in ("~~~", "```"):
-        readme = f"# Project\n\n{fence}markdown\n{image}\n\n{image}\n{fence}\n"
+    blocks = {
+        "tilde": f"~~~markdown\n{image}\n\n{image}\n~~~\n",
+        "backtick": f"```markdown\n{image}\n\n{image}\n```\n",
+        "longer-close": f"```markdown\n{image}\n\n{image}\n`````\n",
+        "blockquote": f"> ```markdown\n> {image}\n>\n> {image}\n> ```\n",
+    }
+    for name, block in blocks.items():
         site, media = _tree(
-            tmp_path / fence[0], {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/clip.gif"), readme=readme
+            tmp_path / name,
+            {"leases/index.html": _CLIP},
+            (*_CLIP_FILES, "recordings/clip.gif"),
+            readme=f"# Project\n\n{block}",
         )
 
         result = _check(site, media)
 
-        assert result.returncode == 1, fence
-        assert result.stderr == "unreferenced: recordings/clip.gif\n", fence
+        assert result.returncode == 1, name
+        assert result.stderr == "unreferenced: recordings/clip.gif\n", name
 
 
 def test_a_root_relative_video_src_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
@@ -267,6 +275,16 @@ def test_a_root_relative_src_with_an_encoded_site_path_shows_its_capture(tmp_pat
     result = _check(site, media)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_an_encoded_site_url_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
+    url = "https://example.github.io/%70roject/assets/missing.png?v=2#x"
+    site, media = _tree(tmp_path, {"index.html": f'<img src="{url}">'}, (), readme=f"![Missing]({url})\n")
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == f"missing: {url} (shown by index.html)\nmissing: {url} (shown by README.md)\n"
 
 
 def test_a_root_relative_src_outside_the_site_path_fails(tmp_path: Path, _check) -> None:

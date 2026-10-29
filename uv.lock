@@ -758,6 +758,7 @@ devcontainer = [
 ]
 docs = [
     { name = "ghp-import" },
+    { name = "markdown-it-py" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
@@ -823,6 +824,7 @@ devcontainer = [
 ]
 docs = [
     { name = "ghp-import", specifier = ">=2.1" },
+    { name = "markdown-it-py", specifier = ">=3" },
     { name = "mkdocs", specifier = ">=1,<2" },
     { name = "mkdocs-material", specifier = ">=9,<10" },
 ]
