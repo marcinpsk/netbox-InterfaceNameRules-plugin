@@ -78,8 +78,16 @@ packaging = [
     "build>=1.4",
 ]
 docs = [
+    "ghp-import>=2.1",
     "mkdocs>=1,<2",
     "mkdocs-material>=9,<10",
+]
+# The browser suite in docs_media/ that captures the documentation screenshots and recordings.
+docs-media = [
+    "imageio-ffmpeg>=0.6",
+    "playwright",
+    "pytest>=9.0.2",
+    "pytest-playwright>=0.7",
 ]
 dev = [
     {include-group = "ci-tests"},
@@ -87,6 +95,7 @@ dev = [
     {include-group = "reuse"},
     {include-group = "release"},
     {include-group = "packaging"},
+    {include-group = "docs-media"},
     "django>=5.1,<7.0",
 ]
 # Installed into the NetBox virtualenv, so it carries tools only. A framework pin here would
@@ -204,10 +213,11 @@ max-complexity = 15
     "D", "B904", "BLE001", "INP001", "PTH", "S101", "S105", "S110", "S310",
     "S603", "S607", "T20", "TRY301",
 ]
-".devcontainer/scripts/load-sample-data.py" = ["C901"]
 ".devcontainer/scripts/test-e2e.py" = ["C901"]
 "performance/**" = ["T20"]
 "scripts/**" = ["T20", "S101"]
+# The browser suite asserts the state of each view, and runs ffmpeg with the arguments it builds.
+"docs_media/**" = ["D", "S101", "S603"]
 # A console check: its printed report is what CI reads.
 ".github/scripts/**" = ["T20"]
 # The guard under test is a shell script, so running it is the test.

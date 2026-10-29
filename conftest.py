@@ -11,6 +11,9 @@ import pytest
 
 from netbox_interface_name_rules.tests.parallel import MAX_PARALLEL_WORKERS
 
+# The browser suite of the documentation media has its own pytest.ini; run it as `pytest docs_media`.
+collect_ignore = ["docs_media"]
+
 
 def pytest_xdist_auto_num_workers(config):
     """Cap the worker count that pytest-xdist detects for ``-n auto``."""
