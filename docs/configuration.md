@@ -14,7 +14,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
 | Device Type | No | Restrict to devices of this type |
-| Platform | No | Restrict to devices running this software platform/OS |
+| Platform | No | Restrict to devices running this software platform/OS or a child platform of it |
 | Name Template | Yes | Interface name pattern with template variables |
 | Parent Name Template | No | Name template for the channelized parent, with the same variables as Name Template except `{channel}`. Blank keeps the parent's current name |
 | Breakout Mode | No | Flat renames the base to the first channel and creates sibling interfaces. Channelized turns the base into a parent with one subinterface per channel (requires NetBox channel support) |
@@ -44,6 +44,16 @@ model name. For device-interface rules, it matches each device
 interface's current name, including a standalone interface such as `mgmt0`. A channel
 subinterface is never matched on its own; it follows the parent whose family a rule wins.
 When multiple regex patterns match at the same score, the longest pattern wins.
+
+A platform scope matches a device on that platform and a device on a child
+platform of it, at any depth. For example, a rule on `JunOS` matches a device on
+`JunOS 24.4R2-S5.4-EVO` when that platform is a child of `JunOS`. When rules on
+more than one of these platforms match at the same parent module type and device
+type scope, the rule on the platform closest to the device platform wins. A rule
+with no platform comes after them. The score does not show this order, because
+it depends on the device. Apply Rules uses the same scope: a rule on `JunOS`
+previews and renames the modules on devices on `JunOS` and on its child
+platforms.
 
 ### RE2 Pattern Syntax
 

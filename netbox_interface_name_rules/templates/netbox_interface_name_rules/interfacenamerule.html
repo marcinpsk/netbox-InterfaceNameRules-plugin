@@ -47,6 +47,8 @@
       </table>
       <p class="small mb-0 mt-1">
         Scope bits: <code>parent_module_type</code>=4, <code>device_type</code>=2, <code>platform</code>=1.
+        A <code>platform</code> scope also matches the child platforms of that platform.
+        When rules on more than one platform match a device, the rule on the closest platform wins.
         Two rules with the same score: lowest <code>pk</code> (oldest rule) wins.
       </p>
     </div>

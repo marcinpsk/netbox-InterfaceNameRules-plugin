@@ -27,7 +27,7 @@ automatically apply renaming rules based on configurable templates.
 - **Template variables**: `{slot}`, `{bay_position}`, `{bay_position_num}`, `{base}`, `{channel}`, etc.
 - **Arithmetic expressions**: `{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}`
 - **Breakout support**: create multiple channel interfaces from a single port (e.g., QSFP+ 4x10G)
-- **Scoping**: rules can be scoped to specific device types, parent module types, or be universal
+- **Scoping**: rules can be scoped to specific device types, parent module types, platforms (with their child platforms), or be universal
 - **Bulk import/export**: YAML-based rule management via the UI or API
 - **netbox-branching**: renames run in the active branch, and a merge, revert or sync keeps the names that it replays (netbox-branching 1.2.x on NetBox 4.7). A channel that the plugin kept at its old name is the exception: see [Limits in a branch](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/configuration/#limits-in-a-branch)
 

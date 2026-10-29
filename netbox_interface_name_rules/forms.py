@@ -88,7 +88,9 @@ class RuleTestForm(forms.Form):
         queryset=Platform.objects.all(),
         required=False,
         label="Platform",
-        help_text="Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS)",
+        help_text=(
+            "Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS) or a child platform of it"
+        ),
         widget=forms.Select(attrs={"class": "form-select"}),
     )
     name_template = forms.CharField(
@@ -264,7 +266,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
                 "Setting this raises the priority score by 200 (regex)."
             ),
             "platform": (
-                "Optional. Restricts this rule to devices running this OS/platform. "
+                "Optional. Restricts this rule to devices running this OS/platform or a child platform of it. "
+                "When rules on more than one of these platforms match, the rule on the closest platform wins. "
                 "Setting this raises the priority score by 100 (regex)."
             ),
             "module_type_is_regex": (
