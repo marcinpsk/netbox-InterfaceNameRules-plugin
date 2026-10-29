@@ -35,15 +35,36 @@ _SET_COLOR_MODE = """mode => {
     localStorage.setItem("netbox-color-mode", mode);
     document.documentElement.setAttribute("data-bs-theme", mode);
 }"""
-#: Remove the sticky top bar, which covers a scrolled element.
-#: Hide what differs on each run: the object identifier and the timestamps.
-_PREPARE_PAGE = """() => {
+#: The elements whose text differs on each run: the object identifier, the timestamps, and the time and host
+#: name in the footer. No image may show them.
+RUN_VALUES = ".breadcrumb + code, li:has(> .mdi-calendar-plus), li:has(> .mdi-calendar-edit), #footer-stamp"
+_HIDE_RUN_VALUES = f"{RUN_VALUES} {{ visibility: hidden !important; }}"
+#: Remove the sticky top bar of a screenshot, which covers a scrolled element, and hide the values of the run.
+_PREPARE_PAGE = (
+    """() => {
     const style = document.createElement("style");
-    style.textContent = `header.navbar.sticky-top { display: none !important; }
-        .breadcrumb + code, li:has(> .mdi-calendar-plus), li:has(> .mdi-calendar-edit)
-        { visibility: hidden !important; }`;
+    style.textContent = `header.navbar.sticky-top { display: none !important; } """
+    + _HIDE_RUN_VALUES
+    + """`;
     document.head.append(style);
 }"""
+)
+#: Hide the values of the run on each page of a recording, from its first frame.
+_HIDE_RUN_VALUES_SCRIPT = (
+    """(() => {
+    const style = document.createElement("style");
+    style.textContent = `"""
+    + _HIDE_RUN_VALUES
+    + """`;
+    const add = () => {
+        if (!document.documentElement) return false;
+        document.documentElement.append(style);
+        return true;
+    };
+    // The script can run before the html element exists.
+    if (!add()) new MutationObserver((_records, observer) => add() && observer.disconnect()).observe(document, {childList: true});
+})();"""
+)
 _NEXT_PAINT = "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
 _BODY_LUMINANCE = """() => {
     const [r, g, b] = getComputedStyle(document.body).backgroundColor.match(/\\d+/g).map(Number);
@@ -170,6 +191,12 @@ def interface_names(page: Page, count: int) -> list[str]:
     return sorted(name.strip() for name in names.all_inner_texts())
 
 
+def assert_run_values_hidden(page: Page) -> None:
+    values = page.locator(RUN_VALUES)
+    for index in range(values.count()):
+        expect(values.nth(index)).to_be_hidden()
+
+
 @pytest.fixture
 def capture(page: Page, screenshots_dir: Path) -> Callable[..., None]:
     """Return a function that writes one view as <name>-light.png and <name>-dark.png.
@@ -182,6 +209,7 @@ def capture(page: Page, screenshots_dir: Path) -> Callable[..., None]:
         page.evaluate(_PREPARE_PAGE)
         # Keep the pointer off the content, so that no row or button shows its hover state.
         page.mouse.move(0, 0)
+        assert_run_values_hidden(page)
         target = target or page.locator("#page-content")
         luminance = {}
         for mode in COLOR_MODES:
@@ -219,6 +247,7 @@ def record(
             color_scheme="light", record_video_dir=Path(output_path) / "video", record_video_size=VIEWPORT
         )
         context.add_init_script(script=CURSOR_SCRIPT)
+        context.add_init_script(script=_HIDE_RUN_VALUES_SCRIPT)
         recorded = context.new_page()
         # The video timeline starts with the screencast of the page.
         started = time.monotonic()
@@ -229,9 +258,11 @@ def record(
         # Wait until the browser paints the ready page, so that the cut does not show a partly drawn page.
         recorded.evaluate(_NEXT_PAINT)
         start = time.monotonic() - started
+        assert_run_values_hidden(recorded)
         clip = Clip(recorded)
         clip.pause()
         yield clip
+        assert_run_values_hidden(recorded)
         clip.pause(END_PAUSE)
         video = recorded.video
         assert video is not None, "the recorded context records no video"
