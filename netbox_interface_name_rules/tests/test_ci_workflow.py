@@ -2,6 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the coverage wiring of the CI test workflow."""
 
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -85,3 +86,79 @@ class CoverageCombineWorkflowTest(unittest.TestCase):
         self.assertIn("--cov-fail-under=0", pyproject["tool"]["pytest"]["ini_options"]["addopts"].split())
         self.assertIn("coverage report\n", combine)
         self.assertNotIn("--fail-under", combine)
+
+
+def _workflows():
+    for path in sorted((_PROJECT_ROOT / ".github" / "workflows").iterdir()):
+        if path.suffix in {".yaml", ".yml"}:
+            yield path.name, yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _path_filter_matches(patterns, path):
+    """Match *path* as a GitHub path filter does: the last pattern that matches decides, and ! excludes."""
+
+    def regex(pattern):
+        parts = re.split(r"(\*\*/?|\*)", pattern)
+        tokens = {"**": ".*", "**/": "(?:.*/)?", "*": "[^/]*"}
+        return "".join(tokens.get(part, re.escape(part)) for part in parts)
+
+    selected = False
+    for pattern in patterns:
+        excluded = pattern.startswith("!")
+        if re.fullmatch(regex(pattern.removeprefix("!")), path):
+            selected = not excluded
+    return selected
+
+
+class DocsWorkflowTest(unittest.TestCase):
+    """The docs build sees each change that the captured media show, and no gh-pages publish is dropped."""
+
+    def test_no_waiting_gh_pages_publish_is_cancelled(self):
+        publishers = {
+            f"{name}:{job_name}": job["concurrency"]
+            for name, workflow in _workflows()
+            for job_name, job in workflow["jobs"].items()
+            if job.get("concurrency", {}).get("group") == "publish-gh-pages"
+        }
+
+        self.assertEqual(sorted(publishers), ["coverage-badge.yaml:publish-coverage", "docs-deploy.yaml:deploy"])
+        for publisher, concurrency in publishers.items():
+            with self.subTest(publisher=publisher):
+                # The default queue keeps one waiting job, so a new one cancels it.
+                self.assertEqual(
+                    concurrency, {"group": "publish-gh-pages", "cancel-in-progress": False, "queue": "max"}
+                )
+
+    def test_a_pull_request_that_changes_a_captured_view_builds_the_docs(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        patterns = workflow["on"]["pull_request"]["paths"]
+
+        for path in (
+            "netbox_interface_name_rules/forms.py",
+            "netbox_interface_name_rules/tables.py",
+            "netbox_interface_name_rules/views.py",
+            "netbox_interface_name_rules/models.py",
+            "netbox_interface_name_rules/engine.py",
+            "netbox_interface_name_rules/family/plans.py",
+            "netbox_interface_name_rules/templates/netbox_interface_name_rules/rule_apply.html",
+            "docs_media/test_recordings.py",
+            "docs/examples.md",
+            "contrib/juniper.yaml",
+            "scripts/load_demo_data.py",
+            "mkdocs.yml",
+            "README.md",
+            "uv.lock",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(_path_filter_matches(patterns, path))
+
+    def test_a_pull_request_that_changes_only_the_plugin_tests_skips_the_docs_build(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        patterns = workflow["on"]["pull_request"]["paths"]
+
+        for path in (
+            "netbox_interface_name_rules/tests/test_views.py",
+            "netbox_interface_name_rules/tests/query_counts.json",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(_path_filter_matches(patterns, path))

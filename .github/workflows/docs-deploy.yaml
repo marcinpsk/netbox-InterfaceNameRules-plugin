@@ -36,9 +36,11 @@ jobs:
     permissions:
       contents: write
     # coverage-badge.yaml also writes gh-pages; one group keeps each push from overwriting the other.
+    # `queue: max` keeps each waiting publish; the default queue cancels a waiting job when a new one arrives.
     concurrency:
       group: publish-gh-pages
       cancel-in-progress: false
+      queue: max
     steps:
       # Builds of two releases can overlap, so the older one can finish last.
       - name: Refuse a tag that is not the latest release

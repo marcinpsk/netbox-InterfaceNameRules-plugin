@@ -16,9 +16,10 @@ name: Docs build
     branches:
       - main
       - develop
+    # The plugin code draws the captured views; its tests do not.
     paths:
-      - "netbox_interface_name_rules/templates/**"
-      - "netbox_interface_name_rules/static/**"
+      - "netbox_interface_name_rules/**"
+      - "!netbox_interface_name_rules/tests/**"
       - "docs/**"
       - "docs_media/**"
       - "mkdocs.yml"
