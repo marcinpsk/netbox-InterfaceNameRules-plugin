@@ -15,9 +15,9 @@ from .regex_safety import compile_module_type_pattern
 
 @dataclass(frozen=True, slots=True)
 class _RuleSnapshot:
-    """One enabled-rule set read from one alias; only the memo changes after publication."""
+    """One enabled-rule set and platform tree read from one pair of aliases; only the memo changes after publication."""
 
-    alias: str | None
+    aliases: tuple | None
     version: str | None
     exact: tuple
     regex: tuple
@@ -27,7 +27,7 @@ class _RuleSnapshot:
 
 def _empty_rule_cache():
     """Return a new snapshot that matches no alias, so the next read reloads."""
-    return _RuleSnapshot(alias=None, version=None, exact=(), regex=(), platform_parents={}, memo={})
+    return _RuleSnapshot(aliases=None, version=None, exact=(), regex=(), platform_parents={}, memo={})
 
 
 # A reload rebinds this to a new snapshot, so a reader never mixes entries from two versions.
@@ -46,7 +46,7 @@ def pinned_rule_cache():
     """Pin one enabled-rule snapshot for all selections inside the block.
 
     The first selection loads and fingerprints the rule set. Later selections in
-    the same thread and from the same read alias skip the fingerprint query.
+    the same thread and from the same read aliases skip the fingerprint query.
     Nested blocks share the snapshot. The pin is thread-local, and an empty block
     does not load rules.
     """
@@ -60,7 +60,7 @@ def pinned_rule_cache():
         _pin.depth -= 1
         if _pin.depth == 0:
             _pin.primed = False
-            for attr in ("alias", "exact", "regex", "platform_parents", "memo"):
+            for attr in ("aliases", "exact", "regex", "platform_parents", "memo"):
                 _pin.__dict__.pop(attr, None)
 
 
@@ -144,8 +144,8 @@ def _version_row_signature():
 _ROW_SIGNATURE = _version_row_signature()
 
 
-def _platform_tree_signature():
-    """Build a subquery that hashes the parent of every platform in primary-key order."""
+def _platform_tree_hash():
+    """Return a one-row queryset that hashes the parent of every platform in primary-key order."""
     from dcim.models import Platform
 
     text = TextField()
@@ -156,42 +156,39 @@ def _platform_tree_signature():
         output_field=text,
     )
     # Grouping on a constant aggregates every platform into one row.
-    return Subquery(
+    return (
         Platform.objects.order_by()
         .annotate(tree=Value(1))
         .values("tree")
         .annotate(signature=_Md5OrderedStringAgg(row, Value(",", output_field=text)))
-        .values("signature")
+        .values_list("signature", flat=True)
     )
 
 
-def _enabled_rules_version(alias):
-    """Return a deterministic content fingerprint of all enabled rules and of the platform tree on *alias*.
+def _enabled_rules_version(alias, platform_alias):
+    """Return a deterministic content fingerprint of the enabled rules on *alias* and of the platform tree.
 
     PostgreSQL hashes the matching and output columns in primary-key order. Each
     value is length-prefixed, so arbitrary text cannot create field or row boundary
     collisions. The empty rule set has a stable empty rules part. The platform
     tree decides which rules a device platform matches, so a tree edit changes the
-    fingerprint too, in the same query.
+    fingerprint too. One query reads both when they share an alias. With exempt
+    rule models in a branch, the rules are on main and the tree is on the branch,
+    so a second query reads the tree.
     """
     from .models import InterfaceNameRule
 
-    rules = Coalesce(
-        _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
-        Value("", output_field=TextField()),
-    )
-    return (
-        InterfaceNameRule.objects.using(alias)
-        .filter(enabled=True)
-        .aggregate(
-            fingerprint=Concat(
-                rules,
-                Value("/", output_field=TextField()),
-                Coalesce(_platform_tree_signature(), Value("", output_field=TextField())),
-                output_field=TextField(),
-            )
+    text = TextField()
+    empty = Value("", output_field=text)
+    rules_hash = Coalesce(_Md5OrderedStringAgg(_ROW_SIGNATURE, empty), empty)
+    rules = InterfaceNameRule.objects.using(alias).filter(enabled=True)
+    if platform_alias == alias:
+        tree_hash = Coalesce(Subquery(_platform_tree_hash()), empty)
+        return rules.aggregate(
+            fingerprint=Concat(rules_hash, Value("/", output_field=text), tree_hash, output_field=text)
         )["fingerprint"]
-    )
+    tree_hash = next(iter(_platform_tree_hash().using(platform_alias)), None) or ""
+    return f"{rules.aggregate(fingerprint=rules_hash)['fingerprint']}/{tree_hash}"
 
 
 def _get_enabled_rules():
@@ -208,16 +205,18 @@ def _get_enabled_rules():
     # One module-level cache, replaced atomically.
     global _RULE_CACHE  # noqa: PLW0603
 
-    # A branch can hold other rules than main, so a snapshot belongs to the alias it was read from.
+    # A branch can hold other rules or another platform tree than main, so a snapshot belongs to its read aliases.
     alias = _enabled_module_rules().db
+    platform_alias = Platform.objects.db
+    aliases = (alias, platform_alias)
     pinned = getattr(_pin, "depth", 0) > 0
-    if pinned and getattr(_pin, "primed", False) and _pin.alias == alias:
+    if pinned and getattr(_pin, "primed", False) and _pin.aliases == aliases:
         # Return the thread's snapshot. Another thread can replace the shared cache.
         return _pin.exact, _pin.regex, _pin.platform_parents, _pin.memo
 
     cache = _RULE_CACHE
-    version = _enabled_rules_version(alias)
-    if (cache.alias, cache.version) != (alias, version):
+    version = _enabled_rules_version(alias, platform_alias)
+    if (cache.aliases, cache.version) != (aliases, version):
         rules = list(_enabled_module_rules().using(alias).order_by("module_type__model", "pk"))
         exact = tuple(rule for rule in rules if not rule.module_type_is_regex)
         regex_rules = sorted(
@@ -225,15 +224,15 @@ def _get_enabled_rules():
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
         regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
-        platform_parents = dict(Platform.objects.using(alias).order_by().values_list("pk", "parent_id"))
+        platform_parents = dict(Platform.objects.using(platform_alias).order_by().values_list("pk", "parent_id"))
         cache = _RuleSnapshot(
-            alias=alias, version=version, exact=exact, regex=regex, platform_parents=platform_parents, memo={}
+            aliases=aliases, version=version, exact=exact, regex=regex, platform_parents=platform_parents, memo={}
         )
         _RULE_CACHE = cache
 
     if pinned:
         # Keep a private memo so another thread cannot clear this batch's entries.
-        _pin.alias = alias
+        _pin.aliases = aliases
         _pin.exact = cache.exact
         _pin.regex = cache.regex
         _pin.platform_parents = cache.platform_parents

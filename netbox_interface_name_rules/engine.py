@@ -514,15 +514,16 @@ def _device_interface_rules(device):
 
     device_type = getattr(device, "device_type", None)
     platform = getattr(device, "platform", None)
+    candidates = InterfaceNameRule.objects.filter(applies_to_device_interfaces=True, enabled=True)
     platform_scope = Q(platform__isnull=True)
     if platform is not None:
-        platform_scope |= Q(platform__in=platform.get_ancestors(include_self=True))
+        ancestors = platform.get_ancestors(include_self=True)
+        if ancestors.db != candidates.db:
+            # Exempt rule models in a branch: a subquery would read the platform tree of main.
+            ancestors = list(ancestors.values_list("pk", flat=True))
+        platform_scope |= Q(platform__in=ancestors)
     rules = list(
-        InterfaceNameRule.objects.filter(
-            applies_to_device_interfaces=True,
-            enabled=True,
-        )
-        .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
+        candidates.filter(Q(device_type=device_type) | Q(device_type__isnull=True))
         .filter(platform_scope)
         .select_related("platform")
     )
