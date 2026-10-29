@@ -10,6 +10,7 @@ from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.rule_selection import (
     _build_candidates,
     _platform_lineage,
+    _platform_subtree,
     find_matching_rule,
     platform_lineage,
     platform_subtree,
@@ -132,6 +133,19 @@ class RuleSelectionTest(TestCase):
                 (None, None, None),
             ],
         )
+
+    def test_a_subtree_walks_only_from_the_requested_platform(self):
+        """A parent cycle in an unrelated tree does not change, or stop, the subtree of another platform."""
+        parents = {1: None, 2: 1, 3: 2, 4: 1, 10: 11, 11: 10, 12: None}
+
+        self.assertEqual(_platform_subtree(1, parents), {1, 2, 3, 4})
+        self.assertEqual(_platform_subtree(2, parents), {2, 3})
+        self.assertEqual(_platform_subtree(12, parents), {12})
+        self.assertEqual(_platform_subtree(99, parents), {99})
+
+    def test_a_subtree_walk_ends_inside_a_cycle(self):
+        """A cycle reachable from the requested platform ends the walk instead of looping."""
+        self.assertEqual(_platform_subtree(10, {10: 11, 11: 10, 12: 11}), {10, 11, 12})
 
     def test_a_platform_cycle_fails_instead_of_looping(self):
         """A platform map in which a platform is its own ancestor raises instead of looping."""

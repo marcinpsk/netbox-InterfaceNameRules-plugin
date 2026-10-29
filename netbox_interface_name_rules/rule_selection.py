@@ -4,6 +4,7 @@
 
 import contextlib
 import threading
+from collections import defaultdict
 from dataclasses import dataclass
 
 from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -297,8 +298,25 @@ def platform_lineage(platform) -> list:
 def platform_subtree(platform_id) -> set:
     """Return *platform_id* and the pk of each of its descendants, from the rule snapshot."""
     _, _, platform_parents, _ = _get_enabled_rules()
-    descendants = (pk for pk in platform_parents if platform_id in _platform_lineage(pk, platform_parents))
-    return {platform_id, *descendants}
+    return _platform_subtree(platform_id, platform_parents)
+
+
+def _platform_subtree(platform_id, platform_parents) -> set:
+    """Return *platform_id* and the pk of each of its descendants in *platform_parents*.
+
+    The walk starts at *platform_id* and visits each platform once, so a cycle ends it.
+    """
+    children = defaultdict(list)
+    for pk, parent_id in platform_parents.items():
+        children[parent_id].append(pk)
+    subtree = set()
+    pending = [platform_id]
+    while pending:
+        pk = pending.pop()
+        if pk not in subtree:
+            subtree.add(pk)
+            pending.extend(children[pk])
+    return subtree
 
 
 def _rule_scope_matches(rule, scope_ids):
