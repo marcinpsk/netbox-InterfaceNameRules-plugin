@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
-from django.db.models import Aggregate, F, TextField, Value
+from django.db.models import Aggregate, F, Subquery, TextField, Value
 from django.db.models.functions import Cast, Coalesce, Concat, Length
 
 from .regex_safety import compile_module_type_pattern
@@ -21,12 +21,13 @@ class _RuleSnapshot:
     version: str | None
     exact: tuple
     regex: tuple
+    platform_parents: dict
     memo: dict
 
 
 def _empty_rule_cache():
     """Return a new snapshot that matches no alias, so the next read reloads."""
-    return _RuleSnapshot(alias=None, version=None, exact=(), regex=(), memo={})
+    return _RuleSnapshot(alias=None, version=None, exact=(), regex=(), platform_parents={}, memo={})
 
 
 # A reload rebinds this to a new snapshot, so a reader never mixes entries from two versions.
@@ -59,7 +60,7 @@ def pinned_rule_cache():
         _pin.depth -= 1
         if _pin.depth == 0:
             _pin.primed = False
-            for attr in ("alias", "exact", "regex", "memo"):
+            for attr in ("alias", "exact", "regex", "platform_parents", "memo"):
                 _pin.__dict__.pop(attr, None)
 
 
@@ -143,35 +144,67 @@ def _version_row_signature():
 _ROW_SIGNATURE = _version_row_signature()
 
 
+def _platform_tree_signature():
+    """Build a subquery that hashes the parent of every platform in primary-key order."""
+    from dcim.models import Platform
+
+    text = TextField()
+    row = Concat(
+        Cast(F("id"), output_field=text),
+        Value(":", output_field=text),
+        Coalesce(Cast(F("parent_id"), output_field=text), Value("", output_field=text)),
+        output_field=text,
+    )
+    # Grouping on a constant aggregates every platform into one row.
+    return Subquery(
+        Platform.objects.order_by()
+        .annotate(tree=Value(1))
+        .values("tree")
+        .annotate(signature=_Md5OrderedStringAgg(row, Value(",", output_field=text)))
+        .values("signature")
+    )
+
+
 def _enabled_rules_version(alias):
-    """Return a deterministic content fingerprint of all enabled rules on *alias*.
+    """Return a deterministic content fingerprint of all enabled rules and of the platform tree on *alias*.
 
     PostgreSQL hashes the matching and output columns in primary-key order. Each
     value is length-prefixed, so arbitrary text cannot create field or row boundary
-    collisions. The empty rule set has a stable empty fingerprint.
+    collisions. The empty rule set has a stable empty rules part. The platform
+    tree decides which rules a device platform matches, so a tree edit changes the
+    fingerprint too, in the same query.
     """
     from .models import InterfaceNameRule
 
+    rules = Coalesce(
+        _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
+        Value("", output_field=TextField()),
+    )
     return (
         InterfaceNameRule.objects.using(alias)
         .filter(enabled=True)
         .aggregate(
-            fingerprint=Coalesce(
-                _Md5OrderedStringAgg(_ROW_SIGNATURE, Value("", output_field=TextField())),
-                Value("", output_field=TextField()),
+            fingerprint=Concat(
+                rules,
+                Value("/", output_field=TextField()),
+                Coalesce(_platform_tree_signature(), Value("", output_field=TextField())),
+                output_field=TextField(),
             )
         )["fingerprint"]
     )
 
 
 def _get_enabled_rules():
-    """Return the exact rules, regex rules, and memo for the current version on the read alias.
+    """Return the exact rules, regex rules, platform parents and memo for the current version on the read alias.
 
     Exact rules retain model ordering, which reduces to primary-key order for one
     module type. Regex rules are compiled once and ordered by decreasing pattern
-    length, then primary key. A reload publishes one new cache snapshot so a
-    concurrent reader cannot combine values from two versions.
+    length, then primary key. The platform parents map each platform pk to its
+    parent pk. A reload publishes one new cache snapshot so a concurrent reader
+    cannot combine values from two versions.
     """
+    from dcim.models import Platform
+
     # One module-level cache, replaced atomically.
     global _RULE_CACHE  # noqa: PLW0603
 
@@ -180,7 +213,7 @@ def _get_enabled_rules():
     pinned = getattr(_pin, "depth", 0) > 0
     if pinned and getattr(_pin, "primed", False) and _pin.alias == alias:
         # Return the thread's snapshot. Another thread can replace the shared cache.
-        return _pin.exact, _pin.regex, _pin.memo
+        return _pin.exact, _pin.regex, _pin.platform_parents, _pin.memo
 
     cache = _RULE_CACHE
     version = _enabled_rules_version(alias)
@@ -192,7 +225,10 @@ def _get_enabled_rules():
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
         regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
-        cache = _RuleSnapshot(alias=alias, version=version, exact=exact, regex=regex, memo={})
+        platform_parents = dict(Platform.objects.using(alias).order_by().values_list("pk", "parent_id"))
+        cache = _RuleSnapshot(
+            alias=alias, version=version, exact=exact, regex=regex, platform_parents=platform_parents, memo={}
+        )
         _RULE_CACHE = cache
 
     if pinned:
@@ -200,11 +236,12 @@ def _get_enabled_rules():
         _pin.alias = alias
         _pin.exact = cache.exact
         _pin.regex = cache.regex
+        _pin.platform_parents = cache.platform_parents
         _pin.memo = dict(cache.memo)
         _pin.primed = True
-        return _pin.exact, _pin.regex, _pin.memo
+        return _pin.exact, _pin.regex, _pin.platform_parents, _pin.memo
 
-    return cache.exact, cache.regex, cache.memo
+    return cache.exact, cache.regex, cache.platform_parents, cache.memo
 
 
 def _scope_ids(parent_module_type, device_type, platform):
@@ -214,6 +251,20 @@ def _scope_ids(parent_module_type, device_type, platform):
         device_type.pk if device_type is not None else None,
         platform.pk if platform is not None else None,
     )
+
+
+def _platform_lineage(platform_id, platform_parents) -> list:
+    """Return *platform_id* and the pk of each of its ancestors, the closest first.
+
+    A platform that the snapshot does not know, such as one created in a pinned batch, has no ancestors.
+    """
+    lineage = []
+    while platform_id is not None:
+        if platform_id in lineage:
+            raise ValueError(f"Platform {platform_id} is its own ancestor.")
+        lineage.append(platform_id)
+        platform_id = platform_parents.get(platform_id)
+    return lineage
 
 
 def _rule_scope_matches(rule, scope_ids):
@@ -226,33 +277,28 @@ def _rule_scope_matches(rule, scope_ids):
     )
 
 
-def _build_candidates(parent_module_type, device_type, platform) -> list:
-    """Build scope combinations from most specific to least specific."""
-    seen: set = set()
-    candidates = []
-    parent_options = [parent_module_type, None] if parent_module_type else [None]
-    device_options = [device_type, None] if device_type else [None]
-    platform_options = [platform, None] if platform else [None]
-    for parent in parent_options:
-        for device in device_options:
-            for candidate_platform in platform_options:
-                candidate = (parent, device, candidate_platform)
-                if candidate not in seen:
-                    seen.add(candidate)
-                    candidates.append(candidate)
-    return candidates
+def _build_candidates(parent_module_type_id, device_type_id, platform_lineage) -> list:
+    """Build scope-id combinations from most specific to least specific; a closer platform comes first."""
+    parent_options = [parent_module_type_id, None] if parent_module_type_id is not None else [None]
+    device_options = [device_type_id, None] if device_type_id is not None else [None]
+    platform_options = [*platform_lineage, None]
+    return [
+        (parent, device, platform)
+        for parent in parent_options
+        for device in device_options
+        for platform in platform_options
+    ]
 
 
 def _find_exact_match(module_type, candidates, exact_rules=None):
     """Return the first enabled exact rule in scope-precedence order."""
     if exact_rules is None:
-        exact_rules, _, _ = _get_enabled_rules()
+        exact_rules, _, _, _ = _get_enabled_rules()
 
     scoped_rules = [rule for rule in exact_rules if rule.module_type_id == module_type.pk]
     for candidate in candidates:
-        scope_ids = _scope_ids(*candidate)
         for rule in scoped_rules:
-            if _rule_scope_matches(rule, scope_ids):
+            if _rule_scope_matches(rule, candidate):
                 return rule
     return None
 
@@ -260,12 +306,11 @@ def _find_exact_match(module_type, candidates, exact_rules=None):
 def _find_regex_match(model_name: str, candidates, regex_rules=None):
     """Return the first enabled regex rule in scope-precedence order."""
     if regex_rules is None:
-        _, regex_rules, _ = _get_enabled_rules()
+        _, regex_rules, _, _ = _get_enabled_rules()
 
     for candidate in candidates:
-        scope_ids = _scope_ids(*candidate)
         for compiled, rule in regex_rules:
-            if compiled is not None and _rule_scope_matches(rule, scope_ids) and compiled.fullmatch(model_name):
+            if compiled is not None and _rule_scope_matches(rule, candidate) and compiled.fullmatch(model_name):
                 return rule
     return None
 
@@ -275,25 +320,26 @@ def find_matching_rule(module_type, parent_module_type, device_type, platform=No
 
     Exact module-type rules take priority over regular-expression rules. Within
     each tier, parent module type, device type, and platform scopes are tried from
-    most specific to least specific.
+    most specific to least specific. A rule platform matches the device platform and
+    each of its ancestors, and a closer platform comes before a farther one.
     """
     if module_type is None:
         return None
 
-    exact_rules, regex_rules, memo = _get_enabled_rules()
-    signature = (
-        module_type.pk,
-        # Regex matching reads the live model name, so the memo key must include it.
-        module_type.model,
-        *_scope_ids(parent_module_type, device_type, platform),
-    )
+    exact_rules, regex_rules, platform_parents, memo = _get_enabled_rules()
+    scope_ids = _scope_ids(parent_module_type, device_type, platform)
+    # Regex matching reads the live model name, so the memo key must include it.
+    signature = (module_type.pk, module_type.model, *scope_ids)
     # A single dictionary read cannot race with another thread's memo clear between
     # a membership check and a later subscript.
     cached = memo.get(signature, _MEMO_MISS)
     if cached is not _MEMO_MISS:
         return cached
 
-    candidates = _build_candidates(parent_module_type, device_type, platform)
+    parent_module_type_id, device_type_id, platform_id = scope_ids
+    candidates = _build_candidates(
+        parent_module_type_id, device_type_id, _platform_lineage(platform_id, platform_parents)
+    )
     result = _find_exact_match(module_type, candidates, exact_rules) or _find_regex_match(
         module_type.model,
         candidates,

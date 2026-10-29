@@ -7,7 +7,7 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rule_selection import _build_candidates, find_matching_rule
+from netbox_interface_name_rules.rule_selection import _build_candidates, _platform_lineage, find_matching_rule
 
 
 class RuleSelectionTest(TestCase):
@@ -89,7 +89,7 @@ class RuleSelectionTest(TestCase):
 
     def test_candidate_order_descends_by_specificity_score(self):
         """Candidate order is the scope weighting of specificity_score, counted down from 7 to 0."""
-        candidates = _build_candidates("parent", "device", "platform")
+        candidates = _build_candidates("parent", "device", ["platform"])
 
         weights = [
             (4 if parent else 0) + (2 if device else 0) + (1 if platform else 0)
@@ -97,3 +97,25 @@ class RuleSelectionTest(TestCase):
         ]
 
         self.assertEqual(weights, [7, 6, 5, 4, 3, 2, 1, 0])
+
+    def test_candidates_try_the_closer_platform_first_in_each_scope(self):
+        """Within one parent and device scope, the device platform comes before its ancestors, then no platform."""
+        candidates = _build_candidates("parent", None, ["child", "ancestor"])
+
+        self.assertEqual(
+            candidates,
+            [
+                ("parent", None, "child"),
+                ("parent", None, "ancestor"),
+                ("parent", None, None),
+                (None, None, "child"),
+                (None, None, "ancestor"),
+                (None, None, None),
+            ],
+        )
+
+    def test_a_platform_cycle_fails_instead_of_looping(self):
+        """A platform map in which a platform is its own ancestor raises instead of looping."""
+        self.assertEqual(_platform_lineage(3, {3: 2, 2: 1, 1: None}), [3, 2, 1])
+        with self.assertRaisesMessage(ValueError, "Platform 3 is its own ancestor."):
+            _platform_lineage(3, {3: 2, 2: 3})

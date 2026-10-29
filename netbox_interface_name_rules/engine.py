@@ -504,27 +504,33 @@ def pinned_reapply(modules):
 
 
 def _device_interface_rules(device):
-    """Return enabled device-interface rules in matching priority order."""
+    """Return enabled device-interface rules in matching priority order.
+
+    A rule platform matches the device platform and each of its ancestors.
+    """
     from django.db.models import Q
 
     from .models import InterfaceNameRule
 
     device_type = getattr(device, "device_type", None)
     platform = getattr(device, "platform", None)
+    platform_scope = Q(platform__isnull=True)
+    if platform is not None:
+        platform_scope |= Q(platform__in=platform.get_ancestors(include_self=True))
     rules = list(
         InterfaceNameRule.objects.filter(
             applies_to_device_interfaces=True,
             enabled=True,
         )
         .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
-        .filter(Q(platform=platform) | Q(platform__isnull=True))
+        .filter(platform_scope)
+        .select_related("platform")
     )
-    # Sort Python-side: specificity_score descending, then module_type_pattern length
-    # descending (for device-interface rules with ties), then pk ascending for stability.
-    # (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)
+    # Higher score first, then the closer (deeper) platform, then the longer pattern, then the lower pk.
     rules.sort(
         key=lambda r: (
             -r.specificity_score,
+            -r.platform.level if r.platform_id else 0,
             -len(r.module_type_pattern or ""),
             r.pk,
         )
@@ -703,6 +709,8 @@ def has_applicable_interfaces(rule) -> bool:
 def _build_module_qs(rule):
     """Return a Module queryset filtered to the rule's scope (module type, parent, device, platform).
 
+    A rule platform covers the devices on that platform and on each of its descendants.
+
     Shared by ``find_interfaces_for_rule`` and ``apply_rule_to_existing`` to avoid
     duplicating the filtering logic.
     """
@@ -717,7 +725,7 @@ def _build_module_qs(rule):
     if rule.device_type:
         qs = qs.filter(device__device_type=rule.device_type)
     if rule.platform:
-        qs = qs.filter(device__platform=rule.platform)
+        qs = qs.filter(device__platform__in=rule.platform.get_descendants(include_self=True))
     return qs
 
 

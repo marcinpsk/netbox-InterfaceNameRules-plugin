@@ -579,7 +579,12 @@ class FindMatchingRuleCachingTest(TestCase):
             # separate thread has its own connection and cannot see this TestCase's uncommitted rows.)
             worker_pin_depth.append(getattr(rule_selection._pin, "depth", 0))
             rule_selection._RULE_CACHE = rule_selection._RuleSnapshot(
-                alias=DEFAULT_DB_ALIAS, version="concurrent-reload-other-version", exact=(), regex=(), memo={}
+                alias=DEFAULT_DB_ALIAS,
+                version="concurrent-reload-other-version",
+                exact=(),
+                regex=(),
+                platform_parents={},
+                memo={},
             )
 
         try:

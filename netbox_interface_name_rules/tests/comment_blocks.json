@@ -13,10 +13,6 @@
       1
     ],
     [
-      "# Sort Python-side: specificity_score descending, then module_type_pattern length\n# descending (for device-interface rules with ties), then pk ascending for stability.\n# (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)",
-      1
-    ],
-    [
       "# The guard runs while it can still see every claimed row, before two of them that intend\n# one family are collapsed into it.",
       1
     ]
