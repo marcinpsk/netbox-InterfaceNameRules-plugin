@@ -324,6 +324,12 @@ disabled rule is never selected, so its preview is empty. The Build Rule tester
 previews every installed module in the scope of the rule, because the rule is
 not saved yet.
 
+A change of a device platform, or a move of a platform in the platform tree, is
+not a rename trigger. The interfaces keep the names from the rule that the engine
+selected before. After an upgrade to the first release that matches child
+platforms, or after you change a device platform or the platform tree, run Apply
+Rules for the rules on the affected platforms.
+
 ## netbox-branching
 
 The plugin supports [netbox-branching](https://github.com/netboxlabs/netbox-branching)

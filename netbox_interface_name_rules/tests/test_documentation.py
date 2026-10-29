@@ -520,6 +520,17 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_says_to_apply_rules_after_a_platform_change(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn(
+            "A change of a device platform, or a move of a platform in the platform tree, is not a rename "
+            "trigger. The interfaces keep the names from the rule that the engine selected before. After an "
+            "upgrade to the first release that matches child platforms, or after you change a device platform "
+            "or the platform tree, run Apply Rules for the rules on the affected platforms.",
+            guide,
+        )
+
     def test_the_guides_name_the_netbox_branching_series_that_the_version_gate_accepts(self):
         statements = {
             ("docs", "configuration.md"): (
