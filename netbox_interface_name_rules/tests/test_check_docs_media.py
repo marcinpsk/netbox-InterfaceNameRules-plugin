@@ -225,6 +225,20 @@ def test_a_gif_that_only_the_readme_shows_is_on_a_page(tmp_path: Path, _check) -
     assert result.stdout == "Each local media file of the site exists, and each of the 3 captures is on a page.\n"
 
 
+def test_a_gif_inside_a_readme_code_block_is_not_on_a_page(tmp_path: Path, _check) -> None:
+    image = f"![A clip]({_SITE_URL}assets/recordings/clip.gif)"
+    for fence in ("~~~", "```"):
+        readme = f"# Project\n\n{fence}markdown\n{image}\n\n{image}\n{fence}\n"
+        site, media = _tree(
+            tmp_path / fence[0], {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/clip.gif"), readme=readme
+        )
+
+        result = _check(site, media)
+
+        assert result.returncode == 1, fence
+        assert result.stderr == "unreferenced: recordings/clip.gif\n", fence
+
+
 def test_a_root_relative_video_src_that_the_site_lacks_fails(tmp_path: Path, _check) -> None:
     page = '<video src="/project/assets/recordings/missing.mp4"></video>'
     site, media = _tree(tmp_path, {"leases/index.html": page}, ())
@@ -238,6 +252,16 @@ def test_a_root_relative_video_src_that_the_site_lacks_fails(tmp_path: Path, _ch
 def test_a_root_relative_src_under_the_site_path_shows_its_capture(tmp_path: Path, _check) -> None:
     site, media = _tree(
         tmp_path, {"guide/index.html": '<img src="/project/assets/screenshots/shot.png">'}, ("shot.png",)
+    )
+
+    result = _check(site, media)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_root_relative_src_with_an_encoded_site_path_shows_its_capture(tmp_path: Path, _check) -> None:
+    site, media = _tree(
+        tmp_path, {"guide/index.html": '<img src="/%70roject/assets/screenshots/shot.png?v=2#x">'}, ("shot.png",)
     )
 
     result = _check(site, media)

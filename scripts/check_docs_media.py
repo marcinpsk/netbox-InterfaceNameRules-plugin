@@ -55,9 +55,10 @@ def _sources(html: str) -> list[str]:
 
 def _site_file(site: Path, site_path: str, path: str) -> Path | None:
     """Return the file of the site that the URL *path* names, or None when the path is outside *site_path*."""
+    path = unquote(path)
     if not path.startswith(site_path):
         return None
-    return (site / unquote(path.removeprefix(site_path))).resolve()
+    return (site / path.removeprefix(site_path)).resolve()
 
 
 def _is_site_file(site: Path, file: Path | None) -> bool:
@@ -79,7 +80,7 @@ def _media(site: Path, site_url: str, page: Path) -> list[tuple[str, Path | None
 
 def _readme_media(site: Path, site_url: str, readme: Path) -> list[tuple[str, Path | None]]:
     """Return each README media URL under the site URL, and the file of the site that it names."""
-    html = markdown.markdown(readme.read_text(encoding="utf-8"))
+    html = markdown.markdown(readme.read_text(encoding="utf-8"), extensions=["fenced_code"])
     site_path = urlsplit(site_url).path
     return [
         (source, _site_file(site, site_path, urlsplit(source).path))
