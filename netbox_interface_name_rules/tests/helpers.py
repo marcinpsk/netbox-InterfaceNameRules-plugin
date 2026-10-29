@@ -52,6 +52,7 @@ TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces (4.7+)"
 REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+REQUIRES_NESTED_PLATFORMS = "requires a NetBox that nests platforms (4.4+)"
 REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
 # On NetBox 4.5 and older the token stays literal in the interface name.
 REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.

@@ -7,7 +7,13 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
-from netbox_interface_name_rules.rule_selection import _build_candidates, _platform_lineage, find_matching_rule
+from netbox_interface_name_rules.rule_selection import (
+    _build_candidates,
+    _platform_lineage,
+    find_matching_rule,
+    platform_lineage,
+    platform_subtree,
+)
 
 
 class RuleSelectionTest(TestCase):
@@ -67,6 +73,19 @@ class RuleSelectionTest(TestCase):
         self.assertEqual(parent_scoped.specificity_score, 1004)
         self.assertEqual(device_and_platform_scoped.specificity_score, 1003)
         self.assertEqual(selected, parent_scoped)
+
+    def test_a_root_platform_scope_matches_its_exact_platform_on_every_release(self):
+        """NetBox 4.3 does not nest platforms, so there a platform scope is its exact platform."""
+        platform = Platform.objects.create(name="SelectorExactOS", slug="selector-exact-os")
+        other = Platform.objects.create(name="SelectorOtherOS", slug="selector-other-os")
+        rule = InterfaceNameRule.objects.create(
+            module_type=self.module_type, platform=platform, name_template="exact{bay_position}"
+        )
+
+        self.assertEqual(find_matching_rule(self.module_type, None, self.device_type, platform), rule)
+        self.assertIsNone(find_matching_rule(self.module_type, None, self.device_type, other))
+        self.assertEqual(platform_lineage(platform), [platform.pk])
+        self.assertEqual(platform_subtree(platform.pk), {platform.pk})
 
     def test_a_device_interface_rule_is_never_selected_for_a_module(self):
         """Module selection skips device-interface rules, and the row that used to leak cannot exist.

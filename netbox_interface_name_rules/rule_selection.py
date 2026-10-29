@@ -6,7 +6,7 @@ import contextlib
 import threading
 from dataclasses import dataclass
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db.models import Aggregate, F, Subquery, TextField, Value
 from django.db.models.functions import Cast, Coalesce, Concat, Length
 
@@ -165,6 +165,20 @@ def _platform_tree_hash():
     )
 
 
+def platforms_nest() -> bool:
+    """Return whether this NetBox nests platforms (4.4+); before that, every platform is a root.
+
+    Probed from the Platform model rather than a version comparison, as ``supports_channelization`` does.
+    """
+    from dcim.models import Platform
+
+    try:
+        Platform._meta.get_field("parent")
+    except FieldDoesNotExist:  # pragma: no cover - only reachable on NetBox 4.3
+        return False
+    return True
+
+
 def _enabled_rules_version(alias, platform_alias):
     """Return a deterministic content fingerprint of the enabled rules on *alias* and of the platform tree.
 
@@ -174,7 +188,7 @@ def _enabled_rules_version(alias, platform_alias):
     tree decides which rules a device platform matches, so a tree edit changes the
     fingerprint too. One query reads both when they share an alias. With exempt
     rule models in a branch, the rules are on main and the tree is on the branch,
-    so a second query reads the tree.
+    so a second query reads the tree. Without nested platforms there is no tree to hash.
     """
     from .models import InterfaceNameRule
 
@@ -182,6 +196,8 @@ def _enabled_rules_version(alias, platform_alias):
     empty = Value("", output_field=text)
     rules_hash = Coalesce(_Md5OrderedStringAgg(_ROW_SIGNATURE, empty), empty)
     rules = InterfaceNameRule.objects.using(alias).filter(enabled=True)
+    if not platforms_nest():  # pragma: no cover - only reachable on NetBox 4.3
+        return rules.aggregate(fingerprint=rules_hash)["fingerprint"]
     if platform_alias == alias:
         tree_hash = Coalesce(Subquery(_platform_tree_hash()), empty)
         return rules.aggregate(
@@ -224,7 +240,11 @@ def _get_enabled_rules():
             key=lambda rule: (-len(rule.module_type_pattern or ""), rule.pk),
         )
         regex = tuple((compile_stored_pattern(rule.module_type_pattern), rule) for rule in regex_rules)
-        platform_parents = dict(Platform.objects.using(platform_alias).order_by().values_list("pk", "parent_id"))
+        platform_parents = (
+            dict(Platform.objects.using(platform_alias).order_by().values_list("pk", "parent_id"))
+            if platforms_nest()
+            else {}
+        )
         cache = _RuleSnapshot(
             aliases=aliases, version=version, exact=exact, regex=regex, platform_parents=platform_parents, memo={}
         )

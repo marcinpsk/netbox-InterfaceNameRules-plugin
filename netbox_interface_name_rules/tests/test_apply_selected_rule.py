@@ -26,7 +26,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_module_bay_templates,
     plain_module_type,
 )
-from netbox_interface_name_rules.tests.platform_cases import PlatformTreeFixtures
+from netbox_interface_name_rules.tests.platform_cases import BreakoutModuleFixtures, PlatformTreeFixtures
 
 
 def _previewed(rule, limit=None):
@@ -92,7 +92,7 @@ class PlatformScopedApplyTest(PlatformTreeFixtures):
         self.assertFalse(has_applicable_interfaces(broad))
 
 
-class DeviceTypeScopedApplyTest(PlatformTreeFixtures):
+class DeviceTypeScopedApplyTest(BreakoutModuleFixtures):
     """A rule with no device type leaves alone a module for which a device-type rule wins."""
 
     def test_a_rule_with_no_device_type_skips_the_module_a_device_type_rule_selects(self):

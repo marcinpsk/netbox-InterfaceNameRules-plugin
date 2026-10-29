@@ -2,12 +2,16 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """The platform tree and the breakout module type that the platform-scope test modules share."""
 
+from unittest import skipUnless
+
 from dcim.models import Interface, Module, ModuleBay, Platform
 from django.test import TestCase
 
 from netbox_interface_name_rules.engine import find_matching_rule
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.rule_selection import platforms_nest
 from netbox_interface_name_rules.tests.helpers import (
+    REQUIRES_NESTED_PLATFORMS,
     make_device,
     make_device_type,
     make_manufacturer,
@@ -19,8 +23,8 @@ from netbox_interface_name_rules.tests.helpers import (
 PATTERN = r"QSFPP-4X10GE-.*"
 
 
-class PlatformTreeFixtures(TestCase):
-    """A Junos platform tree, an unrelated platform, and a breakout module type."""
+class BreakoutModuleFixtures(TestCase):
+    """A breakout module type and a device type with one bay, on every NetBox release."""
 
     @classmethod
     def setUpTestData(cls):
@@ -29,13 +33,6 @@ class PlatformTreeFixtures(TestCase):
         cls.device_type = make_device_type(manufacturer, "PlatTree", model="PTX10008-PlatTree")
         make_module_bay_templates(cls.device_type, ("Bay 0",))
         cls.placement = make_placement("PlatTree")
-        cls.junos = Platform.objects.create(name="PlatTree JunOS", slug="plattree-junos")
-        cls.evo = Platform.objects.create(name="PlatTree JunOS 24.4R2-EVO", slug="plattree-evo", parent=cls.junos)
-        cls.evo_build = Platform.objects.create(
-            name="PlatTree JunOS 24.4R2-S5.4-EVO", slug="plattree-s54", parent=cls.evo
-        )
-        cls.junos_sibling = Platform.objects.create(name="PlatTree JunOS 23.4R1", slug="plattree-234", parent=cls.junos)
-        cls.eos = Platform.objects.create(name="PlatTree EOS", slug="plattree-eos")
 
     def _regex_rule(self, template, **scope):
         return InterfaceNameRule.objects.create(
@@ -53,3 +50,19 @@ class PlatformTreeFixtures(TestCase):
         )
         Interface.objects.create(device=device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
         return module
+
+
+@skipUnless(platforms_nest(), REQUIRES_NESTED_PLATFORMS)
+class PlatformTreeFixtures(BreakoutModuleFixtures):
+    """A Junos platform tree and an unrelated platform, on a NetBox that nests platforms."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.junos = Platform.objects.create(name="PlatTree JunOS", slug="plattree-junos")
+        cls.evo = Platform.objects.create(name="PlatTree JunOS 24.4R2-EVO", slug="plattree-evo", parent=cls.junos)
+        cls.evo_build = Platform.objects.create(
+            name="PlatTree JunOS 24.4R2-S5.4-EVO", slug="plattree-s54", parent=cls.evo
+        )
+        cls.junos_sibling = Platform.objects.create(name="PlatTree JunOS 23.4R1", slug="plattree-234", parent=cls.junos)
+        cls.eos = Platform.objects.create(name="PlatTree EOS", slug="plattree-eos")
