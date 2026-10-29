@@ -525,6 +525,33 @@ class RuleApplyDetailViewTest(ViewTestBase):
         self.assertContains(response, "This rule is disabled. Enable it to preview and apply it.")
         self.assertNotContains(response, "No installed interfaces would be affected by this rule.")
 
+    def test_a_device_interface_rule_says_that_apply_rules_does_not_preview_it(self):
+        """Apply Rules scans modules only, so enabling a device-interface rule still gives no preview."""
+        device_rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            device_type=self.device_type,
+            name_template="Ethernet{vc_position}/{base}",
+        )
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": device_rule.pk}
+        )
+
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                InterfaceNameRule.objects.filter(pk=device_rule.pk).update(enabled=enabled)
+
+                response = self.client.get(url)
+
+                page = " ".join(response.content.decode().split())
+                self.assertEqual(response.context["preview"], [])
+                self.assertIn(
+                    "Apply Rules previews and renames module interfaces only. A device-interface rule renames "
+                    "device interfaces when the device joins or changes position in a virtual chassis.",
+                    page,
+                )
+                self.assertNotIn("Enable it to preview and apply it.", page)
+                self.assertNotIn("No installed interfaces would be affected by this rule.", page)
+
 
 class RuleApplicableViewTest(ViewTestBase):
     """Test the RuleApplicableView (AJAX applicable check)."""
