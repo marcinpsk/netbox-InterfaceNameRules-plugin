@@ -1,0 +1,181 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Marcin Zieba <marcinpsk@gmail.com>
+name: Docs build
+
+# Builds the documentation site with the screenshots and recordings of the commit that it checks out, and
+# uploads the site as the docs-site artifact. docs-deploy.yaml deploys it for a release tag. A pull request
+# that changes what the media show gets the site as an artifact only.
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: The ref to check out. Empty checks out the commit of the calling event.
+        type: string
+        default: ""
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "netbox_interface_name_rules/templates/**"
+      - "netbox_interface_name_rules/static/**"
+      - "docs/**"
+      - "docs_media/**"
+      - "mkdocs.yml"
+      - "README.md"
+      - "contrib/**"
+      - "scripts/load_demo_data.py"
+      - "scripts/check_docs_media.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs-build.yaml"
+      - ".github/workflows/docs-deploy.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # A new push to a pull request replaces its running build. A release build always finishes.
+    concurrency:
+      group: docs-build-${{ github.event.pull_request.number || inputs.ref || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          path: plugin
+          persist-credentials: false
+
+      # The top NetBox release of the test matrix in test.yaml.
+      - name: Checkout NetBox
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: "netbox-community/netbox"
+          path: netbox
+          ref: v4.7.0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install NetBox and plugin
+        working-directory: plugin
+        shell: bash
+        run: |
+          uv pip install --system-certs --system -r ../netbox/requirements.txt
+          uv export --system-certs --locked --no-default-groups --no-emit-project --format requirements-txt | \
+            uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
+          uv pip install --system-certs --system --no-deps -e .
+
+      - name: Set up NetBox configuration
+        working-directory: netbox
+        run: |
+          cat > netbox/netbox/configuration.py << 'EOF'
+          ALLOWED_HOSTS = ['*']
+          DATABASE = {
+              'NAME': 'netbox',
+              'USER': 'netbox',
+              'PASSWORD': 'netbox',
+              'HOST': 'localhost',
+              'PORT': '',
+              'CONN_MAX_AGE': 300,
+              'ENGINE': 'django.db.backends.postgresql'
+          }
+          REDIS = {
+              'tasks': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 0},
+              'caching': {'HOST': 'localhost', 'PORT': 6379, 'DATABASE': 1}
+          }
+          SECRET_KEY = 'docs-secret-key-not-for-production-1234567890123456'
+          API_TOKEN_PEPPERS = {0: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+          PLUGINS = ['netbox_interface_name_rules']
+          EOF
+
+      # DEBUG is off, so NetBox shows no debug banner; --insecure serves the static files without DEBUG.
+      - name: Start NetBox with the demo data
+        working-directory: netbox/netbox
+        env:
+          DJANGO_SUPERUSER_PASSWORD: admin
+        run: |
+          python manage.py migrate --no-input
+          python manage.py createsuperuser --no-input --username admin --email admin@example.com
+          PYTHONPATH="$PWD" python ../../plugin/scripts/load_demo_data.py
+          python manage.py runserver --insecure --noreload 127.0.0.1:8000 > "$RUNNER_TEMP/netbox.log" 2>&1 &
+          curl --silent --show-error --fail --retry 30 --retry-delay 2 --retry-all-errors \
+            --output /dev/null http://127.0.0.1:8000/login/
+
+      # The media suite and the site builder, apart from the Python environment of NetBox.
+      - name: Install the docs dependencies
+        working-directory: plugin
+        run: uv sync --system-certs --locked --no-build --only-group docs --only-group docs-media
+
+      # --with-deps runs apt-get update; Playwright brings its own Chromium, so drop the Chrome source first.
+      - name: Install the Playwright browser
+        working-directory: plugin
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
+          uv run --no-sync playwright install --with-deps chromium
+
+      # imageio-ffmpeg in the docs-media group brings the ffmpeg that encodes the recordings.
+      - name: Capture the documentation screenshots and recordings
+        working-directory: plugin
+        run: uv run --no-sync pytest docs_media --tracing=retain-on-failure -v
+
+      - name: Build the documentation site
+        working-directory: plugin
+        run: uv run --no-sync mkdocs build --strict
+
+      # The build does not fail on a missing image in raw HTML or a missing video, so the check reads the built pages.
+      - name: Check the screenshots and recordings on the built pages
+        working-directory: plugin
+        run: uv run --no-sync python scripts/check_docs_media.py site docs/assets
+
+      - name: Upload the site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: docs-site
+          path: plugin/site/
+          if-no-files-found: error
+          retention-days: 14
+
+      # test-results/ also holds the raw WebM of each recording.
+      - name: Upload Playwright traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: playwright-traces-docs
+          path: plugin/test-results/
+          retention-days: 14
+
+      - name: Show the NetBox log
+        if: ${{ failure() }}
+        run: cat "$RUNNER_TEMP/netbox.log"

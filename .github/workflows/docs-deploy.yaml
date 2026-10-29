@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
+name: Deploy Documentation
+
+# Deploys the site of one release tag to the gh-pages branch, so the site always shows the latest release.
+# release.yaml calls it after a release. Dispatch it with a tag to deploy that release again.
+"on":
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag to build and deploy, for example v1.9.0.
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to build and deploy, for example v1.9.0.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docs-build.yaml
+    with:
+      # The full tag ref, so a branch name fails the checkout.
+      ref: refs/tags/${{ inputs.tag }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # coverage-badge.yaml also writes gh-pages; one group keeps each push from overwriting the other.
+    concurrency:
+      group: publish-gh-pages
+      cancel-in-progress: false
+    steps:
+      # Builds of two releases can overlap, so the older one can finish last.
+      - name: Refuse a tag that is not the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          latest=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+          if [ "$latest" != "$TAG" ]; then
+            echo "::error::$TAG is not the latest release ($latest). The site shows the latest release only."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        # zizmor: ignore[artipacked] ghp-import pushes to gh-pages, so this
+        # checkout has to keep its credential.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Download the site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: docs-site
+          path: site
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync --locked --no-build --only-group docs
+
+      # The site replaces the whole branch, so it takes the coverage report that coverage-badge.yaml published.
+      - name: Keep the coverage report of gh-pages
+        run: |
+          git fetch --no-tags --depth=1 origin gh-pages
+          if git cat-file -e FETCH_HEAD:coverage; then
+            git archive FETCH_HEAD coverage | tar -x -C site
+          else
+            echo "gh-pages holds no coverage report"
+          fi
+
+      # mkdocs gh-deploy uses ghp-import too; this pushes the site that the build job checked.
+      - name: Deploy to gh-pages
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          uv run --no-sync ghp-import --no-jekyll --push --force --message "Deploy the documentation of $TAG" site
