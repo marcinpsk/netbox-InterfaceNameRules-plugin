@@ -7,7 +7,7 @@ The devcontainer and the documentation build use this script. Put the NetBox sou
 
     PYTHONPATH=/opt/netbox/netbox python scripts/load_demo_data.py
 
-Each object is created once, so a second run changes nothing. A run is one transaction. The script loads each rule that it can,
+Each object is created once, so a second run changes nothing. The devices and the rules each load in one transaction. The script loads each rule that it can,
 and exits with status 1 when it skipped a rule.
 """
 
@@ -375,7 +375,7 @@ def main():
     from django.core.management import call_command
     from django.db import transaction
 
-    # One transaction: a run that stops leaves no object half made, for example a device type without its templates.
+    # A run that stops leaves no object half made. The devices commit first: a module install renames on commit.
     with transaction.atomic():
         print("🖥  Creating demo devices…")
         site, manufacturer, role = shared_objects()
@@ -386,6 +386,7 @@ def main():
         load_rule_scopes(manufacturer)
         # Fix the member_count counter of each VirtualChassis.
         call_command("calculate_cached_counts", verbosity=0)
+    with transaction.atomic():
         skipped = load_rules()
         print("🔄 Re-applying the device-interface rules to the members of the demo chassis…")
         reapply_device_rules()

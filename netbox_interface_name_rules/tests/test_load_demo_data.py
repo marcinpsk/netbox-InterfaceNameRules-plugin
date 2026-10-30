@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -221,3 +221,12 @@ class LoaderTransactionTest(TestCase):
 
         self.assertEqual((first, second), (0, 0))
         self.assertNotIn("✓", output)
+
+
+class LoaderCommitTest(TransactionTestCase):
+    def test_the_apply_demo_device_keeps_the_interface_names_of_netbox_after_the_commit(self):
+        status, _ = run(load_demo_data.main)
+
+        names = Interface.objects.filter(device__name=load_demo_data.APPLY_DEMO_DEVICE).values_list("name", flat=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(sorted(names), [str(position) for position in load_demo_data.APPLY_DEMO_BAYS])
