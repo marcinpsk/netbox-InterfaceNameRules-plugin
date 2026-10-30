@@ -23,4 +23,5 @@ grep --quiet 'binary' "$work/overrides.txt" || { echo "$tag: no psycopg[c] requi
   uv pip compile --system-certs --quiet --no-header --no-annotate --generate-hashes \
     --python-version "$python" --python-platform x86_64-unknown-linux-gnu \
     --only-binary=:all: --no-binary=promise --override "$work/overrides.txt" "$work/requirements.txt"
-} > .github/netbox-requirements.txt
+} > "$work/netbox-requirements.txt"
+mv "$work/netbox-requirements.txt" .github/netbox-requirements.txt
