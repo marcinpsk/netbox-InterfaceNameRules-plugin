@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """A rule's platform scope covers the child platforms of that platform, and the closest platform wins."""
 
-from dcim.models import Interface, Platform, VirtualChassis
+from dcim.models import Interface, Module, ModuleBay, Platform, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -14,6 +14,7 @@ from netbox_interface_name_rules.engine import (
     find_interfaces_for_rule,
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
+from netbox_interface_name_rules.tests.committed_callbacks import run_the_reapply
 from netbox_interface_name_rules.tests.helpers import make_device
 from netbox_interface_name_rules.tests.platform_cases import PATTERN, PlatformTreeFixtures
 
@@ -165,6 +166,48 @@ class DeviceInterfaceRuleScopeTest(PlatformTreeFixtures):
 
         interface.refresh_from_db()
         self.assertEqual(interface.name, "Gi0/1")
+
+
+class DeviceReapplySnapshotTest(PlatformTreeFixtures):
+    """One rename-trigger reapply reads the rule snapshot once, for every device and both rule kinds."""
+
+    def test_a_reapply_of_two_devices_runs_one_fingerprint_query(self):
+        self._regex_rule("junos{bay_position}", platform=self.junos)
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True, name_template="mgmt{vc_position}", module_type_pattern="mgmt0"
+        )
+        chassis = VirtualChassis.objects.create(name="plattree-snapshot")
+        devices = []
+        for position in (1, 2):
+            device = make_device(
+                "PlatTree",
+                self.device_type,
+                self.placement,
+                name=f"plattree-snapshot-{position}",
+                platform=self.evo_build,
+                virtual_chassis=chassis,
+                vc_position=position,
+            )
+            Interface.objects.create(device=device, name="mgmt0", type="1000base-t")
+            with self.captureOnCommitCallbacks(execute=True):
+                Module.objects.create(
+                    device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.module_type
+                )
+            devices.append(device)
+        with self.captureOnCommitCallbacks() as callbacks:
+            for device in devices:
+                device.vc_position += 2
+                device.save()
+
+        with CaptureQueriesContext(connection) as queries:
+            run_the_reapply(callbacks)
+
+        fingerprints = [query["sql"] for query in queries.captured_queries if "STRING_AGG" in query["sql"]]
+        self.assertEqual(len(fingerprints), 1, fingerprints)
+        self.assertEqual(
+            sorted(Interface.objects.filter(name__startswith="mgmt").values_list("name", flat=True)),
+            ["mgmt3", "mgmt4"],
+        )
 
 
 class ApplyScopeTest(PlatformTreeFixtures):
