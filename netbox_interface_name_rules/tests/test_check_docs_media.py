@@ -181,6 +181,16 @@ def test_a_site_that_was_not_built_is_a_usage_error(tmp_path: Path, _check) -> N
     assert result.stderr == f"{site} is not a directory: build the site first\n"
 
 
+def test_a_media_root_that_does_not_exist_is_a_usage_error(tmp_path: Path, _check) -> None:
+    site, media = _tree(tmp_path, {}, ())
+    media.rmdir()
+
+    result = _check(site, media)
+
+    assert result.returncode == 2
+    assert result.stderr == f"{media} is not a directory: capture the media first\n"
+
+
 def test_the_site_directory_comes_from_mkdocs_yml(tmp_path: Path, _check) -> None:
     site, media = _tree(tmp_path, {"index.html": '<img src="assets/screenshots/shot.png">'}, ("shot.png",))
     site.rename(tmp_path / "public")

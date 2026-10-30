@@ -133,9 +133,10 @@ def main(root: Path = ROOT) -> int:
     config = yaml.safe_load((root / "mkdocs.yml").read_text(encoding="utf-8"))
     site_dir = root / config.get("site_dir", "site")
     media_dir = root / config.get("docs_dir", "docs") / MEDIA
-    if not site_dir.is_dir():
-        sys.stderr.write(f"{site_dir} is not a directory: build the site first\n")
-        return 2
+    for directory, step in ((site_dir, "build the site"), (media_dir, "capture the media")):
+        if not directory.is_dir():
+            sys.stderr.write(f"{directory} is not a directory: {step} first\n")
+            return 2
     found = problems(site_dir, media_dir, root / "README.md", config["site_url"])
     if found:
         sys.stderr.write("".join(f"{message}\n" for message in found))
