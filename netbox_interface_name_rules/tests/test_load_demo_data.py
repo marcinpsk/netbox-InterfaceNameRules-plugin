@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from dcim.models import Module
+from dcim.models import InterfaceTemplate, Module, ModuleType
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -92,3 +92,12 @@ class ModuleInstallTest(LoaderTestCase):
         self.assertIn(f"Installed 1 {load_demo_data.APPLY_DEMO_MODULE_TYPE}", output)
         _, output = run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
         self.assertNotIn("Installed", output)
+
+    def test_a_module_type_that_exists_gets_its_module_interface_template(self):
+        ModuleType.objects.create(manufacturer=self.manufacturer, model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
+
+        run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+        run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+
+        templates = InterfaceTemplate.objects.filter(module_type__model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
+        self.assertEqual(list(templates.values_list("name", flat=True)), ["{module}"])

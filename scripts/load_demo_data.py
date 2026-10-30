@@ -204,8 +204,10 @@ def load_apply_demo_device(site, manufacturer, role):
     module_type = ModuleType.objects.filter(model=APPLY_DEMO_MODULE_TYPE).first()
     if module_type is None:
         module_type = ModuleType.objects.create(manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE)
-        # NetBox replaces {module} with the bay position.
-        InterfaceTemplate.objects.create(module_type=module_type, name="{module}", type="100gbase-x-qsfp28")
+    # NetBox replaces {module} with the bay position.
+    InterfaceTemplate.objects.get_or_create(
+        module_type=module_type, name="{module}", defaults={"type": "100gbase-x-qsfp28"}
+    )
     obj = device(APPLY_DEMO_DEVICE, site, acx, role)
     installed = 0
     for position in APPLY_DEMO_BAYS:
