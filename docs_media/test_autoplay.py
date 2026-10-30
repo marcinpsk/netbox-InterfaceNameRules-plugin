@@ -91,3 +91,17 @@ def test_reduced_motion_turned_on_after_load_pauses_the_videos(docs_page: Page) 
     docs_page.emulate_media(reduced_motion="no-preference")
 
     calls_after(docs_page, "play:control")
+
+
+def test_an_entry_queued_before_reduced_motion_turns_on_does_not_play(spec_page: Page) -> None:
+    spec_page.emulate_media(reduced_motion="reduce")
+    calls_after(spec_page, "pause:control")
+    spec_page.evaluate("window.calls = []")
+
+    spec_page.evaluate(
+        """() => window.observers[0].callback(
+          [{ target: document.getElementById("control"), isIntersecting: true, intersectionRatio: 1 }]
+        )"""
+    )
+
+    assert spec_page.evaluate("window.calls") == ["pause:control"]

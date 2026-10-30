@@ -6,8 +6,8 @@ const videos = document.querySelectorAll("video[muted]");
 const observer = new IntersectionObserver(
   (entries) => {
     for (const { target, isIntersecting, intersectionRatio } of entries) {
-      // A browser can refuse to play (for example, to save power); the reader then presses Play.
-      if (isIntersecting && intersectionRatio >= 0.5) target.play().catch(() => {});
+      // An entry can arrive after reduced motion turned on. A browser can refuse to play; the reader then presses Play.
+      if (isIntersecting && intersectionRatio >= 0.5 && !reduceMotion.matches) target.play().catch(() => {});
       else target.pause();
     }
   },
