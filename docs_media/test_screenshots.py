@@ -75,17 +75,25 @@ def test_rule_list(page: Page, capture: Callable[..., None]) -> None:
     capture("rule-list")
 
 
+# A regex rule scores scope × 1000 + len(pattern); the device type scope is 2 and the platform scope is 1.
 @pytest.mark.parametrize(
-    ("name", "fields"),
+    ("name", "fields", "score"),
     [
-        ("rule-detail-juniper-breakout", {"pattern": "QSFP-4X10G-.*", "device_type": "ACX7024"}),
-        ("rule-detail-sonic-catch-all", {"pattern": ".*", "platform": "SONiC"}),
+        ("rule-detail-juniper-breakout", {"pattern": "QSFP-4X10G-.*", "device_type": "ACX7024"}, 2 * 1000 + 13),
+        ("rule-detail-sonic-catch-all", {"pattern": ".*", "platform": "SONiC"}, 1 * 1000 + 2),
     ],
 )
-def test_rule_detail(page: Page, api: NetBoxAPI, capture: Callable[..., None], name: str, fields: dict) -> None:
+def test_rule_detail(
+    page: Page, api: NetBoxAPI, capture: Callable[..., None], name: str, fields: dict, score: int
+) -> None:
     rule = api.rule(**fields)
     open_page(page, f"{PLUGIN}/rules/{rule['id']}/")
-    expect(page.get_by_text("Priority score")).to_be_visible()
+    expect(page.locator("strong", has_text="Priority score")).to_have_text(f"Priority score: {score}")
+    table = page.locator("table.attr-table")
+    columns = [text.strip() for text in table.locator("thead th").all_text_contents()]
+    cells = table.locator("tbody td")
+    expect(cells.nth(columns.index("Device Type"))).to_have_text(fields.get("device_type", "Any device"))
+    expect(cells.nth(columns.index("Platform"))).to_have_text(fields.get("platform", "Any platform"))
     capture(name)
 
 
