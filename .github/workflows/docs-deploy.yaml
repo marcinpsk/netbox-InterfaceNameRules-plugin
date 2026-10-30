@@ -79,6 +79,14 @@ jobs:
       # The site replaces the whole branch, so it takes the coverage report that coverage-badge.yaml published.
       - name: Keep the coverage report of gh-pages
         run: |
+          # ls-remote --exit-code returns 2 when no such branch exists, and another non-zero status on an error.
+          status=0
+          git ls-remote --exit-code --heads origin gh-pages > /dev/null || status=$?
+          if [ "$status" -eq 2 ]; then
+            echo "gh-pages does not exist yet"
+            exit 0
+          fi
+          [ "$status" -eq 0 ] || exit "$status"
           git fetch --no-tags --depth=1 origin gh-pages
           if git cat-file -e FETCH_HEAD:coverage; then
             git archive FETCH_HEAD coverage | tar -x -C site
@@ -93,4 +101,4 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          uv run --no-sync ghp-import --no-jekyll --push --force --message "Deploy the documentation of $TAG" site
+          uv run --no-sync --no-build ghp-import --no-jekyll --push --force --message "Deploy the documentation of $TAG" site

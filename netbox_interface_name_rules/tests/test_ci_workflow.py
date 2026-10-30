@@ -2,7 +2,11 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the coverage wiring of the CI test workflow."""
 
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -162,3 +166,96 @@ class DocsWorkflowTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertFalse(_path_filter_matches(patterns, path))
+
+
+def _run_commands(script):
+    """Return each command of a run script, with its backslash continuations joined."""
+    return [line.strip() for line in script.replace("\\\n", " ").splitlines() if line.strip()]
+
+
+class WorkflowSourceBuildTest(unittest.TestCase):
+    """No workflow step lets uv build a package from source, so no setup script runs."""
+
+    def test_every_uv_run_and_uv_sync_refuses_a_source_build(self):
+        for name, workflow in _workflows():
+            for job_name, job in workflow["jobs"].items():
+                for step in job.get("steps", []):
+                    for command in _run_commands(step.get("run", "")):
+                        if re.search(r"\buv (?:run|sync)\b", command):
+                            with self.subTest(workflow=name, job=job_name, command=command):
+                                self.assertIn("--no-build", command)
+
+
+# An origin with a main branch, and with a gh-pages branch that holds a coverage report when $GH_PAGES is "yes".
+_ORIGIN_SETUP = """
+git init -q --bare origin.git
+git init -q -b main work
+cd work
+git config user.name t
+git config user.email t@example.invalid
+git commit -q --allow-empty -m init
+git remote add origin ../origin.git
+git push -q origin main
+if [ "$GH_PAGES" = yes ]; then
+  git checkout -q --orphan gh-pages
+  mkdir coverage
+  echo report > coverage/index.html
+  git add coverage
+  git commit -q -m coverage
+  git push -q origin gh-pages
+  git checkout -q main
+  rm -rf coverage
+fi
+mkdir site
+"""
+
+
+def _bash(script, cwd, env=None):
+    """Run *script* as GitHub runs a step without a shell key: bash -e {0}."""
+    return subprocess.run(  # noqa: S603 - The script is a workflow step of this repository.
+        ["bash", "-e", "-c", script],  # noqa: S607 - Use bash from the test environment PATH.
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "git and bash are required")
+class DocsDeployCoverageTest(unittest.TestCase):
+    """The deploy keeps the coverage report of gh-pages, and also deploys when gh-pages does not exist."""
+
+    def _deploy_step(self, with_gh_pages, reachable=True):
+        workflow = dict(_workflows())["docs-deploy.yaml"]
+        [script] = [
+            s["run"]
+            for s in workflow["jobs"]["deploy"]["steps"]
+            if s.get("name") == "Keep the coverage report of gh-pages"
+        ]
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "no"}
+        setup = _bash(_ORIGIN_SETUP, root, env)
+        self.assertEqual(setup.returncode, 0, setup.stderr)
+        if not reachable:
+            (root / "origin.git").rename(root / "moved.git")
+        result = _bash(script, root / "work")
+        return result, root / "work" / "site"
+
+    def test_the_deploy_copies_the_coverage_report_of_gh_pages_into_the_site(self):
+        result, site = self._deploy_step(with_gh_pages=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((site / "coverage" / "index.html").read_text(), "report\n")
+
+    def test_the_deploy_continues_when_gh_pages_does_not_exist(self):
+        result, site = self._deploy_step(with_gh_pages=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((site / "coverage").exists())
+
+    def test_the_deploy_stops_when_it_cannot_read_gh_pages(self):
+        result, site = self._deploy_step(with_gh_pages=True, reachable=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((site / "coverage").exists())

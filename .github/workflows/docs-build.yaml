@@ -144,21 +144,21 @@ jobs:
         working-directory: plugin
         run: |
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
-          uv run --no-sync playwright install --with-deps chromium
+          uv run --no-sync --no-build playwright install --with-deps chromium
 
       # imageio-ffmpeg in the docs-media group brings the ffmpeg that encodes the recordings.
       - name: Capture the documentation screenshots and recordings
         working-directory: plugin
-        run: uv run --no-sync pytest docs_media --tracing=retain-on-failure -v
+        run: uv run --no-sync --no-build pytest docs_media --tracing=retain-on-failure -v
 
       - name: Build the documentation site
         working-directory: plugin
-        run: uv run --no-sync mkdocs build --strict
+        run: uv run --no-sync --no-build mkdocs build --strict
 
       # The build does not fail on a missing image in raw HTML or a missing video, so the check reads the built pages.
       - name: Check the screenshots and recordings on the built pages
         working-directory: plugin
-        run: uv run --no-sync python scripts/check_docs_media.py site docs/assets
+        run: uv run --no-sync --no-build python scripts/check_docs_media.py site docs/assets
 
       - name: Upload the site
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
