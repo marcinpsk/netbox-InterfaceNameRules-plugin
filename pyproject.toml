@@ -86,6 +86,7 @@ docs = [
 # The browser suite in docs_media/ that captures the documentation screenshots and recordings.
 docs-media = [
     "imageio-ffmpeg>=0.6",
+    "numpy>=2",
     "playwright",
     "pytest>=9.0.2",
     "pytest-playwright>=0.7",

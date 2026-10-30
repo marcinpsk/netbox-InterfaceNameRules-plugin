@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import imageio_ffmpeg
+import numpy as np
 from playwright.sync_api import Locator, Page
 
 #: Headless Chromium draws no pointer, so each page draws one that follows the mouse events.
@@ -55,6 +56,10 @@ GIF_WIDTH = 800
 GIF_FPS = 8
 #: The flat colors of the UI need no more colors and no dithering, which keeps the GIF small.
 GIF_COLORS = 64
+#: A pixel of the GIF keeps its color until it changes by more than this; the WebM changes each pixel a little.
+GIF_HOLD = 12
+#: A frame that changes more than this share of the pixels shows a new page, so the GIF takes all of it.
+GIF_NEW_PAGE = 0.02
 #: The README GIF loads on each PyPI and GitHub view, so its size has a limit.
 GIF_MAX_BYTES = 2 * 1024 * 1024
 _FFMPEG_TIMEOUT = 300
@@ -110,10 +115,42 @@ def encode(webm: Path, start: float, output: Path, gif: bool = False) -> None:
     assert CLIP_SECONDS[0] <= seconds <= CLIP_SECONDS[1], f"{mp4.name} lasts {seconds:.1f} s, not {CLIP_SECONDS} s"
     _ffmpeg(*trim, "-frames:v", "1", output.with_suffix(".png"))
     if gif:
-        palette = (
-            f"fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos,split[a][b];"
-            f"[a]palettegen=max_colors={GIF_COLORS}:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle"
-        )
-        _ffmpeg(*trim, "-vf", palette, "-loop", "0", output.with_suffix(".gif"))
+        _gif(webm, start, output.with_suffix(".gif"))
         size = output.with_suffix(".gif").stat().st_size
         assert size <= GIF_MAX_BYTES, f"{output.name}.gif has {size} bytes, more than {GIF_MAX_BYTES}"
+
+
+def _gif(webm: Path, start: float, gif: Path) -> None:
+    """Write *webm* from *start* seconds as *gif*, and hold each pixel while it changes by GIF_HOLD or less."""
+    scale = f"fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos"
+    reader = imageio_ffmpeg.read_frames(str(webm), input_params=["-ss", f"{start:.3f}"], output_params=["-vf", scale])
+    width, height = next(reader)["size"]
+    palette = (
+        f"split[a][b];[a]palettegen=max_colors={GIF_COLORS}:stats_mode=diff[p];"
+        "[b][p]paletteuse=dither=none:diff_mode=rectangle"
+    )
+    writer = imageio_ffmpeg.write_frames(
+        str(gif),
+        (width, height),
+        fps=GIF_FPS,
+        codec="gif",
+        pix_fmt_out="pal8",
+        quality=None,
+        macro_block_size=1,
+        ffmpeg_log_level="error",
+        ffmpeg_timeout=_FFMPEG_TIMEOUT,
+        output_params=["-vf", palette, "-loop", "0"],
+    )
+    writer.send(None)
+    try:
+        held = None
+        for data in reader:
+            frame = np.frombuffer(data, np.uint8).reshape(height, width, 3)
+            if held is not None:
+                changed = np.abs(frame.astype(np.int16) - held).max(axis=2) > GIF_HOLD
+                if changed.mean() <= GIF_NEW_PAGE:
+                    frame = np.where(changed[..., None], frame, held)
+            writer.send(frame)
+            held = frame
+    finally:
+        writer.close()
