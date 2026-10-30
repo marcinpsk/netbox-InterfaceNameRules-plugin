@@ -19,6 +19,10 @@ import django
 import yaml
 
 CONTRIB_DIR = Path(__file__).resolve().parents[1] / "contrib"
+#: {alternative rule file: the file that it replaces}. contrib/README.md says to import one or the other, not both.
+ALTERNATIVE_RULE_FILES = {"juniper-channelized.yaml": "juniper.yaml"}
+#: The rule files whose header offers rows with the same rule lookup as options: the demo loads the first option.
+ALTERNATIVE_ROW_FILES = ("linux.yaml",)
 
 #: The device that Apply Rules renames: its modules are installed before the rules exist.
 APPLY_DEMO_DEVICE = "acx7024-1"
@@ -63,10 +67,14 @@ def skip(label, reason):
 
 
 def contrib_rules():
-    """Return (file name, rows) for each rule file of contrib/. The callers check that each row is a mapping."""
+    """Return (file name, rows) for each rule file of contrib/ that the demo loads.
+
+    The callers check that each row is a mapping.
+    """
     return [
         (path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or [])
         for path in sorted(CONTRIB_DIR.glob("*.yaml"))
+        if path.name not in ALTERNATIVE_RULE_FILES
     ]
 
 
@@ -288,10 +296,23 @@ def rule_lookup(row):
 
 
 def load_rules():
-    """Load each rule of contrib/ and return the number of rules that were skipped."""
+    """Load each rule of contrib/ and return the number of rules that were skipped.
+
+    Each row is a complete rule. A second row with the same rule lookup is a skipped rule, not an update,
+    except in a file of ALTERNATIVE_ROW_FILES.
+    """
     from netbox_interface_name_rules.models import InterfaceNameRule
 
+    # A row that leaves out one of these fields gets the default of the model field.
+    field_defaults = {
+        name: InterfaceNameRule._meta.get_field(name).get_default()
+        for name in ("parent_name_template", "breakout_mode")
+    }
+    for alternative, replaced in ALTERNATIVE_RULE_FILES.items():
+        if (CONTRIB_DIR / alternative).exists():
+            print(f"📋 Not loading {alternative}: it is an alternative to {replaced}, which the demo loads.")
     skipped = 0
+    loaded = {}
     for filename, rows in contrib_rules():
         print(f"📋 Loading {filename}…")
         for number, row in enumerate(rows, start=1):
@@ -310,8 +331,18 @@ def load_rules():
                 skip(label, str(exc))
                 skipped += 1
                 continue
+            key = frozenset(lookup.items())
+            if key in loaded:
+                if loaded[key] == filename and filename in ALTERNATIVE_ROW_FILES:
+                    skip(label, f"not loaded: an option of {filename} that the demo does not use")
+                    continue
+                skip(label, f"{filename} repeats the rule of {loaded[key]}")
+                skipped += 1
+                continue
+            loaded[key] = filename
             defaults = {
                 "name_template": row["name_template"],
+                **{name: row.get(name, default) for name, default in field_defaults.items()},
                 "channel_count": int(row.get("channel_count", 0)),
                 "channel_start": int(row.get("channel_start", 0)),
                 "description": row.get("description", ""),

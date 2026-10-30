@@ -12,6 +12,7 @@ from unittest.mock import patch
 from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
 from django.test import TestCase
 
+from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "load_demo_data.py"
@@ -22,6 +23,13 @@ _spec.loader.exec_module(load_demo_data)
 _REGEX_ROW = """- module_type_pattern: "DEMO-.*"
   module_type_is_regex: true
   name_template: "{name_template}"
+"""
+_CHANNELIZED_ROW = """- module_type_pattern: "DEMO-.*"
+  module_type_is_regex: true
+  name_template: "xe-0/0/{bay_position}:{channel}"
+  parent_name_template: "et-0/0/{bay_position}"
+  breakout_mode: channelized
+  channel_count: 4
 """
 
 
@@ -62,6 +70,71 @@ class ContribRowsTest(LoaderTestCase):
         self.assertIn("rules.yaml row 2", output)
         self.assertIn("rules.yaml row 3", output)
         self.assertEqual(InterfaceNameRule.objects.filter(module_type_pattern="DEMO-.*").count(), 1)
+
+    def test_a_row_sets_its_breakout_mode_and_parent_name_template(self):
+        self.use_contrib({"rules.yaml": _CHANNELIZED_ROW})
+
+        skipped, _ = self.load_rules()
+
+        rule = InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*")
+        self.assertEqual(skipped, 0)
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.CHANNELIZED)
+        self.assertEqual(rule.parent_name_template, "et-0/0/{bay_position}")
+
+    def test_a_row_without_the_breakout_fields_resets_them_to_the_model_defaults(self):
+        self.use_contrib({"rules.yaml": _CHANNELIZED_ROW})
+        self.load_rules()
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="x{bay_position}")})
+
+        self.load_rules()
+
+        rule = InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*")
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
+        self.assertEqual(rule.parent_name_template, "")
+
+    def test_a_second_row_with_the_same_rule_is_a_skipped_rule(self):
+        self.use_contrib(
+            {
+                "a.yaml": _REGEX_ROW.format(name_template="a{bay_position}"),
+                "b.yaml": _REGEX_ROW.format(name_template="b{bay_position}"),
+            }
+        )
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 1)
+        self.assertEqual(InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*").name_template, "a{bay_position}")
+        skip_line = next(line for line in output.splitlines() if "b.yaml" in line and "a.yaml" in line)
+        self.assertIn("DEMO-.*", skip_line)
+
+    def test_a_file_of_alternative_rows_loads_the_first_row_of_each_rule(self):
+        self.use_contrib(
+            {
+                "linux.yaml": _REGEX_ROW.format(name_template="eth{bay_position}")
+                + _REGEX_ROW.format(name_template="ens{bay_position}")
+            }
+        )
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0)
+        self.assertEqual(
+            InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*").name_template, "eth{bay_position}"
+        )
+        self.assertIn("an option of linux.yaml", output)
+
+    def test_the_demo_loads_juniper_yaml_and_not_its_channelized_alternative(self):
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertNotIn("Loading juniper-channelized.yaml", output)
+        notice = next(line for line in output.splitlines() if "juniper-channelized.yaml" in line)
+        self.assertIn("juniper.yaml", notice.replace("juniper-channelized.yaml", ""))
+        rule = InterfaceNameRule.objects.get(
+            module_type_pattern="QSFP-4X10G-.*", device_type__model="ACX7024", applies_to_device_interfaces=False
+        )
+        self.assertEqual(rule.description, "Juniper ACX7024 QSFP+ 4x10G breakout (all variants)")
+        self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
 
 
 class ModuleInstallTest(LoaderTestCase):
