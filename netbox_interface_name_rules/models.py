@@ -258,7 +258,7 @@ class InterfaceNameRule(NetBoxModel):
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
         A device-level rule takes no parent_module_type, so its scope is at most 3.
-        Two rules with the same score fall back to lowest pk (first created).
+        Two rules with the same score fall back to the closest platform, then to the lowest pk (first created).
 
         A platform rule also matches a device on a descendant of its platform (NetBox 4.4+).
         The platform bit is the same for each matching platform, so the score does

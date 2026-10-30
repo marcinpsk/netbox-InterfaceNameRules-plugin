@@ -378,6 +378,19 @@ class RuleDetailViewTest(ViewTestBase):
             with self.subTest(statement=statement):
                 self.assertIn(statement, page)
 
+    def test_priority_panel_puts_the_closest_platform_before_the_lowest_pk(self):
+        response = self.client.get(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", kwargs={"pk": self.rule.pk})
+        )
+
+        page = " ".join(response.content.decode().split())
+        self.assertIn(
+            "Two rules with the same score: the rule on the closest platform wins, then the lowest "
+            "<code>pk</code> (oldest rule).",
+            page,
+        )
+        self.assertNotIn("Two rules with the same score: lowest <code>pk</code> (oldest rule) wins.", page)
+
     def test_detail_view_404_for_missing(self):
         """Detail view returns 404 for non-existent rule PK."""
         url = reverse(
