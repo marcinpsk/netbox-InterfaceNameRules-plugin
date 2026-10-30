@@ -25,8 +25,8 @@ from .domain import (
 from .execution import execute_installed_plan
 from .installed import (
     half_built_members,
-    interfaces_by_module,
     module_raw_bases,
+    modules_with_interfaces,
     plan_installed_families_from,
     plan_interface_rename,
     plan_kept_interface,
@@ -364,12 +364,11 @@ def apply_rule_to_modules(rule, modules, selected_pks=None, limit=None) -> Batch
     """
     if not modules:
         return BatchOutcome(families=())
-    by_module = interfaces_by_module(modules)
     families: list[FamilyOutcome] = []
     changed = 0
     with pinned_template_cache(modules):
-        for module in modules:
-            outcomes = _apply_module(rule, module, by_module[module.pk], selected_pks)
+        for module, interfaces in modules_with_interfaces(modules):
+            outcomes = _apply_module(rule, module, interfaces, selected_pks)
             families.extend(outcomes)
             changed += sum(outcome.changed_count for outcome in outcomes)
             if limit is not None and changed >= limit:

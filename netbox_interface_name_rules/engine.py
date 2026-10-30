@@ -894,21 +894,13 @@ def find_interfaces_for_rule(rule, limit=None):
     list is truncated after that many changed entries, but *total_checked* always reflects the full
     count of families examined (a family counts once, however many channels it has).
     """
-    from dcim.models import Interface
-
     modules = _rule_modules(rule)
-    # Batch-load all interfaces for matching modules to avoid N+1 queries.
-    ifaces_by_module = defaultdict(list)
     module_pks = [module.pk for module in modules]
-    for iface in Interface.objects.filter(module__in=module_pks).order_by("module_id", "name"):
-        ifaces_by_module[iface.module_id].append(iface)
-
     results = []
     total_checked = 0
     with family_ops.pinned_template_cache(modules):
-        for index, module in enumerate(modules):
+        for index, (module, ifaces) in enumerate(family_ops.modules_with_interfaces(modules)):
             variables = build_variables(module.module_bay, device=module.device)
-            ifaces = ifaces_by_module.get(module.pk, [])
             checked, stop = _process_module(rule, module, ifaces, variables, limit, results)
             total_checked += checked
             if stop:

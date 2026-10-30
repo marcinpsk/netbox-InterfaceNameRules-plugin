@@ -3,8 +3,11 @@
 """Apply Rules acts only on the modules for which the engine selects the applied rule."""
 
 from unittest import skipUnless
+from unittest.mock import patch
 
 from dcim.models import Interface, Module, ModuleBay
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from netbox_interface_name_rules.engine import (
     apply_rule_to_existing,
@@ -14,6 +17,7 @@ from netbox_interface_name_rules.engine import (
     has_applicable_interfaces,
     supports_channelization,
 )
+from netbox_interface_name_rules.family import installed as family_installed
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.tests.helpers import (
     CHANNELIZED,
@@ -21,6 +25,7 @@ from netbox_interface_name_rules.tests.helpers import (
     REQUIRES_CHANNELIZATION,
     ChannelizationTestCase,
     build_device,
+    interface_batches,
     make_device,
     make_device_type,
     make_module_bay_templates,
@@ -124,6 +129,35 @@ class PlatformChangeApplyTest(PlatformTreeFixtures):
         apply_rule_to_existing(on_eos)
 
         self.assertEqual(self._name(), "j-et-0/0/0")
+
+
+class ModuleInterfaceBatchTest(BreakoutModuleFixtures):
+    """A preview or an apply that reaches its limit reads the interfaces of the modules it visits only."""
+
+    def setUp(self):
+        self.rule = self._regex_rule("any-{bay_position}")
+        self.modules = [self._module_on(None, f"plattree-batch-{index}") for index in range(5)]
+
+    def test_a_limited_preview_reads_the_interfaces_of_one_module_batch(self):
+        with patch.object(family_installed, "MODULE_BATCH", 2), CaptureQueriesContext(connection) as queries:
+            previewed, total_checked = _previewed(self.rule, limit=1)
+
+        self.assertEqual([len(batch) for batch in interface_batches(queries)], [2])
+        self.assertEqual((len(previewed), total_checked), (1, 5))
+
+    def test_a_full_preview_reads_every_batch(self):
+        with patch.object(family_installed, "MODULE_BATCH", 2), CaptureQueriesContext(connection) as queries:
+            previewed, total_checked = _previewed(self.rule)
+
+        self.assertEqual([len(batch) for batch in interface_batches(queries)], [2, 2, 1])
+        self.assertEqual((previewed, total_checked), ({module.pk for module in self.modules}, 5))
+
+    def test_a_limited_apply_reads_the_interfaces_of_one_module_batch(self):
+        with patch.object(family_installed, "MODULE_BATCH", 2), CaptureQueriesContext(connection) as queries:
+            outcome = apply_rule_to_existing(self.rule, limit=1)
+
+        self.assertEqual([len(batch) for batch in interface_batches(queries)], [2])
+        self.assertEqual(len(outcome.changed_families), 1)
 
 
 class DeviceTypeScopedApplyTest(BreakoutModuleFixtures):

@@ -8,6 +8,7 @@ failure still names the class it came from.
 """
 
 import contextlib
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -431,3 +432,12 @@ class VcDriftTestCase(ChannelizationTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             module = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
         return module, bay
+
+
+def interface_batches(queries):
+    """Return the module primary keys of each batch query that reads the interfaces of a module list."""
+    return [
+        re.search(r'"module_id" IN \(([^)]*)\)', query["sql"]).group(1).split(", ")
+        for query in queries.captured_queries
+        if 'ORDER BY "dcim_interface"."module_id"' in query["sql"]
+    ]

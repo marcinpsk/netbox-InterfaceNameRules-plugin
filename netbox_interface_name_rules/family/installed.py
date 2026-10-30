@@ -146,15 +146,22 @@ def _channelized_plans(module, rule, variables, interfaces, bases):
     return plans
 
 
-def interfaces_by_module(modules):
-    """Load every interface of a module batch in one query, in stable per-module order."""
-    by_module: dict[int, list] = {module.pk: [] for module in modules}
-    if not by_module:
-        return by_module
-    rows = Interface.objects.filter(module_id__in=list(by_module)).order_by("module_id", "name")
-    for interface in rows:
-        by_module[interface.module_id].append(interface)
-    return by_module
+# The number of modules whose interfaces one query reads.
+MODULE_BATCH = 500
+
+
+def modules_with_interfaces(modules):
+    """Yield each of *modules* with its interfaces, in stable per-module order, with one query per module batch.
+
+    A caller that stops early reads no interface of a later batch.
+    """
+    for start in range(0, len(modules), MODULE_BATCH):
+        batch = modules[start : start + MODULE_BATCH]
+        by_module: dict[int, list] = {module.pk: [] for module in batch}
+        for interface in Interface.objects.filter(module_id__in=list(by_module)).order_by("module_id", "name"):
+            by_module[interface.module_id].append(interface)
+        for module in batch:
+            yield module, by_module[module.pk]
 
 
 def device_interface_families(interfaces):
