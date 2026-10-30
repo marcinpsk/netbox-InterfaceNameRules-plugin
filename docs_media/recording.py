@@ -6,6 +6,7 @@ Playwright records each clip as WebM. The static ffmpeg of imageio-ffmpeg cuts t
 writes an H.264 MP4, a PNG poster and, for the README, an animated GIF.
 """
 
+import struct
 import subprocess
 from pathlib import Path
 
@@ -97,12 +98,15 @@ class Clip:
         self.pause()
 
 
-def _ffmpeg(*arguments: str | Path) -> None:
-    subprocess.run(
+def _ffmpeg(*arguments: str | Path, stdin: bytes | None = None) -> bytes:
+    """Run ffmpeg with *arguments* and *stdin*, and return its standard output."""
+    return subprocess.run(
         [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", *map(str, arguments)],
+        input=stdin,
+        stdout=subprocess.PIPE,
         check=True,
         timeout=_FFMPEG_TIMEOUT,
-    )
+    ).stdout
 
 
 def encode(webm: Path, start: float, output: Path, gif: bool = False) -> None:
@@ -115,42 +119,26 @@ def encode(webm: Path, start: float, output: Path, gif: bool = False) -> None:
     assert CLIP_SECONDS[0] <= seconds <= CLIP_SECONDS[1], f"{mp4.name} lasts {seconds:.1f} s, not {CLIP_SECONDS} s"
     _ffmpeg(*trim, "-frames:v", "1", output.with_suffix(".png"))
     if gif:
-        _gif(webm, start, output.with_suffix(".gif"))
+        _gif(trim, output.with_suffix(".png"), output.with_suffix(".gif"))
         size = output.with_suffix(".gif").stat().st_size
         assert size <= GIF_MAX_BYTES, f"{output.name}.gif has {size} bytes, more than {GIF_MAX_BYTES}"
 
 
-def _gif(webm: Path, start: float, gif: Path) -> None:
-    """Write *webm* from *start* seconds as *gif*, and hold each pixel while it changes by GIF_HOLD or less."""
-    scale = f"fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos"
-    reader = imageio_ffmpeg.read_frames(str(webm), input_params=["-ss", f"{start:.3f}"], output_params=["-vf", scale])
-    width, height = next(reader)["size"]
+def _gif(trim: tuple[str | Path, ...], poster: Path, gif: Path) -> None:
+    """Write the clip that *trim* reads as *gif*, and hold each pixel while it changes by GIF_HOLD or less."""
+    # The IHDR chunk of the PNG poster holds the width and the height of the clip.
+    width, height = struct.unpack(">II", poster.read_bytes()[16:24])
+    size = (GIF_WIDTH, round(GIF_WIDTH * height / width))
+    scale = f"fps={GIF_FPS},scale={size[0]}:{size[1]}:flags=lanczos"
+    raw = _ffmpeg(*trim, "-vf", scale, "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+    frames = np.frombuffer(raw, np.uint8).reshape(-1, size[1], size[0], 3).copy()
+    for index in range(1, len(frames)):
+        changed = np.abs(frames[index].astype(np.int16) - frames[index - 1]).max(axis=2) > GIF_HOLD
+        if changed.mean() <= GIF_NEW_PAGE:
+            frames[index] = np.where(changed[..., None], frames[index], frames[index - 1])
     palette = (
         f"split[a][b];[a]palettegen=max_colors={GIF_COLORS}:stats_mode=diff[p];"
         "[b][p]paletteuse=dither=none:diff_mode=rectangle"
     )
-    writer = imageio_ffmpeg.write_frames(
-        str(gif),
-        (width, height),
-        fps=GIF_FPS,
-        codec="gif",
-        pix_fmt_out="pal8",
-        quality=None,
-        macro_block_size=1,
-        ffmpeg_log_level="error",
-        ffmpeg_timeout=_FFMPEG_TIMEOUT,
-        output_params=["-vf", palette, "-loop", "0"],
-    )
-    writer.send(None)
-    try:
-        held = None
-        for data in reader:
-            frame = np.frombuffer(data, np.uint8).reshape(height, width, 3)
-            if held is not None:
-                changed = np.abs(frame.astype(np.int16) - held).max(axis=2) > GIF_HOLD
-                if changed.mean() <= GIF_NEW_PAGE:
-                    frame = np.where(changed[..., None], frame, held)
-            writer.send(frame)
-            held = frame
-    finally:
-        writer.close()
+    raw_input = ("-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(GIF_FPS), "-i", "-")
+    _ffmpeg(*raw_input, "-vf", palette, "-loop", "0", gif, stdin=frames.tobytes())

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import imageio_ffmpeg
 import numpy as np
+import pytest
 
 from docs_media.recording import GIF_FPS, encode
 
@@ -68,3 +69,11 @@ def test_the_gif_shows_a_change_of_the_page(tmp_path: Path) -> None:
     assert frames[0][250, 375].min() > 200
     red, green, blue = frames[-1][250, 375]
     assert blue > 200 and max(red, green) < 80
+
+
+def test_a_gif_that_ffmpeg_cannot_write_fails_the_encoding(tmp_path: Path) -> None:
+    # Each write to /dev/full fails with "No space left on device".
+    (tmp_path / "page.gif").symlink_to("/dev/full")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        encode(webm(tmp_path / "page.webm", NOISY_PAGE), 0, tmp_path / "page", gif=True)
