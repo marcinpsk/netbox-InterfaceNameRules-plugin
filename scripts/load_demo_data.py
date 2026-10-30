@@ -248,7 +248,8 @@ def load_rule_scopes(manufacturer):
     from dcim.models import DeviceType, ModuleType
 
     for row in contrib_mappings():
-        if model := row.get("device_type"):
+        # YAML reads a model such as 7609 as a number.
+        if model := str(row.get("device_type") or ""):
             ensure_type(DeviceType, model, manufacturer, slug=model.lower())
         for model in (row.get("module_type"), row.get("parent_module_type")):
             ensure_type(ModuleType, model, manufacturer)

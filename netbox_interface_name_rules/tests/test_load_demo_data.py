@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
+from dcim.models import Device, DeviceType, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
 from django.test import TestCase, TransactionTestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -165,6 +165,14 @@ class ModuleInstallTest(LoaderTestCase):
         self.assertIn(f"Installed 1 {load_demo_data.APPLY_DEMO_MODULE_TYPE}", output)
         _, output = run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
         self.assertNotIn("Installed", output)
+
+    def test_a_numeric_device_type_in_yaml_names_a_device_type_by_its_text(self):
+        self.use_contrib({"numeric.yaml": "- device_type: 7609\n  name_template: x\n"})
+
+        run(load_demo_data.load_rule_scopes, self.manufacturer)
+        run(load_demo_data.load_rule_scopes, self.manufacturer)
+
+        self.assertEqual(list(DeviceType.objects.filter(model="7609").values_list("slug", flat=True)), ["7609"])
 
     def test_a_module_type_that_exists_gets_its_module_interface_template(self):
         ModuleType.objects.create(manufacturer=self.manufacturer, model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
