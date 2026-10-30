@@ -434,7 +434,11 @@ _MEDIA_URL_SPELLINGS = (
 )
 
 
-@pytest.mark.parametrize(("site_url", "src"), itertools.product(_SITE_URL_SPELLINGS, _MEDIA_URL_SPELLINGS))
+@pytest.mark.parametrize(
+    ("site_url", "src"),
+    # MkDocs adds the last slash of a site_url without one.
+    list(itertools.product((*_SITE_URL_SPELLINGS, "https://example.github.io/my%20project"), _MEDIA_URL_SPELLINGS)),
+)
 def test_each_spelling_of_the_site_url_finds_the_capture_or_reports_it_missing(
     tmp_path: Path, _check, site_url: str, src: str
 ) -> None:
@@ -445,6 +449,24 @@ def test_each_spelling_of_the_site_url_finds_the_capture_or_reports_it_missing(
 
     assert _check(*shown).returncode == 0, _check(*shown).stderr
     assert f"missing: {src} (shown by guide/index.html)\n" in _check(*lacking).stderr
+
+
+def test_a_site_url_without_a_path_finds_the_capture_or_reports_it_missing(tmp_path: Path, _check) -> None:
+    pages = {"guide/index.html": '<img src="https://example.github.io/assets/screenshots/shot.png">'}
+    shown = _tree(tmp_path / "shown", pages, ("shot.png",), site_url="https://example.github.io")
+    lacking = _tree(tmp_path / "lacking", pages, ("other.png",), (), site_url="https://example.github.io")
+
+    assert _check(*shown).returncode == 0, _check(*shown).stderr
+    assert "missing: https://example.github.io/assets/screenshots/shot.png" in _check(*lacking).stderr
+
+
+def test_a_readme_image_of_a_sibling_path_of_a_site_url_without_a_slash_is_not_in_the_site(
+    tmp_path: Path, _check
+) -> None:
+    readme = "![Shot](https://example.github.io/project-other/assets/missing.png)\n"
+    site, media = _tree(tmp_path, {}, (), readme=readme, site_url="https://example.github.io/project")
+
+    assert _check(site, media).returncode == 0, _check(site, media).stderr
 
 
 @pytest.mark.parametrize("port", ["8443", "0"])

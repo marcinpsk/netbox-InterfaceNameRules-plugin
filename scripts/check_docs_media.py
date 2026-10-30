@@ -23,7 +23,7 @@ import argparse
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import SplitResult, unquote, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 
 import yaml
 from markdown_it import MarkdownIt
@@ -108,6 +108,9 @@ def _readme_media(site: Path, site_url: str, readme: Path) -> list[tuple[str, Pa
 
 def problems(site_dir: Path, media_dir: Path, readme: Path, site_url: str) -> list[str]:
     """Return one message for each media file that the site lacks and each capture that nothing shows."""
+    # MkDocs adds the last slash of a site_url without one; the path comparisons need it.
+    parts = urlsplit(site_url)
+    site_url = urlunsplit(parts._replace(path=parts.path if parts.path.endswith("/") else f"{parts.path}/"))
     site = site_dir.resolve()
     media = (site_dir / MEDIA).resolve()
     shown_by = [
