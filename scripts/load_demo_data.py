@@ -83,7 +83,7 @@ def shared_objects():
 
 
 def device(name, site, device_type, role):
-    """Return the device *name* and whether this call created it."""
+    """Return the device *name*, and create it when it does not exist."""
     from dcim.models import Device
 
     obj, created = Device.objects.get_or_create(
@@ -91,7 +91,7 @@ def device(name, site, device_type, role):
     )
     if created:
         ok(f"Created device {name}")
-    return obj, created
+    return obj
 
 
 def join_chassis(chassis_name, members):
@@ -124,11 +124,14 @@ def load_100_bay_device(site, manufacturer, role):
         for i in range(1, 101):
             ModuleBayTemplate.objects.create(device_type=device_type, name=f"bay{i}", position=str(i))
     module_type, _ = ModuleType.objects.get_or_create(manufacturer=manufacturer, model="TEST-1PORT")
-    obj, created = device("test-100ports", site, device_type, role)
-    if created:
-        for bay in ModuleBay.objects.filter(device=obj).order_by("name"):
-            Module.objects.create(device=obj, module_bay=bay, module_type=module_type, status="active")
-        ok("Installed TEST-1PORT modules into all 100 bays")
+    obj = device("test-100ports", site, device_type, role)
+    # Fill each empty bay on each run, so that a run that stopped after it created the device completes it.
+    installed = 0
+    for bay in ModuleBay.objects.filter(device=obj, installed_module__isnull=True).order_by("name"):
+        Module.objects.create(device=obj, module_bay=bay, module_type=module_type, status="active")
+        installed += 1
+    if installed:
+        ok(f"Installed {installed} TEST-1PORT modules into test-100ports")
 
 
 def load_demo_vc_stacks(site, manufacturer, role):
@@ -153,7 +156,7 @@ def load_demo_vc_stacks(site, manufacturer, role):
 
     # The e2e tests change test-vc-stack; demo-vc-stack stays for manual checks.
     for chassis_name, prefix in (("test-vc-stack", "vc-stack"), ("demo-vc-stack", "demo-vc")):
-        join_chassis(chassis_name, [(device(f"{prefix}-{n}", site, switch, role)[0], n) for n in (1, 2)])
+        join_chassis(chassis_name, [(device(f"{prefix}-{n}", site, switch, role), n) for n in (1, 2)])
 
     # Remove the modules other than VC-SFP that manual tests left in the sfp0 bays of the demo stack.
     for name in ("demo-vc-1", "demo-vc-2"):
@@ -175,7 +178,7 @@ def load_vendor_stacks(site, manufacturer, role):
             for name, kind in interfaces:
                 InterfaceTemplate.objects.create(device_type=device_type, name=name, type=kind)
             ok(f"Created DeviceType {model}")
-        join_chassis(chassis_name, [(device(name, site, device_type, role)[0], n) for name, n in members])
+        join_chassis(chassis_name, [(device(name, site, device_type, role), n) for name, n in members])
 
 
 def load_apply_demo_device(site, manufacturer, role):
@@ -203,12 +206,15 @@ def load_apply_demo_device(site, manufacturer, role):
         module_type = ModuleType.objects.create(manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE)
         # NetBox replaces {module} with the bay position.
         InterfaceTemplate.objects.create(module_type=module_type, name="{module}", type="100gbase-x-qsfp28")
-    obj, created = device(APPLY_DEMO_DEVICE, site, acx, role)
-    if created:
-        for position in APPLY_DEMO_BAYS:
-            bay = ModuleBay.objects.get(device=obj, position=str(position))
+    obj = device(APPLY_DEMO_DEVICE, site, acx, role)
+    installed = 0
+    for position in APPLY_DEMO_BAYS:
+        bay = ModuleBay.objects.get(device=obj, position=str(position))
+        if not Module.objects.filter(module_bay=bay).exists():
             Module.objects.create(device=obj, module_bay=bay, module_type=module_type, status="active")
-        ok(f"Installed {len(APPLY_DEMO_BAYS)} {APPLY_DEMO_MODULE_TYPE} modules into {APPLY_DEMO_DEVICE}")
+            installed += 1
+    if installed:
+        ok(f"Installed {installed} {APPLY_DEMO_MODULE_TYPE} modules into {APPLY_DEMO_DEVICE}")
 
 
 def load_rule_scopes(manufacturer):

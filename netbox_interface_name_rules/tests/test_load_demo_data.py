@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from dcim.models import Module
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -61,3 +62,33 @@ class ContribRowsTest(LoaderTestCase):
         self.assertIn("rules.yaml row 2", output)
         self.assertIn("rules.yaml row 3", output)
         self.assertEqual(InterfaceNameRule.objects.filter(module_type_pattern="DEMO-.*").count(), 1)
+
+
+class ModuleInstallTest(LoaderTestCase):
+    def test_the_100_bay_device_gets_a_module_in_each_empty_bay_on_the_next_run(self):
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+        for module in Module.objects.filter(device__name="test-100ports", module_bay__name__in=["bay1", "bay2"]):
+            module.delete()
+
+        _, output = run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+
+        modules = Module.objects.filter(device__name="test-100ports")
+        self.assertEqual(modules.count(), 100)
+        self.assertEqual(modules.values("module_bay").distinct().count(), 100)
+        self.assertIn("Installed 2 TEST-1PORT", output)
+        _, output = run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+        self.assertNotIn("Installed", output)
+
+    def test_the_apply_demo_device_gets_a_module_in_each_empty_bay_on_the_next_run(self):
+        run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+        Module.objects.get(device__name=load_demo_data.APPLY_DEMO_DEVICE, module_bay__position="2").delete()
+
+        _, output = run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+
+        positions = Module.objects.filter(device__name=load_demo_data.APPLY_DEMO_DEVICE).values_list(
+            "module_bay__position", flat=True
+        )
+        self.assertEqual(sorted(positions), [str(bay) for bay in load_demo_data.APPLY_DEMO_BAYS])
+        self.assertIn(f"Installed 1 {load_demo_data.APPLY_DEMO_MODULE_TYPE}", output)
+        _, output = run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+        self.assertNotIn("Installed", output)
