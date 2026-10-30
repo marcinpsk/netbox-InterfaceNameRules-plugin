@@ -186,8 +186,7 @@ class WorkflowSourceBuildTest(unittest.TestCase):
                                 self.assertIn("--no-build", command)
 
 
-# An origin with a main branch, and with a gh-pages branch that holds a coverage report when $GH_PAGES is "yes",
-# or only a ci/gh-pages branch when $GH_PAGES is "nested".
+# An origin with main, and gh-pages with a coverage report ($GH_PAGES yes) or only ci/gh-pages ($GH_PAGES nested).
 _ORIGIN_SETUP = """
 git init -q --bare origin.git
 git init -q -b main work
@@ -249,7 +248,7 @@ class DocsDeployCoverageTest(unittest.TestCase):
         result, site = self._deploy_step(with_gh_pages=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((site / "coverage" / "index.html").read_text(), "report\n")
+        self.assertEqual((site / "coverage" / "index.html").read_text(encoding="utf-8"), "report\n")
 
     def test_the_deploy_continues_when_gh_pages_does_not_exist(self):
         result, site = self._deploy_step(with_gh_pages=False)
