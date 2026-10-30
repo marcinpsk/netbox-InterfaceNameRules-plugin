@@ -3,6 +3,7 @@
 """scripts/check_docs_media.py on a temporary built site."""
 
 import importlib.util
+import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ def _tree(
     captured: tuple[str, ...],
     published: tuple[str, ...] | None = None,
     readme: str = "# Project\n",
+    site_url: str = _SITE_URL,
 ):
     """Write a built site, the captured media, a README and mkdocs.yml; return the site and the media root.
 
@@ -40,7 +42,7 @@ def _tree(
         (site / "assets" / _media_path(name)).parent.mkdir(parents=True, exist_ok=True)
         (site / "assets" / _media_path(name)).write_bytes(_PNG)
     (root / "README.md").write_text(readme, encoding="utf-8")
-    (root / "mkdocs.yml").write_text(f"site_name: project\nsite_url: {_SITE_URL}\n", encoding="utf-8")
+    (root / "mkdocs.yml").write_text(f"site_name: project\nsite_url: {site_url}\n", encoding="utf-8")
     return site, media
 
 
@@ -398,3 +400,36 @@ def test_a_readme_image_inside_an_html_comment_is_not_checked(tmp_path: Path, _c
     result = _check(site, media)
 
     assert result.returncode == 0, result.stderr
+
+
+# Equal spellings of the site URL https://example.github.io/my project/: default port, host case, percent-encoding.
+_SITE_URL_SPELLINGS = (
+    "https://example.github.io/my%20project/",
+    "https://example.github.io:443/my%20project/",
+    "https://Example.GitHub.io/%6Dy%20project/",
+)
+_MEDIA_URL_SPELLINGS = (
+    *(f"{url}assets/screenshots/shot.png" for url in _SITE_URL_SPELLINGS),
+    "//example.github.io/my%20project/assets/screenshots/shot.png",
+    "/my%20project/assets/screenshots/sho%74.png",
+)
+
+
+@pytest.mark.parametrize(("site_url", "src"), itertools.product(_SITE_URL_SPELLINGS, _MEDIA_URL_SPELLINGS))
+def test_each_spelling_of_the_site_url_finds_the_capture_or_reports_it_missing(
+    tmp_path: Path, _check, site_url: str, src: str
+) -> None:
+    readme = "# Project\n" if src.startswith("/") and not src.startswith("//") else f"![Shot]({src})\n"
+    pages = {"guide/index.html": f'<img src="{src}">'}
+    shown = _tree(tmp_path / "shown", pages, ("shot.png",), readme=readme, site_url=site_url)
+    lacking = _tree(tmp_path / "lacking", pages, ("other.png",), (), readme=readme, site_url=site_url)
+
+    assert _check(*shown).returncode == 0, _check(*shown).stderr
+    assert f"missing: {src} (shown by guide/index.html)\n" in _check(*lacking).stderr
+
+
+def test_an_image_on_another_port_of_the_site_host_is_not_in_the_site(tmp_path: Path, _check) -> None:
+    readme = "![Shot](https://example.github.io:8443/project/assets/missing.png)\n"
+    site, media = _tree(tmp_path, {}, (), readme=readme)
+
+    assert _check(site, media).returncode == 0

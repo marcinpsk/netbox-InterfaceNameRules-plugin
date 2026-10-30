@@ -8,10 +8,10 @@ check on the built site: it reads the `<img src>`, `<video src>`, `<video poster
 every HTML page, so the renderer has already resolved each Markdown form, code block and comment.
 
 It fails when a media URL of a page is not a file inside the site. A relative URL resolves against its
-page, and a root-relative URL (`/...`) or a URL under the `site_url` of mkdocs.yml (compared after
-decoding) resolves against the site path. It also fails when a README media URL under the `site_url` is
-not in the site, and when a page or the README shows no captured file: a screenshot, a recording, its
-poster or its GIF.
+page, and a root-relative URL (`/...`) or a URL under the `site_url` of mkdocs.yml (the same origin, and
+the path compared after decoding) resolves against the site path. It also fails when a README media URL
+under the `site_url` is not in the site, and when a page or the README shows no captured file: a
+screenshot, a recording, its poster or its GIF.
 
 Not checked: `srcset` candidates.
 The README check renders the README as CommonMark, as GitHub and PyPI do, and reads the same elements.
@@ -32,6 +32,8 @@ from markdown_it import MarkdownIt
 MEDIA = Path("assets")
 #: The captured files that a page must show, relative to the media root.
 CAPTURES = ("screenshots/*.png", "recordings/*.mp4", "recordings/*.png", "recordings/*.gif")
+#: The port that a URL without a port uses, for each scheme.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 #: The attributes that name a media file, for each element.
 _MEDIA_ATTRIBUTES = {"img": ("src",), "video": ("src", "poster"), "source": ("src",)}
 
@@ -56,16 +58,22 @@ def _sources(html: str) -> list[str]:
 
 def _site_file(site: Path, site_path: str, path: str) -> Path | None:
     """Return the file of the site that the URL *path* names, or None when the path is outside *site_path*."""
-    path = unquote(path)
+    path, site_path = unquote(path), unquote(site_path)
     if not path.startswith(site_path):
         return None
     return (site / path.removeprefix(site_path)).resolve()
 
 
+def _origin(url: SplitResult, scheme: str) -> tuple[str, str | None, int | None]:
+    """Return the scheme, the lowercase host and the port of *url*; *scheme* applies when the URL has none."""
+    scheme = url.scheme or scheme
+    return scheme, url.hostname, url.port or _DEFAULT_PORTS.get(scheme)
+
+
 def _under_site_url(url: SplitResult, site_url: SplitResult) -> bool:
-    """Return whether the absolute *url* names the host of the site and, once decoded, a path under the site."""
-    same_host = url.scheme in ("", site_url.scheme) and url.netloc.lower() == site_url.netloc.lower()
-    return bool(url.netloc) and same_host and unquote(url.path).startswith(site_url.path)
+    """Return whether the absolute *url* names the origin of the site and, once decoded, a path under the site."""
+    same_origin = _origin(url, site_url.scheme) == _origin(site_url, site_url.scheme)
+    return bool(url.netloc) and same_origin and unquote(url.path).startswith(unquote(site_url.path))
 
 
 def _is_site_file(site: Path, file: Path | None) -> bool:
