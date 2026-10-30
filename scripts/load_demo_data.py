@@ -230,22 +230,28 @@ def load_apply_demo_device(site, manufacturer, role):
         ok(f"Installed {installed} {APPLY_DEMO_MODULE_TYPE} modules into {APPLY_DEMO_DEVICE}")
 
 
+def contrib_mappings():
+    """Yield each row of the contrib/ rule files that is a mapping."""
+    for _filename, rows in contrib_rules():
+        yield from (row for row in rows if isinstance(row, dict))
+
+
+def ensure_type(cls, model, manufacturer, **fields):
+    """Create a *cls* object (a device or module type) for *model* when no object has that model."""
+    if model and not cls.objects.filter(model=model).exists():
+        cls.objects.create(manufacturer=manufacturer, model=model, **fields)
+        ok(f"Created {cls.__name__} {model}")
+
+
 def load_rule_scopes(manufacturer):
     """Create each device type and exact module type that a contrib rule names, when no object has that model."""
     from dcim.models import DeviceType, ModuleType
 
-    for _filename, rows in contrib_rules():
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            model = row.get("device_type")
-            if model and not DeviceType.objects.filter(model=model).exists():
-                DeviceType.objects.create(manufacturer=manufacturer, model=model, slug=model.lower())
-                ok(f"Created DeviceType {model}")
-            for model in (row.get("module_type"), row.get("parent_module_type")):
-                if model and not ModuleType.objects.filter(model=model).exists():
-                    ModuleType.objects.create(manufacturer=manufacturer, model=model)
-                    ok(f"Created ModuleType {model}")
+    for row in contrib_mappings():
+        if model := row.get("device_type"):
+            ensure_type(DeviceType, model, manufacturer, slug=model.lower())
+        for model in (row.get("module_type"), row.get("parent_module_type")):
+            ensure_type(ModuleType, model, manufacturer)
 
 
 def resolve(cls, label, **lookup):
@@ -295,6 +301,37 @@ def rule_lookup(row):
     return lookup, {}
 
 
+class SkippedRuleError(Exception):
+    """A contrib row that the demo does not load; *counted* is False for an option that the demo does not use."""
+
+    def __init__(self, label, reason, counted=True):
+        super().__init__(f"{label}: {reason}")
+        self.label, self.reason, self.counted = label, reason, counted
+
+
+def row_rule(filename, number, row, loaded):
+    """Return the label, the lookup and the extra defaults of a row, or raise SkippedRuleError.
+
+    *loaded* maps each rule lookup that an earlier row loaded to its file; this call adds the row's lookup.
+    """
+    if not isinstance(row, dict):
+        raise SkippedRuleError(f"{filename} row {number}", f"not a mapping: {row!r}")
+    label = row.get("module_type") or row.get("module_type_pattern") or row.get("device_type") or "(device)"
+    if not row.get("name_template"):
+        raise SkippedRuleError(label, "missing name_template")
+    try:
+        lookup, extra = rule_lookup(row)
+    except LookupError as exc:
+        raise SkippedRuleError(label, str(exc)) from exc
+    key = frozenset(lookup.items())
+    if key in loaded and loaded[key] == filename and filename in ALTERNATIVE_ROW_FILES:
+        raise SkippedRuleError(label, f"not loaded: an option of {filename} that the demo does not use", counted=False)
+    if key in loaded:
+        raise SkippedRuleError(label, f"{filename} repeats the rule of {loaded[key]}")
+    loaded[key] = filename
+    return label, lookup, extra
+
+
 def load_rules():
     """Load each rule of contrib/ and return the number of rules that were skipped.
 
@@ -316,30 +353,12 @@ def load_rules():
     for filename, rows in contrib_rules():
         print(f"📋 Loading {filename}…")
         for number, row in enumerate(rows, start=1):
-            if not isinstance(row, dict):
-                skip(f"{filename} row {number}", f"not a mapping: {row!r}")
-                skipped += 1
-                continue
-            label = row.get("module_type") or row.get("module_type_pattern") or row.get("device_type") or "(device)"
-            if not row.get("name_template"):
-                skip(label, "missing name_template")
-                skipped += 1
-                continue
             try:
-                lookup, extra = rule_lookup(row)
-            except LookupError as exc:
-                skip(label, str(exc))
-                skipped += 1
+                label, lookup, extra = row_rule(filename, number, row, loaded)
+            except SkippedRuleError as exc:
+                skip(exc.label, exc.reason)
+                skipped += exc.counted
                 continue
-            key = frozenset(lookup.items())
-            if key in loaded:
-                if loaded[key] == filename and filename in ALTERNATIVE_ROW_FILES:
-                    skip(label, f"not loaded: an option of {filename} that the demo does not use")
-                    continue
-                skip(label, f"{filename} repeats the rule of {loaded[key]}")
-                skipped += 1
-                continue
-            loaded[key] = filename
             defaults = {
                 "name_template": row["name_template"],
                 **{name: row.get(name, default) for name, default in field_defaults.items()},
