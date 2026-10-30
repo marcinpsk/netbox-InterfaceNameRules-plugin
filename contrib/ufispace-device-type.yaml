@@ -22,6 +22,8 @@
 #        device_type set        → +2 pts
 #        platform set           → +1 pt
 #   3. For regex rules: longer pattern beats shorter at the same scope.
+#   4. Exception: among rules of the same kind with the same scope, the rule on the
+#      closest platform wins, whatever the pattern length.
 #
 # Examples for a QSFP-DD-400G-DR4 module in a S9610-36D device:
 #   Rule A: /.*/ device_type=S9610-36D              → score 2000+2=2002  (dt, short)

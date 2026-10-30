@@ -697,6 +697,16 @@ class DocumentedPriorityScoreTest(unittest.TestCase):
                 self.assertEqual(text.count(f'scope "dt" (score {device_label})'), 1)
                 self.assertEqual(text.count(f'scope "pl" (score {platform_label})'), 1)
 
+    def test_contrib_cascade_states_the_closest_platform_exception(self):
+        exception = (
+            "#   4. Exception: among rules of the same kind with the same scope, the rule on the\n"
+            "#      closest platform wins, whatever the pattern length.\n"
+        )
+        for name in ("ufispace.yaml", "ufispace-device-type.yaml"):
+            with self.subTest(file=name):
+                text = (_PROJECT_ROOT / "contrib" / name).read_text(encoding="utf-8")
+                self.assertEqual(text.count(exception), 1)
+
     def test_examples_captions_state_the_model_scores(self):
         guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text(encoding="utf-8")
         cases = {
