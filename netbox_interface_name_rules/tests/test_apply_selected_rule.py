@@ -25,6 +25,7 @@ from netbox_interface_name_rules.tests.helpers import (
     make_device_type,
     make_module_bay_templates,
     plain_module_type,
+    token_module_type,
 )
 from netbox_interface_name_rules.tests.platform_cases import BreakoutModuleFixtures, PlatformTreeFixtures
 
@@ -90,6 +91,39 @@ class PlatformScopedApplyTest(PlatformTreeFixtures):
         self._module_on(self.evo_build, "plattree-build")
 
         self.assertFalse(has_applicable_interfaces(broad))
+
+
+class PlatformChangeApplyTest(PlatformTreeFixtures):
+    """After a device platform change, Apply Rules starts from the names that the earlier rule gave."""
+
+    def setUp(self):
+        self.templated = token_module_type(self.module_type.manufacturer, "QSFPP-4X10GE-ER", "et-0/0/{module}")
+        self.on_junos = self._regex_rule("j-{base}", platform=self.junos)
+        device = make_device("PlatTree", self.device_type, self.placement, name="plattree-moved", platform=self.evo)
+        self.module = Module.objects.create(
+            device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.templated
+        )
+        apply_rule_to_existing(self.on_junos)
+        self.assertEqual(self._name(), "j-et-0/0/0")
+        device.platform = self.eos
+        device.save()
+
+    def _name(self):
+        return Interface.objects.get(module=self.module).name
+
+    def test_a_module_that_no_rule_matches_keeps_the_names_of_the_earlier_rule(self):
+        self.assertEqual(_previewed(self.on_junos), (set(), 0))
+        apply_rule_to_existing(self.on_junos)
+
+        self.assertEqual(self._name(), "j-et-0/0/0")
+
+    def test_a_base_rule_does_not_rename_a_name_that_another_rule_gave(self):
+        on_eos = self._regex_rule("e-{base}", platform=self.eos)
+
+        self.assertEqual(_previewed(on_eos), (set(), 1))
+        apply_rule_to_existing(on_eos)
+
+        self.assertEqual(self._name(), "j-et-0/0/0")
 
 
 class DeviceTypeScopedApplyTest(BreakoutModuleFixtures):

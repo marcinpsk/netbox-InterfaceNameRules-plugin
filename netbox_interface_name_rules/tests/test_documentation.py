@@ -531,6 +531,20 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_states_what_apply_rules_cannot_restore_after_a_platform_change(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn(
+            "Apply Rules starts from the names that the interfaces have now. A rule that reads `{base}` finds "
+            "the base only in a raw template name or in a name that the rule gives itself, so it does not rename "
+            "an interface that another rule renamed. When no rule matches a module after the change, Apply Rules "
+            "does not include the module for any rule, and the interfaces keep the names from the earlier rule. "
+            "The plugin cannot give back the raw template names. Rename these interfaces by hand, or delete the "
+            "module and install it again. NetBox then creates the interfaces again from the module type "
+            "templates, but the delete removes the configuration of the old interfaces.",
+            guide,
+        )
+
     def test_the_guides_name_the_netbox_branching_series_that_the_version_gate_accepts(self):
         statements = {
             ("docs", "configuration.md"): (

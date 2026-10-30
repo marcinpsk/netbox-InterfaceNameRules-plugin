@@ -330,6 +330,16 @@ selected before. After an upgrade to the first release that matches child
 platforms, or after you change a device platform or the platform tree, run Apply
 Rules for the rules on the affected platforms.
 
+Apply Rules starts from the names that the interfaces have now. A rule that
+reads `{base}` finds the base only in a raw template name or in a name that the
+rule gives itself, so it does not rename an interface that another rule renamed.
+When no rule matches a module after the change, Apply Rules does not include the
+module for any rule, and the interfaces keep the names from the earlier rule.
+The plugin cannot give back the raw template names. Rename these interfaces by
+hand, or delete the module and install it again. NetBox then creates the
+interfaces again from the module type templates, but the delete removes the
+configuration of the old interfaces.
+
 ## netbox-branching
 
 The plugin supports [netbox-branching](https://github.com/netboxlabs/netbox-branching)
