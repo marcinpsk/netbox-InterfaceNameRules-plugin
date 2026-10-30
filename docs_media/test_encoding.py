@@ -68,12 +68,14 @@ def test_the_gif_shows_a_change_of_the_page(tmp_path: Path) -> None:
     # The GIF is 800 px wide: the box is at 250 to 500 px, 187 to 312 px.
     assert frames[0][250, 375].min() > 200
     red, green, blue = frames[-1][250, 375]
-    assert blue > 200 and max(red, green) < 80
+    assert blue > 200
+    assert max(red, green) < 80
 
 
 def test_a_gif_that_ffmpeg_cannot_write_fails_the_encoding(tmp_path: Path) -> None:
     # Each write to /dev/full fails with "No space left on device".
     (tmp_path / "page.gif").symlink_to("/dev/full")
+    page = webm(tmp_path / "page.webm", NOISY_PAGE)
 
     with pytest.raises(subprocess.CalledProcessError):
-        encode(webm(tmp_path / "page.webm", NOISY_PAGE), 0, tmp_path / "page", gif=True)
+        encode(page, 0, tmp_path / "page", gif=True)
