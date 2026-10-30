@@ -428,8 +428,9 @@ def test_each_spelling_of_the_site_url_finds_the_capture_or_reports_it_missing(
     assert f"missing: {src} (shown by guide/index.html)\n" in _check(*lacking).stderr
 
 
-def test_an_image_on_another_port_of_the_site_host_is_not_in_the_site(tmp_path: Path, _check) -> None:
-    readme = "![Shot](https://example.github.io:8443/project/assets/missing.png)\n"
+@pytest.mark.parametrize("port", ["8443", "0"])
+def test_an_image_on_another_port_of_the_site_host_is_not_in_the_site(tmp_path: Path, _check, port: str) -> None:
+    readme = f"![Shot](https://example.github.io:{port}/project/assets/missing.png)\n"
     site, media = _tree(tmp_path, {}, (), readme=readme)
 
     assert _check(site, media).returncode == 0

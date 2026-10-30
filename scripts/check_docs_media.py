@@ -67,7 +67,7 @@ def _site_file(site: Path, site_path: str, path: str) -> Path | None:
 def _origin(url: SplitResult, scheme: str) -> tuple[str, str | None, int | None]:
     """Return the scheme, the lowercase host and the port of *url*; *scheme* applies when the URL has none."""
     scheme = url.scheme or scheme
-    return scheme, url.hostname, url.port or _DEFAULT_PORTS.get(scheme)
+    return scheme, url.hostname, _DEFAULT_PORTS.get(scheme) if url.port is None else url.port
 
 
 def _under_site_url(url: SplitResult, site_url: SplitResult) -> bool:
