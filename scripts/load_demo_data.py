@@ -59,12 +59,11 @@ def skip(label, reason):
 
 
 def contrib_rules():
-    """Return (file name, rule rows) for each rule file of contrib/."""
-    files = []
-    for path in sorted(CONTRIB_DIR.glob("*.yaml")):
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
-        files.append((path.name, [row for row in data if isinstance(row, dict)]))
-    return files
+    """Return (file name, rows) for each rule file of contrib/. The callers check that each row is a mapping."""
+    return [
+        (path.name, yaml.safe_load(path.read_text(encoding="utf-8")) or [])
+        for path in sorted(CONTRIB_DIR.glob("*.yaml"))
+    ]
 
 
 def shared_objects():
@@ -218,6 +217,8 @@ def load_rule_scopes(manufacturer):
 
     for _filename, rows in contrib_rules():
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             model = row.get("device_type")
             if model and not DeviceType.objects.filter(model=model).exists():
                 DeviceType.objects.create(manufacturer=manufacturer, model=model, slug=model.lower())
@@ -282,7 +283,11 @@ def load_rules():
     skipped = 0
     for filename, rows in contrib_rules():
         print(f"📋 Loading {filename}…")
-        for row in rows:
+        for number, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                skip(f"{filename} row {number}", f"not a mapping: {row!r}")
+                skipped += 1
+                continue
             label = row.get("module_type") or row.get("module_type_pattern") or row.get("device_type") or "(device)"
             if not row.get("name_template"):
                 skip(label, "missing name_template")
