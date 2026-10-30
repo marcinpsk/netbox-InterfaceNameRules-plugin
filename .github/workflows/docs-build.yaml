@@ -26,6 +26,8 @@ name: Docs build
       - "README.md"
       - "contrib/**"
       - "scripts/load_demo_data.py"
+      - "scripts/lock-netbox-requirements.sh"
+      - ".github/netbox-requirements.txt"
       - "scripts/check_docs_media.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -93,7 +95,9 @@ jobs:
         working-directory: plugin
         shell: bash
         run: |
-          uv pip install --system-certs --system -r ../netbox/requirements.txt
+          # scripts/lock-netbox-requirements.sh writes the lock from requirements.txt of the NetBox tag above.
+          uv pip install --system-certs --system --require-hashes --only-binary=:all: --no-binary=promise \
+            -r .github/netbox-requirements.txt
           uv export --system-certs --locked --no-default-groups --no-emit-project --format requirements-txt | \
             uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin
           uv pip install --system-certs --system --no-deps -e .

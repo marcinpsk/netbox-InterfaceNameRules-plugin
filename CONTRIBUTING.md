@@ -77,6 +77,10 @@ uv run --no-sync python scripts/check_docs_media.py site docs/assets
 A pull request that changes a template, the docs or the demo data runs the same build, and uploads
 the site as the `docs-site` artifact.
 
+The docs build installs NetBox from `.github/netbox-requirements.txt`: the requirements of the NetBox
+tag in `docs-build.yaml`, with hashes. When you change that tag or the Python version, write the lock
+again with `scripts/lock-netbox-requirements.sh <tag> <Python version>`. A test compares the two.
+
 ### Commits
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):
