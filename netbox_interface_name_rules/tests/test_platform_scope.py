@@ -107,6 +107,14 @@ class PlatformTreeCacheTest(PlatformTreeFixtures):
 
         self.assertEqual(self._select(Platform.objects.get(pk=newcomer.pk)), rule)
 
+    def test_a_child_platform_created_after_a_selection_gets_the_ancestor_rule(self):
+        rule = self._regex_rule("junos{bay_position}", platform=self.junos)
+        self.assertEqual(self._select(self.evo), rule)
+
+        child = Platform.objects.create(name="PlatTree Created", slug="plattree-created", parent=self.evo)
+
+        self.assertEqual(self._select(child), rule)
+
 
 class DeviceInterfaceRuleScopeTest(PlatformTreeFixtures):
     """Device-interface rules match the device platform and each of its ancestors, the closest first."""
