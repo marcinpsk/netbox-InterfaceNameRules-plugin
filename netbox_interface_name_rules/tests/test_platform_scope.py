@@ -172,7 +172,7 @@ class DeviceReapplySnapshotTest(PlatformTreeFixtures):
     """One rename-trigger reapply reads the rule snapshot once, for every device and both rule kinds."""
 
     def test_a_reapply_of_two_devices_runs_one_fingerprint_query(self):
-        self._regex_rule("junos{bay_position}", platform=self.junos)
+        self._regex_rule("junos{vc_position}-{bay_position}", platform=self.junos)
         InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, name_template="mgmt{vc_position}", module_type_pattern="mgmt0"
         )
@@ -190,9 +190,10 @@ class DeviceReapplySnapshotTest(PlatformTreeFixtures):
             )
             Interface.objects.create(device=device, name="mgmt0", type="1000base-t")
             with self.captureOnCommitCallbacks(execute=True):
-                Module.objects.create(
+                module = Module.objects.create(
                     device=device, module_bay=ModuleBay.objects.get(device=device), module_type=self.module_type
                 )
+                Interface.objects.create(device=device, module=module, name="et-0/0/0", type="10gbase-x-sfpp")
             devices.append(device)
         with self.captureOnCommitCallbacks() as callbacks:
             for device in devices:
@@ -207,6 +208,10 @@ class DeviceReapplySnapshotTest(PlatformTreeFixtures):
         self.assertEqual(
             sorted(Interface.objects.filter(name__startswith="mgmt").values_list("name", flat=True)),
             ["mgmt3", "mgmt4"],
+        )
+        self.assertEqual(
+            sorted(Interface.objects.filter(module__device__in=devices).values_list("name", flat=True)),
+            ["junos3-0", "junos4-0"],
         )
 
 
