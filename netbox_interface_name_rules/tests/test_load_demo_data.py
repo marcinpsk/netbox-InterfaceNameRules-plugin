@@ -203,3 +203,21 @@ class ReapplyDeviceRulesTest(LoaderTestCase):
 
         self.assertTrue(Interface.objects.filter(device=demo_member, name="GigabitEthernet2/0/1").exists())
         self.assertTrue(Interface.objects.filter(device=user_member, name="GigabitEthernet1/0/1").exists())
+
+
+class LoaderTransactionTest(TestCase):
+    def test_a_run_that_stops_leaves_no_partial_demo_data(self):
+        with (
+            patch.object(load_demo_data, "load_vendor_stacks", side_effect=RuntimeError("stopped")),
+            self.assertRaisesMessage(RuntimeError, "stopped"),
+        ):
+            run(load_demo_data.main)
+
+        self.assertFalse(Device.objects.filter(name="test-100ports").exists())
+
+    def test_the_demo_loads_with_status_0_and_a_second_run_changes_nothing(self):
+        first, _ = run(load_demo_data.main)
+        second, output = run(load_demo_data.main)
+
+        self.assertEqual((first, second), (0, 0))
+        self.assertNotIn("✓", output)

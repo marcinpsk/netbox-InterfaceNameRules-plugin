@@ -7,7 +7,7 @@ The devcontainer and the documentation build use this script. Put the NetBox sou
 
     PYTHONPATH=/opt/netbox/netbox python scripts/load_demo_data.py
 
-Each object is created once, so a second run changes nothing. The script loads each rule that it can,
+Each object is created once, so a second run changes nothing. A run is one transaction. The script loads each rule that it can,
 and exits with status 1 when it skipped a rule.
 """
 
@@ -373,19 +373,22 @@ def main():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "netbox.settings")
     django.setup()
     from django.core.management import call_command
+    from django.db import transaction
 
-    print("🖥  Creating demo devices…")
-    site, manufacturer, role = shared_objects()
-    load_100_bay_device(site, manufacturer, role)
-    load_demo_vc_stacks(site, manufacturer, role)
-    load_vendor_stacks(site, manufacturer, role)
-    load_apply_demo_device(site, manufacturer, role)
-    load_rule_scopes(manufacturer)
-    # Fix the member_count counter of each VirtualChassis.
-    call_command("calculate_cached_counts", verbosity=0)
-    skipped = load_rules()
-    print("🔄 Re-applying the device-interface rules to the members of the demo chassis…")
-    reapply_device_rules()
+    # One transaction: a run that stops leaves no object half made, for example a device type without its templates.
+    with transaction.atomic():
+        print("🖥  Creating demo devices…")
+        site, manufacturer, role = shared_objects()
+        load_100_bay_device(site, manufacturer, role)
+        load_demo_vc_stacks(site, manufacturer, role)
+        load_vendor_stacks(site, manufacturer, role)
+        load_apply_demo_device(site, manufacturer, role)
+        load_rule_scopes(manufacturer)
+        # Fix the member_count counter of each VirtualChassis.
+        call_command("calculate_cached_counts", verbosity=0)
+        skipped = load_rules()
+        print("🔄 Re-applying the device-interface rules to the members of the demo chassis…")
+        reapply_device_rules()
     if skipped:
         print(f"⚠️  {skipped} rule(s) skipped.")
         return 1
