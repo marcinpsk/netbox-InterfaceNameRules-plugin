@@ -81,7 +81,7 @@ jobs:
         run: |
           # ls-remote --exit-code returns 2 when no such branch exists, and another non-zero status on an error.
           status=0
-          git ls-remote --exit-code --heads origin gh-pages > /dev/null || status=$?
+          git ls-remote --exit-code origin refs/heads/gh-pages > /dev/null || status=$?
           if [ "$status" -eq 2 ]; then
             echo "gh-pages does not exist yet"
             exit 0

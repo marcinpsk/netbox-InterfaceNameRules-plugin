@@ -186,7 +186,8 @@ class WorkflowSourceBuildTest(unittest.TestCase):
                                 self.assertIn("--no-build", command)
 
 
-# An origin with a main branch, and with a gh-pages branch that holds a coverage report when $GH_PAGES is "yes".
+# An origin with a main branch, and with a gh-pages branch that holds a coverage report when $GH_PAGES is "yes",
+# or only a ci/gh-pages branch when $GH_PAGES is "nested".
 _ORIGIN_SETUP = """
 git init -q --bare origin.git
 git init -q -b main work
@@ -205,6 +206,8 @@ if [ "$GH_PAGES" = yes ]; then
   git push -q origin gh-pages
   git checkout -q main
   rm -rf coverage
+elif [ "$GH_PAGES" = nested ]; then
+  git push -q origin main:refs/heads/ci/gh-pages
 fi
 mkdir site
 """
@@ -226,7 +229,7 @@ def _bash(script, cwd, env=None):
 class DocsDeployCoverageTest(unittest.TestCase):
     """The deploy keeps the coverage report of gh-pages, and also deploys when gh-pages does not exist."""
 
-    def _deploy_step(self, with_gh_pages, reachable=True):
+    def _deploy_step(self, with_gh_pages, reachable=True, nested=False):
         workflow = dict(_workflows())["docs-deploy.yaml"]
         [script] = [
             s["run"]
@@ -234,7 +237,7 @@ class DocsDeployCoverageTest(unittest.TestCase):
             if s.get("name") == "Keep the coverage report of gh-pages"
         ]
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "no"}
+        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "nested" if nested else "no"}
         setup = _bash(_ORIGIN_SETUP, root, env)
         self.assertEqual(setup.returncode, 0, setup.stderr)
         if not reachable:
@@ -258,4 +261,10 @@ class DocsDeployCoverageTest(unittest.TestCase):
         result, site = self._deploy_step(with_gh_pages=True, reachable=False)
 
         self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((site / "coverage").exists())
+
+    def test_the_deploy_continues_when_only_a_branch_ending_in_gh_pages_exists(self):
+        result, site = self._deploy_step(with_gh_pages=False, nested=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((site / "coverage").exists())
