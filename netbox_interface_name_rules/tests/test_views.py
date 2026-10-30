@@ -331,6 +331,15 @@ class RuleListViewTest(ViewTestBase):
         self.assertContains(response, "Module rules use these variables in the Parent Name Template field.")
         self.assertContains(response, "Device-interface rules use these variables in the Name Template field.")
 
+    def test_priority_tooltip_says_the_closest_platform_wins_a_tie(self):
+        response = self.client.get(reverse("plugins:netbox_interface_name_rules:interfacenamerule_list"))
+
+        self.assertContains(
+            response,
+            "Higher score = higher priority in rule lookup. Exception: among rules of the same kind (exact or "
+            "regex) with the same scope, the rule on the closest platform wins.",
+        )
+
     def test_list_view_unauthenticated_redirects(self):
         """Unauthenticated access to list view redirects to login."""
         self.client.logout()
@@ -350,6 +359,24 @@ class RuleDetailViewTest(ViewTestBase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_priority_panel_states_the_score_layout(self):
+        response = self.client.get(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_detail", kwargs={"pk": self.rule.pk})
+        )
+
+        page = " ".join(response.content.decode().split())
+        for statement in (
+            (
+                "<strong>Higher score = higher priority</strong>, except that among rules of the same kind with "
+                "the same scope, the rule on the closest platform wins."
+            ),
+            "Exact FK rules always outrank regex rules (score 10000+&nbsp;vs max ≤&nbsp;7255).",
+            "<tr><td>Exact FK (module_type)</td><td>10000 + scope</td><td>10000 – 10007</td></tr>",
+            "<tr><td>Regex (module_type_pattern)</td><td>scope × 1000 + len(pattern)</td><td>1 – 7255</td></tr>",
+        ):
+            with self.subTest(statement=statement):
+                self.assertIn(statement, page)
 
     def test_detail_view_404_for_missing(self):
         """Detail view returns 404 for non-existent rule PK."""
@@ -480,6 +507,50 @@ class RuleApplyDetailViewTest(ViewTestBase):
         expected = "families" if supports_channelization() else "interfaces"
         self.assertEqual(response.context["checked_unit"], expected)
         self.assertEqual(response.context["families_supported"], supports_channelization())
+
+    def test_a_disabled_rule_says_why_its_preview_is_empty(self):
+        """A disabled rule selects no module, so the empty preview names the cause instead of a missing match."""
+        device = make_device("Disabled", self.device_type, name="disabled-dev-01")
+        bay = ModuleBay.objects.create(device=device, name="Bay 0", position="0")
+        module = Module.objects.create(device=device, module_bay=bay, module_type=self.module_type)
+        Interface.objects.create(device=device, module=module, name="0", type="10gbase-x-sfpp")
+        self.rule.enabled = False
+        self.rule.save()
+
+        response = self.client.get(
+            reverse("plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": self.rule.pk})
+        )
+
+        self.assertEqual(response.context["preview"], [])
+        self.assertContains(response, "This rule is disabled. Enable it to preview and apply it.")
+        self.assertNotContains(response, "No installed interfaces would be affected by this rule.")
+
+    def test_a_device_interface_rule_says_that_apply_rules_does_not_preview_it(self):
+        """Apply Rules scans modules only, so enabling a device-interface rule still gives no preview."""
+        device_rule = InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            device_type=self.device_type,
+            name_template="Ethernet{vc_position}/{base}",
+        )
+        url = reverse(
+            "plugins:netbox_interface_name_rules:interfacenamerule_apply_detail", kwargs={"pk": device_rule.pk}
+        )
+
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                InterfaceNameRule.objects.filter(pk=device_rule.pk).update(enabled=enabled)
+
+                response = self.client.get(url)
+
+                page = " ".join(response.content.decode().split())
+                self.assertEqual(response.context["preview"], [])
+                self.assertIn(
+                    "Apply Rules previews and renames module interfaces only. A device-interface rule renames "
+                    "device interfaces when the device joins or changes position in a virtual chassis.",
+                    page,
+                )
+                self.assertNotIn("Enable it to preview and apply it.", page)
+                self.assertNotIn("No installed interfaces would be affected by this rule.", page)
 
 
 class RuleApplicableViewTest(ViewTestBase):

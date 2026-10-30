@@ -50,7 +50,7 @@ class InterfaceNameRule(NetBoxModel):
     Scoping fields (all optional):
       - parent_module_type: match only when installed inside this module type
       - device_type:        match only devices of this hardware model
-      - platform:           match only devices running this software platform/OS
+      - platform:           match only devices running this software platform/OS or a child platform of it (NetBox 4.4+)
     """
 
     module_type = models.ForeignKey(
@@ -105,7 +105,10 @@ class InterfaceNameRule(NetBoxModel):
         blank=True,
         related_name="+",
         verbose_name="Platform",
-        help_text="If set, rule only applies to devices running this software platform/OS",
+        help_text=(
+            "If set, rule only applies to devices running this software platform/OS "
+            "or a child platform of it (NetBox 4.4+)"
+        ),
     )
     name_template = models.CharField(
         max_length=255,
@@ -245,17 +248,23 @@ class InterfaceNameRule(NetBoxModel):
         3. **Regex pattern length** (longer = more specific string match).
 
         Score layout:
-          - Exact FK rules: 1000 + scope  (1000–1007)
-          - Regex rules:    scope × 100 + len(pattern)
-            e.g. device-scoped 15-char pattern → 2×100+15 = 215
-                 platform-scoped 2-char pattern → 1×100+2 = 102
-          Exact rules always outrank regex (max regex score with scope=7,
-          max_length=255 would be 7×100+255 = 955, so 1000 safely exceeds
-          any possible regex score).
+          - Exact FK rules: 10000 + scope  (10000–10007)
+          - Regex rules:    scope × 1000 + len(pattern)
+            e.g. device-scoped 15-char pattern → 2×1000+15 = 2015
+                 platform-scoped 2-char pattern → 1×1000+2 = 1002
+          A pattern has at most 255 characters, so more scope always scores
+          higher than a longer pattern, and exact rules (10000+) always score
+          higher than regex rules (at most 7×1000+255 = 7255).
 
         Scope bit weights: parent_module_type=4, device_type=2, platform=1.
         A device-level rule takes no parent_module_type, so its scope is at most 3.
         Two rules with the same score fall back to lowest pk (first created).
+
+        A platform rule also matches a device on a descendant of its platform (NetBox 4.4+).
+        The platform bit is the same for each matching platform, so the score does
+        not order them. For one device, among rules with the same parent module type
+        and device type, the engine tries the rule on the closest platform first,
+        before it compares pattern length and pk.
         """
         scope = (
             (4 if self.parent_module_type_id else 0)
@@ -263,8 +272,8 @@ class InterfaceNameRule(NetBoxModel):
             + (1 if self.platform_id else 0)
         )
         if not self.module_type_is_regex:
-            return 1000 + scope
-        return scope * 100 + len(self.module_type_pattern)
+            return 10000 + scope
+        return scope * 1000 + len(self.module_type_pattern)
 
     @property
     def specificity_label(self) -> str:

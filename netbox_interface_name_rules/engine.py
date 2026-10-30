@@ -504,27 +504,28 @@ def pinned_reapply(modules):
 
 
 def _device_interface_rules(device):
-    """Return enabled device-interface rules in matching priority order."""
+    """Return enabled device-interface rules in matching priority order.
+
+    A rule platform matches the device platform and each of its ancestors. The lineage comes from the
+    platform tree of the rule snapshot, which reads the alias the router gives for platforms.
+    """
     from django.db.models import Q
 
     from .models import InterfaceNameRule
 
     device_type = getattr(device, "device_type", None)
-    platform = getattr(device, "platform", None)
+    lineage = rule_selection.platform_lineage(getattr(device, "platform", None))
+    closeness = {pk: index for index, pk in enumerate(lineage)}
     rules = list(
-        InterfaceNameRule.objects.filter(
-            applies_to_device_interfaces=True,
-            enabled=True,
-        )
+        InterfaceNameRule.objects.filter(applies_to_device_interfaces=True, enabled=True)
         .filter(Q(device_type=device_type) | Q(device_type__isnull=True))
-        .filter(Q(platform=platform) | Q(platform__isnull=True))
+        .filter(Q(platform__isnull=True) | Q(platform__in=lineage))
     )
-    # Sort Python-side: specificity_score descending, then module_type_pattern length
-    # descending (for device-interface rules with ties), then pk ascending for stability.
-    # (InterfaceNameRule has no DB 'priority' field; specificity_score is a property.)
+    # Higher score first, then the closer platform, then the longer pattern, then the lower pk.
     rules.sort(
         key=lambda r: (
             -r.specificity_score,
+            closeness.get(r.platform_id, len(lineage)),
             -len(r.module_type_pattern or ""),
             r.pk,
         )
@@ -703,8 +704,9 @@ def has_applicable_interfaces(rule) -> bool:
 def _build_module_qs(rule):
     """Return a Module queryset filtered to the rule's scope (module type, parent, device, platform).
 
-    Shared by ``find_interfaces_for_rule`` and ``apply_rule_to_existing`` to avoid
-    duplicating the filtering logic.
+    A rule platform covers the devices on that platform and on each of its descendants.
+
+    ``_rule_modules`` reads it and keeps the modules that select the rule.
     """
     from dcim.models import Module
 
@@ -717,7 +719,7 @@ def _build_module_qs(rule):
     if rule.device_type:
         qs = qs.filter(device__device_type=rule.device_type)
     if rule.platform:
-        qs = qs.filter(device__platform=rule.platform)
+        qs = qs.filter(device__platform__in=rule_selection.platform_subtree(rule.platform.pk))
     return qs
 
 
@@ -822,7 +824,7 @@ def _installed_flat_entry(module, plan, interface) -> dict | None:
     }
 
 
-def _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks):
+def _process_module(rule, module, ifaces, variables, limit, results):
     """Preview one module from its family plans.  Returns (checked_count, should_stop).
 
     An installed flat family is previewed from the plan Apply Rules executes, because its members
@@ -856,15 +858,15 @@ def _process_module(rule, module, ifaces, variables, limit, results, module_qs, 
             continue
         results.append(entry)
         if limit is not None and len(results) >= limit:
-            return checked + _count_remaining_interfaces(module_qs, processed_pks), True
+            return checked, True
     return checked, False
 
 
-def _count_remaining_interfaces(module_qs, processed_pks) -> int:
-    """Count the rule candidates in modules not yet visited during a find_interfaces_for_rule scan."""
+def _count_remaining_interfaces(remaining_pks) -> int:
+    """Count the rule candidates in the modules a find_interfaces_for_rule scan did not visit."""
     from dcim.models import Interface
 
-    qs = Interface.objects.filter(module__in=module_qs.exclude(pk__in=processed_pks))
+    qs = Interface.objects.filter(module__in=remaining_pks)
     if supports_channelization():  # pragma: no cover - the column exists only on NetBox 4.7+
         qs = qs.filter(channel_id__isnull=True)  # a family counts once, through its parent
     return qs.count()
@@ -894,44 +896,39 @@ def find_interfaces_for_rule(rule, limit=None):
     """
     from dcim.models import Interface
 
-    module_qs = _build_module_qs(rule).select_related(
-        "module_type",
-        "device__device_type",
-        "device__platform",
-        *family_template_names.BAY_CHAIN_RELATIONS,
-    )
+    modules = _rule_modules(rule)
     # Batch-load all interfaces for matching modules to avoid N+1 queries.
     ifaces_by_module = defaultdict(list)
-    for iface in Interface.objects.filter(module__in=module_qs).order_by("module_id", "name"):
+    module_pks = [module.pk for module in modules]
+    for iface in Interface.objects.filter(module__in=module_pks).order_by("module_id", "name"):
         ifaces_by_module[iface.module_id].append(iface)
 
-    modules = list(module_qs)
-    processed_pks = set()
     results = []
     total_checked = 0
     with family_ops.pinned_template_cache(modules):
-        for module in modules:
-            processed_pks.add(module.pk)
+        for index, module in enumerate(modules):
             variables = build_variables(module.module_bay, device=module.device)
             ifaces = ifaces_by_module.get(module.pk, [])
-            checked, stop = _process_module(rule, module, ifaces, variables, limit, results, module_qs, processed_pks)
+            checked, stop = _process_module(rule, module, ifaces, variables, limit, results)
             total_checked += checked
             if stop:
-                return results, total_checked
+                return results, total_checked + _count_remaining_interfaces(module_pks[index + 1 :])
 
     return results, total_checked
 
 
-def _batch_modules(rule):
-    """Return the rule's modules with every relation planning and template resolution dereference."""
-    return list(
-        _build_module_qs(rule).select_related(
-            "module_type",
-            "device__device_type",
-            "device__platform",
-            *family_template_names.BAY_CHAIN_RELATIONS,
-        )
-    )
+def _rule_modules(rule):
+    """Return the modules in *rule*'s scope that select *rule*, with every relation planning and selection read.
+
+    A module for which the engine selects another rule is left out, so Apply Rules agrees with the
+    rename triggers. An unsaved rule, such as the rule tester's preview, is no stored rule that
+    selection can pick, so it keeps every module in its scope.
+    """
+    with pinned_rule_cache():
+        modules = list(_build_module_qs(rule).select_related(*_NAMING_RELATIONS))
+        if getattr(rule, "pk", None) is None:
+            return modules
+        return [module for module in modules if _selected_rule(module, module.module_bay) == rule]
 
 
 def apply_rule_to_existing(rule, limit=None, interface_ids=None) -> family_ops.BatchOutcome:
@@ -952,7 +949,7 @@ def apply_rule_to_existing(rule, limit=None, interface_ids=None) -> family_ops.B
     id_set = frozenset(interface_ids) if interface_ids is not None else None
     if not rule.enabled or (id_set is not None and not id_set):
         return family_ops.BatchOutcome(families=())
-    return family_ops.apply_rule_to_modules(rule, _batch_modules(rule), selected_pks=id_set, limit=limit)
+    return family_ops.apply_rule_to_modules(rule, _rule_modules(rule), selected_pks=id_set, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -974,7 +971,7 @@ def find_convertible_families(rule, limit=None) -> family_ops.ConversionPreview:
     # whether this release can hold a family is the family package's call.
     if not family_ops.conversion_offered(rule):
         return family_ops.ConversionPreview(candidates=())
-    return family_ops.preview_rule_conversions(rule, _batch_modules(rule), limit=limit)
+    return family_ops.preview_rule_conversions(rule, _rule_modules(rule), limit=limit)
 
 
 def convert_flat_families(rule, base_pks=None) -> family_ops.BatchOutcome:
@@ -986,4 +983,4 @@ def convert_flat_families(rule, base_pks=None) -> family_ops.BatchOutcome:
     Returns the batch outcome: one explicit family result per family it planned.
     """
     selected = None if base_pks is None else frozenset(base_pks)
-    return family_ops.convert_rule_families(rule, _batch_modules(rule), selected_pks=selected)
+    return family_ops.convert_rule_families(rule, _rule_modules(rule), selected_pks=selected)

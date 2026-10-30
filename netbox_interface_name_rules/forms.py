@@ -88,7 +88,10 @@ class RuleTestForm(forms.Form):
         queryset=Platform.objects.all(),
         required=False,
         label="Platform",
-        help_text="Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS)",
+        help_text=(
+            "Optional: scope to devices running this software platform/OS (e.g. SONiC, EOS) "
+            "or a child platform of it (NetBox 4.4+)"
+        ),
         widget=forms.Select(attrs={"class": "form-select"}),
     )
     name_template = forms.CharField(
@@ -231,8 +234,8 @@ class InterfaceNameRuleForm(NetBoxModelForm):
 
     Priority is auto-computed from the rule fields — it cannot be set manually.
     Scope fields (parent_module_type, device_type, platform) raise the priority score:
-    parent_module_type +400, device_type +200, platform +100 (for regex rules).
-    Exact FK rules always outrank regex rules (score 1000+ vs max 955).
+    parent_module_type +4000, device_type +2000, platform +1000 (for regex rules).
+    Exact FK rules always outrank regex rules (score 10000+ vs max 7255).
     """
 
     class Meta:
@@ -256,20 +259,22 @@ class InterfaceNameRuleForm(NetBoxModelForm):
         help_texts = {
             "parent_module_type": (
                 "Optional. Restricts this rule to modules installed inside the given parent module type. "
-                "Setting this raises the priority score by 400 (regex) or keeps exact priority at 1000+. "
+                "Setting this raises the priority score by 4000 (regex) or keeps exact priority at 10000+. "
                 "Must be empty for device-level interface rules."
             ),
             "device_type": (
                 "Optional. Restricts this rule to modules installed in this device model. "
-                "Setting this raises the priority score by 200 (regex)."
+                "Setting this raises the priority score by 2000 (regex)."
             ),
             "platform": (
-                "Optional. Restricts this rule to devices running this OS/platform. "
-                "Setting this raises the priority score by 100 (regex)."
+                "Optional. Restricts this rule to devices running this OS/platform or a child platform of it (NetBox 4.4+). "
+                "Among matching rules with the same parent module type and device type, "
+                "the rule on the closest platform wins. "
+                "Setting this raises the priority score by 1000 (regex)."
             ),
             "module_type_is_regex": (
                 "When checked, use a regex pattern instead of an exact FK. "
-                "Note: exact FK rules always outrank regex rules (exact score 1000–1007, regex max 955)."
+                "Note: exact FK rules always outrank regex rules (exact score 10000–10007, regex max 7255)."
             ),
         }
 

@@ -14,7 +14,7 @@ Navigate to **Plugins → Interface Name Rules → Add** or use the REST API.
 | Regex Mode | No | When enabled, match by pattern instead of exact module type FK |
 | Parent Module Type | No | Restrict to modules inside this parent (e.g., converter). Must be empty on a device-interface rule |
 | Device Type | No | Restrict to devices of this type |
-| Platform | No | Restrict to devices running this software platform/OS |
+| Platform | No | Restrict to devices running this software platform/OS or a child platform of it (NetBox 4.4+) |
 | Name Template | Yes | Interface name pattern with template variables |
 | Parent Name Template | No | Name template for the channelized parent, with the same variables as Name Template except `{channel}`. Blank keeps the parent's current name |
 | Breakout Mode | No | Flat renames the base to the first channel and creates sibling interfaces. Channelized turns the base into a parent with one subinterface per channel (requires NetBox channel support) |
@@ -44,6 +44,19 @@ model name. For device-interface rules, it matches each device
 interface's current name, including a standalone interface such as `mgmt0`. A channel
 subinterface is never matched on its own; it follows the parent whose family a rule wins.
 When multiple regex patterns match at the same score, the longest pattern wins.
+
+A platform scope matches a device on that platform and a device on a child
+platform of it, at any depth. Platforms nest from NetBox 4.4; on NetBox 4.3 a
+platform scope matches its exact platform only. For example, a rule on `JunOS`
+matches a device on `JunOS 24.4R2-S5.4-EVO` when that platform is a child of
+`JunOS`. When rules on
+more than one of these platforms match at the same parent module type and device
+type scope, the rule on the platform closest to the device platform wins. A rule
+with no platform comes after them. The score does not show this order, because
+it depends on the device. Apply Rules uses the same scope: a rule on `JunOS`
+previews and renames the modules on devices on `JunOS` and on its child
+platforms, except a module for which another rule wins (see
+[Apply Rules and the Applicable Column](#apply-rules-and-the-applicable-column)).
 
 ### RE2 Pattern Syntax
 
@@ -300,6 +313,22 @@ as in a [journal entry](#journal-entries-after-an-automatic-rename).
 The **Applicable** column shows ✓ only when at least one currently-installed
 interface **would actually change name** if the rule were applied.  Rules where
 all matching interfaces are already correctly named show `—`.
+
+Apply Rules skips each module for which the engine selects another rule, for
+example an exact module type rule, a rule that adds a parent module type or a
+device type, or a rule on a closer platform with the same parent module type
+and device type. The preview,
+the Applicable column and the flat-to-channelized conversion skip it too. So
+Apply Rules gives a module the same names that a rename trigger gives it. A
+disabled rule is never selected, so its preview is empty. The Build Rule tester
+previews every installed module in the scope of the rule, because the rule is
+not saved yet.
+
+A change of a device platform, or a move of a platform in the platform tree, is
+not a rename trigger. The interfaces keep the names from the rule that the engine
+selected before. After an upgrade to the first release that matches child
+platforms, or after you change a device platform or the platform tree, run Apply
+Rules for the rules on the affected platforms.
 
 ## netbox-branching
 
