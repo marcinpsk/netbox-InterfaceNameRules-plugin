@@ -302,8 +302,9 @@ class DocsDeployCoverageTest(unittest.TestCase):
         self.assertFalse((site / "coverage").exists())
 
 
-# Fakes for the network and the resolver: curl writes a NetBox requirements.txt, uv fails when $FAKE_UV is "fail".
+# Fakes: curl writes a NetBox requirements.txt only with HTTPS-only redirects; uv fails when $FAKE_UV is "fail".
 _FAKE_CURL = """#!/usr/bin/env bash
+case " $* " in *" --proto =https "*) ;; *) echo "curl may follow a redirect to plain HTTP" >&2; exit 1;; esac
 while [ $# -gt 0 ]; do if [ "$1" = --output ]; then out=$2; shift; fi; shift; done
 printf 'Django==6.0\\npsycopg[c,pool]==3.3.5\\n' > "$out"
 """

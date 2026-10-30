@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-curl --fail --silent --show-error --location --output "$work/requirements.txt" \
+curl --proto =https --fail --silent --show-error --location --output "$work/requirements.txt" \
   "https://raw.githubusercontent.com/netbox-community/netbox/$tag/requirements.txt"
 # psycopg-binary replaces the C build of psycopg; promise publishes no wheel, so it is the one source build.
 sed -n '/^psycopg\[/{s/\bc\b/binary/;p}' "$work/requirements.txt" > "$work/overrides.txt"
