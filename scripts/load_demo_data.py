@@ -25,6 +25,8 @@ APPLY_DEMO_DEVICE = "acx7024-1"
 APPLY_DEMO_BAYS = range(4)
 APPLY_DEMO_MODULE_TYPE = "QSFP-100G-LR4"
 
+#: The VC-SWITCH stacks: (chassis name, member name prefix). The e2e tests change test-vc-stack; demo-vc-stack stays.
+VC_SWITCH_STACKS = (("test-vc-stack", "vc-stack"), ("demo-vc-stack", "demo-vc"))
 #: Vendor virtual chassis: (device type, its interface templates, [(member, VC position)], chassis name).
 VENDOR_STACKS = (
     (
@@ -46,6 +48,8 @@ VENDOR_STACKS = (
         "arista-stack",
     ),
 )
+#: The virtual chassis that this script creates. It renames the members of these chassis only.
+DEMO_CHASSIS = tuple(name for name, _prefix in VC_SWITCH_STACKS) + tuple(stack[-1] for stack in VENDOR_STACKS)
 
 
 def ok(label):
@@ -154,8 +158,7 @@ def load_demo_vc_stacks(site, manufacturer, role):
     if created:
         InterfaceTemplate.objects.create(module_type=sfp, name="0", type="1000base-x-sfp")
 
-    # The e2e tests change test-vc-stack; demo-vc-stack stays for manual checks.
-    for chassis_name, prefix in (("test-vc-stack", "vc-stack"), ("demo-vc-stack", "demo-vc")):
+    for chassis_name, prefix in VC_SWITCH_STACKS:
         join_chassis(chassis_name, [(device(f"{prefix}-{n}", site, switch, role), n) for n in (1, 2)])
 
     # Remove the modules other than VC-SFP that manual tests left in the sfp0 bays of the demo stack.
@@ -321,12 +324,12 @@ def load_rules():
 
 
 def reapply_device_rules():
-    """Rename the VC members again: they joined their chassis before the device-interface rules existed."""
+    """Rename the members of the demo chassis again: they joined before the device-interface rules existed."""
     from dcim.models import Device
 
     from netbox_interface_name_rules.engine import apply_device_interface_rules
 
-    members = Device.objects.filter(virtual_chassis__isnull=False).select_related(
+    members = Device.objects.filter(virtual_chassis__name__in=DEMO_CHASSIS).select_related(
         "virtual_chassis", "device_type", "platform"
     )
     for member in members:
@@ -350,7 +353,7 @@ def main():
     # Fix the member_count counter of each VirtualChassis.
     call_command("calculate_cached_counts", verbosity=0)
     skipped = load_rules()
-    print("🔄 Re-applying the device-interface rules to the VC members…")
+    print("🔄 Re-applying the device-interface rules to the members of the demo chassis…")
     reapply_device_rules()
     if skipped:
         print(f"⚠️  {skipped} rule(s) skipped.")

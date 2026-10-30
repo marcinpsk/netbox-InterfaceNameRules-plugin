@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from dcim.models import InterfaceTemplate, Module, ModuleType
+from dcim.models import Device, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
 from django.test import TestCase
 
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -101,3 +101,32 @@ class ModuleInstallTest(LoaderTestCase):
 
         templates = InterfaceTemplate.objects.filter(module_type__model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
         self.assertEqual(list(templates.values_list("name", flat=True)), ["{module}"])
+
+
+class ReapplyDeviceRulesTest(LoaderTestCase):
+    def test_the_demo_chassis_are_the_chassis_that_the_loader_creates(self):
+        run(load_demo_data.load_demo_vc_stacks, self.site, self.manufacturer, self.role)
+        run(load_demo_data.load_vendor_stacks, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(set(VirtualChassis.objects.values_list("name", flat=True)), set(load_demo_data.DEMO_CHASSIS))
+
+    def test_the_device_rules_rename_only_the_members_of_the_demo_chassis(self):
+        run(load_demo_data.load_vendor_stacks, self.site, self.manufacturer, self.role)
+        demo_member = Device.objects.get(name="cisco-sw-2")
+        user_member = Device.objects.create(
+            name="user-sw-3", site=self.site, device_type=demo_member.device_type, role=self.role
+        )
+        user_member.virtual_chassis = VirtualChassis.objects.create(name="user-stack", master=None)
+        user_member.vc_position = 3
+        user_member.save()
+        InterfaceNameRule.objects.create(
+            applies_to_device_interfaces=True,
+            device_type=demo_member.device_type,
+            module_type_pattern="GigabitEthernet[0-9]+/[0-9]+/[0-9]+",
+            name_template="GigabitEthernet{vc_position}/0/{port}",
+        )
+
+        run(load_demo_data.reapply_device_rules)
+
+        self.assertTrue(Interface.objects.filter(device=demo_member, name="GigabitEthernet2/0/1").exists())
+        self.assertTrue(Interface.objects.filter(device=user_member, name="GigabitEthernet1/0/1").exists())
