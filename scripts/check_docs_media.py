@@ -28,7 +28,9 @@ from urllib.parse import SplitResult, unquote, urlsplit
 import yaml
 from markdown_it import MarkdownIt
 
-#: The media root, relative to the site root.
+#: The repository: its mkdocs.yml names the built site and the docs, and its README.md is checked too.
+ROOT = Path(__file__).resolve().parents[1]
+#: The media root, relative to the site root and to the docs root.
 MEDIA = Path("assets")
 #: The captured files that a page must show, relative to the media root.
 CAPTURES = ("screenshots/*.png", "recordings/*.mp4", "recordings/*.png", "recordings/*.gif")
@@ -104,11 +106,10 @@ def _readme_media(site: Path, site_url: str, readme: Path) -> list[tuple[str, Pa
     ]
 
 
-def problems(site_dir: Path, media_dir: Path, readme: Path, config: Path) -> list[str]:
+def problems(site_dir: Path, media_dir: Path, readme: Path, site_url: str) -> list[str]:
     """Return one message for each media file that the site lacks and each capture that nothing shows."""
     site = site_dir.resolve()
     media = (site_dir / MEDIA).resolve()
-    site_url = yaml.safe_load(config.read_text(encoding="utf-8"))["site_url"]
     shown_by = [
         (page.relative_to(site_dir).as_posix(), source, file)
         for page in sorted(site_dir.rglob("*.html"))
@@ -127,25 +128,24 @@ def problems(site_dir: Path, media_dir: Path, readme: Path, config: Path) -> lis
     return found
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Print each problem and return 1 when there is one."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("site_dir", type=Path, help="the built site, for example site")
-    parser.add_argument("media_dir", type=Path, help="the captured media root, docs/assets")
-    parser.add_argument("--readme", type=Path, default=Path("README.md"), help="the README (default: README.md)")
-    parser.add_argument("--config", type=Path, default=Path("mkdocs.yml"), help="the site configuration (mkdocs.yml)")
-    arguments = parser.parse_args(argv)
-    for directory in (arguments.site_dir, arguments.media_dir):
-        if not directory.is_dir():
-            parser.error(f"{directory} is not a directory")
-    found = problems(arguments.site_dir, arguments.media_dir, arguments.readme, arguments.config)
+def main(root: Path = ROOT) -> int:
+    """Check the built site of the repository at *root*: print each problem and return 1 when there is one."""
+    config = yaml.safe_load((root / "mkdocs.yml").read_text(encoding="utf-8"))
+    site_dir = root / config.get("site_dir", "site")
+    media_dir = root / config.get("docs_dir", "docs") / MEDIA
+    if not site_dir.is_dir():
+        sys.stderr.write(f"{site_dir} is not a directory: build the site first\n")
+        return 2
+    found = problems(site_dir, media_dir, root / "README.md", config["site_url"])
     if found:
         sys.stderr.write("".join(f"{message}\n" for message in found))
         return 1
-    count = sum(1 for pattern in CAPTURES for _file in arguments.media_dir.glob(pattern))
+    count = sum(1 for pattern in CAPTURES for _file in media_dir.glob(pattern))
     sys.stdout.write(f"Each local media file of the site exists, and each of the {count} captures is on a page.\n")
     return 0
 
 
 if __name__ == "__main__":
+    # The check takes no arguments: it reads the paths of the repository, not paths from the command line.
+    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     sys.exit(main())

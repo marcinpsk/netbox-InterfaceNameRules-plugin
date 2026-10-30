@@ -71,7 +71,7 @@ uv sync --only-group docs --only-group docs-media
 uv run --no-sync playwright install chromium
 uv run --no-sync pytest docs_media --base-url http://127.0.0.1:8000
 uv run --no-sync mkdocs build --strict
-uv run --no-sync python scripts/check_docs_media.py site docs/assets
+uv run --no-sync python scripts/check_docs_media.py
 ```
 
 A pull request that changes a template, the docs or the demo data runs the same build, and uploads

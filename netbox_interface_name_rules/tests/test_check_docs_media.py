@@ -29,7 +29,7 @@ def _tree(
 
     A name without a directory is a screenshot; a published file is in the site under assets/.
     """
-    site, media = root / "site", root / "assets"
+    site, media = root / "site", root / "docs" / "assets"
     site.mkdir(parents=True, exist_ok=True)
     for name, body in pages.items():
         (site / name).parent.mkdir(parents=True, exist_ok=True)
@@ -60,12 +60,7 @@ class Result:
 @pytest.fixture
 def _check(capsys):
     def check(site: Path, media: Path) -> Result:
-        root = site.parent
-        options = ["--readme", str(root / "README.md"), "--config", str(root / "mkdocs.yml")]
-        try:
-            returncode = check_docs_media.main([str(site), str(media), *options])
-        except SystemExit as exc:
-            returncode = exc.code
+        returncode = check_docs_media.main(site.parent)
         captured = capsys.readouterr()
         return Result(returncode, captured.out, captured.err)
 
@@ -176,11 +171,25 @@ def test_an_image_inside_an_html_comment_is_not_on_the_page(tmp_path: Path, _che
     assert result.stderr == "unreferenced: screenshots/leases-light.png\n"
 
 
-def test_a_directory_that_does_not_exist_is_a_usage_error(tmp_path: Path, _check) -> None:
-    result = _check(tmp_path / "missing", tmp_path)
+def test_a_site_that_was_not_built_is_a_usage_error(tmp_path: Path, _check) -> None:
+    site, media = _tree(tmp_path, {}, ())
+    site.rmdir()
+
+    result = _check(site, media)
 
     assert result.returncode == 2
-    assert "is not a directory" in result.stderr
+    assert result.stderr == f"{site} is not a directory: build the site first\n"
+
+
+def test_the_site_directory_comes_from_mkdocs_yml(tmp_path: Path, _check) -> None:
+    site, media = _tree(tmp_path, {"index.html": '<img src="assets/screenshots/shot.png">'}, ("shot.png",))
+    site.rename(tmp_path / "public")
+    config = tmp_path / "mkdocs.yml"
+    config.write_text(config.read_text(encoding="utf-8") + "site_dir: public\n", encoding="utf-8")
+
+    result = _check(site, media)
+
+    assert result.returncode == 0, result.stderr
 
 
 _CLIP = (

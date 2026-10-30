@@ -162,7 +162,7 @@ jobs:
       # The build does not fail on a missing image in raw HTML or a missing video, so the check reads the built pages.
       - name: Check the screenshots and recordings on the built pages
         working-directory: plugin
-        run: uv run --no-sync --no-build python scripts/check_docs_media.py site docs/assets
+        run: uv run --no-sync --no-build python scripts/check_docs_media.py
 
       - name: Upload the site
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
