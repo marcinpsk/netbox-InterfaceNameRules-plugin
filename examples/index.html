@@ -1200,13 +1200,13 @@ the <code>FPC/PIC/port</code> convention — for pizza-box ACX devices this simp
 <a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">"Juniper</span><span class="nv"> </span><span class="s">ACX7024</span><span class="nv"> </span><span class="s">1GE</span><span class="nv"> </span><span class="s">SFP</span><span class="nv"> </span><span class="s">naming</span><span class="nv"> </span><span class="s">(all</span><span class="nv"> </span><span class="s">variants)"</span>
 </code></pre></div>
 <p><strong>Rule priority tip:</strong> The exact FK rule for <code>SFP-10G-LR</code> automatically
-outranks any <code>SFP-10G-.*</code> regex rule at the same scope (score ≥ 1000 vs
-score ≤ 955). You don't need to remove regex rules to avoid conflicts — the
+outranks any <code>SFP-10G-.*</code> regex rule at the same scope (score ≥ 10000 vs
+score ≤ 7255). You don't need to remove regex rules to avoid conflicts — the
 exact FK rule always wins.</p>
 <h3 id="rule-detail-juniper-acx7024-qsfp-410g-breakout">Rule detail — Juniper ACX7024 QSFP+ 4×10G breakout</h3>
 <p>The rule detail page shows the auto-computed <strong>priority score</strong> and a
 human-readable label (e.g. <code>regex(13) / device</code>):</p>
-<p><img alt="Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 213" src="../screenshots/04-rule-detail-juniper-xe-breakout.png" /></p>
+<p><img alt="Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 2013" src="../screenshots/04-rule-detail-juniper-xe-breakout.png" /></p>
 <hr />
 <h2 id="breakout-channel-interfaces">Breakout / channel interfaces</h2>
 <p>When a high-density transceiver (QSFP+, QSFP28, QSFP-DD) is split into
@@ -1390,7 +1390,7 @@ Platform object in NetBox) and <code>contrib/ufispace-device-type.yaml</code> fo
 device-type-scoped rules (no Platform required). Load only <strong>one</strong> of the two
 files to avoid ambiguity.</p>
 <h3 id="rule-detail-sonic-platform-scoped-catch-all">Rule detail — SONiC platform-scoped catch-all</h3>
-<p><img alt="Rule detail for SONiC catch-all rule, showing platform scope and priority score 102" src="../screenshots/04c-rule-detail-sonic-swp.png" /></p>
+<p><img alt="Rule detail for SONiC catch-all rule, showing platform scope and priority score 1002" src="../screenshots/04c-rule-detail-sonic-swp.png" /></p>
 <hr />
 <h2 id="linux-servers">Linux servers</h2>
 <p>Linux servers with pluggable SFP/QSFP ports benefit from this plugin when you

@@ -701,7 +701,7 @@ automatically apply renaming rules based on configurable templates.</p>
 <li><strong>Arithmetic expressions</strong>: <code>{8 + ({parent_bay_position_num} - 1) * 2 + {sfp_slot}}</code></li>
 <li><strong>Breakout support</strong>: create multiple channel interfaces from a single port</li>
 <li><strong>Bounded regex pattern matching</strong>: match module types with RE2 patterns (e.g., <code>QSFP-DD-400G-.*</code>) to cover entire product families with a single rule; exact FK match takes priority over regex</li>
-<li><strong>Scoping</strong>: rules can target specific device types, parent module types, platforms, or be universal</li>
+<li><strong>Scoping</strong>: rules can target specific device types, parent module types, platforms, or be universal. A platform scope also covers the child platforms of that platform (NetBox 4.4+)</li>
 <li><strong>Build Rule tester</strong>: preview module and device-interface names before saving. Module rules also preview matching installed interfaces.</li>
 <li><strong>Apply Rules</strong>: batch rename existing interfaces with live preview and background job support</li>
 <li><strong>netbox-branching</strong>: renames run in the active branch, and a merge, revert or sync keeps the names that it replays (netbox-branching 1.2.x on NetBox 4.7). A channel that the plugin kept at its old name is the exception: see <a href="configuration/#limits-in-a-branch">Limits in a branch</a></li>

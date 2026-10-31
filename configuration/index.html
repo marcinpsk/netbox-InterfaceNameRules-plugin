@@ -1033,7 +1033,7 @@
 <tr>
 <td>Platform</td>
 <td>No</td>
-<td>Restrict to devices running this software platform/OS</td>
+<td>Restrict to devices running this software platform/OS or a child platform of it (NetBox 4.4+)</td>
 </tr>
 <tr>
 <td>Name Template</td>
@@ -1123,6 +1123,18 @@ model name. For device-interface rules, it matches each device
 interface's current name, including a standalone interface such as <code>mgmt0</code>. A channel
 subinterface is never matched on its own; it follows the parent whose family a rule wins.
 When multiple regex patterns match at the same score, the longest pattern wins.</p>
+<p>A platform scope matches a device on that platform and a device on a child
+platform of it, at any depth. Platforms nest from NetBox 4.4; on NetBox 4.3 a
+platform scope matches its exact platform only. For example, a rule on <code>JunOS</code>
+matches a device on <code>JunOS 24.4R2-S5.4-EVO</code> when that platform is a child of
+<code>JunOS</code>. When rules on
+more than one of these platforms match at the same parent module type and device
+type scope, the rule on the platform closest to the device platform wins. A rule
+with no platform comes after them. The score does not show this order, because
+it depends on the device. Apply Rules uses the same scope: a rule on <code>JunOS</code>
+previews and renames the modules on devices on <code>JunOS</code> and on its child
+platforms, except a module for which another rule wins (see
+<a href="#apply-rules-and-the-applicable-column">Apply Rules and the Applicable Column</a>).</p>
 <h3 id="re2-pattern-syntax">RE2 Pattern Syntax</h3>
 <p>The plugin compiles and executes every stored rule pattern with
 <a href="https://github.com/google/re2/wiki/syntax">RE2</a>. RE2 guarantees bounded memory
@@ -1343,6 +1355,29 @@ as in a <a href="#journal-entries-after-an-automatic-rename">journal entry</a>.<
 <p>The <strong>Applicable</strong> column shows ✓ only when at least one currently-installed
 interface <strong>would actually change name</strong> if the rule were applied.  Rules where
 all matching interfaces are already correctly named show <code>—</code>.</p>
+<p>Apply Rules skips each module for which the engine selects another rule, for
+example an exact module type rule, a rule that adds a parent module type or a
+device type, or a rule on a closer platform with the same parent module type
+and device type. The preview,
+the Applicable column and the flat-to-channelized conversion skip it too. So
+Apply Rules gives a module the same names that a rename trigger gives it. A
+disabled rule is never selected, so its preview is empty. The Build Rule tester
+previews every installed module in the scope of the rule, because the rule is
+not saved yet.</p>
+<p>A change of a device platform, or a move of a platform in the platform tree, is
+not a rename trigger. The interfaces keep the names from the rule that the engine
+selected before. After an upgrade to the first release that matches child
+platforms, or after you change a device platform or the platform tree, run Apply
+Rules for the rules on the affected platforms.</p>
+<p>Apply Rules starts from the names that the interfaces have now. A rule that
+reads <code>{base}</code> finds the base only in a raw template name or in a name that the
+rule gives itself, so it does not rename an interface that another rule renamed.
+When no rule matches a module after the change, Apply Rules does not include the
+module for any rule, and the interfaces keep the names from the earlier rule.
+The plugin cannot give back the raw template names. Rename these interfaces by
+hand, or delete the module and install it again. NetBox then creates the
+interfaces again from the module type templates, but the delete removes the
+configuration of the old interfaces.</p>
 <h2 id="netbox-branching">netbox-branching</h2>
 <p>The plugin supports <a href="https://github.com/netboxlabs/netbox-branching">netbox-branching</a>
 1.2.x on NetBox 4.7. When netbox-branching is installed, NetBox does not start
