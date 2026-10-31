@@ -390,14 +390,11 @@ def load_rules():
                 "description": row.get("description", ""),
                 **extra,
             }
-            try:
-                rule = InterfaceNameRule.objects.select_for_update().get(**lookup)
-            except InterfaceNameRule.DoesNotExist:
-                InterfaceNameRule.objects.create(**lookup, **defaults)
+            # update_or_create() without its write of an unchanged rule, so that a second run changes nothing.
+            rule, created = InterfaceNameRule.objects.select_for_update().get_or_create(**lookup, defaults=defaults)
+            if created:
                 ok(f"{label} → {row['name_template']!r}")
-                continue
-            # Write only the changed fields, so that a second run changes nothing and keeps the other fields.
-            if changed := [name for name, value in defaults.items() if getattr(rule, name) != value]:
+            elif changed := [name for name, value in defaults.items() if getattr(rule, name) != value]:
                 for name in changed:
                     setattr(rule, name, defaults[name])
                 rule.save(update_fields=[*changed, "last_updated"])

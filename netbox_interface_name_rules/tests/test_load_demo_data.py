@@ -20,6 +20,7 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
+from django.db.models import QuerySet
 from django.test import TestCase, TransactionTestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -119,6 +120,32 @@ class ContribRowsTest(LoaderTestCase):
         rule = InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*")
         self.assertEqual(rule.name_template, "b{bay_position}")
         self.assertFalse(rule.enabled)
+
+    def test_a_rule_that_another_writer_creates_after_the_lookup_is_updated(self):
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
+        real_get = QuerySet.get
+        raced = []
+
+        def get_after_a_concurrent_create(queryset, *args, **kwargs):
+            # Another writer creates the rule after the lookup of the loader found none.
+            if queryset.model is InterfaceNameRule and not raced:
+                raced.append(True)
+                InterfaceNameRule.objects.create(
+                    module_type_pattern="DEMO-.*", module_type_is_regex=True, name_template="other{bay_position}"
+                )
+                raise InterfaceNameRule.DoesNotExist
+            return real_get(queryset, *args, **kwargs)
+
+        with patch.object(QuerySet, "get", get_after_a_concurrent_create):
+            skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertEqual(
+            list(
+                InterfaceNameRule.objects.filter(module_type_pattern="DEMO-.*").values_list("name_template", flat=True)
+            ),
+            ["a{bay_position}"],
+        )
 
     def test_a_second_row_with_the_same_rule_is_a_skipped_rule(self):
         self.use_contrib(
