@@ -102,6 +102,24 @@ class ContribRowsTest(LoaderTestCase):
         self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
         self.assertEqual(rule.parent_name_template, "")
 
+    def test_an_update_keeps_a_field_that_changed_after_the_loader_read_the_rule(self):
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
+        self.load_rules()
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="b{bay_position}")})
+        real_save = InterfaceNameRule.save
+
+        def save_after_a_concurrent_edit(rule, **kwargs):
+            # An operator disables the rule between the read of the loader and its save.
+            InterfaceNameRule.objects.filter(pk=rule.pk).update(enabled=False)
+            return real_save(rule, **kwargs)
+
+        with patch.object(InterfaceNameRule, "save", save_after_a_concurrent_edit):
+            self.load_rules()
+
+        rule = InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*")
+        self.assertEqual(rule.name_template, "b{bay_position}")
+        self.assertFalse(rule.enabled)
+
     def test_a_second_row_with_the_same_rule_is_a_skipped_rule(self):
         self.use_contrib(
             {
