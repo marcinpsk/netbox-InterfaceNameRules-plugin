@@ -15,6 +15,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    # semantic-release writes these to $GITHUB_OUTPUT; tag is the new tag when released is true.
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Checkout
         # zizmor: ignore[artipacked] semantic-release pushes the release commit and tag,
@@ -44,6 +48,18 @@ jobs:
         run: uv sync --locked --no-build --only-group release --only-group packaging
 
       - name: Run semantic-release
+        id: release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: uv run --no-sync --no-build semantic-release version --changelog --push --vcs-release
+
+  # It runs after semantic-release creates the GitHub release, which the latest-release check of the deploy reads.
+  # A failed deploy leaves the release in place: re-run the failed jobs, or dispatch docs-deploy.yaml with the tag.
+  docs:
+    needs: semantic-release
+    if: needs.semantic-release.outputs.released == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/docs-deploy.yaml
+    with:
+      tag: ${{ needs.semantic-release.outputs.tag }}

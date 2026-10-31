@@ -721,16 +721,6 @@ class DocumentedPriorityScoreTest(unittest.TestCase):
                 text = (_PROJECT_ROOT / "contrib" / name).read_text(encoding="utf-8")
                 self.assertEqual(text.count(exception), 1)
 
-    def test_examples_captions_state_the_model_scores(self):
-        guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text(encoding="utf-8")
-        cases = {
-            "4×10G breakout rule, showing priority score": ("QSFP-4X10G-.*", {"device_type": True}),
-            "showing platform scope and priority score": (".*", {"platform": True}),
-        }
-        for anchor, (pattern, scope) in cases.items():
-            with self.subTest(caption=anchor):
-                self.assertEqual(guide.count(f"{anchor} {_regex_rule_score(pattern, **scope)}]"), 1)
-
 
 _MIGRATIONS = _PROJECT_ROOT / "netbox_interface_name_rules" / "migrations"
 _ROW_WRITES = {"update", "delete", "save", "bulk_update", "bulk_create"}

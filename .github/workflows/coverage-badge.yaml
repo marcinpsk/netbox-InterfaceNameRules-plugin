@@ -21,9 +21,11 @@ jobs:
       contents: write
       actions: read
 
+    # docs-deploy.yaml also writes gh-pages; `queue: max` keeps each waiting publish of the group.
     concurrency:
       group: publish-gh-pages
       cancel-in-progress: false
+      queue: max
 
     steps:
       - name: Download coverage report
