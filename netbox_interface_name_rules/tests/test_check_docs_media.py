@@ -470,6 +470,16 @@ def test_each_spelling_of_the_site_url_finds_the_capture_or_reports_it_missing(
     assert f"missing: {src} (shown by guide/index.html)\n" in _check(*lacking).stderr
 
 
+@pytest.mark.parametrize("src", _MEDIA_URL_SPELLINGS[:-1])
+def test_each_spelling_of_a_readme_image_under_the_site_url_is_checked(tmp_path: Path, _check, src: str) -> None:
+    readme = f"![Shot]({src})\n"
+    shown = _tree(tmp_path / "shown", {}, ("shot.png",), readme=readme, site_url=_SITE_URL_SPELLINGS[0])
+    lacking = _tree(tmp_path / "lacking", {}, (), readme=readme, site_url=_SITE_URL_SPELLINGS[0])
+
+    assert _check(*shown).returncode == 0, _check(*shown).stderr
+    assert _check(*lacking).stderr == f"missing: {src} (shown by README.md)\n"
+
+
 def test_a_site_url_without_a_path_finds_the_capture_or_reports_it_missing(tmp_path: Path, _check) -> None:
     pages = {"guide/index.html": '<img src="https://example.github.io/assets/screenshots/shot.png">'}
     shown = _tree(tmp_path / "shown", pages, ("shot.png",), site_url="https://example.github.io")

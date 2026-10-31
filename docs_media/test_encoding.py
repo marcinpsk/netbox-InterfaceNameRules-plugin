@@ -65,6 +65,7 @@ def test_the_gif_shows_a_change_of_the_page(tmp_path: Path) -> None:
     encode(webm(tmp_path / "box.webm", f"{NOISY_PAGE},{BOX}"), 0, tmp_path / "box", gif=True)
 
     frames = gif_frames(tmp_path / "box.gif")
+    assert len(frames) >= (SECONDS - 1) * GIF_FPS
     # The GIF is 800 px wide: the box is at 250 to 500 px, 187 to 312 px.
     assert frames[0][250, 375].min() > 200
     red, green, blue = frames[-1][250, 375]
