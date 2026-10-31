@@ -33,21 +33,21 @@ def _sets_a_timeout(keyword):
 
 def _missing_timeouts(tree):
     modules, functions = _imported_names(tree)
+    calls = {id(node.func): node for node in ast.walk(tree) if isinstance(node, ast.Call)}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        function = node.func
-        module_call = (
-            isinstance(function, ast.Attribute)
-            and function.attr in WAITING_CALLS
-            and isinstance(function.value, ast.Name)
-            and function.value.id in modules
+        module_function = (
+            isinstance(node, ast.Attribute)
+            and node.attr in WAITING_CALLS
+            and isinstance(node.value, ast.Name)
+            and node.value.id in modules
         )
-        if not (module_call or (isinstance(function, ast.Name) and function.id in functions)):
+        imported_function = isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in functions
+        if not (module_function or imported_function):
             continue
-        if any(_sets_a_timeout(keyword) for keyword in node.keywords):
-            continue
-        yield node.lineno
+        call = calls.get(id(node))
+        # A reference that is not called directly (runner = subprocess.run) hides the calls made through it.
+        if call is None or not any(_sets_a_timeout(keyword) for keyword in call.keywords):
+            yield node.lineno
 
 
 def _sources():
@@ -85,6 +85,13 @@ class SubprocessTimeoutTest(SimpleTestCase):
             "sp.run(['git'])\nrun(['git'])\noutput(['git'])\nrun(['git'], timeout=60)"
         )
         self.assertEqual(list(_missing_timeouts(tree)), [3, 4, 5])
+
+    def test_a_waiting_function_bound_to_another_name_is_refused(self):
+        tree = ast.parse(
+            "from subprocess import run\nrunner = subprocess.run\nother = run\nrunner(['git'])\n"
+            "subprocess.run(['git'], timeout=60)"
+        )
+        self.assertEqual(list(_missing_timeouts(tree)), [2, 3])
 
     def test_the_sources_include_the_docs_media_tests(self):
         self.assertIn(PROJECT_ROOT / "docs_media" / "test_encoding.py", list(_sources()))
