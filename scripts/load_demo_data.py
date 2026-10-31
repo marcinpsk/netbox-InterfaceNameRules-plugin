@@ -137,10 +137,13 @@ def load_100_bay_device(site, manufacturer, role):
             ModuleBayTemplate.objects.create(device_type=device_type, name=f"bay{i}", position=str(i))
     module_type, _ = ModuleType.objects.get_or_create(manufacturer=manufacturer, model="TEST-1PORT")
     # Apply Rules counts interfaces for its batch limit, so each module needs one.
-    InterfaceTemplate.objects.get_or_create(
+    template, _ = InterfaceTemplate.objects.get_or_create(
         module_type=module_type, name="{module}", defaults={"type": "100gbase-x-qsfp28"}
     )
     obj = device("test-100ports", site, device_type, role)
+    # A module that an earlier loader installed before the template existed has no interface.
+    for module in Module.objects.filter(device=obj, module_type=module_type, interfaces__isnull=True):
+        template.instantiate(device=obj, module=module).save()
     # Fill each empty bay on each run, so that a run that stopped after it created the device completes it.
     installed = 0
     for bay in ModuleBay.objects.filter(device=obj, installed_module__isnull=True).order_by("name"):

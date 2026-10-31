@@ -187,6 +187,16 @@ class ModuleInstallTest(LoaderTestCase):
 
         self.assertEqual(Interface.objects.filter(device__name="test-100ports", module__isnull=False).count(), 100)
 
+    def test_a_module_that_an_earlier_run_installed_without_an_interface_gets_one(self):
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+        # An earlier loader installed the modules before TEST-1PORT had an interface template.
+        Interface.objects.filter(device__name="test-100ports", module__module_bay__name__in=["bay1", "bay2"]).delete()
+
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+
+        names = Interface.objects.filter(device__name="test-100ports", module__module_bay__name__in=["bay1", "bay2"])
+        self.assertEqual(sorted(names.values_list("name", flat=True)), ["1", "2"])
+
     def test_the_apply_demo_device_gets_a_module_in_each_empty_bay_on_the_next_run(self):
         run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
         Module.objects.get(device__name=load_demo_data.APPLY_DEMO_DEVICE, module_bay__position="2").delete()
