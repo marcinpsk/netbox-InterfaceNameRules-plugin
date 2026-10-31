@@ -95,11 +95,11 @@ def shared_objects():
 
 
 def device(name, site, device_type, role):
-    """Return the device *name*, and create it when it does not exist."""
+    """Return the device *name* of *site*, and create it when it does not exist; a device of another site stays."""
     from dcim.models import Device
 
     obj, created = Device.objects.get_or_create(
-        name=name, defaults={"site": site, "device_type": device_type, "role": role, "status": "active"}
+        name=name, site=site, defaults={"device_type": device_type, "role": role, "status": "active"}
     )
     if created:
         ok(f"Created device {name}")
@@ -127,7 +127,7 @@ def join_chassis(chassis_name, members):
 
 def load_100_bay_device(site, manufacturer, role):
     """Load a device with 100 installed modules, for the batch limit of Apply Rules."""
-    from dcim.models import DeviceType, Module, ModuleBay, ModuleBayTemplate, ModuleType
+    from dcim.models import DeviceType, InterfaceTemplate, Module, ModuleBay, ModuleBayTemplate, ModuleType
 
     device_type, created = DeviceType.objects.get_or_create(
         manufacturer=manufacturer, model="TEST-100BAY", defaults={"slug": "test-100bay", "u_height": 2}
@@ -136,6 +136,10 @@ def load_100_bay_device(site, manufacturer, role):
         for i in range(1, 101):
             ModuleBayTemplate.objects.create(device_type=device_type, name=f"bay{i}", position=str(i))
     module_type, _ = ModuleType.objects.get_or_create(manufacturer=manufacturer, model="TEST-1PORT")
+    # Apply Rules counts interfaces for its batch limit, so each module needs one.
+    InterfaceTemplate.objects.get_or_create(
+        module_type=module_type, name="{module}", defaults={"type": "100gbase-x-qsfp28"}
+    )
     obj = device("test-100ports", site, device_type, role)
     # Fill each empty bay on each run, so that a run that stopped after it created the device completes it.
     installed = 0
@@ -171,7 +175,7 @@ def load_demo_vc_stacks(site, manufacturer, role):
 
     # Remove the modules other than VC-SFP that manual tests left in the sfp0 bays of the demo stack.
     for name in ("demo-vc-1", "demo-vc-2"):
-        for bay in ModuleBay.objects.filter(device__name=name, name="sfp0"):
+        for bay in ModuleBay.objects.filter(device__name=name, device__site=site, name="sfp0"):
             for module in Module.objects.filter(module_bay=bay).exclude(module_type=sfp):
                 module.delete()
                 ok(f"Removed stale {module.module_type.model} from {name} sfp0")
@@ -236,23 +240,36 @@ def contrib_mappings():
         yield from (row for row in rows if isinstance(row, dict))
 
 
-def ensure_type(cls, model, manufacturer, **fields):
-    """Create a *cls* object (a device or module type) for *model* when no object has that model."""
-    if model and not cls.objects.filter(model=model).exists():
+def ensure_type(cls, model, manufacturer, own=False, **fields):
+    """Create a *cls* object (a device or module type) for *model* when no object has that model.
+
+    With *own*, only an object of *manufacturer* counts.
+    """
+    existing = cls.objects.filter(model=model, **({"manufacturer": manufacturer} if own else {}))
+    if model and not existing.exists():
         cls.objects.create(manufacturer=manufacturer, model=model, **fields)
         ok(f"Created {cls.__name__} {model}")
 
 
 def load_rule_scopes(manufacturer):
     """Create each device type and exact module type that a contrib rule names, when no object has that model."""
-    from dcim.models import DeviceType, ModuleType
+    from dcim.models import DeviceType, Manufacturer, ModuleType
+    from django.utils.text import slugify
 
     for row in contrib_mappings():
+        # row_rule() skips a row without a name template, so its types are not needed.
+        if not row.get("name_template"):
+            continue
         # YAML reads a model such as 7609 as a number.
         if model := str(row.get("device_type") or ""):
             ensure_type(DeviceType, model, manufacturer, slug=model.lower())
-        for model in (row.get("module_type"), row.get("parent_module_type")):
-            ensure_type(ModuleType, model, manufacturer)
+        # rule_lookup() looks for the module type of the row's manufacturer, when the row names one.
+        if vendor := row.get("manufacturer"):
+            owner, _ = Manufacturer.objects.get_or_create(name=vendor, defaults={"slug": slugify(vendor)})
+            ensure_type(ModuleType, row.get("module_type"), owner, own=True)
+        else:
+            ensure_type(ModuleType, row.get("module_type"), manufacturer)
+        ensure_type(ModuleType, row.get("parent_module_type"), manufacturer)
 
 
 def resolve(cls, label, **lookup):
@@ -368,9 +385,17 @@ def load_rules():
                 "description": row.get("description", ""),
                 **extra,
             }
-            _rule, created = InterfaceNameRule.objects.update_or_create(**lookup, defaults=defaults)
-            if created:
+            try:
+                rule = InterfaceNameRule.objects.get(**lookup)
+            except InterfaceNameRule.DoesNotExist:
+                InterfaceNameRule.objects.create(**lookup, **defaults)
                 ok(f"{label} → {row['name_template']!r}")
+                continue
+            # Save only a changed rule, so that a second run changes nothing.
+            if any(getattr(rule, name) != value for name, value in defaults.items()):
+                for name, value in defaults.items():
+                    setattr(rule, name, value)
+                rule.save()
     return skipped
 
 

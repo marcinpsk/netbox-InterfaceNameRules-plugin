@@ -9,7 +9,17 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from dcim.models import Device, DeviceType, Interface, InterfaceTemplate, Module, ModuleType, VirtualChassis
+from dcim.models import (
+    Device,
+    DeviceType,
+    Interface,
+    InterfaceTemplate,
+    Module,
+    ModuleBay,
+    ModuleType,
+    Site,
+    VirtualChassis,
+)
 from django.test import TestCase, TransactionTestCase
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
@@ -136,6 +146,26 @@ class ContribRowsTest(LoaderTestCase):
         self.assertEqual(rule.description, "Juniper ACX7024 QSFP+ 4x10G breakout (all variants)")
         self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
 
+    def test_a_row_without_a_name_template_creates_no_type(self):
+        self.use_contrib({"rules.yaml": "- device_type: NO-RULE-DT\n  module_type: NO-RULE-MT\n"})
+
+        skipped, _ = self.load_rules()
+
+        self.assertEqual(skipped, 1)
+        self.assertFalse(DeviceType.objects.filter(model="NO-RULE-DT").exists())
+        self.assertFalse(ModuleType.objects.filter(model="NO-RULE-MT").exists())
+
+    def test_a_row_with_a_manufacturer_loads_the_rule_of_its_module_type(self):
+        self.use_contrib(
+            {"rules.yaml": "- module_type: VENDOR-MT\n  manufacturer: Demo Vendor\n  name_template: v{bay_position}\n"}
+        )
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        rule = InterfaceNameRule.objects.get(module_type__model="VENDOR-MT")
+        self.assertEqual(rule.module_type.manufacturer.name, "Demo Vendor")
+
 
 class ModuleInstallTest(LoaderTestCase):
     def test_the_100_bay_device_gets_a_module_in_each_empty_bay_on_the_next_run(self):
@@ -151,6 +181,11 @@ class ModuleInstallTest(LoaderTestCase):
         self.assertIn("Installed 2 TEST-1PORT", output)
         _, output = run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
         self.assertNotIn("Installed", output)
+
+    def test_each_module_of_the_100_bay_device_has_an_interface_for_the_batch_limit(self):
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(Interface.objects.filter(device__name="test-100ports", module__isnull=False).count(), 100)
 
     def test_the_apply_demo_device_gets_a_module_in_each_empty_bay_on_the_next_run(self):
         run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
@@ -182,6 +217,30 @@ class ModuleInstallTest(LoaderTestCase):
 
         templates = InterfaceTemplate.objects.filter(module_type__model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
         self.assertEqual(list(templates.values_list("name", flat=True)), ["{module}"])
+
+
+class OtherSiteDeviceTest(LoaderTestCase):
+    def test_a_device_of_the_same_name_at_another_site_is_not_reused(self):
+        other_site = Site.objects.create(name="Other Site", slug="other-site")
+        device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model="USER-DT", slug="user-dt")
+        user_device = Device.objects.create(name="demo-x", site=other_site, device_type=device_type, role=self.role)
+
+        demo_device, _ = run(load_demo_data.device, "demo-x", self.site, device_type, self.role)
+
+        self.assertEqual(demo_device.site, self.site)
+        self.assertNotEqual(demo_device.pk, user_device.pk)
+
+    def test_the_stale_module_cleanup_keeps_the_modules_of_a_device_at_another_site(self):
+        other_site = Site.objects.create(name="Other Site", slug="other-site")
+        device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model="USER-DT", slug="user-dt")
+        user_device = Device.objects.create(name="demo-vc-1", site=other_site, device_type=device_type, role=self.role)
+        bay = ModuleBay.objects.create(device=user_device, name="sfp0")
+        module_type = ModuleType.objects.create(manufacturer=self.manufacturer, model="USER-SFP")
+        Module.objects.create(device=user_device, module_bay=bay, module_type=module_type)
+
+        run(load_demo_data.load_demo_vc_stacks, self.site, self.manufacturer, self.role)
+
+        self.assertTrue(Module.objects.filter(device=user_device, module_type=module_type).exists())
 
 
 class ReapplyDeviceRulesTest(LoaderTestCase):
@@ -225,9 +284,12 @@ class LoaderTransactionTest(TestCase):
 
     def test_the_demo_loads_with_status_0_and_a_second_run_changes_nothing(self):
         first, _ = run(load_demo_data.main)
+        before = list(InterfaceNameRule.objects.order_by("pk").values_list("pk", "last_updated"))
         second, output = run(load_demo_data.main)
+        after = list(InterfaceNameRule.objects.order_by("pk").values_list("pk", "last_updated"))
 
         self.assertEqual((first, second), (0, 0))
+        self.assertEqual(after, before)
         self.assertNotIn("✓", output)
 
 
