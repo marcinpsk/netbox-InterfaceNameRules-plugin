@@ -240,6 +240,14 @@ class OtherSiteDeviceTest(LoaderTestCase):
         self.assertEqual(demo_device.site, self.site)
         self.assertNotEqual(demo_device.pk, user_device.pk)
 
+    def test_a_device_of_the_demo_site_with_another_device_type_stops_the_load(self):
+        user_type = DeviceType.objects.create(manufacturer=self.manufacturer, model="USER-DT", slug="user-dt")
+        demo_type = DeviceType.objects.create(manufacturer=self.manufacturer, model="DEMO-DT", slug="demo-dt")
+        Device.objects.create(name="demo-x", site=self.site, device_type=user_type, role=self.role)
+
+        with self.assertRaisesMessage(LookupError, "demo-x"):
+            run(load_demo_data.device, "demo-x", self.site, demo_type, self.role)
+
     def test_the_stale_module_cleanup_keeps_the_modules_of_a_device_at_another_site(self):
         other_site = Site.objects.create(name="Other Site", slug="other-site")
         device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model="USER-DT", slug="user-dt")

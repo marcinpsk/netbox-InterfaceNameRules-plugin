@@ -103,6 +103,8 @@ def device(name, site, device_type, role):
     )
     if created:
         ok(f"Created device {name}")
+    elif obj.device_type_id != device_type.pk:
+        raise LookupError(f"{name} at {site} is a {obj.device_type}, not a {device_type}: it is not a demo device")
     return obj
 
 
