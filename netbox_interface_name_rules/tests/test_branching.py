@@ -69,7 +69,7 @@ class VersionGateStartupTest(SimpleTestCase):
         environment = {**os.environ, "PYTHONPATH": os.pathsep.join(entry for entry in sys.path if entry)}
 
         completed = subprocess.run(  # noqa: S603 - Run a fixed probe in a child interpreter.
-            [sys.executable, "-c", probe], env=environment, capture_output=True, text=True, check=False
+            [sys.executable, "-c", probe], env=environment, capture_output=True, text=True, check=False, timeout=120
         )
 
         self.assertNotEqual(completed.returncode, 0)

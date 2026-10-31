@@ -263,6 +263,7 @@ def _bash(script, cwd, env=None):
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
 
 

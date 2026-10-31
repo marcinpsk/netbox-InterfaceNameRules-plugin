@@ -9,7 +9,7 @@ import imageio_ffmpeg
 import numpy as np
 import pytest
 
-from docs_media.recording import GIF_FPS, encode
+from docs_media.recording import _FFMPEG_TIMEOUT, GIF_FPS, encode
 
 SECONDS = 7
 # A white page with the small noise of each frame of a WebM recording, as the WebM of Playwright has.
@@ -38,6 +38,7 @@ def webm(path: Path, video_filter: str) -> Path:
             str(path),
         ],
         check=True,
+        timeout=_FFMPEG_TIMEOUT,
     )
     return path
 

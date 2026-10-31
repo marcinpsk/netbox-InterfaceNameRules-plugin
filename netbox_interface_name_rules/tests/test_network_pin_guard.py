@@ -26,6 +26,7 @@ class NetworkPinGuardTest(SimpleTestCase):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=60,
             )
 
     def test_pins_outside_one_range_are_accepted(self):
