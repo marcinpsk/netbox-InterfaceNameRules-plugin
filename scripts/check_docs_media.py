@@ -8,8 +8,9 @@ check on the built site: it reads the `<img src>`, `<video src>`, `<video poster
 every HTML page, so the renderer has already resolved each Markdown form, code block and comment.
 
 It fails when a media URL of a page is not a file inside the site. A relative URL resolves against its
-page, and a root-relative URL (`/...`) or a URL under the `site_url` of mkdocs.yml (the same origin, and
-the path compared after decoding) resolves against the site path. It also fails when a README media URL
+page, so an empty URL or a URL without a path (`?v=2`, `#top`) names the page directory, not a file. A
+root-relative URL (`/...`) or a URL under the `site_url` of mkdocs.yml (the same origin, and the path
+compared after decoding) resolves against the site path. It also fails when a README media URL
 under the `site_url` is not in the site, and when a page or the README shows no captured file: a
 screenshot, a recording, its poster or its GIF.
 
@@ -49,7 +50,7 @@ class _MediaSources(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         names = _MEDIA_ATTRIBUTES.get(tag, ())
-        self.sources.extend(value for name, value in attrs if name in names and value)
+        self.sources.extend(value or "" for name, value in attrs if name in names)
 
 
 def _sources(html: str) -> list[str]:
@@ -90,7 +91,7 @@ def _media(site: Path, site_url: str, page: Path) -> list[tuple[str, Path | None
         url = urlsplit(source)
         if _under_site_url(url, site_parts) or (url.path.startswith("/") and not (url.scheme or url.netloc)):
             files.append((source, _site_file(site, site_parts.path, url.path)))
-        elif not (url.scheme or url.netloc or not url.path):
+        elif not (url.scheme or url.netloc):
             files.append((source, (page.parent / unquote(url.path)).resolve()))
     return files
 
@@ -123,7 +124,7 @@ def problems(site_dir: Path, media_dir: Path, readme: Path, site_url: str) -> li
     shown = set()
     for name, source, file in shown_by:
         if not _is_site_file(site, file):
-            found.append(f"missing: {source} (shown by {name})")
+            found.append(f"missing: {source or '""'} (shown by {name})")
         elif file.is_relative_to(media):
             shown.add(file.relative_to(media))
     captured = {file.relative_to(media_dir) for pattern in CAPTURES for file in media_dir.glob(pattern)}

@@ -354,6 +354,25 @@ def test_a_video_source_that_the_site_lacks_fails(tmp_path: Path, _check) -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("element", "source"),
+    [
+        ('<img src="">', '""'),
+        ("<img src>", '""'),
+        ('<video poster="">', '""'),
+        ('<img src="?v=2">', "?v=2"),
+        ('<img src="#x">', "#x"),
+    ],
+)
+def test_a_media_url_that_names_no_file_fails(tmp_path: Path, _check, element: str, source: str) -> None:
+    site, media = _tree(tmp_path, {"guide/index.html": element}, ())
+
+    result = _check(site, media)
+
+    assert result.returncode == 1
+    assert result.stderr == f"missing: {source} (shown by guide/index.html)\n"
+
+
 def test_a_captured_recording_that_no_page_shows_fails(tmp_path: Path, _check) -> None:
     site, media = _tree(tmp_path, {"leases/index.html": _CLIP}, (*_CLIP_FILES, "recordings/other.mp4"))
 
