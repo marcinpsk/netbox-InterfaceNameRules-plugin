@@ -256,10 +256,25 @@ def ensure_type(cls, model, manufacturer, own=False, **fields):
         ok(f"Created {cls.__name__} {model}")
 
 
+def contrib_manufacturer(name):
+    """Return the manufacturer *name*, and create it with a free slug when it does not exist."""
+    from dcim.models import Manufacturer
+    from django.utils.text import slugify
+
+    if owner := Manufacturer.objects.filter(name=name).first():
+        return owner
+    # Another manufacturer can have the slug of this name, for example "Demo-Vendor" for "Demo Vendor".
+    base = slug = slugify(name)
+    number = 1
+    while Manufacturer.objects.filter(slug=slug).exists():
+        number += 1
+        slug = f"{base}-{number}"
+    return Manufacturer.objects.create(name=name, slug=slug)
+
+
 def load_rule_scopes(manufacturer):
     """Create each device type and exact module type that a contrib rule names, when no object has that model."""
-    from dcim.models import DeviceType, Manufacturer, ModuleType
-    from django.utils.text import slugify
+    from dcim.models import DeviceType, ModuleType
 
     for row in contrib_mappings():
         # row_rule() skips a row without a name template, so its types are not needed.
@@ -270,8 +285,7 @@ def load_rule_scopes(manufacturer):
             ensure_type(DeviceType, model, manufacturer, slug=model.lower())
         # rule_lookup() looks for the module type of the row's manufacturer, when the row names one.
         if vendor := row.get("manufacturer"):
-            owner, _ = Manufacturer.objects.get_or_create(name=vendor, defaults={"slug": slugify(vendor)})
-            ensure_type(ModuleType, row.get("module_type"), owner, own=True)
+            ensure_type(ModuleType, row.get("module_type"), contrib_manufacturer(vendor), own=True)
         else:
             ensure_type(ModuleType, row.get("module_type"), manufacturer)
         ensure_type(ModuleType, row.get("parent_module_type"), manufacturer)
@@ -355,6 +369,21 @@ def row_rule(filename, number, row, loaded):
     return label, lookup, extra
 
 
+def save_rule(lookup, defaults):
+    """Create or update the rule of *lookup*, and return whether it was created.
+
+    This is update_or_create() without its write of an unchanged rule, so that a second run changes nothing.
+    """
+    from netbox_interface_name_rules.models import InterfaceNameRule
+
+    rule, created = InterfaceNameRule.objects.select_for_update().get_or_create(**lookup, defaults=defaults)
+    if not created and (changed := [name for name, value in defaults.items() if getattr(rule, name) != value]):
+        for name in changed:
+            setattr(rule, name, defaults[name])
+        rule.save(update_fields=[*changed, "last_updated"])
+    return created
+
+
 def load_rules():
     """Load each rule of contrib/ and return the number of rules that were skipped.
 
@@ -390,14 +419,8 @@ def load_rules():
                 "description": row.get("description", ""),
                 **extra,
             }
-            # update_or_create() without its write of an unchanged rule, so that a second run changes nothing.
-            rule, created = InterfaceNameRule.objects.select_for_update().get_or_create(**lookup, defaults=defaults)
-            if created:
+            if save_rule(lookup, defaults):
                 ok(f"{label} → {row['name_template']!r}")
-            elif changed := [name for name, value in defaults.items() if getattr(rule, name) != value]:
-                for name in changed:
-                    setattr(rule, name, defaults[name])
-                rule.save(update_fields=[*changed, "last_updated"])
     return skipped
 
 

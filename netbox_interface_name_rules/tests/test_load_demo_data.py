@@ -14,6 +14,7 @@ from dcim.models import (
     DeviceType,
     Interface,
     InterfaceTemplate,
+    Manufacturer,
     Module,
     ModuleBay,
     ModuleType,
@@ -102,6 +103,18 @@ class ContribRowsTest(LoaderTestCase):
         rule = InterfaceNameRule.objects.get(module_type_pattern="DEMO-.*")
         self.assertEqual(rule.breakout_mode, BreakoutModeChoices.FLAT)
         self.assertEqual(rule.parent_name_template, "")
+
+    def test_a_row_manufacturer_whose_slug_another_manufacturer_has_loads_its_rule(self):
+        Manufacturer.objects.create(name="Demo-Vendor", slug="demo-vendor")
+        self.use_contrib(
+            {"rules.yaml": "- module_type: VENDOR-MT\n  manufacturer: Demo Vendor\n  name_template: v{bay_position}\n"}
+        )
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        rule = InterfaceNameRule.objects.get(module_type__model="VENDOR-MT")
+        self.assertEqual(rule.module_type.manufacturer.name, "Demo Vendor")
 
     def test_an_update_keeps_a_field_that_changed_after_the_loader_read_the_rule(self):
         self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
@@ -230,7 +243,9 @@ class ModuleInstallTest(LoaderTestCase):
     def test_each_module_of_the_100_bay_device_has_an_interface_for_the_batch_limit(self):
         run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
 
-        self.assertEqual(Interface.objects.filter(device__name="test-100ports", module__isnull=False).count(), 100)
+        interfaces = Interface.objects.filter(device__name="test-100ports", module__isnull=False)
+        self.assertEqual(interfaces.count(), 100)
+        self.assertEqual(interfaces.order_by().values("module").distinct().count(), 100)
 
     def test_a_module_that_an_earlier_run_installed_without_an_interface_gets_one(self):
         run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
