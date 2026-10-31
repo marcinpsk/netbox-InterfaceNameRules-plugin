@@ -116,6 +116,28 @@ class ContribRowsTest(LoaderTestCase):
         rule = InterfaceNameRule.objects.get(module_type__model="VENDOR-MT")
         self.assertEqual(rule.module_type.manufacturer.name, "Demo Vendor")
 
+    def test_a_row_manufacturer_that_another_writer_creates_during_the_load_is_reused(self):
+        self.use_contrib(
+            {"rules.yaml": "- module_type: VENDOR-MT\n  manufacturer: Demo Vendor\n  name_template: v{bay_position}\n"}
+        )
+        real_exists = QuerySet.exists
+        raced = []
+
+        def exists_after_a_concurrent_create(queryset):
+            # Another writer creates the manufacturer after the name lookup of the loader found none.
+            if queryset.model is Manufacturer and not raced:
+                raced.append(True)
+                Manufacturer.objects.create(name="Demo Vendor", slug="demo-vendor")
+            return real_exists(queryset)
+
+        with patch.object(QuerySet, "exists", exists_after_a_concurrent_create):
+            skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertEqual(
+            list(Manufacturer.objects.filter(name="Demo Vendor").values_list("slug", flat=True)), ["demo-vendor"]
+        )
+
     def test_an_update_keeps_a_field_that_changed_after_the_loader_read_the_rule(self):
         self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
         self.load_rules()

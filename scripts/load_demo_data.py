@@ -269,7 +269,9 @@ def contrib_manufacturer(name):
     while Manufacturer.objects.filter(slug=slug).exists():
         number += 1
         slug = f"{base}-{number}"
-    return Manufacturer.objects.create(name=name, slug=slug)
+    # get_or_create() reads the manufacturer again when another writer created it after the lookup.
+    owner, _ = Manufacturer.objects.get_or_create(name=name, defaults={"slug": slug})
+    return owner
 
 
 def load_rule_scopes(manufacturer):
