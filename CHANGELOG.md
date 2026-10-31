@@ -6,6 +6,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.10.2 (2026-10-31)
+
+### Bug Fixes
+
+- **rules**: Put the closest platform before the lowest pk in the tie-break
+  ([`a9e3dd4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/a9e3dd4467095f43342f14d13894d3d6a66c948b))
+
+### Chores
+
+- **deps**: Bump gitpython
+  ([`353d47d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/353d47d834c625a8b14c0b82d43f4d2da2dbe9e0))
+
+- **deps**: Bump the github-actions group with 5 updates
+  ([`5ba5dc0`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5ba5dc0ddc7476694c060b7fd04f7e44e4478c61))
+
+- **deps**: Bump the uv group across 1 directory with 2 updates
+  ([`d6dd2fd`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/d6dd2fd8adbb460c888227aaa56c853e0e90b0a6))
+
+- **deps-dev**: Bump ruff from 0.16.10 to 0.17.1
+  ([`feaea0d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/feaea0d627523a2647e7a7547cbfa7a845ac7332))
+
+### Documentation
+
+- **apply**: State what Apply Rules cannot restore after a platform change
+  ([`5c28057`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5c280574f2bbf440acc840224b3e4033fe2aa404))
+
+### Performance Improvements
+
+- **apply**: Read module interfaces in batches so a limit stops the reads
+  ([`1187745`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/11877455d1bc8e07a3d7ee14217ada0dcd8a62e5))
+
+- **triggers**: Read one rule snapshot for a whole rename-trigger reapply
+  ([`f553344`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f5533448edb7d34961956952b1e52852851d0787))
+
+### Testing
+
+- **rules**: Select a child platform created after a warm selection
+  ([`8c93f57`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/8c93f5783573a219ce20f911553d0dd2bee4e4f2))
+
+- **triggers**: Rename a module interface by its chassis position in the snapshot reapply test
+  ([`5c5fe80`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/5c5fe8058be6478dc8eff57d75535cb608cb72a2))
+
+
 ## v1.10.1 (2026-10-23)
 
 ### Bug Fixes
