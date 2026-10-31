@@ -62,11 +62,13 @@ See the [full configuration guide](https://marcinpsk.github.io/netbox-InterfaceN
   <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/icon.svg" alt="NetBox Interface Name Rules" width="30"/>
 </p>
 
+![Apply Rules: open the preview of a rule, leave one interface out, apply, and see the renamed interfaces of the device](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/recordings/apply-rules.gif)
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/01-rule-list.png" alt="Rule list" width="700"/>
+  <img src="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/screenshots/rule-list-light.png" alt="Rule list" width="700"/>
 </p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/11-apply-rule-preview.png" alt="Apply-rules preview" width="700"/>
+  <img src="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/screenshots/apply-preview-light.png" alt="Apply-rules preview" width="700"/>
 </p>
 
 ## Compatibility

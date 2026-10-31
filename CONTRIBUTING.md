@@ -58,6 +58,29 @@ TEST_DB_NAME=test_netbox_interface_name_rules TEST_REDIS_HOST=localhost pytest n
 A local run prints coverage but does not fail on it. The 97% gate runs in CI on the combined
 coverage data of the NetBox v4.5.3 leg and the netbox-branching leg.
 
+### Documentation screenshots and recordings
+
+Do not commit screenshots. The docs build captures them, and the site of each release shows them.
+`docs_media/` is a Playwright suite that writes them to `docs/assets/screenshots/` and
+`docs/assets/recordings/`. It needs a NetBox with this plugin and the demo data of
+`scripts/load_demo_data.py`, signed in as `admin` with the password `admin`. Use a new database:
+
+```bash
+PYTHONPATH=/opt/netbox/netbox python scripts/load_demo_data.py
+uv sync --only-group docs --only-group docs-media
+uv run --no-sync playwright install chromium
+uv run --no-sync pytest docs_media --base-url http://127.0.0.1:8000
+uv run --no-sync mkdocs build --strict
+uv run --no-sync python scripts/check_docs_media.py
+```
+
+A pull request that changes a template, the docs or the demo data runs the same build, and uploads
+the site as the `docs-site` artifact.
+
+The docs build installs NetBox from `.github/netbox-requirements.txt`: the requirements of the NetBox
+tag in `docs-build.yaml`, with hashes. When you change that tag or the Python version, write the lock
+again with `scripts/lock-netbox-requirements.sh <tag> <Python version>`. A test compares the two.
+
 ### Commits
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):

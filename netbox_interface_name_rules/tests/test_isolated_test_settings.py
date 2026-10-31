@@ -59,6 +59,7 @@ class IsolatedTestSettingsTest(TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=120,
         )
         # Report the child's own error: a CalledProcessError would hide why the import failed.
         assert completed.returncode == 0, f"{module} failed to import:\n{completed.stderr[-2000:]}"
