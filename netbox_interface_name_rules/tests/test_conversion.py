@@ -42,6 +42,7 @@ from netbox_interface_name_rules.engine import (
     supports_channelization,
 )
 from netbox_interface_name_rules.family import FamilyStatus, execute_conversion, plan_module_conversions
+from netbox_interface_name_rules.family import installed as family_installed
 from netbox_interface_name_rules.family.template_names import BAY_CHAIN_RELATIONS
 from netbox_interface_name_rules.jobs import rule_job_kwargs
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -59,6 +60,7 @@ from netbox_interface_name_rules.tests.helpers import (
     ChannelizationTestCase,
     build_device,
     empty_the_webhook_queue,
+    interface_batches,
     make_interface_webhook_rule,
     make_job,
     plain_module_type,
@@ -1020,6 +1022,7 @@ class ConversionScanCostTest(ConversionTestCase):
 
     def test_a_second_module_of_the_same_type_costs_the_scan_no_extra_queries(self):
         """Resolving the names per module turns an Apply page load into a fleet-sized scan."""
+        self._verdicts()  # The first scan loads the rule cache.
         one_module = len(self._scan_queries())
 
         self._install(self.module_type, "4", run_rules=False)
@@ -1092,6 +1095,13 @@ class ConversionScanLimitTest(ConversionTestCase):
 
         self.assertEqual(len(self._dry_runs(capped)), 2, [query["sql"] for query in capped.captured_queries])
         self.assertEqual(len(self._dry_runs(uncapped)), 3)
+
+    def test_a_limited_scan_reads_the_interfaces_of_the_module_batches_it_visits(self):
+        with patch.object(family_installed, "MODULE_BATCH", 1), CaptureQueriesContext(connection) as queries:
+            preview = find_convertible_families(self.rule, limit=1)
+
+        self.assertEqual([len(batch) for batch in interface_batches(queries)], [1, 1])
+        self.assertTrue(preview.has_more)
 
     def test_a_blocked_family_counts_against_the_limit(self):
         """It costs the same dry run as a convertible one, so it has to bound the scan the same way."""

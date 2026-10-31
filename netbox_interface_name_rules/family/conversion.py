@@ -34,7 +34,7 @@ from .domain import (
     InterfaceSnapshot,
     MemberOutcome,
 )
-from .installed import interfaces_by_module, module_raw_bases
+from .installed import module_raw_bases, modules_with_interfaces
 from .names import COLLISION_REASON, is_name_collision, name_is_taken, validate_or_block
 from .targets import channelized_family_names, used_parent_template
 from .template_names import pinned_template_cache
@@ -140,12 +140,10 @@ def plan_module_conversions(
 def _planned_families(rule, modules):  # pragma: no cover - requires channelization support
     """Yield every convertible family in the batch as ``(module, plan, base interface)``.
 
-    The module rows, their interfaces and each module type's templates are read once for the whole
-    batch, so a second module of the same type costs the scan no extra query.
+    The module rows and each module type's templates are read once for the whole batch, and the
+    interfaces once per module batch, so a second module of the same type costs the scan no extra query.
     """
-    by_module = interfaces_by_module(modules)
-    for module in modules:
-        interfaces = by_module[module.pk]
+    for module, interfaces in modules_with_interfaces(modules):
         rows_by_pk = {interface.pk: interface for interface in interfaces}
         variables = build_variables(module.module_bay, device=module.device)
         for plan in plan_module_conversions(module, rule, variables, interfaces):

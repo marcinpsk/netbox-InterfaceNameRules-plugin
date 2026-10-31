@@ -7,6 +7,7 @@ These tests create real DB objects and exercise the full engine pipeline.
 
 import dataclasses
 import threading
+from unittest import skipUnless
 
 from dcim.models import (
     DeviceType,
@@ -28,7 +29,8 @@ from netbox_interface_name_rules.engine import (
 )
 from netbox_interface_name_rules.models import InterfaceNameRule
 from netbox_interface_name_rules.name_template import TEMPLATE_VARIABLES
-from netbox_interface_name_rules.tests.helpers import make_device
+from netbox_interface_name_rules.rule_selection import platforms_nest
+from netbox_interface_name_rules.tests.helpers import REQUIRES_NESTED_PLATFORMS, make_device
 
 
 class FindMatchingRuleTest(TestCase):
@@ -441,12 +443,12 @@ class FindMatchingRuleCachingTest(TestCase):
         rule_a = InterfaceNameRule.objects.create(module_type=mt_a, device_type=dt_x, name_template="a{bay_position}")
         rule_b = InterfaceNameRule.objects.create(module_type=mt_b, device_type=dt_y, name_template="b{bay_position}")
 
-        before = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
+        before = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS)
         # Swap device_type between the two rules via bulk .update(): SUM(device_type) is unchanged
         # (x+y == y+x), count unchanged, last_updated unbumped. Only the per-rule pairing differs.
         InterfaceNameRule.objects.filter(pk=rule_a.pk).update(device_type=dt_y)
         InterfaceNameRule.objects.filter(pk=rule_b.pk).update(device_type=dt_x)
-        after = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
+        after = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS)
 
         self.assertNotEqual(before, after, "fingerprint collided on a compensating FK swap (Sum-aggregate weakness)")
 
@@ -579,7 +581,12 @@ class FindMatchingRuleCachingTest(TestCase):
             # separate thread has its own connection and cannot see this TestCase's uncommitted rows.)
             worker_pin_depth.append(getattr(rule_selection._pin, "depth", 0))
             rule_selection._RULE_CACHE = rule_selection._RuleSnapshot(
-                alias=DEFAULT_DB_ALIAS, version="concurrent-reload-other-version", exact=(), regex=(), memo={}
+                aliases=(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS),
+                version="concurrent-reload-other-version",
+                exact=(),
+                regex=(),
+                platform_parents={},
+                memo={},
             )
 
         try:
@@ -608,6 +615,46 @@ class FindMatchingRuleCachingTest(TestCase):
 
         # The restored cache must serve an unpinned lookup, so a later test cannot inherit a broken cache.
         self.assertEqual(find_matching_rule(self.module_type, None, self.device_type), universal)
+
+    @skipUnless(platforms_nest(), REQUIRES_NESTED_PLATFORMS)
+    def test_pinned_block_keeps_its_platform_tree_across_concurrent_cache_reload(self):
+        """A pinned batch matches ancestors from the tree it primed with, also after another thread reloads.
+
+        The reload publishes a tree in which both child platforms are roots. A child-platform lookup
+        that the pinned memo does not hold must still find the rule on the parent platform.
+        """
+        from netbox_interface_name_rules import rule_selection
+        from netbox_interface_name_rules.engine import pinned_rule_cache
+
+        parent = Platform.objects.create(name="CacheParentOS", slug="cache-parent-os")
+        first = Platform.objects.create(name="CacheChildOS 1", slug="cache-child-os-1", parent=parent)
+        second = Platform.objects.create(name="CacheChildOS 2", slug="cache-child-os-2", parent=parent)
+        on_parent = InterfaceNameRule.objects.create(
+            module_type=self.module_type, platform=parent, name_template="p{bay_position}"
+        )
+
+        def concurrent_reload():
+            rule_selection._RULE_CACHE = rule_selection._RuleSnapshot(
+                aliases=(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS),
+                version="concurrent-reload-other-tree",
+                exact=(),
+                regex=(),
+                platform_parents={parent.pk: None, first.pk: None, second.pk: None},
+                memo={},
+            )
+
+        try:
+            with pinned_rule_cache():
+                self.assertEqual(find_matching_rule(self.module_type, None, self.device_type, first), on_parent)
+
+                worker = threading.Thread(target=concurrent_reload)
+                worker.start()
+                worker.join()
+                self.assertEqual(rule_selection._RULE_CACHE.version, "concurrent-reload-other-tree")
+
+                self.assertEqual(find_matching_rule(self.module_type, None, self.device_type, second), on_parent)
+        finally:
+            rule_selection._RULE_CACHE = rule_selection._empty_rule_cache()
 
     def test_reload_publishes_a_fresh_cache_snapshot_atomically(self):
         """A version change rebinds _RULE_CACHE to a new snapshot instead of mutating the old one in place.
@@ -733,7 +780,7 @@ class FindMatchingRuleCachingTest(TestCase):
         r2 = InterfaceNameRule.objects.create(
             applies_to_device_interfaces=True, module_type_pattern="p2", name_template="b"
         )
-        fp_two_rules = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
+        fp_two_rules = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS)
 
         # Forge a one-rule set whose name_template embeds r1's trailing columns, a row separator, and
         # r2's columns up to its name_template. Column order: id, module_type_id, is_regex, pattern,
@@ -743,7 +790,7 @@ class FindMatchingRuleCachingTest(TestCase):
         forged_name_template = field_sep.join(["a", "0", "0", "true"]) + row_sep + r2_cells_through_name
         InterfaceNameRule.objects.filter(pk=r2.pk).delete()
         InterfaceNameRule.objects.filter(pk=r1.pk).update(name_template=forged_name_template)
-        fp_forged_one_rule = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS)
+        fp_forged_one_rule = rule_selection._enabled_rules_version(DEFAULT_DB_ALIAS, DEFAULT_DB_ALIAS)
 
         self.assertNotEqual(
             fp_two_rules,

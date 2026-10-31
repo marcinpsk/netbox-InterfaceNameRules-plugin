@@ -46,8 +46,8 @@ the `FPC/PIC/port` convention — for pizza-box ACX devices this simplifies to
 ```
 
 **Rule priority tip:** The exact FK rule for `SFP-10G-LR` automatically
-outranks any `SFP-10G-.*` regex rule at the same scope (score ≥ 1000 vs
-score ≤ 955). You don't need to remove regex rules to avoid conflicts — the
+outranks any `SFP-10G-.*` regex rule at the same scope (score ≥ 10000 vs
+score ≤ 7255). You don't need to remove regex rules to avoid conflicts — the
 exact FK rule always wins.
 
 ### Rule detail — Juniper ACX7024 QSFP+ 4×10G breakout
@@ -55,7 +55,7 @@ exact FK rule always wins.
 The rule detail page shows the auto-computed **priority score** and a
 human-readable label (e.g. `regex(13) / device`):
 
-![Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 213](screenshots/04-rule-detail-juniper-xe-breakout.png)
+![Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 2013](screenshots/04-rule-detail-juniper-xe-breakout.png)
 
 ---
 
@@ -253,7 +253,7 @@ files to avoid ambiguity.
 
 ### Rule detail — SONiC platform-scoped catch-all
 
-![Rule detail for SONiC catch-all rule, showing platform scope and priority score 102](screenshots/04c-rule-detail-sonic-swp.png)
+![Rule detail for SONiC catch-all rule, showing platform scope and priority score 1002](screenshots/04c-rule-detail-sonic-swp.png)
 
 ---
 

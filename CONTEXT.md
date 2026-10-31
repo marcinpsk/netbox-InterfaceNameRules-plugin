@@ -73,6 +73,10 @@ _Avoid_: Format string, raw template name
 A named value that a name template substitutes before it evaluates the arithmetic that remains. A variable is available only in the naming contexts that provide it. Substituted values are literal text, not template syntax. A text variable can hold any text, so arithmetic cannot use it; an integer variable always holds a whole number.
 _Avoid_: Placeholder, token
 
+**Rule scope**:
+The parent module type, device type and platform that limit where a rule applies. A blank scope field matches every value. A platform scope matches a device on that platform or on a descendant of it; platforms nest from NetBox 4.4. When several rules match a module, an exact module type rule comes before a pattern rule. In each of the two, a parent module type scope comes first, then a device type scope, then the platform closest to the device platform; a rule with no platform comes last.
+_Avoid_: Filter, match criteria
+
 **Naming context**:
 The set of template variables available where a name template is evaluated. There are three: a module member name, a module parent name, and a device interface name. A variable used outside its naming context never resolves.
 _Avoid_: Rule type, scope

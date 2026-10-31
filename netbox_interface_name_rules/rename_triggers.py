@@ -41,7 +41,7 @@ from netbox.context import current_request
 from .branching import replay_in_progress
 from .naming import bay_naming_values, chassis_position
 from .rename_outcomes import OutcomeKind, RenameOutcome, renamed_count
-from .rule_selection import parent_type_scopes_a_rule
+from .rule_selection import parent_type_scopes_a_rule, pinned_rule_cache
 from .transactions import atomic_with_events, write_alias, write_scope
 
 if TYPE_CHECKING:
@@ -183,10 +183,12 @@ def reapply(triggers):
             device_triggers.setdefault(trigger.pk, []).append((place, trigger))
         else:
             module_triggers.append((place, trigger))
-    attempted_pks = _reapply_modules(module_triggers, device_triggers) if module_triggers else frozenset()
-    for pairs in device_triggers.values():
-        _, first = pairs[0]
-        _reapply_device(first, attempted_pks)
+    # One rule snapshot serves the module reapply and each device, for module and device-interface rules.
+    with pinned_rule_cache():
+        attempted_pks = _reapply_modules(module_triggers, device_triggers) if module_triggers else frozenset()
+        for pairs in device_triggers.values():
+            _, first = pairs[0]
+            _reapply_device(first, attempted_pks)
 
 
 @dataclasses.dataclass

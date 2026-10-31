@@ -8,6 +8,7 @@ failure still names the class it came from.
 """
 
 import contextlib
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -52,6 +53,7 @@ TEST_PASSWORD = "testpass123"  # noqa: S105 - Test credential only.
 PLUGIN_LOGGER = "netbox_interface_name_rules"
 REQUIRES_CHANNELIZATION = "requires a NetBox that models channelized interfaces (4.7+)"
 REQUIRES_NO_CHANNELIZATION = "requires a NetBox that cannot model channelized interfaces (4.6 and older)"
+REQUIRES_NESTED_PLATFORMS = "requires a NetBox that nests platforms (4.4+)"
 REQUIRES_MODULE_PLACEHOLDER = "NetBox does not resolve {module} in module-bay positions"
 # On NetBox 4.5 and older the token stays literal in the interface name.
 REQUIRES_VC_POSITION_TOKEN = "requires a NetBox that resolves {vc_position} in template names (4.6+)"  # noqa: S105 - Skip reason, not a credential.
@@ -430,3 +432,12 @@ class VcDriftTestCase(ChannelizationTestCase):
         with self.captureOnCommitCallbacks(execute=True):
             module = Module.objects.create(device=device, module_bay=bay, module_type=module_type)
         return module, bay
+
+
+def interface_batches(queries):
+    """Return the module primary keys of each batch query that reads the interfaces of a module list."""
+    return [
+        re.search(r'"module_id" IN \(([^)]*)\)', query["sql"]).group(1).split(", ")
+        for query in queries.captured_queries
+        if 'ORDER BY "dcim_interface"."module_id"' in query["sql"]
+    ]

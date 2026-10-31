@@ -520,6 +520,31 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
             guide,
         )
 
+    def test_configuration_says_to_apply_rules_after_a_platform_change(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn(
+            "A change of a device platform, or a move of a platform in the platform tree, is not a rename "
+            "trigger. The interfaces keep the names from the rule that the engine selected before. After an "
+            "upgrade to the first release that matches child platforms, or after you change a device platform "
+            "or the platform tree, run Apply Rules for the rules on the affected platforms.",
+            guide,
+        )
+
+    def test_configuration_states_what_apply_rules_cannot_restore_after_a_platform_change(self):
+        guide = _normalised_doc("docs", "configuration.md")
+
+        self.assertIn(
+            "Apply Rules starts from the names that the interfaces have now. A rule that reads `{base}` finds "
+            "the base only in a raw template name or in a name that the rule gives itself, so it does not rename "
+            "an interface that another rule renamed. When no rule matches a module after the change, Apply Rules "
+            "does not include the module for any rule, and the interfaces keep the names from the earlier rule. "
+            "The plugin cannot give back the raw template names. Rename these interfaces by hand, or delete the "
+            "module and install it again. NetBox then creates the interfaces again from the module type "
+            "templates, but the delete removes the configuration of the old interfaces.",
+            guide,
+        )
+
     def test_the_guides_name_the_netbox_branching_series_that_the_version_gate_accepts(self):
         statements = {
             ("docs", "configuration.md"): (
@@ -631,6 +656,80 @@ class ReviewedDocumentationContractTest(unittest.TestCase):
 
         self.assertIn("NetBox-%E2%89%A54.3.0-blue", readme)
         self.assertNotIn("NetBox-%E2%89%A54.2.0-blue", readme)
+
+
+_CONTRIB_SCORE_EXAMPLE = re.compile(r"→ score (\d+)\+(\d+)=(\d+) ")
+
+
+def _regex_rule_score(pattern, *, device_type=False, platform=False):
+    """Return the priority score of an unsaved regex rule with *pattern* and the given scope."""
+    rule = InterfaceNameRule(
+        module_type_is_regex=True,
+        module_type_pattern=pattern,
+        device_type_id=1 if device_type else None,
+        platform_id=1 if platform else None,
+    )
+    return rule.specificity_score
+
+
+def _score_range_label(score):
+    """Return the range label of *score*, for example ``2xxx`` for 2015."""
+    digits = str(score)
+    return digits[0] + "x" * (len(digits) - 1)
+
+
+class DocumentedPriorityScoreTest(unittest.TestCase):
+    """Keep each documented priority score equal to the score that the model computes."""
+
+    def test_contrib_score_examples_match_the_model(self):
+        cases = {
+            ("ufispace.yaml", "Rule A: /.*/ platform=SONiC "): (".*", {"platform": True}),
+            ("ufispace.yaml", "Rule B: /QSFP-DD-400G-.*/ platform=SONiC "): ("QSFP-DD-400G-.*", {"platform": True}),
+            ("ufispace-device-type.yaml", "Rule A: /.*/ device_type=S9610-36D "): (".*", {"device_type": True}),
+            ("ufispace-device-type.yaml", "Rule B: /QSFP-DD-400G-.*/ device_type=S9610-36D "): (
+                "QSFP-DD-400G-.*",
+                {"device_type": True},
+            ),
+        }
+        for (name, anchor), (pattern, scope) in cases.items():
+            with self.subTest(file=name, rule=anchor):
+                text = (_PROJECT_ROOT / "contrib" / name).read_text(encoding="utf-8")
+                lines = [line for line in text.splitlines() if anchor in line]
+                self.assertEqual(len(lines), 1)
+                example = _CONTRIB_SCORE_EXAMPLE.search(lines[0])
+                self.assertIsNotNone(example)
+                scope_part, length, total = map(int, example.groups())
+                score = _regex_rule_score(pattern, **scope)
+                self.assertEqual((scope_part + length, length, total), (score, len(pattern), score))
+
+    def test_contrib_scope_ranges_match_the_model(self):
+        device_label = _score_range_label(_regex_rule_score("", device_type=True))
+        platform_label = _score_range_label(_regex_rule_score("", platform=True))
+        for name in ("ufispace.yaml", "ufispace-device-type.yaml"):
+            with self.subTest(file=name):
+                text = (_PROJECT_ROOT / "contrib" / name).read_text(encoding="utf-8")
+                self.assertEqual(text.count(f'scope "dt" (score {device_label})'), 1)
+                self.assertEqual(text.count(f'scope "pl" (score {platform_label})'), 1)
+
+    def test_contrib_cascade_states_the_closest_platform_exception(self):
+        exception = (
+            "#   4. Exception: among rules of the same kind with the same scope, the rule on the\n"
+            "#      closest platform wins, whatever the pattern length.\n"
+        )
+        for name in ("ufispace.yaml", "ufispace-device-type.yaml"):
+            with self.subTest(file=name):
+                text = (_PROJECT_ROOT / "contrib" / name).read_text(encoding="utf-8")
+                self.assertEqual(text.count(exception), 1)
+
+    def test_examples_captions_state_the_model_scores(self):
+        guide = (_PROJECT_ROOT / "docs" / "examples.md").read_text(encoding="utf-8")
+        cases = {
+            "4×10G breakout rule, showing priority score": ("QSFP-4X10G-.*", {"device_type": True}),
+            "showing platform scope and priority score": (".*", {"platform": True}),
+        }
+        for anchor, (pattern, scope) in cases.items():
+            with self.subTest(caption=anchor):
+                self.assertEqual(guide.count(f"{anchor} {_regex_rule_score(pattern, **scope)}]"), 1)
 
 
 _MIGRATIONS = _PROJECT_ROOT / "netbox_interface_name_rules" / "migrations"
