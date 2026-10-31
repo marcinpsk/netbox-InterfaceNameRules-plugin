@@ -247,9 +247,9 @@ mkdir site
 """
 
 
-# Each git command that reads a tree object fails; the other commands run the real git.
+# Each git command named in $FAIL_GIT writes its output and then fails, as on a damaged object.
 _UNREADABLE_TREE_GIT = """#!/usr/bin/env bash
-case "$1" in cat-file|ls-tree|archive) echo "fatal: unable to read tree" >&2; exit 128;; esac
+case " $FAIL_GIT " in *" $1 "*) "{git}" "$@"; echo "fatal: unable to read tree" >&2; exit 128;; esac
 exec "{git}" "$@"
 """
 
@@ -270,7 +270,7 @@ def _bash(script, cwd, env=None):
 class DocsDeployCoverageTest(unittest.TestCase):
     """The deploy keeps the coverage report of gh-pages, and also deploys when gh-pages does not exist."""
 
-    def _deploy_step(self, with_gh_pages, reachable=True, nested=False, bare=False, readable=True):
+    def _deploy_step(self, with_gh_pages, reachable=True, nested=False, bare=False, failing=""):
         workflow = dict(_workflows())["docs-deploy.yaml"]
         [script] = [
             s["run"]
@@ -284,12 +284,12 @@ class DocsDeployCoverageTest(unittest.TestCase):
         if not reachable:
             (root / "origin.git").rename(root / "moved.git")
         step_env = None
-        if not readable:
+        if failing:
             # A git that cannot read the tree of the fetched gh-pages, as with a damaged object.
             (root / "bin").mkdir()
             (root / "bin" / "git").write_text(_UNREADABLE_TREE_GIT.format(git=shutil.which("git")), encoding="utf-8")
             (root / "bin" / "git").chmod(0o755)
-            step_env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}"}
+            step_env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "FAIL_GIT": failing}
         result = _bash(script, root / "work", step_env)
         return result, root / "work" / "site"
 
@@ -319,11 +319,16 @@ class DocsDeployCoverageTest(unittest.TestCase):
         self.assertFalse((site / "coverage").exists())
 
     def test_the_deploy_stops_when_it_cannot_read_the_tree_of_gh_pages(self):
-        result, site = self._deploy_step(with_gh_pages=True, readable=False)
+        result, site = self._deploy_step(with_gh_pages=True, failing="cat-file ls-tree archive")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("gh-pages holds no coverage report", result.stdout)
         self.assertFalse((site / "coverage").exists())
+
+    def test_the_deploy_stops_when_it_cannot_archive_the_coverage_report(self):
+        result, _site = self._deploy_step(with_gh_pages=True, failing="archive")
+
+        self.assertNotEqual(result.returncode, 0)
 
     def test_the_deploy_continues_when_only_a_branch_ending_in_gh_pages_exists(self):
         result, site = self._deploy_step(with_gh_pages=False, nested=True)

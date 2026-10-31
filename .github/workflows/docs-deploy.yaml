@@ -79,6 +79,8 @@ jobs:
       # The site replaces the whole branch, so it takes the coverage report that coverage-badge.yaml published.
       - name: Keep the coverage report of gh-pages
         run: |
+          # A failed git archive stops the step, not only a failed tar.
+          set -o pipefail
           # ls-remote --exit-code returns 2 when no such branch exists, and another non-zero status on an error.
           status=0
           git ls-remote --exit-code origin refs/heads/gh-pages > /dev/null || status=$?
