@@ -13,6 +13,7 @@ and exits with status 1 when it skipped a rule.
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 import django
@@ -76,6 +77,25 @@ def contrib_rules():
         for path in sorted(CONTRIB_DIR.glob("*.yaml"))
         if path.name not in ALTERNATIVE_RULE_FILES
     ]
+
+
+def create_once(existing, create):
+    """Return (the first object of *existing*, False), or (the object that *create()* makes, True).
+
+    The insert runs in a savepoint. When another writer committed a matching object after the lookup, the
+    IntegrityError rolls back only the savepoint, and the object of the other writer is returned.
+    """
+    from django.db import IntegrityError, transaction
+
+    if (obj := existing.first()) is not None:
+        return obj, False
+    try:
+        with transaction.atomic():
+            return create(), True
+    except IntegrityError:
+        if (obj := existing.first()) is None:
+            raise
+        return obj, False
 
 
 def shared_objects():
@@ -143,14 +163,20 @@ def load_100_bay_device(site, manufacturer, role):
         module_type=module_type, name="{module}", defaults={"type": "100gbase-x-qsfp28"}
     )
     obj = device("test-100ports", site, device_type, role)
+
+    def add_interface(module):
+        interface = template.instantiate(device=obj, module=module)
+        interface.save()
+        return interface
+
     # A module that an earlier loader installed before the template existed has no interface.
     for module in Module.objects.filter(device=obj, module_type=module_type, interfaces__isnull=True):
-        template.instantiate(device=obj, module=module).save()
+        create_once(module.interfaces.all(), partial(add_interface, module))
     # Fill each empty bay on each run, so that a run that stopped after it created the device completes it.
     installed = 0
     for bay in ModuleBay.objects.filter(device=obj, installed_module__isnull=True).order_by("name"):
-        Module.objects.create(device=obj, module_bay=bay, module_type=module_type, status="active")
-        installed += 1
+        install = partial(Module.objects.create, device=obj, module_bay=bay, module_type=module_type, status="active")
+        installed += create_once(Module.objects.filter(module_bay=bay), install)[1]
     if installed:
         ok(f"Installed {installed} TEST-1PORT modules into test-100ports")
 
@@ -221,9 +247,10 @@ def load_apply_demo_device(site, manufacturer, role):
         for i in range(24):
             ModuleBayTemplate.objects.create(device_type=acx, name=f"Transceiver 0/0/{i}", position=str(i))
         ok("Created DeviceType ACX7024 with 24 transceiver bays")
-    module_type = ModuleType.objects.filter(model=APPLY_DEMO_MODULE_TYPE).first()
-    if module_type is None:
-        module_type = ModuleType.objects.create(manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE)
+    module_type, _ = create_once(
+        ModuleType.objects.filter(model=APPLY_DEMO_MODULE_TYPE),
+        partial(ModuleType.objects.create, manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE),
+    )
     # NetBox replaces {module} with the bay position.
     InterfaceTemplate.objects.get_or_create(
         module_type=module_type, name="{module}", defaults={"type": "100gbase-x-qsfp28"}
@@ -232,9 +259,8 @@ def load_apply_demo_device(site, manufacturer, role):
     installed = 0
     for position in APPLY_DEMO_BAYS:
         bay = ModuleBay.objects.get(device=obj, position=str(position))
-        if not Module.objects.filter(module_bay=bay).exists():
-            Module.objects.create(device=obj, module_bay=bay, module_type=module_type, status="active")
-            installed += 1
+        install = partial(Module.objects.create, device=obj, module_bay=bay, module_type=module_type, status="active")
+        installed += create_once(Module.objects.filter(module_bay=bay), install)[1]
     if installed:
         ok(f"Installed {installed} {APPLY_DEMO_MODULE_TYPE} modules into {APPLY_DEMO_DEVICE}")
 
@@ -250,28 +276,34 @@ def ensure_type(cls, model, manufacturer, own=False, **fields):
 
     With *own*, only an object of *manufacturer* counts.
     """
+    if not model:
+        return
     existing = cls.objects.filter(model=model, **({"manufacturer": manufacturer} if own else {}))
-    if model and not existing.exists():
-        cls.objects.create(manufacturer=manufacturer, model=model, **fields)
+    if create_once(existing, partial(cls.objects.create, manufacturer=manufacturer, model=model, **fields))[1]:
         ok(f"Created {cls.__name__} {model}")
 
 
 def contrib_manufacturer(name):
     """Return the manufacturer *name*, and create it with a free slug when it does not exist."""
     from dcim.models import Manufacturer
+    from django.db import IntegrityError
     from django.utils.text import slugify
 
-    if owner := Manufacturer.objects.filter(name=name).first():
-        return owner
-    # Another manufacturer can have the slug of this name, for example "Demo-Vendor" for "Demo Vendor".
-    base = slug = slugify(name)
-    number = 1
-    while Manufacturer.objects.filter(slug=slug).exists():
-        number += 1
-        slug = f"{base}-{number}"
-    # get_or_create() reads the manufacturer again when another writer created it after the lookup.
-    owner, _ = Manufacturer.objects.get_or_create(name=name, defaults={"slug": slug})
-    return owner
+    base = slugify(name)
+    while True:
+        # Another manufacturer can have the slug of this name, for example "Demo-Vendor" for "Demo Vendor".
+        slug, number = base, 1
+        while Manufacturer.objects.filter(slug=slug).exists():
+            number += 1
+            slug = f"{base}-{number}"
+        try:
+            return create_once(
+                Manufacturer.objects.filter(name=name), partial(Manufacturer.objects.create, name=name, slug=slug)
+            )[0]
+        except IntegrityError:
+            # Another writer took the slug after the check: try the next free slug.
+            if not Manufacturer.objects.filter(slug=slug).exists():
+                raise
 
 
 def load_rule_scopes(manufacturer):
@@ -286,10 +318,11 @@ def load_rule_scopes(manufacturer):
         if model := str(row.get("device_type") or ""):
             ensure_type(DeviceType, model, manufacturer, slug=model.lower())
         # rule_lookup() looks for the module type of the row's manufacturer, when the row names one.
-        if vendor := row.get("manufacturer"):
-            ensure_type(ModuleType, row.get("module_type"), contrib_manufacturer(vendor), own=True)
+        module_type = row.get("module_type")
+        if module_type and (vendor := row.get("manufacturer")):
+            ensure_type(ModuleType, module_type, contrib_manufacturer(vendor), own=True)
         else:
-            ensure_type(ModuleType, row.get("module_type"), manufacturer)
+            ensure_type(ModuleType, module_type, manufacturer)
         ensure_type(ModuleType, row.get("parent_module_type"), manufacturer)
 
 
@@ -372,18 +405,21 @@ def row_rule(filename, number, row, loaded):
 
 
 def save_rule(lookup, defaults):
-    """Create or update the rule of *lookup*, and return whether it was created.
+    """Create or update the rule of *lookup*; return "created", "updated", or None for an unchanged rule.
 
     This is update_or_create() without its write of an unchanged rule, so that a second run changes nothing.
     """
     from netbox_interface_name_rules.models import InterfaceNameRule
 
     rule, created = InterfaceNameRule.objects.select_for_update().get_or_create(**lookup, defaults=defaults)
-    if not created and (changed := [name for name, value in defaults.items() if getattr(rule, name) != value]):
+    if created:
+        return "created"
+    if changed := [name for name, value in defaults.items() if getattr(rule, name) != value]:
         for name in changed:
             setattr(rule, name, defaults[name])
         rule.save(update_fields=[*changed, "last_updated"])
-    return created
+        return "updated"
+    return None
 
 
 def load_rules():
@@ -421,8 +457,8 @@ def load_rules():
                 "description": row.get("description", ""),
                 **extra,
             }
-            if save_rule(lookup, defaults):
-                ok(f"{label} → {row['name_template']!r}")
+            if status := save_rule(lookup, defaults):
+                ok(f"{label} {status} → {row['name_template']!r}")
     return skipped
 
 

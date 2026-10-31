@@ -5,7 +5,7 @@
 import importlib.util
 import io
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,6 +36,7 @@ _REGEX_ROW = """- module_type_pattern: "DEMO-.*"
   module_type_is_regex: true
   name_template: "{name_template}"
 """
+_VENDOR_ROW = "- module_type: VENDOR-MT\n  manufacturer: Demo Vendor\n  name_template: v{bay_position}\n"
 _CHANNELIZED_ROW = """- module_type_pattern: "DEMO-.*"
   module_type_is_regex: true
   name_template: "xe-0/0/{bay_position}:{channel}"
@@ -43,6 +44,36 @@ _CHANNELIZED_ROW = """- module_type_pattern: "DEMO-.*"
   breakout_mode: channelized
   channel_count: 4
 """
+
+
+@contextmanager
+def another_writer_creates(model, create, reads=1):
+    """Run *create* once, right after read number *reads* of *model*: the reader then holds a stale answer."""
+    real_fetch_all, real_exists = QuerySet._fetch_all, QuerySet.exists
+    done = []
+    seen = []
+
+    def after_the_read(queryset):
+        if queryset.model is model and not done:
+            seen.append(True)
+            if len(seen) == reads:
+                done.append(True)
+                create()
+
+    def fetch_all(queryset):
+        stale = queryset._result_cache is None
+        real_fetch_all(queryset)
+        if stale:
+            after_the_read(queryset)
+
+    def exists(queryset):
+        result = real_exists(queryset)
+        after_the_read(queryset)
+        return result
+
+    with patch.object(QuerySet, "_fetch_all", fetch_all), patch.object(QuerySet, "exists", exists):
+        yield
+    assert done, f"nothing read {model.__name__}"
 
 
 def run(function, *args):
@@ -117,26 +148,59 @@ class ContribRowsTest(LoaderTestCase):
         self.assertEqual(rule.module_type.manufacturer.name, "Demo Vendor")
 
     def test_a_row_manufacturer_that_another_writer_creates_during_the_load_is_reused(self):
-        self.use_contrib(
-            {"rules.yaml": "- module_type: VENDOR-MT\n  manufacturer: Demo Vendor\n  name_template: v{bay_position}\n"}
-        )
-        real_exists = QuerySet.exists
-        raced = []
+        self.use_contrib({"rules.yaml": _VENDOR_ROW})
 
-        def exists_after_a_concurrent_create(queryset):
-            # Another writer creates the manufacturer after the name lookup of the loader found none.
-            if queryset.model is Manufacturer and not raced:
-                raced.append(True)
-                Manufacturer.objects.create(name="Demo Vendor", slug="demo-vendor")
-            return real_exists(queryset)
-
-        with patch.object(QuerySet, "exists", exists_after_a_concurrent_create):
+        with another_writer_creates(
+            Manufacturer, lambda: Manufacturer.objects.create(name="Demo Vendor", slug="demo-vendor")
+        ):
             skipped, output = self.load_rules()
 
         self.assertEqual(skipped, 0, output)
         self.assertEqual(
             list(Manufacturer.objects.filter(name="Demo Vendor").values_list("slug", flat=True)), ["demo-vendor"]
         )
+
+    def test_a_row_manufacturer_slug_that_another_writer_takes_during_the_load_gets_the_next_slug(self):
+        self.use_contrib({"rules.yaml": _VENDOR_ROW})
+
+        # The second read is the slug check: the other writer takes the slug after it.
+        with another_writer_creates(
+            Manufacturer, lambda: Manufacturer.objects.create(name="Demo-Vendor", slug="demo-vendor"), reads=2
+        ):
+            skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertEqual(Manufacturer.objects.get(name="Demo Vendor").slug, "demo-vendor-2")
+
+    def test_a_type_that_another_writer_creates_during_the_load_is_reused(self):
+        self.use_contrib({"rules.yaml": _VENDOR_ROW.replace("  manufacturer: Demo Vendor\n", "")})
+
+        with another_writer_creates(
+            ModuleType, lambda: ModuleType.objects.create(manufacturer=self.manufacturer, model="VENDOR-MT")
+        ):
+            skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertEqual(ModuleType.objects.filter(model="VENDOR-MT").count(), 1)
+
+    def test_a_row_manufacturer_without_a_module_type_is_not_created(self):
+        self.use_contrib(
+            {"rules.yaml": _REGEX_ROW.format(name_template="x{bay_position}") + "  manufacturer: Unused Vendor\n"}
+        )
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        self.assertFalse(Manufacturer.objects.filter(name="Unused Vendor").exists())
+
+    def test_a_changed_rule_is_reported(self):
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
+        self.load_rules()
+        self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="b{bay_position}")})
+
+        _, output = self.load_rules()
+
+        self.assertIn("DEMO-.* updated", output)
 
     def test_an_update_keeps_a_field_that_changed_after_the_loader_read_the_rule(self):
         self.use_contrib({"rules.yaml": _REGEX_ROW.format(name_template="a{bay_position}")})
@@ -292,6 +356,54 @@ class ModuleInstallTest(LoaderTestCase):
         self.assertIn(f"Installed 1 {load_demo_data.APPLY_DEMO_MODULE_TYPE}", output)
         _, output = run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
         self.assertNotIn("Installed", output)
+
+    def test_a_module_that_another_writer_installs_in_a_100_bay_device_bay_is_kept(self):
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+        Module.objects.get(device__name="test-100ports", module_bay__name="bay1").delete()
+        bay = ModuleBay.objects.get(device__name="test-100ports", name="bay1")
+        module_type = ModuleType.objects.get(model="TEST-1PORT")
+
+        with another_writer_creates(
+            ModuleBay, lambda: Module.objects.create(device=bay.device, module_bay=bay, module_type=module_type)
+        ):
+            run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(Module.objects.filter(device__name="test-100ports").count(), 100)
+
+    def test_an_interface_that_another_writer_adds_to_a_100_bay_module_is_kept(self):
+        run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+        module = Module.objects.get(device__name="test-100ports", module_bay__name="bay1")
+        module.interfaces.all().delete()
+        template = InterfaceTemplate.objects.get(module_type__model="TEST-1PORT")
+
+        with another_writer_creates(Module, lambda: template.instantiate(device=module.device, module=module).save()):
+            run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(list(module.interfaces.values_list("name", flat=True)), ["1"])
+
+    def test_the_apply_demo_module_type_that_another_writer_creates_is_reused(self):
+        with another_writer_creates(
+            ModuleType,
+            lambda: ModuleType.objects.create(
+                manufacturer=self.manufacturer, model=load_demo_data.APPLY_DEMO_MODULE_TYPE
+            ),
+        ):
+            run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(ModuleType.objects.filter(model=load_demo_data.APPLY_DEMO_MODULE_TYPE).count(), 1)
+
+    def test_an_apply_demo_module_that_another_writer_installs_is_kept(self):
+        run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+        Module.objects.get(device__name=load_demo_data.APPLY_DEMO_DEVICE, module_bay__position="0").delete()
+        bay = ModuleBay.objects.get(device__name=load_demo_data.APPLY_DEMO_DEVICE, position="0")
+        module_type = ModuleType.objects.get(model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
+
+        with another_writer_creates(
+            Module, lambda: Module.objects.create(device=bay.device, module_bay=bay, module_type=module_type)
+        ):
+            run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+
+        self.assertEqual(Module.objects.filter(device__name=load_demo_data.APPLY_DEMO_DEVICE).count(), 4)
 
     def test_a_numeric_device_type_in_yaml_names_a_device_type_by_its_text(self):
         self.use_contrib({"numeric.yaml": "- device_type: 7609\n  name_template: x\n"})
