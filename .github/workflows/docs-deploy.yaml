@@ -88,7 +88,9 @@ jobs:
           fi
           [ "$status" -eq 0 ] || exit "$status"
           git fetch --no-tags --depth=1 origin gh-pages
-          if git cat-file -e FETCH_HEAD:coverage; then
+          # ls-tree prints nothing for a missing path; a read error stops the deploy before the forced push.
+          listing=$(git ls-tree --name-only FETCH_HEAD -- coverage) || exit 1
+          if [ -n "$listing" ]; then
             git archive FETCH_HEAD coverage | tar -x -C site
           else
             echo "gh-pages holds no coverage report"

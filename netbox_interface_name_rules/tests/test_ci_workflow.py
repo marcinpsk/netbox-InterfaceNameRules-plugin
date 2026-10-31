@@ -240,8 +240,17 @@ if [ "$GH_PAGES" = yes ]; then
   rm -rf coverage
 elif [ "$GH_PAGES" = nested ]; then
   git push -q origin main:refs/heads/ci/gh-pages
+elif [ "$GH_PAGES" = bare ]; then
+  git push -q origin main:refs/heads/gh-pages
 fi
 mkdir site
+"""
+
+
+# Each git command that reads a tree object fails; the other commands run the real git.
+_UNREADABLE_TREE_GIT = """#!/usr/bin/env bash
+case "$1" in cat-file|ls-tree|archive) echo "fatal: unable to read tree" >&2; exit 128;; esac
+exec "{git}" "$@"
 """
 
 
@@ -261,7 +270,7 @@ def _bash(script, cwd, env=None):
 class DocsDeployCoverageTest(unittest.TestCase):
     """The deploy keeps the coverage report of gh-pages, and also deploys when gh-pages does not exist."""
 
-    def _deploy_step(self, with_gh_pages, reachable=True, nested=False):
+    def _deploy_step(self, with_gh_pages, reachable=True, nested=False, bare=False, readable=True):
         workflow = dict(_workflows())["docs-deploy.yaml"]
         [script] = [
             s["run"]
@@ -269,12 +278,19 @@ class DocsDeployCoverageTest(unittest.TestCase):
             if s.get("name") == "Keep the coverage report of gh-pages"
         ]
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "nested" if nested else "no"}
+        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "nested" if nested else "bare" if bare else "no"}
         setup = _bash(_ORIGIN_SETUP, root, env)
         self.assertEqual(setup.returncode, 0, setup.stderr)
         if not reachable:
             (root / "origin.git").rename(root / "moved.git")
-        result = _bash(script, root / "work")
+        step_env = None
+        if not readable:
+            # A git that cannot read the tree of the fetched gh-pages, as with a damaged object.
+            (root / "bin").mkdir()
+            (root / "bin" / "git").write_text(_UNREADABLE_TREE_GIT.format(git=shutil.which("git")), encoding="utf-8")
+            (root / "bin" / "git").chmod(0o755)
+            step_env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}"}
+        result = _bash(script, root / "work", step_env)
         return result, root / "work" / "site"
 
     def test_the_deploy_copies_the_coverage_report_of_gh_pages_into_the_site(self):
@@ -295,6 +311,20 @@ class DocsDeployCoverageTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((site / "coverage").exists())
 
+    def test_the_deploy_continues_when_gh_pages_holds_no_coverage_report(self):
+        result, site = self._deploy_step(with_gh_pages=False, bare=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gh-pages holds no coverage report", result.stdout)
+        self.assertFalse((site / "coverage").exists())
+
+    def test_the_deploy_stops_when_it_cannot_read_the_tree_of_gh_pages(self):
+        result, site = self._deploy_step(with_gh_pages=True, readable=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("gh-pages holds no coverage report", result.stdout)
+        self.assertFalse((site / "coverage").exists())
+
     def test_the_deploy_continues_when_only_a_branch_ending_in_gh_pages_exists(self):
         result, site = self._deploy_step(with_gh_pages=False, nested=True)
 
@@ -302,13 +332,15 @@ class DocsDeployCoverageTest(unittest.TestCase):
         self.assertFalse((site / "coverage").exists())
 
 
-# Fakes: curl writes a NetBox requirements.txt only with HTTPS-only redirects; uv fails when $FAKE_UV is "fail".
+# Fakes: curl writes a NetBox requirements.txt only with HTTPS-only redirects; uv needs --generate-hashes, and
+# fails when $FAKE_UV is "fail".
 _FAKE_CURL = """#!/usr/bin/env bash
 case " $* " in *" --proto =https "*) ;; *) echo "curl may follow a redirect to plain HTTP" >&2; exit 1;; esac
 while [ $# -gt 0 ]; do if [ "$1" = --output ]; then out=$2; shift; fi; shift; done
 printf 'Django==6.0\\npsycopg[c,pool]==3.3.5\\n' > "$out"
 """
 _FAKE_UV = """#!/usr/bin/env bash
+case " $* " in *" --generate-hashes "*) ;; *) echo "uv must write the hash of each requirement" >&2; exit 1;; esac
 [ "$FAKE_UV" = fail ] && exit 1
 echo "django==6.0"
 """
