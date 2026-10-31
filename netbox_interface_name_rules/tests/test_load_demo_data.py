@@ -23,6 +23,7 @@ from dcim.models import (
 )
 from django.db.models import QuerySet
 from django.test import TestCase, TransactionTestCase
+from django.utils.text import slugify
 
 from netbox_interface_name_rules.choices import BreakoutModeChoices
 from netbox_interface_name_rules.models import InterfaceNameRule
@@ -150,8 +151,9 @@ class ContribRowsTest(LoaderTestCase):
     def test_a_row_manufacturer_that_another_writer_creates_during_the_load_is_reused(self):
         self.use_contrib({"rules.yaml": _VENDOR_ROW})
 
+        # The second read is the name lookup of create_once(): the other writer commits right after it.
         with another_writer_creates(
-            Manufacturer, lambda: Manufacturer.objects.create(name="Demo Vendor", slug="demo-vendor")
+            Manufacturer, lambda: Manufacturer.objects.create(name="Demo Vendor", slug="demo-vendor"), reads=2
         ):
             skipped, output = self.load_rules()
 
@@ -171,6 +173,20 @@ class ContribRowsTest(LoaderTestCase):
 
         self.assertEqual(skipped, 0, output)
         self.assertEqual(Manufacturer.objects.get(name="Demo Vendor").slug, "demo-vendor-2")
+
+    def test_a_row_manufacturer_with_a_long_name_and_a_taken_slug_gets_a_slug_that_fits(self):
+        slug_length = Manufacturer._meta.get_field("slug").max_length
+        # The longest name: its slug fills the slug field, so a "-2" suffix overflows it.
+        name = "Vendor " + "x" * (Manufacturer._meta.get_field("name").max_length - len("Vendor "))
+        Manufacturer.objects.create(name="Other", slug=slugify(name))
+        self.use_contrib({"rules.yaml": _VENDOR_ROW.replace("Demo Vendor", name)})
+
+        skipped, output = self.load_rules()
+
+        self.assertEqual(skipped, 0, output)
+        slug = Manufacturer.objects.get(name=name).slug
+        self.assertLessEqual(len(slug), slug_length)
+        self.assertTrue(slug.endswith("-2"), slug)
 
     def test_a_type_that_another_writer_creates_during_the_load_is_reused(self):
         self.use_contrib({"rules.yaml": _VENDOR_ROW.replace("  manufacturer: Demo Vendor\n", "")})
@@ -363,8 +379,9 @@ class ModuleInstallTest(LoaderTestCase):
         bay = ModuleBay.objects.get(device__name="test-100ports", name="bay1")
         module_type = ModuleType.objects.get(model="TEST-1PORT")
 
+        # The first Module read is the interface repair; the second is the lookup of bay1 before its insert.
         with another_writer_creates(
-            ModuleBay, lambda: Module.objects.create(device=bay.device, module_bay=bay, module_type=module_type)
+            Module, lambda: Module.objects.create(device=bay.device, module_bay=bay, module_type=module_type), reads=2
         ):
             run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
 
@@ -376,7 +393,9 @@ class ModuleInstallTest(LoaderTestCase):
         module.interfaces.all().delete()
         template = InterfaceTemplate.objects.get(module_type__model="TEST-1PORT")
 
-        with another_writer_creates(Module, lambda: template.instantiate(device=module.device, module=module).save()):
+        with another_writer_creates(
+            Interface, lambda: template.instantiate(device=module.device, module=module).save()
+        ):
             run(load_demo_data.load_100_bay_device, self.site, self.manufacturer, self.role)
 
         self.assertEqual(list(module.interfaces.values_list("name", flat=True)), ["1"])
@@ -391,6 +410,16 @@ class ModuleInstallTest(LoaderTestCase):
             run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
 
         self.assertEqual(ModuleType.objects.filter(model=load_demo_data.APPLY_DEMO_MODULE_TYPE).count(), 1)
+
+    def test_the_apply_demo_module_type_of_another_manufacturer_stays_as_it_is(self):
+        other = Manufacturer.objects.create(name="Other Vendor", slug="other-vendor")
+        foreign = ModuleType.objects.create(manufacturer=other, model=load_demo_data.APPLY_DEMO_MODULE_TYPE)
+
+        run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)
+
+        self.assertFalse(InterfaceTemplate.objects.filter(module_type=foreign).exists())
+        modules = Module.objects.filter(device__name=load_demo_data.APPLY_DEMO_DEVICE)
+        self.assertEqual(set(modules.values_list("module_type__manufacturer", flat=True)), {self.manufacturer.pk})
 
     def test_an_apply_demo_module_that_another_writer_installs_is_kept(self):
         run(load_demo_data.load_apply_demo_device, self.site, self.manufacturer, self.role)

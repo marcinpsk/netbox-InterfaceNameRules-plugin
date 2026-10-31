@@ -248,7 +248,7 @@ def load_apply_demo_device(site, manufacturer, role):
             ModuleBayTemplate.objects.create(device_type=acx, name=f"Transceiver 0/0/{i}", position=str(i))
         ok("Created DeviceType ACX7024 with 24 transceiver bays")
     module_type, _ = create_once(
-        ModuleType.objects.filter(model=APPLY_DEMO_MODULE_TYPE),
+        ModuleType.objects.filter(manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE),
         partial(ModuleType.objects.create, manufacturer=manufacturer, model=APPLY_DEMO_MODULE_TYPE),
     )
     # NetBox replaces {module} with the bay position.
@@ -289,13 +289,16 @@ def contrib_manufacturer(name):
     from django.db import IntegrityError
     from django.utils.text import slugify
 
-    base = slugify(name)
+    length = Manufacturer._meta.get_field("slug").max_length
+    base = slugify(name)[:length]
     while True:
         # Another manufacturer can have the slug of this name, for example "Demo-Vendor" for "Demo Vendor".
         slug, number = base, 1
         while Manufacturer.objects.filter(slug=slug).exists():
             number += 1
-            slug = f"{base}-{number}"
+            # The suffix replaces the end of a slug that fills the field.
+            suffix = f"-{number}"
+            slug = f"{base[: length - len(suffix)]}{suffix}"
         try:
             return create_once(
                 Manufacturer.objects.filter(name=name), partial(Manufacturer.objects.create, name=name, slug=slug)
