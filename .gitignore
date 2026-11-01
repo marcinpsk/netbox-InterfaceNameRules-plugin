@@ -66,3 +66,8 @@ docs/superpowers/
 
 # Playwright MCP output (local only)
 .playwright-mcp/
+
+# Documentation media: the docs build captures them (docs_media/)
+docs/assets/screenshots/
+docs/assets/recordings/
+test-results/

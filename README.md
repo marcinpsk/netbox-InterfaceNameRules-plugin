@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![CI](https://img.shields.io/github/actions/workflow/status/marcinpsk/netbox-InterfaceNameRules-plugin/test.yaml?branch=main&label=tests)](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/actions/workflows/test.yaml)
-[![Coverage](https://img.shields.io/endpoint?url=https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/coverage/badge.json)](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/coverage/)
+[![Coverage](https://codecov.io/gh/marcinpsk/netbox-InterfaceNameRules-plugin/branch/main/graph/badge.svg)](https://codecov.io/gh/marcinpsk/netbox-InterfaceNameRules-plugin)
 [![License](https://img.shields.io/github/license/marcinpsk/netbox-InterfaceNameRules-plugin)](LICENSE)
 [![Python](https://img.shields.io/pypi/pyversions/netbox-interface-name-rules)](https://pypi.org/project/netbox-interface-name-rules/)
 [![NetBox](https://img.shields.io/badge/NetBox-%E2%89%A54.3.0-blue)](https://github.com/netbox-community/netbox)
@@ -62,11 +62,13 @@ See the [full configuration guide](https://marcinpsk.github.io/netbox-InterfaceN
   <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/icon.svg" alt="NetBox Interface Name Rules" width="30"/>
 </p>
 
+![Apply Rules: open the preview of a rule, leave one interface out, apply, and see the renamed interfaces of the device](https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/recordings/apply-rules.gif)
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/01-rule-list.png" alt="Rule list" width="700"/>
+  <img src="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/screenshots/rule-list-light.png" alt="Rule list" width="700"/>
 </p>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/marcinpsk/netbox-InterfaceNameRules-plugin/main/docs/screenshots/11-apply-rule-preview.png" alt="Apply-rules preview" width="700"/>
+  <img src="https://marcinpsk.github.io/netbox-InterfaceNameRules-plugin/assets/screenshots/apply-preview-light.png" alt="Apply-rules preview" width="700"/>
 </p>
 
 ## Compatibility

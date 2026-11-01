@@ -24,6 +24,10 @@ theme:
     - content.code.copy
     - navigation.sections
 
+# Plays each recording when the reader scrolls to it.
+extra_javascript:
+  - assets/js/autoplay-videos.js
+
 markdown_extensions:
   - admonition
   - attr_list

@@ -17,6 +17,7 @@ path = [
     ".devcontainer/.env.example",
     ".github/copilot-instructions.md",
     ".github/dependabot.yml",
+    ".github/netbox-requirements.txt",
     ".github/workflows/codeql.yml",
     ".github/ISSUE_TEMPLATE/**",
     ".github/PULL_REQUEST_TEMPLATE/**",

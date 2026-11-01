@@ -25,6 +25,11 @@ automatically apply renaming rules based on configurable templates.
 - **Apply Rules**: batch rename existing interfaces with live preview and background job support
 - **netbox-branching**: renames run in the active branch, and a merge, revert or sync keeps the names that it replays (netbox-branching 1.2.x on NetBox 4.7). A channel that the plugin kept at its old name is the exception: see [Limits in a branch](configuration.md#limits-in-a-branch)
 
+## Rule list
+
+![The Interface Name Rules list with the priority, scope and name template of each rule](assets/screenshots/rule-list-light.png#only-light)
+![The Interface Name Rules list with the priority, scope and name template of each rule](assets/screenshots/rule-list-dark.png#only-dark)
+
 ## Supported Scenarios
 
 | Scenario | Name template | Example result |

@@ -52,7 +52,7 @@ MANUFACTURER_ID = 2  # Generic
 MODULE_TYPE_MODEL = "QSFP-100G-SR4"
 API_TIMEOUT = 10  # seconds for API calls during cleanup
 
-# Transceiver bay IDs (populated by load-sample-data.py)
+# Transceiver bay IDs (populated by scripts/load_demo_data.py)
 # bay_position_num is the numeric suffix of the bay name: "Transceiver 5" → 5
 BAYS = [
     (486, "Transceiver 0", "swp0"),  # bay_position_num=0
@@ -61,8 +61,8 @@ BAYS = [
 
 # Rule ID for toggle test — discovered dynamically at runtime (see toggle test block)
 
-# VC test constants (populated by load-sample-data.py)
-# WARNING: These IDs are hardcoded and depend on the order objects were created by load-sample-data.py.
+# VC test constants (populated by scripts/load_demo_data.py)
+# WARNING: These IDs are hardcoded and depend on the order objects were created by scripts/load_demo_data.py.
 # If tests fail with 404, verify the correct IDs via the API, e.g.:
 #   GET /api/dcim/devices/?name=vc-stack-1
 #   GET /api/dcim/virtual-chassis/?name=test-vc-stack

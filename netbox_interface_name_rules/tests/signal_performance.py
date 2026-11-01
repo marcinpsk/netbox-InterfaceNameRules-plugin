@@ -525,6 +525,7 @@ def _git_revision(path: Path) -> str | None:
         check=False,
         capture_output=True,
         text=True,
+        timeout=60,
     )
     return result.stdout.strip() if result.returncode == 0 else None
 

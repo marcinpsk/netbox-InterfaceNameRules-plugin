@@ -55,7 +55,8 @@ exact FK rule always wins.
 The rule detail page shows the auto-computed **priority score** and a
 human-readable label (e.g. `regex(13) / device`):
 
-![Rule detail for Juniper ACX7024 QSFP+ 4×10G breakout rule, showing priority score 2013](screenshots/04-rule-detail-juniper-xe-breakout.png)
+![Rule detail for the Juniper ACX7024 QSFP+ 4×10G breakout rule, with its priority score](assets/screenshots/rule-detail-juniper-breakout-light.png#only-light)
+![Rule detail for the Juniper ACX7024 QSFP+ 4×10G breakout rule, with its priority score](assets/screenshots/rule-detail-juniper-breakout-dark.png#only-dark)
 
 ---
 
@@ -70,11 +71,16 @@ module install.
 
 Fill in the Build Rule tester to preview results before saving:
 
-![Build Rule tester showing QSFP-4X10G-.* → xe-0/0/{bay_position}:{channel} with 4 channels producing xe-0/0/4:0 through xe-0/0/4:3](screenshots/07-build-rule-juniper-xe-breakout-result.png)
+![Build Rule tester showing QSFP-4X10G-.* → xe-0/0/{bay_position}:{channel} with 4 channels producing xe-0/0/4:0 through xe-0/0/4:3](assets/screenshots/build-rule-juniper-breakout-light.png#only-light)
+![Build Rule tester showing QSFP-4X10G-.* → xe-0/0/{bay_position}:{channel} with 4 channels producing xe-0/0/4:0 through xe-0/0/4:3](assets/screenshots/build-rule-juniper-breakout-dark.png#only-dark)
 
 The **Manual Variable Preview** table shows each channel's computed name
 (`xe-0/0/4:0`, `xe-0/0/4:1`, `xe-0/0/4:2`, `xe-0/0/4:3`) before you
 save the rule.
+
+<video controls muted loop playsinline preload="none" width="1440" height="900" poster="../assets/recordings/build-rule.png" aria-label="Recording: fill in a breakout rule in Build Rule, click Check, and see the name of each channel">
+  <source src="../assets/recordings/build-rule.mp4" type="video/mp4">
+</video>
 
 ### YAML — common breakout rules
 
@@ -236,7 +242,8 @@ keeps its configuration, when the interface meets the conditions in
 
 ### Build Rule — SONiC QSFP-DD 4×100G breakout
 
-![Build Rule tester showing QSFP-DD-400G-.* → swp{bay_position_num}s{channel} with 4 channels at swp5s0..swp5s3](screenshots/10-build-rule-sonic-breakout-result.png)
+![Build Rule tester showing QSFP-DD-400G-.* → swp{bay_position_num}s{channel} with 4 channels at swp5s0..swp5s3](assets/screenshots/build-rule-sonic-breakout-light.png#only-light)
+![Build Rule tester showing QSFP-DD-400G-.* → swp{bay_position_num}s{channel} with 4 channels at swp5s0..swp5s3](assets/screenshots/build-rule-sonic-breakout-dark.png#only-dark)
 
 ---
 
@@ -253,7 +260,8 @@ files to avoid ambiguity.
 
 ### Rule detail — SONiC platform-scoped catch-all
 
-![Rule detail for SONiC catch-all rule, showing platform scope and priority score 1002](screenshots/04c-rule-detail-sonic-swp.png)
+![Rule detail for the SONiC catch-all rule, with its platform scope and priority score](assets/screenshots/rule-detail-sonic-catch-all-light.png#only-light)
+![Rule detail for the SONiC catch-all rule, with its platform scope and priority score](assets/screenshots/rule-detail-sonic-catch-all-dark.png#only-dark)
 
 ---
 
@@ -275,7 +283,8 @@ determined by the host's naming scheme, not the transceiver type.
 
 ### Build Rule — Linux traditional naming (`eth{bay_position_num}`)
 
-![Build Rule tester showing SFP28-25G-.* → eth{bay_position_num} producing eth0](screenshots/09-build-rule-linux-eth-result.png)
+![Build Rule tester showing SFP28-25G-.* → eth{bay_position_num} producing eth0](assets/screenshots/build-rule-linux-eth-light.png#only-light)
+![Build Rule tester showing SFP28-25G-.* → eth{bay_position_num} producing eth0](assets/screenshots/build-rule-linux-eth-dark.png#only-dark)
 
 ### YAML (from `contrib/linux.yaml`)
 
@@ -332,11 +341,22 @@ is evaluated at rename time using a safe AST-based evaluator (no `eval()`).
 
 ## Apply Rules — batch rename
 
-The **Apply Rules** page shows all rules with a live **Applicable** indicator
-(✓ = at least one installed interface would be renamed). Click
-**Preview & Apply** to inspect affected interfaces before committing.
+The **Apply Rules** page lists all rules. **Check all rules** fills the
+**Can rename** column (Yes = at least one installed interface would be renamed).
+Click **Preview & Apply** to inspect affected interfaces before committing.
 
-![Apply Rules list showing regex and exact rules with Applicable column](screenshots/12-apply-rules-updated.png)
+![Apply Rules list filtered to the ACX7024 rules, with the Can rename column after Check all rules](assets/screenshots/apply-rules-list-light.png#only-light)
+![Apply Rules list filtered to the ACX7024 rules, with the Can rename column after Check all rules](assets/screenshots/apply-rules-list-dark.png#only-dark)
+
+The preview lists each interface that the rule renames, with its current and its
+new name. Clear the check box of an interface to leave it out of **Apply Now**.
+
+![Apply Rule preview of the QSFP-100G-.* rule on ACX7024: four interfaces and their new names et-0/0/0 to et-0/0/3](assets/screenshots/apply-preview-light.png#only-light)
+![Apply Rule preview of the QSFP-100G-.* rule on ACX7024: four interfaces and their new names et-0/0/0 to et-0/0/3](assets/screenshots/apply-preview-dark.png#only-dark)
+
+<video controls muted loop playsinline preload="none" width="1440" height="900" poster="../assets/recordings/apply-rules.png" aria-label="Recording: filter the Apply Rules list, open Preview & Apply, leave one interface out, apply, and see the renamed interfaces of the device">
+  <source src="../assets/recordings/apply-rules.mp4" type="video/mp4">
+</video>
 
 ---
 
@@ -344,11 +364,12 @@ The **Apply Rules** page shows all rules with a live **Applicable** indicator
 
 When multiple devices form a **Virtual Chassis** (stack), each member's interfaces need to reflect its position in the chassis. The plugin reapplies the device-interface rules after a device joins or changes position in a virtual chassis, renaming all native device-type interfaces automatically. A device that leaves its chassis renames nothing; a journal entry on the device lists the interfaces whose rules use `{vc_position}`.
 
-Enable **Applies to Device Interfaces** on the rule. The **Module Type Pattern** field acts as a **regex filter on interface names** (not a module type selector) — the REGEX column shows a <img src="screenshots/vc-filter-icon.png" alt="filter" width="16" style="vertical-align:middle"> filter icon instead of a boolean.
+Enable **Applies to Device Interfaces** on the rule. The **Module Type Pattern** field acts as a **regex filter on interface names** (not a module type selector) — the REGEX column shows a filter icon instead of a boolean.
 
 ### Device-level rules list (filtered to VC rules)
 
-![Rules list showing 5 device-level VC rules — filter icon in REGEX column, orange priority badge, green Device Ifaces checkmark](screenshots/vc-rules-list.png)
+![Rules list showing 5 device-level VC rules — filter icon in REGEX column, orange priority badge, green Device Ifaces checkmark](assets/screenshots/vc-rules-list-light.png#only-light)
+![Rules list showing 5 device-level VC rules — filter icon in REGEX column, orange priority badge, green Device Ifaces checkmark](assets/screenshots/vc-rules-list-dark.png#only-dark)
 
 ---
 
@@ -377,7 +398,8 @@ Juniper VCs use **0-based** member IDs. Interfaces follow the `{prefix}-{member}
 
 **jnp-vc-2** at VC position 1 — interfaces renamed `ge-0/0/N` → `ge-1/0/N`, `xe-0/1/N` → `xe-1/1/N`:
 
-![jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming](screenshots/vc-juniper-interfaces.png)
+![jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming](assets/screenshots/vc-juniper-interfaces-light.png#only-light)
+![jnp-vc-2 interfaces page showing ge-1/0/0 through ge-1/0/3 and xe-1/1/0, xe-1/1/1 after VC position 1 renaming](assets/screenshots/vc-juniper-interfaces-dark.png#only-dark)
 
 ---
 
@@ -394,7 +416,15 @@ Cisco stacks use **1-based** member IDs. Templates create `GigabitEthernet1/0/N`
 
 **cisco-sw-2** at VC position 2 — interfaces renamed `GigabitEthernet1/0/N` → `GigabitEthernet2/0/N`:
 
-![cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4](screenshots/vc-cisco-interfaces.png)
+![cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4](assets/screenshots/vc-cisco-interfaces-light.png#only-light)
+![cisco-sw-2 interfaces page showing GigabitEthernet2/0/1 through GigabitEthernet2/0/4](assets/screenshots/vc-cisco-interfaces-dark.png#only-dark)
+
+When a device joins the stack, the plugin renames its interfaces at once. In this
+recording, a third CISCO-C9K joins cisco-stack at position 3:
+
+<video controls muted loop playsinline preload="none" width="1440" height="900" poster="../assets/recordings/vc-rename.png" aria-label="Recording: add a CISCO-C9K to cisco-stack at position 3, and see its GigabitEthernet1/0/N interfaces renamed to GigabitEthernet3/0/N">
+  <source src="../assets/recordings/vc-rename.mp4" type="video/mp4">
+</video>
 
 ---
 
@@ -411,7 +441,8 @@ Arista modular/multi-chassis naming uses `Ethernet{slot}/{port}`. The device typ
 
 **arista-sw-2** at VC position 2 — interfaces renamed `Ethernet1/N` → `Ethernet2/N`:
 
-![arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4](screenshots/vc-arista-interfaces.png)
+![arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4](assets/screenshots/vc-arista-interfaces-light.png#only-light)
+![arista-sw-2 interfaces page showing Ethernet2/1 through Ethernet2/4](assets/screenshots/vc-arista-interfaces-dark.png#only-dark)
 
 !!! tip "Re-apply after initial load"
     If devices were added to the VC *before* rules were loaded (e.g. during bulk provisioning), the signal fires before the rules exist. Force a re-apply with:

@@ -2,6 +2,11 @@
 # Copyright (C) 2025 Marcin Zieba <marcinpsk@gmail.com>
 """Tests for the coverage wiring of the CI test workflow."""
 
+import os
+import re
+import shutil
+import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -85,3 +90,244 @@ class CoverageCombineWorkflowTest(unittest.TestCase):
         self.assertIn("--cov-fail-under=0", pyproject["tool"]["pytest"]["ini_options"]["addopts"].split())
         self.assertIn("coverage report\n", combine)
         self.assertNotIn("--fail-under", combine)
+
+
+def _workflows():
+    for path in sorted((_PROJECT_ROOT / ".github" / "workflows").iterdir()):
+        if path.suffix in {".yaml", ".yml"}:
+            yield path.name, yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _path_filter_matches(patterns, path):
+    """Match *path* as a GitHub path filter does: the last pattern that matches decides, and ! excludes."""
+
+    def regex(pattern):
+        parts = re.split(r"(\*\*/?|\*)", pattern)
+        tokens = {"**": ".*", "**/": "(?:.*/)?", "*": "[^/]*"}
+        return "".join(tokens.get(part, re.escape(part)) for part in parts)
+
+    selected = False
+    for pattern in patterns:
+        excluded = pattern.startswith("!")
+        if re.fullmatch(regex(pattern.removeprefix("!")), path):
+            selected = not excluded
+    return selected
+
+
+class DocsWorkflowTest(unittest.TestCase):
+    """The docs build sees each change that the captured media show, and no gh-pages publish is dropped."""
+
+    def test_no_waiting_pages_deployment_is_cancelled(self):
+        deployers = {
+            f"{name}:{job_name}": job.get("concurrency")
+            for name, workflow in _workflows()
+            for job_name, job in workflow["jobs"].items()
+            if "steps" in job and _steps_using(job, "actions/deploy-pages")
+        }
+
+        # The default queue keeps one waiting job, so a new one cancels it.
+        self.assertEqual(
+            deployers, {"docs-deploy.yaml:deploy": {"group": "pages", "cancel-in-progress": False, "queue": "max"}}
+        )
+
+    def test_a_release_deploys_the_pages_artifact_of_its_tag(self):
+        workflow = dict(_workflows())["docs-deploy.yaml"]
+        build = workflow["jobs"]["build"]
+        deploy = workflow["jobs"]["deploy"]
+
+        self.assertEqual(build["with"], {"ref": "refs/tags/${{ inputs.tag }}", "upload-pages": True})
+        self.assertEqual(deploy["needs"], "build")
+        self.assertEqual(deploy["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
+        self.assertEqual(deploy["environment"]["name"], "github-pages")
+        self.assertEqual(len(_steps_using(deploy, "actions/deploy-pages")), 1)
+
+    def test_the_release_grants_the_deploy_the_pages_permissions(self):
+        docs = dict(_workflows())["release.yaml"]["jobs"]["docs"]
+
+        self.assertEqual(docs["uses"], "./.github/workflows/docs-deploy.yaml")
+        self.assertEqual(docs["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
+
+    def test_the_build_uploads_the_pages_artifact_only_for_a_deploy(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        steps = workflow["jobs"]["build"]["steps"]
+        [pages] = _steps_using({"steps": steps}, "actions/upload-pages-artifact")
+        [site] = [
+            s for s in _steps_using({"steps": steps}, "actions/upload-artifact") if s["with"]["name"] == "docs-site"
+        ]
+
+        self.assertEqual(workflow["on"]["workflow_call"]["inputs"]["upload-pages"]["default"], False)
+        self.assertEqual(pages["if"], "${{ inputs.upload-pages }}")
+        self.assertEqual(site["if"], "${{ !inputs.upload-pages }}")
+        self.assertEqual(pages["with"]["path"], "plugin/site/")
+
+    def test_no_workflow_writes_the_gh_pages_branch(self):
+        for name, workflow in _workflows():
+            with self.subTest(workflow=name):
+                self.assertNotIn("gh-pages", yaml.safe_dump(workflow))
+
+    def test_a_pull_request_that_changes_a_captured_view_builds_the_docs(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        patterns = workflow["on"]["pull_request"]["paths"]
+
+        for path in (
+            "netbox_interface_name_rules/forms.py",
+            "netbox_interface_name_rules/tables.py",
+            "netbox_interface_name_rules/views.py",
+            "netbox_interface_name_rules/models.py",
+            "netbox_interface_name_rules/engine.py",
+            "netbox_interface_name_rules/family/plans.py",
+            "netbox_interface_name_rules/templates/netbox_interface_name_rules/rule_apply.html",
+            "docs_media/test_recordings.py",
+            "docs/examples.md",
+            "contrib/juniper.yaml",
+            "scripts/load_demo_data.py",
+            "mkdocs.yml",
+            "README.md",
+            "uv.lock",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(_path_filter_matches(patterns, path))
+
+    def test_a_pull_request_that_changes_only_the_plugin_tests_skips_the_docs_build(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        patterns = workflow["on"]["pull_request"]["paths"]
+
+        for path in (
+            "netbox_interface_name_rules/tests/test_views.py",
+            "netbox_interface_name_rules/tests/query_counts.json",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(_path_filter_matches(patterns, path))
+
+
+def _run_commands(script):
+    """Return each command of a run script, with its backslash continuations joined."""
+    return [line.strip() for line in script.replace("\\\n", " ").splitlines() if line.strip()]
+
+
+class WorkflowSourceBuildTest(unittest.TestCase):
+    """No workflow step lets uv build a package from source, so no setup script runs."""
+
+    def test_every_uv_run_and_uv_sync_refuses_a_source_build(self):
+        for name, workflow in _workflows():
+            for job_name, job in workflow["jobs"].items():
+                for step in job.get("steps", []):
+                    for command in _run_commands(step.get("run", "")):
+                        if re.search(r"\buv (?:run|sync)\b", command):
+                            with self.subTest(workflow=name, job=job_name, command=command):
+                                self.assertIn("--no-build", command)
+
+
+# Package managers run code that the lock pins, but that this repository did not review.
+_DEPENDENCY_CODE = re.compile(r"\b(?:uv (?:run|sync|pip)|pip install)\b")
+# semantic-release is the dependency that pushes the release, so it needs the token.
+_WRITE_JOBS_WITH_DEPENDENCY_CODE = {"release.yaml:semantic-release"}
+
+
+class WorkflowWriteTokenTest(unittest.TestCase):
+    """A job that can write to the repository runs no dependency code, so a bad dependency cannot use the token."""
+
+    def test_only_the_allowed_jobs_run_dependency_code_with_a_write_scope(self):
+        found = set()
+        for name, workflow in _workflows():
+            for job_name, job in workflow["jobs"].items():
+                permissions = job.get("permissions", workflow.get("permissions", "write-all"))
+                writes = permissions == "write-all" or "write" in dict(permissions).values()
+                commands = [c for step in job.get("steps", []) for c in _run_commands(step.get("run", ""))]
+                if writes and any(_DEPENDENCY_CODE.search(command) for command in commands):
+                    found.add(f"{name}:{job_name}")
+
+        self.assertEqual(found, _WRITE_JOBS_WITH_DEPENDENCY_CODE)
+
+
+_NETBOX_LOCK = _PROJECT_ROOT / ".github" / "netbox-requirements.txt"
+
+
+class DocsNetBoxLockTest(unittest.TestCase):
+    """The docs build installs NetBox from hash-pinned wheels locked for the NetBox release and Python it uses."""
+
+    def setUp(self):
+        self.build = dict(_workflows())["docs-build.yaml"]["jobs"]["build"]["steps"]
+
+    def test_the_lock_names_the_netbox_release_and_the_python_of_the_docs_build(self):
+        [ref] = [
+            s["with"]["ref"] for s in self.build if s.get("with", {}).get("repository") == "netbox-community/netbox"
+        ]
+        [python] = [s["with"]["python-version"] for s in self.build if "python-version" in s.get("with", {})]
+
+        header = _NETBOX_LOCK.read_text(encoding="utf-8").splitlines()[0]
+
+        self.assertEqual(header, f"# NetBox {ref} on Python {python}: generated by scripts/lock-netbox-requirements.sh")
+
+    def test_netbox_installs_from_the_lock_with_hashes_and_wheels(self):
+        [install] = [s["run"] for s in self.build if s.get("name") == "Install NetBox and plugin"]
+        [command] = [c for c in _run_commands(install) if c.startswith("uv pip install") and "requirements.txt" in c]
+
+        self.assertIn("-r .github/netbox-requirements.txt", command)
+        self.assertIn("--require-hashes", command)
+        self.assertIn("--only-binary=:all:", command)
+
+    def test_a_change_of_the_lock_builds_the_docs(self):
+        patterns = dict(_workflows())["docs-build.yaml"]["on"]["pull_request"]["paths"]
+
+        self.assertTrue(_path_filter_matches(patterns, ".github/netbox-requirements.txt"))
+
+
+def _bash(script, cwd, env=None):
+    """Run *script* as GitHub runs a step without a shell key: bash -e {0}."""
+    return subprocess.run(  # noqa: S603 - The script is a workflow step of this repository.
+        ["bash", "-e", "-c", script],  # noqa: S607 - Use bash from the test environment PATH.
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+# Fakes: curl needs HTTPS-only redirects, uv needs --generate-hashes and fails when $FAKE_UV is "fail".
+_FAKE_CURL = """#!/usr/bin/env bash
+case " $* " in *" --proto =https "*) ;; *) echo "curl may follow a redirect to plain HTTP" >&2; exit 1;; esac
+while [ $# -gt 0 ]; do if [ "$1" = --output ]; then out=$2; shift; fi; shift; done
+printf 'Django==6.0\\npsycopg[c,pool]==3.3.5\\n' > "$out"
+"""
+_FAKE_UV = """#!/usr/bin/env bash
+case " $* " in *" --generate-hashes "*) ;; *) echo "uv must write the hash of each requirement" >&2; exit 1;; esac
+[ "$FAKE_UV" = fail ] && exit 1
+echo "django==6.0"
+"""
+
+
+@unittest.skipUnless(shutil.which("bash"), "bash is required")
+class LockNetBoxRequirementsScriptTest(unittest.TestCase):
+    """scripts/lock-netbox-requirements.sh replaces the lock only with a complete compile."""
+
+    def _lock(self, uv):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (root / "scripts").mkdir()
+        script = root / "scripts" / "lock-netbox-requirements.sh"
+        script.write_bytes((_PROJECT_ROOT / "scripts" / "lock-netbox-requirements.sh").read_bytes())
+        (root / ".github").mkdir()
+        (root / ".github" / "netbox-requirements.txt").write_text("old\n", encoding="utf-8")
+        (root / "bin").mkdir()
+        for name, body in (("curl", _FAKE_CURL), ("uv", _FAKE_UV)):
+            (root / "bin" / name).write_text(body, encoding="utf-8")
+            (root / "bin" / name).chmod(0o755)
+        env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "FAKE_UV": uv}
+        result = _bash(f'bash "{script}" v9.9.9 3.14', root, env)
+        return result, (root / ".github" / "netbox-requirements.txt").read_text(encoding="utf-8")
+
+    def test_a_compile_writes_the_header_and_the_locked_requirements(self):
+        result, lock = self._lock(uv="ok")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            lock, "# NetBox v9.9.9 on Python 3.14: generated by scripts/lock-netbox-requirements.sh\ndjango==6.0\n"
+        )
+
+    def test_a_failed_compile_keeps_the_lock(self):
+        result, lock = self._lock(uv="fail")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(lock, "old\n")
