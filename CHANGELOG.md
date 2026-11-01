@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- version list -->
 
+## v1.10.3 (2026-11-01)
+
+### Bug Fixes
+
+- **demo**: Keep the apply demo module type and long manufacturer slugs in bounds
+  ([`74a9d1d`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/74a9d1df1d01fc52a14807a81542c647dda0b2ec))
+
+- **demo**: Recover each demo insert from a concurrent writer
+  ([`b5da638`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/b5da63864bca3fd78780f8ca3851c48c1f4eaed1))
+
+### Continuous Integration
+
+- **docs**: Deploy the documentation site as a GitHub Pages artifact
+  ([`980c149`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/980c14919641b2a004794832226c1990d0e8c6b4))
+
+### Testing
+
+- Give each subprocess call a timeout
+  ([`22c01f1`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/22c01f1c61469cd387603f02848cfeabae41021b))
+
+- Refuse a subprocess waiting function that is not called directly
+  ([`f703ed4`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/f703ed45ee584c3d10c05c9f32d91dde70684df7))
+
+- Refuse timeout=None and imported subprocess names in the timeout guard
+  ([`baaa9a9`](https://github.com/marcinpsk/netbox-InterfaceNameRules-plugin/commit/baaa9a974b38965c2972f74db75833a410037eb3))
+
+
 ## v1.10.2 (2026-10-31)
 
 ### Bug Fixes
