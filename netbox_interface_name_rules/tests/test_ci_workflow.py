@@ -117,21 +117,53 @@ def _path_filter_matches(patterns, path):
 class DocsWorkflowTest(unittest.TestCase):
     """The docs build sees each change that the captured media show, and no gh-pages publish is dropped."""
 
-    def test_no_waiting_gh_pages_publish_is_cancelled(self):
-        publishers = {
-            f"{name}:{job_name}": job["concurrency"]
+    def test_no_waiting_pages_deployment_is_cancelled(self):
+        deployers = {
+            f"{name}:{job_name}": job.get("concurrency")
             for name, workflow in _workflows()
             for job_name, job in workflow["jobs"].items()
-            if job.get("concurrency", {}).get("group") == "publish-gh-pages"
+            if "steps" in job and _steps_using(job, "actions/deploy-pages")
         }
 
-        self.assertEqual(sorted(publishers), ["coverage-badge.yaml:publish-coverage", "docs-deploy.yaml:deploy"])
-        for publisher, concurrency in publishers.items():
-            with self.subTest(publisher=publisher):
-                # The default queue keeps one waiting job, so a new one cancels it.
-                self.assertEqual(
-                    concurrency, {"group": "publish-gh-pages", "cancel-in-progress": False, "queue": "max"}
-                )
+        # The default queue keeps one waiting job, so a new one cancels it.
+        self.assertEqual(
+            deployers, {"docs-deploy.yaml:deploy": {"group": "pages", "cancel-in-progress": False, "queue": "max"}}
+        )
+
+    def test_a_release_deploys_the_pages_artifact_of_its_tag(self):
+        workflow = dict(_workflows())["docs-deploy.yaml"]
+        build = workflow["jobs"]["build"]
+        deploy = workflow["jobs"]["deploy"]
+
+        self.assertEqual(build["with"], {"ref": "refs/tags/${{ inputs.tag }}", "upload-pages": True})
+        self.assertEqual(deploy["needs"], "build")
+        self.assertEqual(deploy["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
+        self.assertEqual(deploy["environment"]["name"], "github-pages")
+        self.assertEqual(len(_steps_using(deploy, "actions/deploy-pages")), 1)
+
+    def test_the_release_grants_the_deploy_the_pages_permissions(self):
+        docs = dict(_workflows())["release.yaml"]["jobs"]["docs"]
+
+        self.assertEqual(docs["uses"], "./.github/workflows/docs-deploy.yaml")
+        self.assertEqual(docs["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
+
+    def test_the_build_uploads_the_pages_artifact_only_for_a_deploy(self):
+        workflow = dict(_workflows())["docs-build.yaml"]
+        steps = workflow["jobs"]["build"]["steps"]
+        [pages] = _steps_using({"steps": steps}, "actions/upload-pages-artifact")
+        [site] = [
+            s for s in _steps_using({"steps": steps}, "actions/upload-artifact") if s["with"]["name"] == "docs-site"
+        ]
+
+        self.assertEqual(workflow["on"]["workflow_call"]["inputs"]["upload-pages"]["default"], False)
+        self.assertEqual(pages["if"], "${{ inputs.upload-pages }}")
+        self.assertEqual(site["if"], "${{ !inputs.upload-pages }}")
+        self.assertEqual(pages["with"]["path"], "plugin/site/")
+
+    def test_no_workflow_writes_the_gh_pages_branch(self):
+        for name, workflow in _workflows():
+            with self.subTest(workflow=name):
+                self.assertNotIn("gh-pages", yaml.safe_dump(workflow))
 
     def test_a_pull_request_that_changes_a_captured_view_builds_the_docs(self):
         workflow = dict(_workflows())["docs-build.yaml"]
@@ -186,6 +218,28 @@ class WorkflowSourceBuildTest(unittest.TestCase):
                                 self.assertIn("--no-build", command)
 
 
+# Package managers run code that the lock pins, but that this repository did not review.
+_DEPENDENCY_CODE = re.compile(r"\b(?:uv (?:run|sync|pip)|pip install)\b")
+# semantic-release is the dependency that pushes the release, so it needs the token.
+_WRITE_JOBS_WITH_DEPENDENCY_CODE = {"release.yaml:semantic-release"}
+
+
+class WorkflowWriteTokenTest(unittest.TestCase):
+    """A job that can write to the repository runs no dependency code, so a bad dependency cannot use the token."""
+
+    def test_only_the_allowed_jobs_run_dependency_code_with_a_write_scope(self):
+        found = set()
+        for name, workflow in _workflows():
+            for job_name, job in workflow["jobs"].items():
+                permissions = job.get("permissions", workflow.get("permissions", "write-all"))
+                writes = permissions == "write-all" or "write" in dict(permissions).values()
+                commands = [c for step in job.get("steps", []) for c in _run_commands(step.get("run", ""))]
+                if writes and any(_DEPENDENCY_CODE.search(command) for command in commands):
+                    found.add(f"{name}:{job_name}")
+
+        self.assertEqual(found, _WRITE_JOBS_WITH_DEPENDENCY_CODE)
+
+
 _NETBOX_LOCK = _PROJECT_ROOT / ".github" / "netbox-requirements.txt"
 
 
@@ -219,41 +273,6 @@ class DocsNetBoxLockTest(unittest.TestCase):
         self.assertTrue(_path_filter_matches(patterns, ".github/netbox-requirements.txt"))
 
 
-# An origin with main, and gh-pages with a coverage report ($GH_PAGES yes) or only ci/gh-pages ($GH_PAGES nested).
-_ORIGIN_SETUP = """
-git init -q --bare origin.git
-git init -q -b main work
-cd work
-git config user.name t
-git config user.email t@example.invalid
-git commit -q --allow-empty -m init
-git remote add origin ../origin.git
-git push -q origin main
-if [ "$GH_PAGES" = yes ]; then
-  git checkout -q --orphan gh-pages
-  mkdir coverage
-  echo report > coverage/index.html
-  git add coverage
-  git commit -q -m coverage
-  git push -q origin gh-pages
-  git checkout -q main
-  rm -rf coverage
-elif [ "$GH_PAGES" = nested ]; then
-  git push -q origin main:refs/heads/ci/gh-pages
-elif [ "$GH_PAGES" = bare ]; then
-  git push -q origin main:refs/heads/gh-pages
-fi
-mkdir site
-"""
-
-
-# Each git command named in $FAIL_GIT writes its output and then fails, as on a damaged object.
-_UNREADABLE_TREE_GIT = """#!/usr/bin/env bash
-case " $FAIL_GIT " in *" $1 "*) "{git}" "$@"; echo "fatal: unable to read tree" >&2; exit 128;; esac
-exec "{git}" "$@"
-"""
-
-
 def _bash(script, cwd, env=None):
     """Run *script* as GitHub runs a step without a shell key: bash -e {0}."""
     return subprocess.run(  # noqa: S603 - The script is a workflow step of this repository.
@@ -265,77 +284,6 @@ def _bash(script, cwd, env=None):
         check=False,
         timeout=120,
     )
-
-
-@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "git and bash are required")
-class DocsDeployCoverageTest(unittest.TestCase):
-    """The deploy keeps the coverage report of gh-pages, and also deploys when gh-pages does not exist."""
-
-    def _deploy_step(self, with_gh_pages, reachable=True, nested=False, bare=False, failing=""):
-        workflow = dict(_workflows())["docs-deploy.yaml"]
-        [script] = [
-            s["run"]
-            for s in workflow["jobs"]["deploy"]["steps"]
-            if s.get("name") == "Keep the coverage report of gh-pages"
-        ]
-        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        env = {**os.environ, "GH_PAGES": "yes" if with_gh_pages else "nested" if nested else "bare" if bare else "no"}
-        setup = _bash(_ORIGIN_SETUP, root, env)
-        self.assertEqual(setup.returncode, 0, setup.stderr)
-        if not reachable:
-            (root / "origin.git").rename(root / "moved.git")
-        step_env = None
-        if failing:
-            # A git that cannot read the tree of the fetched gh-pages, as with a damaged object.
-            (root / "bin").mkdir()
-            (root / "bin" / "git").write_text(_UNREADABLE_TREE_GIT.format(git=shutil.which("git")), encoding="utf-8")
-            (root / "bin" / "git").chmod(0o755)
-            step_env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}", "FAIL_GIT": failing}
-        result = _bash(script, root / "work", step_env)
-        return result, root / "work" / "site"
-
-    def test_the_deploy_copies_the_coverage_report_of_gh_pages_into_the_site(self):
-        result, site = self._deploy_step(with_gh_pages=True)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((site / "coverage" / "index.html").read_text(encoding="utf-8"), "report\n")
-
-    def test_the_deploy_continues_when_gh_pages_does_not_exist(self):
-        result, site = self._deploy_step(with_gh_pages=False)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse((site / "coverage").exists())
-
-    def test_the_deploy_stops_when_it_cannot_read_gh_pages(self):
-        result, site = self._deploy_step(with_gh_pages=True, reachable=False)
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((site / "coverage").exists())
-
-    def test_the_deploy_continues_when_gh_pages_holds_no_coverage_report(self):
-        result, site = self._deploy_step(with_gh_pages=False, bare=True)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("gh-pages holds no coverage report", result.stdout)
-        self.assertFalse((site / "coverage").exists())
-
-    def test_the_deploy_stops_when_it_cannot_read_the_tree_of_gh_pages(self):
-        result, site = self._deploy_step(with_gh_pages=True, failing="cat-file ls-tree archive")
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("gh-pages holds no coverage report", result.stdout)
-        self.assertFalse((site / "coverage").exists())
-
-    def test_the_deploy_stops_when_it_cannot_archive_the_coverage_report(self):
-        result, _site = self._deploy_step(with_gh_pages=True, failing="archive")
-
-        self.assertNotEqual(result.returncode, 0)
-
-    def test_the_deploy_continues_when_only_a_branch_ending_in_gh_pages_exists(self):
-        result, site = self._deploy_step(with_gh_pages=False, nested=True)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse((site / "coverage").exists())
 
 
 # Fakes: curl needs HTTPS-only redirects, uv needs --generate-hashes and fails when $FAKE_UV is "fail".

@@ -3,7 +3,7 @@
 name: Docs build
 
 # Builds the documentation site with the screenshots and recordings of the commit that it checks out, and
-# uploads the site as the docs-site artifact. docs-deploy.yaml deploys it for a release tag. A pull request
+# uploads the site as an artifact. docs-deploy.yaml deploys it to GitHub Pages for a release tag. A pull request
 # that changes what the media show gets the site as an artifact only.
 "on":
   workflow_call:
@@ -12,6 +12,10 @@ name: Docs build
         description: The ref to check out. Empty checks out the commit of the calling event.
         type: string
         default: ""
+      upload-pages:
+        description: Upload the site as the GitHub Pages artifact. Otherwise upload it as the docs-site artifact.
+        type: boolean
+        default: false
   pull_request:
     branches:
       - main
@@ -164,7 +168,14 @@ jobs:
         working-directory: plugin
         run: uv run --no-sync --no-build python scripts/check_docs_media.py
 
+      - name: Upload the site for GitHub Pages
+        if: ${{ inputs.upload-pages }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: plugin/site/
+
       - name: Upload the site
+        if: ${{ !inputs.upload-pages }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: docs-site

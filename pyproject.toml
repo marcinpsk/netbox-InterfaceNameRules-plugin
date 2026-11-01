@@ -78,7 +78,6 @@ packaging = [
     "build>=1.4",
 ]
 docs = [
-    "ghp-import>=2.1",
     "markdown-it-py>=3",
     "mkdocs>=1,<2",
     "mkdocs-material>=9,<10",

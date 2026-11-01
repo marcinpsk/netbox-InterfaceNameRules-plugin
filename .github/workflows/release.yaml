@@ -59,7 +59,9 @@ jobs:
     needs: semantic-release
     if: needs.semantic-release.outputs.released == 'true'
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
     uses: ./.github/workflows/docs-deploy.yaml
     with:
       tag: ${{ needs.semantic-release.outputs.tag }}
