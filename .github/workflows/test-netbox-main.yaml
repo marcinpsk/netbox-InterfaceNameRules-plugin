@@ -108,5 +108,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/netbox/netbox
           TEST_DB_NAME: test_netbox_interface_name_rules_main_ci
           TEST_REDIS_HOST: localhost
+          # The baseline belongs to the top release in test.yaml, so this run records the counts of NetBox main.
+          UPDATE_QUERY_COUNTS: "1"
         run: |
           pytest -n auto netbox_interface_name_rules --no-cov -o pythonpath=../netbox/netbox

@@ -267,6 +267,31 @@ class DocsNetBoxLockTest(unittest.TestCase):
         self.assertIn("--require-hashes", command)
         self.assertIn("--only-binary=:all:", command)
 
+    def test_the_install_accepts_each_source_build_that_the_lock_script_allows(self):
+        script = (_PROJECT_ROOT / "scripts" / "lock-netbox-requirements.sh").read_text(encoding="utf-8")
+        [install] = [s["run"] for s in self.build if s.get("name") == "Install NetBox and plugin"]
+        [command] = [c for c in _run_commands(install) if "-r .github/netbox-requirements.txt" in c]
+        allowed = re.findall(r"--no-binary=(\S+)", script)
+
+        # The lock of NetBox v4.7.0 and older holds promise, which publishes no wheel.
+        self.assertIn("promise", allowed)
+        self.assertEqual(re.findall(r"--no-binary=(\S+)", command), allowed)
+
+    def test_the_lock_installs_only_the_versions_that_the_netbox_release_requires(self):
+        [checkout] = [s for s in self.build if s.get("with", {}).get("repository") == "netbox-community/netbox"]
+        [install] = [s["run"] for s in self.build if s.get("name") == "Install NetBox and plugin"]
+        [command] = [c for c in _run_commands(install) if "-r .github/netbox-requirements.txt" in c]
+
+        # A Dependabot bump of a lock pin then fails the install.
+        self.assertIn(f"-c ../{checkout['with']['path']}/requirements.txt", command)
+
+    def test_dependabot_leaves_the_generated_lock_alone(self):
+        config = yaml.safe_load((_PROJECT_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+        [entry] = [u for u in config["updates"] if u["directory"] == "/.github"]
+
+        self.assertEqual(entry["package-ecosystem"], "pip")
+        self.assertEqual(entry["ignore"], [{"dependency-name": "*"}])
+
     def test_a_change_of_the_lock_builds_the_docs(self):
         patterns = dict(_workflows())["docs-build.yaml"]["on"]["pull_request"]["paths"]
 
@@ -331,3 +356,45 @@ class LockNetBoxRequirementsScriptTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(lock, "old\n")
+
+
+def _version(tag):
+    return tuple(int(part) for part in tag.removeprefix("v").split("."))
+
+
+class NetBoxReleaseLegsTest(unittest.TestCase):
+    """Only the top supported NetBox release asserts the query count baseline; every other NetBox records."""
+
+    def setUp(self):
+        self.job = _workflow_jobs()["test-netbox"]
+        releases = {cell["netbox-version"] for cell in self.job["strategy"]["matrix"]["include"]}
+        self.top = max((r for r in releases if r.startswith("v")), key=_version)
+
+    def _test_env(self, job):
+        [step] = [s for s in job["steps"] if "pytest" in s.get("run", "")]
+        return step["env"]
+
+    def test_the_top_release_is_the_one_that_asserts_the_query_counts(self):
+        env = self._test_env(self.job)
+
+        self.assertEqual(
+            env["UPDATE_QUERY_COUNTS"],
+            f"${{{{ (matrix.netbox-version != '{self.top}' || matrix.netbox-branching) && '1' || '' }}}}",
+        )
+        for name in ("EXPECT_NETBOX_CHANNELIZATION", "EXPECT_NETBOX_MODULE_MOVES"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    env[name],
+                    f"${{{{ (matrix.netbox-version == 'feature' || matrix.netbox-version == '{self.top}') && '1' || '' }}}}",
+                )
+
+    def test_the_docs_build_uses_the_top_release(self):
+        steps = dict(_workflows())["docs-build.yaml"]["jobs"]["build"]["steps"]
+        [ref] = [s["with"]["ref"] for s in steps if s.get("with", {}).get("repository") == "netbox-community/netbox"]
+
+        self.assertEqual(ref, self.top)
+
+    def test_the_weekly_netbox_main_run_records_the_query_counts(self):
+        job = dict(_workflows())["test-netbox-main.yaml"]["jobs"]["test-netbox-main"]
+
+        self.assertEqual(self._test_env(job)["UPDATE_QUERY_COUNTS"], "1")

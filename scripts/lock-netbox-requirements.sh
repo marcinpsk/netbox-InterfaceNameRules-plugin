@@ -5,7 +5,7 @@
 # Usage: scripts/lock-netbox-requirements.sh <NetBox tag> <Python version>, the values in docs-build.yaml.
 set -euo pipefail
 
-usage="usage: $0 <NetBox tag, for example v4.7.0> <Python version, for example 3.14>"
+usage="usage: $0 <NetBox tag, for example v4.7.4> <Python version, for example 3.14>"
 tag=${1:?$usage}
 python=${2:?$usage}
 cd "$(dirname "$0")/.."
