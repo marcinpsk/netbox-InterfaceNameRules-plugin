@@ -101,7 +101,7 @@ jobs:
         run: |
           # scripts/lock-netbox-requirements.sh writes the lock from requirements.txt of the NetBox tag above.
           # The constraint fails the install when a lock pin differs from the pin of that NetBox release.
-          uv pip install --system-certs --system --require-hashes --only-binary=:all: \
+          uv pip install --system-certs --system --require-hashes --only-binary=:all: --no-binary=promise \
             -r .github/netbox-requirements.txt -c ../netbox/requirements.txt
           uv export --system-certs --locked --no-default-groups --no-emit-project --format requirements-txt | \
             uv pip install --system-certs --system --only-binary=:all: --require-hashes -r /dev/stdin

@@ -267,6 +267,16 @@ class DocsNetBoxLockTest(unittest.TestCase):
         self.assertIn("--require-hashes", command)
         self.assertIn("--only-binary=:all:", command)
 
+    def test_the_install_accepts_each_source_build_that_the_lock_script_allows(self):
+        script = (_PROJECT_ROOT / "scripts" / "lock-netbox-requirements.sh").read_text(encoding="utf-8")
+        [install] = [s["run"] for s in self.build if s.get("name") == "Install NetBox and plugin"]
+        [command] = [c for c in _run_commands(install) if "-r .github/netbox-requirements.txt" in c]
+        allowed = re.findall(r"--no-binary=(\S+)", script)
+
+        # The lock of NetBox v4.7.0 and older holds promise, which publishes no wheel.
+        self.assertIn("promise", allowed)
+        self.assertEqual(re.findall(r"--no-binary=(\S+)", command), allowed)
+
     def test_the_lock_installs_only_the_versions_that_the_netbox_release_requires(self):
         [checkout] = [s for s in self.build if s.get("with", {}).get("repository") == "netbox-community/netbox"]
         [install] = [s["run"] for s in self.build if s.get("name") == "Install NetBox and plugin"]
@@ -373,7 +383,10 @@ class NetBoxReleaseLegsTest(unittest.TestCase):
         )
         for name in ("EXPECT_NETBOX_CHANNELIZATION", "EXPECT_NETBOX_MODULE_MOVES"):
             with self.subTest(name=name):
-                self.assertIn(f"matrix.netbox-version == '{self.top}'", env[name])
+                self.assertEqual(
+                    env[name],
+                    f"${{{{ (matrix.netbox-version == 'feature' || matrix.netbox-version == '{self.top}') && '1' || '' }}}}",
+                )
 
     def test_the_docs_build_uses_the_top_release(self):
         steps = dict(_workflows())["docs-build.yaml"]["jobs"]["build"]["steps"]
