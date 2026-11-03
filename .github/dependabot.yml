@@ -14,6 +14,14 @@ updates:
     cooldown:
       default-days: 7
 
+  # scripts/lock-netbox-requirements.sh generates .github/netbox-requirements.txt from the pins of one NetBox release.
+  - package-ecosystem: "pip"
+    directory: "/.github"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "*"
+
   - package-ecosystem: "github-actions" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
