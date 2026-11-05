@@ -25,7 +25,7 @@ jobs:
   build:
     permissions:
       contents: read
-    uses: ./.github/workflows/docs-build.yaml
+    uses: $/.github/workflows/docs-build.yaml
     with:
       # The full tag ref, so a branch name fails the checkout.
       ref: refs/tags/${{ inputs.tag }}

@@ -144,7 +144,7 @@ class DocsWorkflowTest(unittest.TestCase):
     def test_the_release_grants_the_deploy_the_pages_permissions(self):
         docs = dict(_workflows())["release.yaml"]["jobs"]["docs"]
 
-        self.assertEqual(docs["uses"], "./.github/workflows/docs-deploy.yaml")
+        self.assertEqual(docs["uses"], "$/.github/workflows/docs-deploy.yaml")
         self.assertEqual(docs["permissions"], {"contents": "read", "pages": "write", "id-token": "write"})
 
     def test_the_build_uploads_the_pages_artifact_only_for_a_deploy(self):
