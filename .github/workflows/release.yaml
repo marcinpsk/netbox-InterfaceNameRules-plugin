@@ -62,6 +62,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: ./.github/workflows/docs-deploy.yaml
+    uses: $/.github/workflows/docs-deploy.yaml
     with:
       tag: ${{ needs.semantic-release.outputs.tag }}
