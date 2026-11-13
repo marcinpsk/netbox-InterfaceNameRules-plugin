@@ -788,7 +788,7 @@ reuse = [
 requires-dist = [{ name = "google-re2", specifier = ">=1.1.20251105" }]
 
 [package.metadata.requires-dev]
-ci-branching = [{ name = "netboxlabs-netbox-branching", specifier = "==1.2.2" }]
+ci-branching = [{ name = "netboxlabs-netbox-branching", specifier = "==1.2.3" }]
 ci-tests = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-cov", specifier = ">=7.0" },
@@ -847,11 +847,11 @@ reuse = [{ name = "reuse", specifier = ">=6.2" }]
 
 [[package]]
 name = "netboxlabs-netbox-branching"
-version = "1.2.2"
+version = "1.2.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/21/e5/444c7bd896ae7e6d13cf5783e413deb98ccefd0da579374843f8678695ff/netboxlabs_netbox_branching-1.2.2.tar.gz", hash = "sha256:ab22c479c9d26c5f1ebf725dbe3327068e53c95dd90b6be28fe76566fad80bb4", size = 113802, upload-time = "2026-10-08T20:53:23.966Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/e8/ffd3c9eb8aaa891645ae0d9c3c64ab328cf6f7bca40156e00077485a5964/netboxlabs_netbox_branching-1.2.3.tar.gz", hash = "sha256:254cc8b0c00d48b0af8342ffa7de07c317bc5baed1c6cf8f728fabd4ef8d5974", size = 117305, upload-time = "2026-10-30T17:14:36.099Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/c9/fe498fa701e6a50d8e75c147f4dafa72a4aab22eb346917613447453afb3/netboxlabs_netbox_branching-1.2.2-py3-none-any.whl", hash = "sha256:98155b3bace19bfc6cd1f709ef3ea06448c831ba3611418fabbb04774dc052cb", size = 136051, upload-time = "2026-10-08T20:53:22.485Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/a8/19dfc8ec9d73a0822de60d3327533d9ffc9e4314d92b07f7bec44fa9b9ef/netboxlabs_netbox_branching-1.2.3-py3-none-any.whl", hash = "sha256:609a0509015a74bd5ab01531caed2c0a742c7dca00b56849d70fef9356e64e5f", size = 145380, upload-time = "2026-10-30T17:14:34.113Z" },
 ]
 
 [[package]]
